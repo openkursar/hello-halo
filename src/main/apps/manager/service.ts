@@ -11,8 +11,9 @@
  * in index.ts and returned as the AppManagerService interface.
  */
 
-import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, unlinkSync } from 'fs'
 import { join } from 'path'
+import { mkdir } from 'fs/promises'
 import { v4 as uuidv4 } from 'uuid'
 import { isReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import { isEngineId } from '../../../shared/types/engine'
@@ -63,6 +64,7 @@ import { mcpContextPreferencesKey, mergeMcpContextPreferences } from '../../../s
 import { compareDotVersions } from '../../../shared/store/version-compare'
 import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
 import { authorVersionPatch, mergeAuthorUpgrade } from './spec-upgrade'
+import { prepareAppDataRelocation, recoverAppDataRelocation } from './data-relocation'
 
 // ============================================
 // MCP Apps Change Event
@@ -186,6 +188,10 @@ export interface AppManagerDeps {
 export function createAppManagerService(deps: AppManagerDeps): AppManagerService {
   const { store, getSpacePath, getAppDataPath, getGlobalAppDir } = deps
   const skills = createSkillLifecycle(deps)
+  const relocating = new Set<string>()
+  const dataHolds = new Map<string, number>()
+  const retiringSpaces = new Map<string, number>()
+  const recoveryRequired = new Set(store.listDataRelocations().filter(relocation => !relocation.committed).map(relocation => relocation.appId))
 
   // Status change event listeners
   const statusChangeHandlers: StatusChangeHandler[] = []
@@ -442,6 +448,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       spec: AppSpec,
       userConfig?: Record<string, unknown>
     ): Promise<string> {
+      if (spaceId && retiringSpaces.has(spaceId)) throw new Error('This workspace is being deleted. Choose another workspace for the installation.')
       // For space-scoped installs, validate space exists
       if (spaceId !== null) {
         const spacePath = getSpacePath(spaceId)
@@ -608,6 +615,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     async uninstall(appId: string, options?: UninstallOptions): Promise<void> {
       const app = requireApp(appId)
+      if (dataHolds.has(appId) || relocating.has(appId) || store.getDataRelocation(appId)) throw new Error('This digital human is moving to another workspace. Retry the move before removing or changing its data.')
       if (app.spec.type === 'skill') {
         await skills.trash(app)
         if (app.status !== 'uninstalled') {
@@ -670,6 +678,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     async deleteApp(appId: string, options?: DeleteAppOptions): Promise<void> {
       const app = requireApp(appId)
+      if (dataHolds.has(appId) || relocating.has(appId) || store.getDataRelocation(appId)) throw new Error('This digital human is moving to another workspace. Retry the move before removing or changing its data.')
       if (app.spec.type === 'skill') {
         await service.uninstall(appId)
         return
@@ -954,6 +963,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     updateSpec(appId: string, specPatch: Record<string, unknown>): void {
       const app = requireApp(appId)
+      if (dataHolds.has(appId) || relocating.has(appId) || store.getDataRelocation(appId)) throw new Error('This digital human is moving to another workspace. Retry the move before removing or changing its data.')
       if (app.spec.type === 'skill') {
         skills.update(app, specPatch)
         return
@@ -1013,6 +1023,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     },
 
     upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome {
+      if (dataHolds.has(appId) || relocating.has(appId) || store.getDataRelocation(appId)) throw new Error('This digital human is moving to another workspace. Retry after the move finishes.')
       const app = requireApp(appId)
       const { next, merged, outcome } = planUpgrade(app, authorSpec)
       if (app.spec.type === 'skill') {
@@ -1091,6 +1102,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     },
 
     async moveToSpace(appId: string, newSpaceId: string | null): Promise<void> {
+      if (newSpaceId && retiringSpaces.has(newSpaceId)) throw new Error('This workspace is being deleted. Choose another workspace.')
       const app = requireApp(appId)
 
       // Cannot move an uninstalled app
@@ -1108,8 +1120,9 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         return
       }
 
-      if (app.spec.type === 'automation' && newSpaceId === null) {
-        throw new AutomationSpaceRequiredError(app.spec.name)
+      if (app.spec.type === 'automation') {
+        if (newSpaceId === null) throw new AutomationSpaceRequiredError(app.spec.name)
+        throw new Error('Digital humans must move through the runtime workspace relocation')
       }
 
       // Validate that the target space exists (if non-global)
@@ -1144,11 +1157,6 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       const oldSpaceId = app.spaceId
 
-      // Freeze identity storage before the default environment can change.
-      if (app.spec.type === 'automation') {
-        store.pinDataPath(appId, resolveWorkDir(appId, oldSpaceId))
-      }
-
       // Persist the new spaceId. The DB unique-index guards against races.
       store.updateSpaceId(appId, newSpaceId)
       notifyAuthorityChanged(appId)
@@ -1166,6 +1174,103 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       const fromScope = oldSpaceId === null ? 'global' : `space ${oldSpaceId}`
       const toScope   = newSpaceId === null ? 'global' : `space ${newSpaceId}`
       console.log(`[AppManager] Moved app ${appId} from ${fromScope} to ${toScope}`)
+    },
+
+    holdWorkspaceData(appIds, retiringSpaceId): () => void {
+      const ids = [...new Set(appIds)]
+      for (const id of ids) dataHolds.set(id, (dataHolds.get(id) ?? 0) + 1)
+      if (retiringSpaceId) retiringSpaces.set(retiringSpaceId, (retiringSpaces.get(retiringSpaceId) ?? 0) + 1)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        for (const id of ids) {
+          const count = dataHolds.get(id)! - 1
+          if (count > 0) dataHolds.set(id, count)
+          else dataHolds.delete(id)
+        }
+        if (retiringSpaceId) {
+          const count = retiringSpaces.get(retiringSpaceId)! - 1
+          if (count > 0) retiringSpaces.set(retiringSpaceId, count)
+          else retiringSpaces.delete(retiringSpaceId)
+        }
+      }
+    },
+
+    async relocateAutomationData(appId, spaceId, options): Promise<{ fileCount: number }> {
+      const app = requireApp(appId)
+      if (app.spec.type !== 'automation') throw new Error('Only digital humans have workspace data to relocate')
+      const spacePath = getAppDataPath(spaceId)
+      if (!spacePath) throw new SpaceNotFoundError(spaceId)
+      if (relocating.has(appId)) throw new Error('This digital human is already moving to another workspace')
+      const journalPath = join(getGlobalAppDir(), 'app-relocations', appId)
+      const target = join(spacePath, '.halo', 'apps', appId)
+      relocating.add(appId)
+      let committed = false
+      let began = false
+      let transfer: Awaited<ReturnType<typeof prepareAppDataRelocation>> | undefined
+      try {
+        const previous = store.getDataRelocation(appId)
+        if (previous) {
+          await recoverAppDataRelocation(previous.journalPath, previous.committed)
+          store.finishDataRelocation(appId)
+        }
+        await mkdir(join(getGlobalAppDir(), 'app-relocations'), { recursive: true })
+        store.beginDataRelocation(appId, journalPath, spaceId)
+        began = true
+        transfer = await prepareAppDataRelocation({ appId, target, sources: options.sources, journalPath, reloadInstructions: true })
+        store.commitDataRelocation(appId, spaceId, options.commitEnvironments)
+        committed = true
+        recoveryRequired.delete(appId)
+        notifyAuthorityChanged(appId)
+        try {
+          await transfer.commit()
+          store.finishDataRelocation(appId)
+        } catch (error) {
+          console.error('[AppManager] Workspace relocation committed; cleanup will be retried', { appId, spaceId, error })
+        }
+        return { fileCount: transfer.fileCount }
+      } catch (error) {
+        if (began && !committed) {
+          try {
+            if (transfer) await transfer.rollback()
+            else await recoverAppDataRelocation(journalPath, false)
+            store.finishDataRelocation(appId)
+          } catch (rollbackError) {
+            recoveryRequired.add(appId)
+            console.error('[AppManager] Workspace relocation rollback failed; recovery retained', { appId, spaceId, error, rollbackError })
+            throw new AggregateError([error, rollbackError], 'The workspace move could not finish or restore all files. Retained data will be recovered before work resumes.')
+          }
+        }
+        console.error('[AppManager] Workspace relocation failed', { appId, spaceId, error })
+        throw error
+      } finally {
+        relocating.delete(appId)
+      }
+    },
+
+    assertAppDataAvailable(appId: string): void {
+      if (recoveryRequired.has(appId)) throw new Error('A workspace move needs file recovery before this digital human can write again. Retry the move or restart Halo.')
+    },
+
+    listLegacyDataAppIds(): string[] {
+      return store.listLegacyDataAppIds()
+    },
+
+    async recoverDataRelocations(): Promise<string[]> {
+      const failed: string[] = []
+      for (const relocation of store.listDataRelocations()) {
+        try {
+          await recoverAppDataRelocation(relocation.journalPath, relocation.committed)
+          store.finishDataRelocation(relocation.appId)
+          recoveryRequired.delete(relocation.appId)
+          console.warn('[AppManager] Interrupted workspace relocation recovered', { appId: relocation.appId, committed: relocation.committed })
+        } catch (error) {
+          failed.push(relocation.appId)
+          console.error('[AppManager] Workspace relocation recovery failed; files retained for retry', { appId: relocation.appId, error })
+        }
+      }
+      return failed
     },
 
     // ── Knowledge Base ────────────────────────
@@ -1264,13 +1369,26 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     // ── File System ───────────────────────────
 
     getAppWorkDir(appId: string): string {
-      const app = requireApp(appId)
-      const workDir = resolveWorkDir(appId, app.spaceId)
-
-      if (app.dataPath && !existsSync(workDir)) {
-        console.warn('[AppManager] Pinned digital human storage is unavailable', { appId })
-        throw new Error('The digital human memory directory is unavailable. Restore it before continuing.')
+      if (relocating.has(appId)) throw new Error('This digital human is moving to another workspace. Its storage will be available when the move finishes.')
+      service.assertAppDataAvailable(appId)
+      let app = requireApp(appId)
+      if (app.spec.type === 'automation' && (!app.spaceId || !getAppDataPath(app.spaceId))) {
+        if (!getAppDataPath('halo-temp')) throw new SpaceNotFoundError('halo-temp')
+        store.updateSpaceId(appId, 'halo-temp')
+        console.warn('[AppManager] Digital human reconnected to Halo workspace after its workspace disappeared', { appId, previousSpaceId: app.spaceId })
+        notifyAuthorityChanged(appId)
+        app = requireApp(appId)
       }
+      if (app.dataPath) {
+        try {
+          if (!statSync(app.dataPath).isDirectory()) throw new Error('The digital human memory location is not a directory')
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+          store.clearDataPath(appId)
+          console.warn('[AppManager] Missing legacy digital human storage reset to current workspace', { appId, spaceId: app.spaceId })
+        }
+      }
+      const workDir = resolveWorkDir(appId, app.spaceId)
 
       // Auto-create if missing (contract: returned path always exists)
       ensureDir(workDir)
@@ -1282,6 +1400,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     },
 
     clearAppMemory(appId: string): number {
+      if (dataHolds.has(appId) || relocating.has(appId) || store.getDataRelocation(appId)) throw new Error('This digital human is moving to another workspace. Retry after the move finishes.')
       const app = requireApp(appId)
       const workDir = resolveWorkDir(appId, app.spaceId)
       let removed = 0
@@ -1375,6 +1494,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     async deleteAppsInSpace(spaceId: string): Promise<number> {
       // Get all apps in this space (including uninstalled)
       const apps = store.list({ spaceId })
+      if (apps.some(app => app.spec.type === 'automation')) {
+        console.error('[AppManager] Space cleanup refused before digital humans were relocated', { spaceId })
+        throw new Error('Digital humans must be relocated before deleting their workspace')
+      }
       let deleted = 0
       let builtinCount = 0
 

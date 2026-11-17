@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -30,6 +30,7 @@ vi.mock('../../../../src/main/services/memory-consolidation/runner', () => ({
 import {
   requestConsolidation,
   consolidateNow,
+  suspendMemoryConsolidation,
   type ConsolidationRequest,
 } from '../../../../src/main/services/memory-consolidation/service'
 import { isConsolidationDue, resolveMemoryLayout, type MemoryLayout } from '../../../../src/main/platform/memory'
@@ -322,6 +323,37 @@ describe('requestConsolidation', () => {
     requestConsolidation(request({ settings: { autoConsolidate: false, cadence: 'diligent' } }))
     await vi.waitFor(() => expect(readFileSync(layout.file, 'utf-8').match(/^## 2026/gm)).toHaveLength(10))
     expect(start).not.toHaveBeenCalled()
+  })
+})
+
+describe('consolidation relocation', () => {
+  it('leaves no detached writes or workspace cleanup after drain and relocation', async () => {
+    writeFileSync(layout.file, DUE)
+    let finish!: (outcome: Round) => void
+    const stopped = new Promise<Round>(resolve => { finish = resolve })
+    start.mockImplementation(async ws => {
+      tidy(ws)
+      return stopped
+    })
+    consolidateNow(request())
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    const lease = suspendMemoryConsolidation([layout])
+    try {
+      finish(ok)
+      await lease.drain()
+      expect(readFileSync(layout.file, 'utf-8')).toBe(DUE)
+      expect(existsSync(layout.stateFile)).toBe(false)
+      expect(readdirSync(layout.consolidationDir)).toEqual([])
+      const moved = join(space, 'relocated')
+      renameSync(join(space, '.halo'), moved)
+      requestConsolidation(request())
+      expect(consolidateNow(request())).toEqual({ started: false, reason: 'suspended' })
+      await flush()
+      expect(existsSync(join(space, '.halo'))).toBe(false)
+      expect(readFileSync(join(moved, 'memory.md'), 'utf-8')).toBe(DUE)
+    } finally {
+      lease.release()
+    }
   })
 })
 

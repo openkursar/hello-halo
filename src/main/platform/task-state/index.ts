@@ -15,9 +15,9 @@ import type { DatabaseManager } from '../store'
 import { TaskStateStore } from './store'
 import { createTaskStateService } from './service'
 import { MIGRATION_NAMESPACE, migrations } from './migrations'
-import type { ConversationGoneCheck, TaskStateService } from './service'
+import type { ConversationGoneCheck, ConversationSpaceResolver, TaskStateService } from './service'
 
-export type { ConversationGoneCheck, TaskStateService } from './service'
+export type { ConversationGoneCheck, ConversationSpaceResolver, TaskStateService } from './service'
 export type { ConversationTaskState } from './types'
 
 let serviceInstance: TaskStateService | null = null
@@ -34,6 +34,8 @@ interface InitTaskStateDeps {
   db: DatabaseManager
   /** Called lazily, on writes and on pruneGone(), never during init. */
   isConversationGone: ConversationGoneCheck
+  /** Canonical placement for new reports; never called during initialization. */
+  resolveSpaceId?: ConversationSpaceResolver
 }
 
 export async function initTaskState(deps: InitTaskStateDeps): Promise<TaskStateService> {
@@ -41,7 +43,7 @@ export async function initTaskState(deps: InitTaskStateDeps): Promise<TaskStateS
   deps.db.runMigrations(appDb, MIGRATION_NAMESPACE, migrations)
 
   const store = new TaskStateStore(appDb)
-  const service = createTaskStateService(store, deps.isConversationGone)
+  const service = createTaskStateService(store, deps.isConversationGone, deps.resolveSpaceId)
   serviceInstance = service
 
   console.log('[TaskState] Initialized')

@@ -21,7 +21,7 @@ GET    /api/spaces/$HALO_SPACE_ID/preferences                      [ai]       wo
 PUT    /api/spaces/$HALO_SPACE_ID/preferences                      [ai]       workspace               Change a space's preferences, e.g. turn its shared memory on or off
 GET    /api/spaces/$HALO_SPACE_ID/memory                           [ai]       workspace               Read the state of a space's memory
 POST   /api/spaces/$HALO_SPACE_ID/memory/consolidate               [ai]       workspace               Consolidate a space's memory now
-DELETE /api/spaces/$HALO_SPACE_ID                                  [ai]       workspace               Delete a space and everything inside it
+DELETE /api/spaces/$HALO_SPACE_ID                                  [ai]       workspace               Delete a workspace while preserving its digital humans
 POST   /api/spaces/$HALO_SPACE_ID/open                             [ai]       workspace               Get a space working directory path
 GET    /api/spaces/$HALO_SPACE_ID/conversations                    [ai]       conversation            List conversations in a space
 POST   /api/spaces/$HALO_SPACE_ID/conversations                    [ai]       conversation            Create an empty conversation
@@ -88,7 +88,7 @@ GET    /api/apps/<appId>/available-skills                          [ai]       di
 GET    /api/skills/command-name                                    [ai]       store                   Preview the slash-command name a skill title would install under
 DELETE /api/apps/<appId>                                           [ai]       digital-human           Soft-delete (uninstall) a digital human; recoverable via reinstall
 POST   /api/apps/<appId>/reinstall                                 [ai]       digital-human           Reinstall a previously soft-deleted (uninstalled) digital human
-POST   /api/apps/<appId>/move-space                                [ai]       digital-human,workspace Set which space a digital human starts new work in
+POST   /api/apps/<appId>/move-space                                [ai]       digital-human,workspace Move a digital human and all its memory and conversations to another space
 POST   /api/apps/<appId>/clear-memory                              [ai]       digital-human           Delete all of a digital human's memory files
 GET    /api/apps/<appId>/memory                                    [ai]       digital-human           Read the state of a digital human's memory
 POST   /api/apps/<appId>/memory/consolidate                        [ai]       digital-human           Consolidate a digital human's memory now

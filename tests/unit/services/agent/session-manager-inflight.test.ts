@@ -18,6 +18,7 @@ import type { AISource } from '../../../../src/shared/types/ai-sources'
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() }
 }))
+vi.mock('../../../../src/main/services/space.service', () => ({ hasSpace: () => true }))
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => '/tmp'), getVersion: vi.fn(() => '0.0.0'),

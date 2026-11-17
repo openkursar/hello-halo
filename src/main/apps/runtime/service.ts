@@ -65,6 +65,7 @@ import { notifyAppEvent } from '../../services/notification.service'
 import { RunningRuns } from './running-runs'
 import { clearOldRunTranscripts } from './run-retention'
 import { refreshWorkdayCalendar, workdayStatusOn } from '../../services/workday-calendar'
+import { awaitWorkspaceDrain, onWorkspaceChangeReleased, pendingWorkspaceChange, pendingWorkspaceRecovery } from './workspace-admission'
 
 // ============================================
 // Constants
@@ -112,12 +113,15 @@ const RUN_PROCESS_CLEARED_MESSAGE = 'This execution can no longer be continued: 
  */
 export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService {
   const queuedAutomatic = new Map<string, Set<AbortController>>()
+  const queuedExecutions = new Map<string, Set<AbortController>>()
   const intentionallyStoppedRuns = new Set<string>()
   // appId → the day (toDateString) a calendar gap was last put on its timeline.
   const calendarGapNotedOn = new Map<string, string>()
   // By run id. `startedAt` is this execution's own start: a continued run keeps
   // its first start in the database.
   const activeExecutions = new Map<string, { controller: AbortController; startedAt: number }>()
+  const executionSettlements = new Map<string, Set<Promise<unknown>>>()
+  const failedWorkspaceCleanup = new Map<string, Set<() => Promise<void>>>()
   const continuationDispatches = new Set<string>()
   let continuationInterval: ReturnType<typeof setInterval> | null = null
   let shuttingDown = false
@@ -184,14 +188,14 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   const liveDecisionEntries = new Map<string, ActivityEntry[]>()
 
   const eventGate = createTurnGate<TriggerContext[]>({
-    isBusy: (appId) => isAppBusy(appId) || store.hasPendingSoloEscalation(appId) || store.hasQueuedSoloContinuation(appId),
+    isBusy: (appId) => !!pendingWorkspaceChange(appId) || isAppBusy(appId) || store.hasPendingSoloEscalation(appId) || store.hasQueuedSoloContinuation(appId),
     getJobIdentity: () => 'owner',
     getActiveIdentity: (appId) => listActiveRuns(appId).length === 1 ? 'owner' : undefined,
     mergeJobs: (jobs) => jobs.flat(),
     deliverMidTurn: (appId, triggers) => {
       const runs = listActiveRuns(appId)
       // Unread when a person stopped the run: they wait for the app's next run.
-      return runs.length === 1 && tryInjectIntoActiveRun(appId, runs[0].runId, triggers.map((trigger) => ({ text: renderEventInput(trigger) })),
+      return !pendingWorkspaceChange(appId) && runs.length === 1 && tryInjectIntoActiveRun(appId, runs[0].runId, triggers.map((trigger) => ({ text: renderEventInput(trigger) })),
         () => eventGate.putBack(appId, [triggers]))
     },
     dispatch: async (appId, triggers) => {
@@ -213,6 +217,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   }, {
     retryDispatch: () => false,
     onDiscard: (triggers, reason) => console.warn('[Runtime] Pending events cancelled', { count: triggers.length, reason }),
+  })
+
+  const releaseWorkspaceSubscription = onWorkspaceChangeReleased(appId => {
+    drainContinuations()
+    eventGate.drain(appId)
   })
 
   let readySubscription: ReturnType<typeof onActiveRunReady> | undefined
@@ -553,20 +562,31 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     return false
   }
 
-  // ── Helper: Execute with concurrency control ────────
-  async function executeWithConcurrency(
-    app: InstalledApp,
-    trigger: TriggerContext,
-    options?: {
-      existingRunId?: string
-      existingSessionKey?: string
-      recordedInputs?: RunSupplement[]
-      /** Fired when no global slot was free and the run entered the queue. */
-      onQueued?: () => void
-      /** Fired once the run row exists and execution is underway. */
-      onStarted?: (info: { runId: string; sessionKey: string; startedAt: number }) => void
+  interface ExecutionOptions {
+    existingRunId?: string
+    existingSessionKey?: string
+    recordedInputs?: RunSupplement[]
+    onQueued?: () => void
+    onStarted?: (info: { runId: string; sessionKey: string; startedAt: number }) => void
+  }
+
+  async function executeWithConcurrency(app: InstalledApp, trigger: TriggerContext, options?: ExecutionOptions): Promise<AppRunResult> {
+    let pending: Promise<void> | undefined
+    while ((pending = pendingWorkspaceRecovery() ?? pendingWorkspaceChange(app.id))) await pending
+    const settlements = executionSettlements.get(app.id) ?? new Set<Promise<unknown>>()
+    executionSettlements.set(app.id, settlements)
+    const execution = executeAdmittedRun(app, trigger, options)
+    settlements.add(execution)
+    try {
+      return await execution
+    } finally {
+      settlements.delete(execution)
+      if (settlements.size === 0 && executionSettlements.get(app.id) === settlements) executionSettlements.delete(app.id)
     }
-  ): Promise<AppRunResult> {
+  }
+
+  // ── Helper: Execute with concurrency control ────────
+  async function executeAdmittedRun(app: InstalledApp, trigger: TriggerContext, options?: ExecutionOptions): Promise<AppRunResult> {
     // From here the person is busy (queued or running): its scheduled times are skipped.
     const busySince = Date.now()
     // Try to acquire a slot immediately without blocking.
@@ -581,6 +601,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       options?.onQueued?.()
 
       const queuedController = new AbortController()
+      const allQueued = queuedExecutions.get(app.id) ?? new Set<AbortController>()
+      allQueued.add(queuedController)
+      queuedExecutions.set(app.id, allQueued)
       const automatic = trigger.type === 'schedule' || trigger.type === 'event'
       if (automatic) {
         const queued = queuedAutomatic.get(app.id) ?? new Set<AbortController>()
@@ -591,8 +614,15 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         await semaphore.acquire(queuedController.signal)
       } catch (error) {
         if (!queuedController.signal.aborted) throw error
-        return recordSkippedAutomatic(app, trigger, typeof queuedController.signal.reason === 'string' ? queuedController.signal.reason : 'Queued automatic execution cancelled')
+        const reason = typeof queuedController.signal.reason === 'string' ? queuedController.signal.reason : 'Queued execution cancelled'
+        if (!automatic) {
+          console.warn('[Runtime] Queued execution stopped before it started; decisions retained', { appId: app.id, runId: options?.existingRunId, reason })
+          throw new Error(reason)
+        }
+        return recordSkippedAutomatic(app, trigger, reason)
       } finally {
+        allQueued.delete(queuedController)
+        if (allQueued.size === 0) queuedExecutions.delete(app.id)
         const automaticQueue = queuedAutomatic.get(app.id)
         automaticQueue?.delete(queuedController)
         if (automaticQueue?.size === 0) queuedAutomatic.delete(app.id)
@@ -611,6 +641,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       }
     }
 
+    if (pendingWorkspaceChange(app.id)) {
+      semaphore.release()
+      console.warn('[Runtime] Queued execution stopped at workspace maintenance boundary', { appId: app.id, runId: options?.existingRunId })
+      throw new Error('Execution stopped before the digital human changed workspace')
+    }
     const currentApp = appManager.getApp(app.id)
     if (!currentApp || currentApp.status === 'uninstalled') {
       semaphore.release()
@@ -655,6 +690,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         existingSessionKey: options?.existingSessionKey,
         recordedInputs: options?.recordedInputs,
         onPendingInputAbandoned: () => { pendingInputAbandoned = true },
+        onCleanupFailure: cleanup => {
+          const pending = failedWorkspaceCleanup.get(app.id) ?? new Set<() => Promise<void>>()
+          pending.add(cleanup)
+          failedWorkspaceCleanup.set(app.id, pending)
+        },
         // Fire the `onRunStarted` lifecycle event at the *real* start of the
         // run (after DB row insertion, before AI session build). This keeps
         // the started/finished event pair semantically meaningful for
@@ -930,7 +970,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
   function dispatchContinuations(): void {
     for (const entry of store.getQueuedContinuations()) {
-      if (continuationDispatches.has(entry.id)) continue
+      if (pendingWorkspaceChange(entry.appId) || continuationDispatches.has(entry.id)) continue
       const team = entry.content.teamContext
       if (team && !getActiveTeamRuntime()) continue
       let app: InstalledApp | null
@@ -1344,6 +1384,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     // ── Execution ───────────────────────────────────
 
     async triggerManually(appId: string): Promise<AppRunResult> {
+      while (pendingWorkspaceChange(appId)) await pendingWorkspaceChange(appId)
       const { app, trigger } = admitManualRun(appId)
 
       const result = await executeWithConcurrency(app, trigger)
@@ -1354,6 +1395,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     },
 
     async startManually(appId: string, options?: { watchable?: boolean }): Promise<AppRunStartInfo> {
+      while (pendingWorkspaceChange(appId)) await pendingWorkspaceChange(appId)
       const { app, trigger } = admitManualRun(appId, options?.watchable === true)
 
       let settled = false
@@ -1561,6 +1603,44 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       return updated
     },
 
+    getAppWorkspaceWorkCount(appId: string): number {
+      return (executionSettlements.get(appId)?.size ?? 0) + (failedWorkspaceCleanup.get(appId)?.size ?? 0)
+    },
+
+    async stopAndDrainAppRuns(appId: string): Promise<void> {
+      if (!pendingWorkspaceChange(appId)) throw new Error('Stopping workspace work requires closed admission')
+      const stopping = [...executionSettlements.get(appId) ?? []]
+      eventGate.park(appId)
+      for (const controller of queuedExecutions.get(appId) ?? []) controller.abort('Execution stopped before the digital human changed workspace')
+      await awaitWorkspaceDrain(appId, 'runs', (async () => {
+        const withdrawals: Promise<void>[] = []
+        for (const [runId, execution] of activeExecutions) {
+          if (store.getRun(runId)?.appId !== appId) continue
+          intentionallyStoppedRuns.add(runId)
+          store.markRunStopped(runId)
+          withdrawals.push(stopForPerson(appId, runId).finally(() => execution.controller.abort()))
+        }
+        await Promise.all(withdrawals)
+        // Preparation before onRunStarted has no durable run id to stop individually.
+        runningRuns.abortApp(appId)
+        await Promise.allSettled(stopping)
+        const pendingCleanup = failedWorkspaceCleanup.get(appId)
+        if (pendingCleanup?.size) {
+          const results = await Promise.allSettled([...pendingCleanup].map(async cleanup => {
+            await cleanup()
+            pendingCleanup.delete(cleanup)
+          }))
+          if (pendingCleanup.size === 0 && failedWorkspaceCleanup.get(appId) === pendingCleanup) failedWorkspaceCleanup.delete(appId)
+          const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+          if (failures.length) {
+            console.error('[Runtime] Native run cleanup still owns workspace resources', { appId, count: failures.length })
+            throw new AggregateError(failures.map(result => result.reason), 'The digital human engine has not finished saving and stopping. Its workspace was not moved.')
+          }
+        }
+      })())
+      console.log('[Runtime] Workspace runs drained; decisions and subscriptions retained', { appId, count: stopping.length })
+    },
+
     async stopRun(appId: string, runId: string): Promise<void> {
       const run = store.getRun(runId)
       if (!run || run.appId !== appId) throw new Error('Task not found')
@@ -1597,6 +1677,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     // ── User-initiated Continue ─────────────────────
 
     async continueFailedRun(appId: string, runId: string): Promise<void> {
+      while (pendingWorkspaceChange(appId)) await pendingWorkspaceChange(appId)
       const app = appManager.getApp(appId)
       if (!app) {
         throw new Error(`App not found: ${appId}`)
@@ -1637,6 +1718,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     },
 
     async injectIntoRun(appId: string, runId: string, text: string, references?: ContentReference[]): Promise<void> {
+      while (pendingWorkspaceChange(appId)) await pendingWorkspaceChange(appId)
       const app = appManager.getApp(appId)
       if (!app) {
         throw new Error(`App not found: ${appId}`)
@@ -1772,6 +1854,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     async deactivateAll(): Promise<void> {
       shuttingDown = true
+      releaseWorkspaceSubscription()
       readySubscription?.dispose()
       readySubscription = undefined
       eventGate.discard(() => true, 'runtime shutting down')
@@ -1827,6 +1910,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       return 'skipped'
     }
 
+    while (pendingWorkspaceChange(appId)) await pendingWorkspaceChange(appId)
     // Admission is checked on both sides of the calendar: before it, so a person
     // who would not run anyway gets no calendar note; after it, because the
     // calendar may wait for its first download and the answer can change.

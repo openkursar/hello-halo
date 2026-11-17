@@ -18,6 +18,7 @@ const { emitAgentEvent, getEngineCapabilities, ensureSessionWarm, v2Sessions, ge
   getConversation: vi.fn(),
 }))
 
+vi.mock('../../../../src/main/services/space.service', () => ({ hasSpace: () => true }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ getEngineCapabilities }))
 vi.mock('../../../../src/main/services/agent/engine-routing', () => ({ resolveConversationEngine: async () => getEngineCapabilities()?.engineId }))
@@ -123,7 +124,7 @@ describe('no live session', () => {
 
     await setConversationGoal(SPACE, CONV, { objective: 'o' })
 
-    expect(ensureSessionWarm).toHaveBeenCalledWith(SPACE, CONV)
+    expect(ensureSessionWarm).toHaveBeenCalledWith(SPACE, CONV, expect.any(AbortSignal))
     expect(session.setGoal).toHaveBeenCalled()
   })
 

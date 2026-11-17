@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -27,7 +27,7 @@ vi.mock('fs/promises', async (importOriginal) => {
   }
 })
 
-import { copyStoredSessions, projectDirName } from '../../../../src/main/services/agent/stored-session'
+import { copyStoredSessions, prepareStoredSession, projectDirName } from '../../../../src/main/services/agent/stored-session'
 
 let configDir: string
 let root: string
@@ -67,6 +67,30 @@ describe('copyStoredSessions', () => {
     expect(existsSync(join(projectsOf(newDir), 'session-1', 'subagents', 'agent-1.jsonl'))).toBe(true)
     expect(existsSync(join(projectsOf(newDir), 'session-2.jsonl'))).toBe(true)
     expect(existsSync(original)).toBe(true)
+  })
+
+  it('copies only selected app sessions and exact sidecars, not another conversation or project metadata', async () => {
+    const oldDir = join(root, 'old')
+    const newDir = join(root, 'new')
+    mkdirSync(oldDir)
+    mkdirSync(newDir)
+    storedSession(oldDir, 'app-session')
+    storedSession(oldDir, 'app-session-extra')
+    storedSession(oldDir, 'ordinary-session')
+    writeFileSync(join(projectsOf(oldDir), 'sessions-index.json'), '{}')
+
+    expect(await copyStoredSessions(oldDir, newDir, configDir, new Set(['app-session']))).toBe(1)
+    expect(readdirSync(projectsOf(newDir)).sort()).toEqual(['app-session', 'app-session.jsonl'])
+    expect(existsSync(join(projectsOf(newDir), 'app-session', 'subagents', 'agent-1.jsonl'))).toBe(true)
+    expect(existsSync(join(projectsOf(oldDir), 'app-session.jsonl'))).toBe(true)
+  })
+
+  it('an empty selection does no filesystem work and an invalid identifier fails before publication', async () => {
+    const oldDir = join(root, 'old')
+    const newDir = join(root, 'new')
+    expect(await copyStoredSessions(oldDir, newDir, configDir, new Set())).toBe(0)
+    await expect(copyStoredSessions(oldDir, newDir, configDir, new Set(['../outside']))).rejects.toThrow('invalid session identifier')
+    expect(existsSync(join(configDir, 'projects'))).toBe(false)
   })
 
   it('finds the sessions of an old folder that no longer exists', async () => {
@@ -113,6 +137,37 @@ describe('copyStoredSessions', () => {
     await copyStoredSessions(oldDir, link, configDir)
 
     expect(existsSync(join(projectsOf(real), 'session-1.jsonl'))).toBe(true)
+  })
+
+  it('selective copy publishes both symlink cwd conventions for strict native resume without inflating mtime', async () => {
+    const oldDir = join(root, 'old')
+    const real = join(root, 'real-new')
+    const link = join(root, 'linked-new')
+    mkdirSync(oldDir)
+    mkdirSync(real)
+    symlinkSync(real, link)
+    const original = storedSession(oldDir, 'session-1')
+    utimesSync(original, new Date(1_000_000), new Date(1_000_000))
+    const ids = new Set(['session-1'])
+
+    expect(await copyStoredSessions(oldDir, link, configDir, ids)).toBe(2)
+    for (const engine of ['halo', 'anthropic'] as const) {
+      expect(await prepareStoredSession({ workDir: link, sessionId: 'session-1', configDir, engine, requireCurrentFile: true })).toBe(true)
+    }
+    for (const cwd of [real, link]) {
+      const transcript = join(projectsOf(cwd), 'session-1.jsonl')
+      expect(statSync(transcript).mtimeMs).toBe(1_000_000)
+      expect(existsSync(join(projectsOf(cwd), 'session-1', 'subagents', 'agent-1.jsonl'))).toBe(true)
+    }
+    expect(await copyStoredSessions(oldDir, link, configDir, ids)).toBe(0)
+
+    writeFileSync(original, '{"turn":2}\n')
+    utimesSync(original, new Date(2_000_000), new Date(2_000_000))
+    expect(await copyStoredSessions(link, oldDir, configDir, ids)).toBe(0)
+    expect(readFileSync(original, 'utf8')).toBe('{"turn":2}\n')
+    expect(await copyStoredSessions(oldDir, link, configDir, ids)).toBe(2)
+    expect(readFileSync(join(projectsOf(real), 'session-1.jsonl'), 'utf8')).toBe('{"turn":2}\n')
+    expect(readFileSync(join(projectsOf(link), 'session-1.jsonl'), 'utf8')).toBe('{"turn":2}\n')
   })
 
   it('leaves the session it would replace whole when a copy fails partway, so the next attempt still replaces it', async () => {

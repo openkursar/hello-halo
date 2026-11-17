@@ -666,6 +666,12 @@ export async function deleteSpace(spaceId: string): Promise<boolean> {
   if (!entry || entry.isTemp) return false
 
   const { target } = deletionDetails(entry)
+  const manager = getAppManager()
+  if (!manager) throw new Error('Digital human services are not ready to prepare workspace deletion')
+  if (manager.listApps({ spaceId, type: 'automation' }).length > 0) {
+    console.error('[Space] Deletion refused before digital humans were relocated', { spaceId })
+    throw new Error('Digital humans must be relocated before deleting their workspace')
+  }
 
   // The entry stays in memory until cleanup is done: app cleanup resolves
   // this space's paths through the registry.
@@ -678,15 +684,12 @@ export async function deleteSpace(spaceId: string): Promise<boolean> {
     return false
   }
 
-  // Clean up all apps belonging to this space from the database
-  // This must happen BEFORE deleting files to ensure proper cleanup
-  const manager = getAppManager()
-  if (manager) {
-    try {
-      await manager.deleteAppsInSpace(spaceId)
-    } catch (err) {
-      console.error(`[Space] Failed to cleanup apps for space ${spaceId}:`, err)
-    }
+  try {
+    await manager.deleteAppsInSpace(spaceId)
+  } catch (error) {
+    console.error(`[Space] Delete aborted while removing resource records for ${spaceId}:`, error)
+    await persistIndexWithRetry(getRegistry())
+    throw error
   }
 
   try {

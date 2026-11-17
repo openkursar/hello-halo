@@ -291,6 +291,50 @@ identity contract; full model history stays in Rust. Packaging unpacks the nativ
 library and this setup module for Node loading; JavaScript facades remain in asar.
 The build manifest and loaded library identify the same SDK source build.
 
+### Scoped workspace maintenance
+
+`beginSpaceMaintenance(spaceId)` synchronously fences engine admission for one
+space and returns its captured `activeWorkCount`, `stopAndDrain()` and `release()`.
+`countSpaceWorkspaceWork(spaceId, { ordinaryOnly: true })` supplies ordinary
+space-chat work only, so a preview may add runtime-owned app chat/run counts
+without double counting manager-owned app sessions. Selective
+`copyStoredSessions(from, to, configDir, sessionIds)` carries only the supplied
+native transcript IDs and their exact sidecar folders, never another app's or
+space conversation's sessions sharing that project directory. Selective copies
+publish both canonical Claude Code and supplied-cwd Halo paths (deduplicated when
+equivalent), preserving source timestamps so copied aliases cannot outdate later
+real writes. Ordinary whole-workspace carry-over retains its previous semantics.
+The controller holds the fence across filesystem/record changes and rollback,
+releasing it in `finally`. Runtime first cancels and drains its own app-chat
+preparation and transient runs; those are not engine-manager-owned executions.
+Then the engine drain cancels that space's pending questions and preparation,
+retires its resident consumers and waits for every captured attempt, native
+creation, persistence flush and child-process exit. Failure is explicit and
+bounded; callers must preserve the source files. Failed cleanup remains retryable
+so another maintenance attempt cannot forget an old writer removed from the live
+session map. The host main process PID is never probed or terminated.
+
+`space-maintenance.ts` owns admission and full-attempt bookkeeping. Space sends,
+warm-ups and goal operations register before preparation, record writes or file
+creation. New work waits outside the captured drain until release and revalidates
+that its space still exists, rather than falling back to temporary storage.
+Cancelled preparation checks its signal after asynchronous boundaries and cannot
+publish a session or dispatch after the fence. `SessionGates.maintenanceSignal`
+carries caller cancellation into acquisition, including runtime-owned preparation,
+so an already cancelled caller never parks behind the fence it is helping drain.
+The registry is empty when unused, with O(1) admission lookups and no idle timers,
+startup scans or per-space polling. Process-exit polling exists only during an
+explicit bounded drain. Live-input acceptance refuses while the space is fenced.
+
+`closeSessionAndWait(conversationId, reason)` is the strict public close for
+runtime-owned app maintenance. It closes the exact manager instance and waits for
+its flush and process exit, retaining incomplete cleanup for retry. The older
+`closeSpaceSessions` remains an idle-only compatibility helper; its warning-only
+PID timeout is not a deletion barrier. Caller-owned transient sessions use the
+public `waitForSessionCleanup(session, capturedPid)` after abort/close; their
+runtime owner retains cleanup failures and must not report a drained execution
+until persistence and process exit have actually settled.
+
 ## 3) Stream Processing Model
 
 ```

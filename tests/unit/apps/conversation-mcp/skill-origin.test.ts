@@ -99,7 +99,7 @@ vi.mock('../../../../src/main/apps/runtime/index', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveChatEnvironment: () => ({ spaceId: 'space', spacePath: state.workDir, workDir: state.workDir, memoryDir: state.workDir }),
-  validateEnvironmentConnections: vi.fn(), appChatRunId: (conversationId: string) => conversationId,
+  validateEnvironmentConnections: vi.fn(() => ({ changed: false, changedSpecIds: [] })), appChatRunId: (conversationId: string) => conversationId,
 }))
 vi.mock('../../../../src/main/apps/runtime/engine-selection', () => ({
   resolveAppSessionEngine: async () => 'halo', prepareAppEngineSession: () => ({}),
@@ -162,7 +162,7 @@ async function turn(origin?: TeamRequestOrigin, guestPolicy?: CapabilityPolicy) 
     appId: app.id, spaceId: 'space', message: 'List my skills',
     conversationId: origin ? buildTeamSessionKey(app.id, 'fixture-team', 'fixture-task')
       : guestPolicy ? buildImSessionKey(app.id, 'wecom-bot', 'direct', 'guest') : `app-chat:${app.id}`,
-    turnStart: { cancelled: false, stoppedBy: undefined, reset: false, end: vi.fn(), releaseSession: vi.fn(), bindSession: vi.fn() },
+    turnStart: { signal: new AbortController().signal, cancelled: false, stoppedBy: undefined, reset: false, end: vi.fn(), releaseSession: vi.fn(), bindSession: vi.fn() },
     ...(origin ? { teamContext: {
       teamId: 'fixture-team', epochId: 'fixture-task', kind: 'message', fromAppId: 'sender', correlationId: 'fixture', wait: false, origin,
     } } : {}),

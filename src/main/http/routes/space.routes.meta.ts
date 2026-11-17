@@ -59,6 +59,7 @@ export const MODULE: RouteModuleMeta = {
       group: 'workspace',
       summary: 'Read one space',
       returns: '{"success":true,"data":{"id":"<uuid>","name":"Work","path":"/…"}}',
+      notes: 'Add ?includeDeletionImpact=true only when preparing a deletion. The response then includes deletionEffect and deletionImpact {digitalHumans:[{id,name}],activeWorkCount}; ordinary reads do not compute that impact.',
     },
 
     'PUT /api/spaces/:spaceId': {
@@ -117,13 +118,13 @@ export const MODULE: RouteModuleMeta = {
     'DELETE /api/spaces/:spaceId': {
       expose: 'ai',
       group: 'workspace',
-      summary: 'Delete a space and everything inside it',
+      summary: 'Delete a workspace while preserving its digital humans',
       returns: '{"success":true}',
       impact: 'irreversible',
       notes: [
-        'Deletes the space folder recursively, every conversation in it, and every digital human installed in it.',
-        'Nothing is moved to a trash folder and there is no undo.',
-        'Name what will be lost and get the user to agree before running this.',
+        'Read GET /api/spaces/:spaceId?includeDeletionImpact=true before confirming: its digitalHumans move to Halo Workspace with memory and conversations intact, and activeWorkCount ongoing items are stopped.',
+        'Workspace conversations and Halo-owned workspace files are permanently deleted. External project files are kept. Digital humans living elsewhere are preserved too, including legacy storage dependencies.',
+        'Name the file loss, digital-human relocation and stopped work and get the user to agree before running this. There is no undo for deleted workspace data.',
       ].join('\n'),
     },
 

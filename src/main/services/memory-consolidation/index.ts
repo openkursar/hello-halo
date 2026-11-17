@@ -27,6 +27,8 @@ export {
   requestConsolidation,
   consolidateNow,
   getMemoryStatus,
+  suspendMemoryConsolidation,
+  type MemoryConsolidationSuspension,
   type ConsolidationRequest,
 } from './service'
 export {

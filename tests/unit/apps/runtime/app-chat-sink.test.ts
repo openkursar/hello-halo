@@ -107,6 +107,24 @@ function feedThinkingOnly(sink: ReturnType<typeof makeSink>) {
   })
 }
 
+describe('disposed chat writers', () => {
+  it('rejects late output and binding writes after workspace sinks were retired', () => {
+    const sink = makeSink()
+    const bound = bindAppChatEngine(sink, { spacePath: '/tmp/old-space', appId: 'app-1', runId: 'chat', engineId: 'halo', expected: {} })
+    sink.writePreInitFailure(new Error('before close'))
+    disposeAppChatSink(IM_KEY)
+    writeEvent.mockClear()
+    saveChatEngineBinding.mockClear()
+    saveChatSessionId.mockClear()
+    bound.onRawMessage?.({ type: 'assistant', message: { content: [{ type: 'text', text: 'late' }] } })
+    bound.onTurnComplete(makeResult({ capturedSessionId: 'late-session', engineId: 'halo' }))
+    sink.writePreInitFailure(new Error('late failure'))
+    expect(writeEvent).not.toHaveBeenCalled()
+    expect(saveChatEngineBinding).not.toHaveBeenCalled()
+    expect(saveChatSessionId).not.toHaveBeenCalled()
+  })
+})
+
 describe('digital human engine binding writes', () => {
   beforeEach(() => {
     saveChatEngineBinding.mockReset().mockReturnValue(true)

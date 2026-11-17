@@ -25,12 +25,17 @@ import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { ImPermissionContext } from './im-permission-registry'
 import type { TeamRequestOrigin, TeamTriggerContext } from '../../../shared/apps/team-types'
 import { createTurnGate } from '../../platform/turn-gate'
+import { pendingWorkspaceChange } from './workspace-admission'
+import { parseAppChatKey, parseNativeChatKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 import { hasActiveAppChatRound, onAppChatRoundChange, peekAppChatSink, type PreparedAppChatInput } from './app-chat-sink'
 
 const LOG_TAG = '[AppChatLiveTurn]'
 
 /** A message on its way to the engine: accepted for a new turn, its round not queued yet. */
 interface StartEntry {
+  controller: AbortController
+  done: Promise<void>
+  finish(): void
   cancelled: boolean
   stoppedBy?: StopReason
   reset: boolean
@@ -90,6 +95,8 @@ function followSinkRounds(): void {
 
 /** A message accepted for a new turn; see {@link beginAppChatTurnStart}. */
 export interface AppChatTurnStart {
+  /** Cancels engine acquisition even while it waits behind a workspace fence. */
+  readonly signal: AbortSignal
   /** Stopped on the way: the turn must send nothing to the engine. */
   readonly cancelled: boolean
   /** Who stopped it on the way: a person's stop voids a person's message. */
@@ -121,11 +128,14 @@ export interface AppChatTurnStart {
  * Called synchronously where the turn is decided, before any await.
  */
 export function beginAppChatTurnStart(conversationId: string): AppChatTurnStart {
-  const entry: StartEntry = { cancelled: false, reset: false }
+  let finish!: () => void
+  const done = new Promise<void>(resolve => { finish = resolve })
+  const entry: StartEntry = { controller: new AbortController(), done, finish, cancelled: false, reset: false }
   const entries = startingTurns.get(conversationId) ?? new Set<StartEntry>()
   entries.add(entry)
   startingTurns.set(conversationId, entries)
   return {
+    signal: entry.controller.signal,
     get cancelled() {
       return entry.cancelled
     },
@@ -152,6 +162,7 @@ export function beginAppChatTurnStart(conversationId: string): AppChatTurnStart 
       const current = startingTurns.get(conversationId)
       if (!current?.delete(entry)) return
       if (current.size === 0) startingTurns.delete(conversationId)
+      entry.finish()
       notifyConversationChange(conversationId)
     },
   }
@@ -183,11 +194,17 @@ export function cancelAppChatTurnStarts(conversationId: string, reason: StopReas
       entry.stoppedBy ??= reason
       // The system stops a message on its way only to reset its conversation.
       if (reason === 'internal') entry.reset = true
+      entry.controller.abort('Chat preparation stopped')
     }
   }
   for (const waiter of liveTurnWaiters.get(conversationId) ?? []) waiter.stopped = true
   notifyConversationChange(conversationId)
   return !!entries
+}
+
+/** Includes holds owned by IM grant preparation and team admission before chat dispatch. */
+export function pendingAppChatTurnStarts(conversationId: string): Promise<void>[] {
+  return [...startingTurns.get(conversationId) ?? []].map(entry => entry.done)
 }
 
 /** Conversations with a message still on its way to the engine. */
@@ -297,6 +314,8 @@ export function keepStoppedInputs(
 }
 
 function prepareLiveInput(conversationId: string, text: string, images?: ImageAttachment[]): PreparedAppChatInput | false {
+  const appId = parseNativeChatKey(conversationId)?.appId ?? parseAppChatKey(conversationId)?.appId ?? parseTeamSessionKey(conversationId)?.appId
+  if (appId && pendingWorkspaceChange(appId)) return false
   const sink = peekAppChatSink(conversationId)
   if (sink?.prepareLiveInput) return sink.prepareLiveInput(text, images)
   // A text-only engine turn predating this surface needs no image preparation.

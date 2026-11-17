@@ -513,9 +513,9 @@ describe('AppManager', () => {
   })
 
   describe('deleteAppsInSpace', () => {
-    it('announces the uninstall of live apps but not of ones already uninstalled', async () => {
-      const liveId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'live-dh' }))
-      const goneId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'gone-dh' }))
+    it('announces the uninstall of live resources but not of ones already uninstalled', async () => {
+      const liveId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'live-mcp', type: 'mcp', mcp_server: { transport: 'stdio', command: 'node', args: [] } }))
+      const goneId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'gone-mcp', type: 'mcp', mcp_server: { transport: 'stdio', command: 'node', args: [] } }))
       await service.uninstall(goneId)
       const handler = vi.fn()
       service.onAppUninstalled(handler)
@@ -1273,15 +1273,21 @@ describe('AppManager', () => {
   // ===========================================================================
 
   describe('moveToSpace', () => {
-    it('keeps automation identity memory at its original location across moves and reloads', async () => {
+    it('refuses a record-only digital human move so runtime cannot bypass data relocation', async () => {
       const appId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'stable-person' }))
+      const original = service.getApp(appId)
       const originalPath = service.getAppWorkDir(appId)
-      await service.moveToSpace(appId, TEST_SPACE_ID_2)
-      expect(service.getApp(appId)?.spaceId).toBe(TEST_SPACE_ID_2)
-      expect(service.getApp(appId)?.dataPath).toBe(originalPath)
+      writeFileSync(join(originalPath, 'memory.md'), 'Retained personal memory')
+      const changed = vi.fn()
+      service.onAppAuthorityChanged(changed)
+
+      await expect(service.moveToSpace(appId, TEST_SPACE_ID_2)).rejects.toThrow('runtime workspace relocation')
+
+      expect(service.getApp(appId)).toEqual(original)
       expect(service.getAppWorkDir(appId)).toBe(originalPath)
-      await service.moveToSpace(appId, TEST_SPACE_ID)
-      expect(service.getAppWorkDir(appId)).toBe(originalPath)
+      expect(readFileSync(join(originalPath, 'memory.md'), 'utf8')).toBe('Retained personal memory')
+      expect(existsSync(join(spacePaths[TEST_SPACE_ID_2], '.halo', 'apps', appId))).toBe(false)
+      expect(changed).not.toHaveBeenCalled()
     })
 
     it('should update spaceId from one space to another', async () => {
@@ -1471,7 +1477,7 @@ describe('AppManager', () => {
       expect(seen).toEqual([true])
     })
 
-    it('does not reseed on moveToSpace', async () => {
+    it('does not reseed knowledge-base bindings when relocating a digital human', async () => {
       const originKb = createKB({ name: 'Origin Space KB' })
       bindToSpace(originKb.id, TEST_SPACE_ID)
 
@@ -1481,8 +1487,17 @@ describe('AppManager', () => {
       const targetKb = createKB({ name: 'Target Space KB' })
       bindToSpace(targetKb.id, TEST_SPACE_ID_2)
 
-      await service.moveToSpace(appId, TEST_SPACE_ID_2)
+      const source = service.getAppWorkDir(appId)
+      await service.relocateAutomationData(appId, TEST_SPACE_ID_2, {
+        sources: [{ path: source, spaceId: TEST_SPACE_ID }],
+        commitEnvironments: () => {},
+      })
 
+      expect(service.getApp(appId)!.spaceId).toBe(TEST_SPACE_ID_2)
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+      expect(service.getApp(appId)!.dataPath).toBeUndefined()
+      expect(service.getAppWorkDir(appId)).toBe(join(spacePaths[TEST_SPACE_ID_2], '.halo', 'apps', appId))
+      expect(existsSync(source)).toBe(false)
       // Bindings from the original seed persist; the new space's KB is not auto-bound.
       expect(listKBsForApp(appId).map(k => k.id)).toEqual([originKb.id])
     })

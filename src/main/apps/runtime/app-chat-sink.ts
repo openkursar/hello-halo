@@ -168,6 +168,9 @@ class AppChatSink implements TurnSink {
   private turn: TurnState = newTurnState()
   private writer: SessionWriter | undefined
   private writerOpened = false
+  private disposed = false
+
+  get isDisposed(): boolean { return this.disposed }
   private turnStartTimer: ReturnType<typeof setTimeout> | null = null
   /**
    * Whether the engine is mid-turn — including a turn it started on its own,
@@ -188,6 +191,7 @@ class AppChatSink implements TurnSink {
 
   /** One detail event for the accepted batch; original records keep their source and arrival order. */
   announceLiveInputs(messages: TranscriptMessage[], live = true): void {
+    if (this.disposed) return
     if (!messages.length) return
     if (!this.spaceId) {
       console.warn(`[AppChat][${this.appId}] Live inputs could not be announced: conversation=${this.conversationId} has no space identity`)
@@ -232,6 +236,7 @@ class AppChatSink implements TurnSink {
 
   /** A live addition awaits the result that consumes it without claiming a new native turn. */
   observeLiveTurn(hooks: AppChatRoundHooks): AppChatRoundHandle {
+    if (this.disposed) throw new Error('The conversation writer was retired')
     let observer!: Round
     const done = new Promise<void>((resolve, reject) => {
       observer = { hooks, resolve, reject, settled: false }
@@ -259,6 +264,7 @@ class AppChatSink implements TurnSink {
   }
 
   beginRound(hooks: AppChatRoundHooks): AppChatRoundHandle {
+    if (this.disposed) throw new Error('The conversation writer was retired')
     let resolve!: () => void
     let reject!: (err: Error) => void
     const done = new Promise<void>((res, rej) => {
@@ -391,6 +397,7 @@ class AppChatSink implements TurnSink {
   // ── TurnSink ───────────────────────────────────────────
 
   onTurnStart(): void {
+    if (this.disposed) return
     this.turn = newTurnState()
     this.current = this.queue.shift() ?? null
     this.turnRunning = true
@@ -401,6 +408,7 @@ class AppChatSink implements TurnSink {
   }
 
   onRawMessage(sdkMessage: unknown): void {
+    if (this.disposed) return
     const message = sdkMessage as { type?: string }
 
     // The first message of the turn is the earliest proof the engine took our
@@ -456,6 +464,7 @@ class AppChatSink implements TurnSink {
   }
 
   onTurnComplete(result: StreamResult): void {
+    if (this.disposed) return
     try {
       this.completeTurn(result)
     } finally {
@@ -467,6 +476,7 @@ class AppChatSink implements TurnSink {
   }
 
   onTurnError(error: Error, _turnStarted?: boolean, partial?: StreamResult): void {
+    if (this.disposed) return
     try {
       if (partial) this.persistPartial(partial, error.message)
     } finally {
@@ -562,6 +572,7 @@ class AppChatSink implements TurnSink {
   }
 
   onConsumerStopped(partial?: StreamResult): void {
+    if (this.disposed) return
     try {
       if (partial) this.persistPartial(partial, 'Chat session ended before the reply completed.')
     } finally {
@@ -585,6 +596,10 @@ class AppChatSink implements TurnSink {
 
   /** Drop the sink's timer and held pushes so a discarded sink cannot outlive its conversation. */
   dispose(): void {
+    if (this.disposed) return
+    this.onConsumerStopped()
+    this.disposed = true
+    this.writer = undefined
     this.permissionIdentity = undefined
     this.hasCurrentConfiguration = undefined
     this.prepareInput = undefined
@@ -600,6 +615,7 @@ class AppChatSink implements TurnSink {
    */
   private armTurnStartDeadline(): void {
     this.clearTurnStartDeadline()
+    if (this.disposed) return
     if (this.turnRunning || (this.queue.length === 0 && this.liveRounds.length === 0)) return
 
     this.turnStartTimer = setTimeout(() => {
@@ -674,6 +690,10 @@ class AppChatSink implements TurnSink {
   }
 
   private getWriter(): SessionWriter | undefined {
+    if (this.disposed) {
+      console.warn(`[AppChat][${this.appId}] Transcript write rejected after sink disposal: conversation=${this.conversationId}`)
+      return undefined
+    }
     if (!this.writerOpened) {
       this.writerOpened = true
       this.writer = this.spacePath
@@ -695,6 +715,7 @@ class AppChatSink implements TurnSink {
   }
 
   private persistSessionId(result: StreamResult): void {
+    if (this.disposed) return
     if (!result.capturedSessionId || !this.spacePath) return
     if (!result.engineId) saveChatSessionId(this.spacePath, this.appId, this.runId, result.capturedSessionId)
 
@@ -818,7 +839,7 @@ export function peekAppChatSink(conversationId: string): AppChatSink | undefined
 }
 
 /** Binding writes belong to the consumer being created, not the longer-lived chat sink. */
-export function bindAppChatEngine(sink: TurnSink, options: {
+export function bindAppChatEngine(sink: TurnSink & { readonly isDisposed?: boolean }, options: {
   spacePath: string
   appId: string
   runId: string
@@ -828,7 +849,7 @@ export function bindAppChatEngine(sink: TurnSink, options: {
   let expected = options.expected
   const persist = (result: StreamResult): StreamResult => {
     const owned = { ...result, engineId: result.engineId ?? options.engineId }
-    if (!owned.capturedSessionId || !options.spacePath) return owned
+    if (sink.isDisposed || !owned.capturedSessionId || !options.spacePath) return owned
     if (owned.engineId !== options.engineId) {
       console.warn('[AppChat] Session binding rejected a different consumer engine', { appId: options.appId, runId: options.runId, engineId: owned.engineId })
       return { ...owned, capturedSessionId: undefined }
@@ -884,6 +905,11 @@ function emitRoundChange(conversationId: string): void {
 }
 
 /** Conversations that currently have a round in flight. */
+/** Includes idle and push-only writers that relocation must retire as well. */
+export function getAppChatSinkConversationIds(): string[] {
+  return [...sinks.keys()]
+}
+
 export function getConversationsWithActiveRound(): string[] {
   const ids: string[] = []
   for (const [conversationId, sink] of sinks) {

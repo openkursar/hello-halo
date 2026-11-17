@@ -20,6 +20,7 @@ import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } 
 import type { MemoryPressureEvent } from '../shared/types/memory-pressure'
 import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
+import type { SpaceDetailsRequestOptions } from '../shared/types/space'
 import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
 import type { PickedLocalEntry } from '../shared/attached-paths'
 import type { ProxyRouteInfo } from '../shared/rpc/contracts/system.contract'
@@ -175,7 +176,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   listSpaces: () => Promise<IpcResponse>
   createSpace: (input: { name: string; icon: string; color?: string; customPath?: string }) => Promise<IpcResponse>
   deleteSpace: (spaceId: string) => Promise<IpcResponse>
-  getSpace: (spaceId: string) => Promise<IpcResponse>
+  getSpace: (spaceId: string, options?: SpaceDetailsRequestOptions) => Promise<IpcResponse>
   openSpaceFolder: (spaceId: string) => Promise<IpcResponse>
   updateSpace: (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => Promise<IpcResponse>
   setSpaceWorkingDir: (spaceId: string, workingDir: string) => Promise<IpcResponse>

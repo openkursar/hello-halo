@@ -48,6 +48,40 @@ re-enter descendant disposal. It closes sessions and pending decisions, while th
 runtime clears local checks and per-epoch caches without publishing epoch changes.
 A failed close leaves the original business history intact and propagates for retry.
 
+## Workspace maintenance
+
+`beginTeamWorkspaceChange` is the local integration surface for a digital-human
+move. It synchronously fences source/actor allocation and delivery, then drains
+admitted participant creation and exact local stop requests. Its final actor IDs
+must also pass the app runtime's full turn/finally/sink barrier before files move;
+a stop receipt alone is not a flush guarantee. No epoch is sealed and no remote
+member is stopped. Existing decisions and shared work history remain intact.
+
+The plan supplies source/target pairs to the caller's journaled filesystem
+transaction: participant metadata goes beneath the moved app's
+`collaboration/<id>`, while participant transcripts retain their ordinary
+`<space>/.halo/apps/<participant-id>` shape. Its synchronous commit joins the
+caller's database transaction. Pinned participant session environments must use
+the plan's participant-specific environments, not the parent app's cwd. Explicit
+cwd/worktree ownership outside Halo's source data root is unchanged, even when an
+external authored cwd equals a parent pinned directory. Non-worktree directories
+inside source Halo data reroot to the destination cwd (preserving their relative
+subdirectory beneath a supplied historical `sourceWorkDirs` root). Their file
+access cwd and workspace roots follow; old project files and attachments do not
+move. Ordinary cwd changes require selective native-history carry by the caller,
+not an automatic native-session reset. When deletion will
+remove the cwd or its repository ownership, the stopped participant instead
+starts future work in the destination cwd. Its invalid workspace lease is dropped
+without releasing or deleting an external checkout; project files are not moved.
+The plan's `resetSessionActorIds` requires neutral history handoff rather than
+native resume against deleted files. Deleted attachments lose file access; model
+selection and permission denials remain intact. `prepareTeamWorkspaceChange`
+provides the same store-only plan before startup admits any execution, without
+requiring a participant service or introducing a startup participant scan for
+users without a legacy app repair. Team scratch remains under the global team-work
+root. Project files do not move; old relative project references are not promised
+to resolve against the new working directory. No artifact-origin model is added.
+
 ## Layer position
 
 Kernel adapters (`message-bus`, `blackboard`, `checks`, `team-tools`) depend on

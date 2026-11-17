@@ -9,7 +9,7 @@ import { createDatabaseManager, type DatabaseManager } from '../../../../src/mai
 import { migrations } from '../../../../src/main/apps/manager/migrations'
 
 const oldSchema = readFileSync(fileURLToPath(new URL('../../../e2e/fixtures/data/app-manager-v2.sql', import.meta.url)), 'utf8')
-const targetVersion = 10
+const targetVersion = 11
 const oldColumns = ['id', 'spec_id', 'space_id', 'spec_json', 'status', 'pending_escalation_id', 'user_config_json', 'user_overrides_json', 'permissions_json', 'installed_at', 'last_run_at', 'last_run_outcome', 'error_message', 'uninstalled_at']
 type Row = Record<string, unknown>
 
@@ -65,6 +65,11 @@ test('the frozen manager v2 layout preserves supported records and applies only 
     assert.deepEqual(own.db.prepare("SELECT * FROM _migrations WHERE namespace = 'other_records'").all(), namespace)
     assert.equal((own.db.prepare("SELECT version FROM _migrations WHERE namespace = 'app_manager'").get() as { version: number }).version, targetVersion)
     assert.deepEqual(own.db.pragma('foreign_key_check'), [])
+    assert.deepEqual(own.db.prepare('SELECT * FROM app_data_relocations').all(), [])
+    const legacyIndex = own.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'idx_apps_legacy_data'").get() as { sql: string }
+    assert.match(legacyIndex.sql, /WHERE data_path IS NOT NULL/)
+    const relocationReference = own.db.pragma('foreign_key_list(app_data_relocations)') as Array<{ table: string; from: string; on_delete: string }>
+    assert.ok(relocationReference.some(reference => reference.table === 'installed_apps' && reference.from === 'app_id' && reference.on_delete === 'RESTRICT'))
   } finally { own.manager.closeAll(); rmSync(own.directory, { recursive: true, force: true }) }
 })
 
@@ -100,6 +105,13 @@ test('the manager upgrade snapshot contains real v2 records and a second opening
     assert.throws(() => insert.run('duplicate-global', null), /UNIQUE/)
     insert.run('space-skill', 'legacy-space')
     assert.throws(() => insert.run('duplicate-space', 'legacy-space'), /UNIQUE/)
+    const people = own.db.prepare("INSERT INTO installed_apps (id, spec_id, space_id, spec_json, installed_at) VALUES (?, 'same-person-name', ?, '{\"type\":\"automation\",\"name\":\"same-person-name\"}', 2001)")
+    people.run('moved-person', 'legacy-space')
+    people.run('retained-person', 'legacy-space')
+    own.db.prepare('UPDATE installed_apps SET status = ?, uninstalled_at = ? WHERE id = ?').run('uninstalled', 2100, 'retained-person')
+    assert.deepEqual(own.db.prepare("SELECT id, status FROM installed_apps WHERE spec_id = 'same-person-name' ORDER BY id").all(), [
+      { id: 'moved-person', status: 'active' }, { id: 'retained-person', status: 'uninstalled' },
+    ])
     const current = own.db.prepare('SELECT * FROM installed_apps ORDER BY id').all()
     const versions = own.db.prepare('SELECT * FROM _migrations ORDER BY namespace').all()
     own.manager.closeAll()

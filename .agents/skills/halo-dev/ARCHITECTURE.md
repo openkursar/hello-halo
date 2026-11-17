@@ -871,6 +871,14 @@ moved, created or deleted; folders inside Halo's and the engine's own data
 cannot be chosen, except the space's own data folder (where a space without a
 project folder works), and the default space's folder cannot be changed.
 
+Digital humans change workspace through `apps/runtime/space-change`, which stops
+and drains their work, journals a merge of memory and transcripts, and atomically
+rewrites all their environments with the installation location. Project files stay.
+Workspace deletion uses `workspace-deletion` to preserve resident and legacy-dependent
+people first. The engine's scoped maintenance fence covers preparation, native
+persistence and process exit; manager remains a data layer, never a runtime caller.
+Startup repairs only legacy split layouts before digital-human data admission.
+
 Notes:
 - **Legacy custom-path spaces**: Created before centralized storage, `path` points to the project directory with `.halo/` inside it. These continue to work without migration.
 - **Lazy-loaded conversations**: `conversation.service.ts` uses `index.json` for fast listing; full conversation data is loaded only when entering a conversation.

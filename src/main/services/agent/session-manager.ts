@@ -31,7 +31,7 @@ import {
   getApiCredentialsForSelection,
   getDbMcpServers
 } from './helpers'
-import { isImSessionKey } from '../../../shared/apps/im-keys'
+import { isImSessionKey, isSpaceConversationId } from '../../../shared/apps/im-keys'
 import { purgeStaleMcpOAuth } from './mcp-auth-state'
 import { onMcpServerRecovered } from './mcp-manager'
 import { emitAgentEvent } from './events'
@@ -52,6 +52,11 @@ import { appendToSystemPrompt, buildKnowledgeSection } from './system-prompt'
 import { assertWorkingDirCurrent } from './working-dir'
 import { prepareStoredSession } from './stored-session'
 import type { KBReference } from '../../../shared/types/tlon'
+import { getQuestionConversationsForSpace, rejectQuestionsForConversation, rejectQuestionsForSpace } from './permission-handler'
+import {
+  assertSpaceOperationCurrent, beginSpaceOperationMaintenance, getSpaceOperationConversationIds, hasSpaceOperations,
+  recordMaintenanceCleanup, retainSpaceCleanup, runSpaceOperation, waitForSessionCleanup, withDrainTimeout,
+} from './space-maintenance'
 
 /**
  * Mask a secret for a diagnostic log line: report presence + length only, never
@@ -420,11 +425,13 @@ function isSessionWorking(conversationId: string): boolean {
  * @param reason - Reason for cleanup (for logging)
  * @param failure - Unexpected termination to settle pending messages before replacement
  */
-function cleanupSession(conversationId: string, reason: string, failure?: Error): void {
+function cleanupSession(conversationId: string, reason: string, failure?: Error): unknown {
   const info = v2Sessions.get(conversationId)
   if (!info) return
 
   console.log(`[Agent][${conversationId}] Cleaning up session: ${reason}`)
+  const pid = info.session.pid
+  let closeError: unknown
 
   // Stop the persistent consumer first (if any)
   const consumer = consumers.get(conversationId)
@@ -451,9 +458,17 @@ function cleanupSession(conversationId: string, reason: string, failure?: Error)
     try {
       info.session.close()  // Release FDs (stdin/stdout/stderr pipes)
     } catch (e) {
-      // Ignore close errors - session may already be dead
+      closeError = e
+      console.warn(`[Agent][${conversationId}] Session close failed:`, e)
     }
   }
+  recordMaintenanceCleanup(info.spaceId, async () => {
+    if (closeError) {
+      info.session.close()
+      closeError = undefined
+    }
+    await waitForSessionCleanup(info.session, pid)
+  }, Boolean(closeError))
 
   unregisterProcess(conversationId, 'v2-session')
   v2Sessions.delete(conversationId)
@@ -471,6 +486,7 @@ function cleanupSession(conversationId: string, reason: string, failure?: Error)
       console.error(`[Agent][${conversationId}] Retired-session listener failed:`, error)
     }
   }
+  return closeError
 }
 
 // ============================================
@@ -772,7 +788,7 @@ async function migrateSessionIfNeeded(workDir: string, sessionId: string, config
  * 3. The abort signal also fires SIGTERM via the spawn signal option
  * Both ensure the old process exits promptly before the new one starts.
  */
-function closeV2SessionForRebuild(conversationId: string, reason = 'rebuild required', failure?: Error): void {
+function closeV2SessionForRebuild(conversationId: string, reason = 'rebuild required', failure?: Error): unknown {
   const info = v2Sessions.get(conversationId)
   if (info) {
     try {
@@ -784,7 +800,7 @@ function closeV2SessionForRebuild(conversationId: string, reason = 'rebuild requ
       // AbortController may not be accessible — proceed with cleanup
     }
   }
-  cleanupSession(conversationId, reason, failure)
+  return cleanupSession(conversationId, reason, failure)
 }
 
 /**
@@ -875,10 +891,10 @@ export function getOrCreateV2Session(
   resolveKnowledgeBases?: () => KBReference[],
   gates?: SessionGates
 ): Promise<V2SessionInfo['session']> {
-  return getOrCreateSessionResult(
+  return runSpaceOperation(spaceId, conversationId, maintenanceSignal => getOrCreateSessionResult(
     spaceId, conversationId, sdkOptions, sessionId, workDir,
-    consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases, gates
-  )
+    consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases, { ...gates, maintenanceSignal }
+  ), gates?.maintenanceSignal)
 }
 
 /** Acquires protection before handoff. Pre-init failure settles before replacement; always release in finally. */
@@ -895,30 +911,34 @@ export async function acquireV2Session(
   gates?: SessionGates,
   onFailureBeforeInit?: (error: Error) => void
 ): Promise<V2SessionLease> {
-  const request: SessionLeaseRequest = {
-    onFailureBeforeInit,
-    callerOwnsStream: gates?.streamOwner === 'caller',
-    engineHandoffContent: typeof sdkOptions.engineHandoffContent === 'string' ? sdkOptions.engineHandoffContent : undefined,
-  }
-  await getOrCreateSessionResult(
-    spaceId, conversationId, sdkOptions, sessionId, workDir,
-    consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases, gates, request
-  )
-  const lease = request.lease!
-  try {
-    if (!request.engineHandoffContent && pendingEngineHandoffs.has(lease.session) && gates?.recoverNativeSession) {
-      const refreshed = await gates.recoverNativeSession()
-      if (!refreshed.trim()) {
-        console.warn(`[Agent][${conversationId}] Input refused: pending engine handoff has no refreshed context`)
-        throw new Error('The conversation history could not be prepared for the engine change')
-      }
-      request.engineHandoffContent = refreshed
+  return runSpaceOperation(spaceId, conversationId, async maintenanceSignal => {
+    gates = { ...gates, maintenanceSignal }
+    const request: SessionLeaseRequest = {
+      onFailureBeforeInit,
+      callerOwnsStream: gates?.streamOwner === 'caller',
+      engineHandoffContent: typeof sdkOptions.engineHandoffContent === 'string' ? sdkOptions.engineHandoffContent : undefined,
     }
-    return lease
-  } catch (error) {
-    lease.release()
-    throw error
-  }
+    await getOrCreateSessionResult(
+      spaceId, conversationId, sdkOptions, sessionId, workDir,
+      consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases, gates, request
+    )
+    const lease = request.lease!
+    try {
+      if (!request.engineHandoffContent && pendingEngineHandoffs.has(lease.session) && gates?.recoverNativeSession) {
+        const refreshed = await gates.recoverNativeSession()
+        if (!refreshed.trim()) {
+          console.warn(`[Agent][${conversationId}] Input refused: pending engine handoff has no refreshed context`)
+          throw new Error('The conversation history could not be prepared for the engine change')
+        }
+        request.engineHandoffContent = refreshed
+      }
+      assertSpaceOperationCurrent(maintenanceSignal)
+      return lease
+    } catch (error) {
+      lease.release()
+      throw error
+    }
+  }, gates?.maintenanceSignal)
 }
 
 interface SessionLeaseRequest {
@@ -941,6 +961,7 @@ async function getOrCreateSessionResult(
   gates?: SessionGates,
   leaseRequest?: SessionLeaseRequest
 ): Promise<V2SessionInfo['session']> {
+  gates?.maintenanceSignal?.throwIfAborted()
   const engineId = isEngineId(sdkOptions.engineId) ? sdkOptions.engineId : getActiveEngine() ?? 'halo'
   sdkOptions = { ...sdkOptions, engineId }
   assertWorkingDirCurrent(spaceId, workDir ?? sdkOptions.cwd)
@@ -1077,6 +1098,8 @@ export type SessionConsumerOptions = Omit<ConsumerContext, 'spaceId' | 'conversa
 
 /** Conditions a caller needs the returned session to actually meet. */
 export interface SessionGates {
+  /** Cancellation from the caller's preparation; aborted work never waits on a maintenance fence. */
+  maintenanceSignal?: AbortSignal
   /** Caller consumes the stream and retains its acquisition lease until explicit release. */
   streamOwner?: 'caller'
   /** Space chat's guides depend on the native history format resolved at creation. */
@@ -1374,12 +1397,16 @@ async function getOrCreateV2SessionInner(
   // not lost (see requestSessionRebuild / sessionsUnderCreation).
   // Control imports this manager, so subscribe only while a native session is being created.
   const { onUserStop } = await import('./control')
+  gates?.maintenanceSignal?.throwIfAborted()
   sessionsUnderCreation.add(conversationId)
   const creationAbort: AbortController = sdkOptions.abortController ?? new AbortController()
+  const onMaintenanceAbort = () => creationAbort.abort(gates?.maintenanceSignal?.reason)
+  gates?.maintenanceSignal?.addEventListener('abort', onMaintenanceAbort, { once: true })
   const stopSubscription = onUserStop(id => { if (id === conversationId) creationAbort.abort() })
   sdkOptions = { ...sdkOptions, abortController: creationAbort }
   let creationToolsetMode: ToolsetContextMode | undefined
   const prepareCreationTools = async (): Promise<void> => {
+    creationAbort.signal.throwIfAborted()
     if (gates?.toolsetInstructions) {
       creationToolsetMode = 'automatic'
     }
@@ -1423,10 +1450,20 @@ async function getOrCreateV2SessionInner(
       session = await startSession()
     }
     if (creationAbort.signal.aborted) {
-      session.close()
+      const pid = session.pid
+      let closed = false
+      const cleanup = async () => {
+        if (!closed) {
+          session.close()
+          closed = true
+        }
+        await waitForSessionCleanup(session, pid)
+      }
+      if (!recordMaintenanceCleanup(spaceId, cleanup)) await cleanup()
       creationAbort.signal.throwIfAborted()
     }
   } finally {
+    gates?.maintenanceSignal?.removeEventListener('abort', onMaintenanceAbort)
     stopSubscription.dispose()
     sessionsUnderCreation.delete(conversationId)
   }
@@ -1527,9 +1564,13 @@ async function getOrCreateV2SessionInner(
  */
 export async function ensureSessionWarm(
   spaceId: string,
-  conversationId: string
+  conversationId: string,
+  maintenanceSignal?: AbortSignal,
 ): Promise<void> {
+  return runSpaceOperation(spaceId, conversationId, signal => ensureSessionWarmInner(spaceId, conversationId, signal), maintenanceSignal)
+}
 
+async function ensureSessionWarmInner(spaceId: string, conversationId: string, maintenanceSignal: AbortSignal): Promise<void> {
   const workDir = getWorkingDir(spaceId)
   const conversation = getConversation(spaceId, conversationId)
   if (!conversation) return
@@ -1543,6 +1584,7 @@ export async function ensureSessionWarm(
   // exactly so the warmed session isn't immediately rebuilt on the first
   // message (fingerprint mismatch).
   const credentials = await getApiCredentialsForSelection(conversation)
+  assertSpaceOperationCurrent(maintenanceSignal)
   console.log(`[Agent] Session warm using: ${credentials.provider}, model: ${credentials.model}`)
 
   // Resolve credentials for SDK (handles OpenAI compat router for non-Anthropic providers).
@@ -1612,6 +1654,7 @@ export async function ensureSessionWarm(
       buildMcpServers,
       resolveKnowledgeBases,
       {
+        maintenanceSignal,
         creationContext: spaceMemory?.contextKey,
         toolsetInstructions: (mode: ToolsetContextMode) => engineId === 'halo' ? buildToolsetSection(spaceId, conversationId, mode) : '',
         recoverNativeSession: sessionId ? async () => (await prepareConversationContinuation(
@@ -1840,6 +1883,7 @@ export function invalidateSessionsForSpace(spaceId: string, reason = 'MCP change
  * before anything else starts.
  */
 export function isSpaceBusy(spaceId: string): boolean {
+  if (hasSpaceOperations(spaceId)) return true
   for (const state of activeSessions.values()) {
     if (state.spaceId === spaceId) return true
   }
@@ -1851,6 +1895,102 @@ export function isSpaceBusy(spaceId: string): boolean {
     if (isSessionBusy(conversationId) || turnsAwaitingInit.has(conversationId)) return true
   }
   return false
+}
+
+function spaceWorkspaceWork(spaceId: string, activeIds = getSpaceOperationConversationIds(spaceId)): Set<string> {
+  for (const id of getQuestionConversationsForSpace(spaceId)) activeIds.add(id)
+  for (const [id, state] of activeSessions) if (state.spaceId === spaceId) activeIds.add(id)
+  for (const [id, creation] of inFlightSessionCreations) if (creation.spaceId === spaceId) activeIds.add(id)
+  for (const [id, info] of v2Sessions) if (info.spaceId === spaceId && isSessionBusy(id)) activeIds.add(id)
+  return activeIds
+}
+
+/** On-demand maintenance preview; each busy conversation is counted only once. */
+export function countSpaceWorkspaceWork(spaceId: string, options?: { ordinaryOnly?: boolean }): number {
+  const work = spaceWorkspaceWork(spaceId)
+  return options?.ordinaryOnly ? [...work].filter(isSpaceConversationId).length : work.size
+}
+
+/** Synchronously fences one space. Release in finally, after commit or rollback. */
+export function beginSpaceMaintenance(spaceId: string): {
+  readonly activeWorkCount: number
+  stopAndDrain(): Promise<void>
+  release(): void
+} {
+  const fence = beginSpaceOperationMaintenance(spaceId)
+  const activeWorkCount = spaceWorkspaceWork(spaceId, fence.conversationIds).size
+  let draining: Promise<void> | undefined
+  return {
+    activeWorkCount,
+    stopAndDrain() {
+      return draining ??= withDrainTimeout((async () => {
+        rejectQuestionsForSpace(spaceId)
+        for (const state of activeSessions.values()) {
+          if (state.spaceId === spaceId) state.abortController.abort('Workspace maintenance')
+        }
+        for (const [id, info] of [...v2Sessions]) {
+          if (info.spaceId !== spaceId) continue
+          getConsumerHandle(id)?.getActiveSessionState()?.abortController.abort('Workspace maintenance')
+          if (info.session.withdrawUnreadInput) {
+            recordMaintenanceCleanup(spaceId, async () => { await info.session.withdrawUnreadInput!() })
+          }
+          closeV2SessionForRebuild(id, 'workspace maintenance')
+        }
+        await Promise.all(fence.state.operations.map(operation => operation.done))
+        // A cancelled native creation may have returned a session just before its abort was observed.
+        await Promise.all(fence.state.cleanups)
+        console.log(`[Agent] Workspace maintenance drained: space=${spaceId}, activeWork=${activeWorkCount}`)
+      })()).catch(error => {
+        console.error(`[Agent] Workspace maintenance failed; files must be preserved: space=${spaceId}`, error)
+        throw error
+      })
+    },
+    release: fence.release,
+  }
+}
+
+interface PendingSessionClosure {
+  session: V2SDKSession
+  pid: number | null | undefined
+  closeFailed?: boolean
+  forget?: () => void
+}
+const pendingSessionClosures = new Map<string, Set<PendingSessionClosure>>()
+
+/** Closes the current manager-owned instance and requires persistence and process exit. */
+export async function closeSessionAndWait(conversationId: string, reason: string, timeoutMs = 10_000): Promise<void> {
+  rejectQuestionsForConversation(conversationId)
+  const pending = pendingSessionClosures.get(conversationId) ?? new Set<PendingSessionClosure>()
+  const info = v2Sessions.get(conversationId)
+  if (info) {
+    const entry: PendingSessionClosure = { session: info.session, pid: info.session.pid, closeFailed: false }
+    pending.add(entry)
+    pendingSessionClosures.set(conversationId, pending)
+    entry.forget = retainSpaceCleanup(info.spaceId, async () => {
+      if (entry.closeFailed) {
+        entry.session.close()
+        entry.closeFailed = false
+      }
+      await waitForSessionCleanup(entry.session, entry.pid)
+      pending.delete(entry)
+      if (pending.size === 0 && pendingSessionClosures.get(conversationId) === pending) pendingSessionClosures.delete(conversationId)
+    })
+    const closeError = closeV2SessionForRebuild(conversationId, reason)
+    if (closeError) {
+      entry.closeFailed = true
+      throw closeError
+    }
+  }
+  await Promise.all([...pending].map(async entry => {
+    if (entry.closeFailed) {
+      entry.session.close()
+      entry.closeFailed = false
+    }
+    await waitForSessionCleanup(entry.session, entry.pid, timeoutMs)
+    entry.forget?.()
+    pending.delete(entry)
+  }))
+  if (pending.size === 0 && pendingSessionClosures.get(conversationId) === pending) pendingSessionClosures.delete(conversationId)
 }
 
 /**

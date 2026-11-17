@@ -54,7 +54,8 @@ vi.mock('../../../src/main/services/agent', () => ({
 }))
 vi.mock('../../../src/main/services/watcher-host.service', () => ({ rerootSpaceWatcher: (id: string, dir: string) => calls.push(`watcher ${id} ${dir}`) }))
 vi.mock('../../../src/main/services/artifact-cache.service', () => ({ rerootSpaceCache: (id: string, dir: string) => calls.push(`files ${id} ${dir}`) }))
-vi.mock('../../../src/main/apps/runtime', () => ({
+vi.mock('../../../src/main/apps/runtime', async () => ({
+  ...await import('../../../src/main/apps/runtime/workspace-mutations'),
   listPinnedWorkDirs: () => ['/work/old', '/work/older'],
   repointSpaceEnvironments: (id: string, dir: string) => {
     calls.push(`pins ${id} ${dir}`)
@@ -155,15 +156,26 @@ describe('changeSpaceWorkingDir', () => {
     expect((await changeSpaceWorkingDir('space-1', '/work/new')).success).toBe(true)
   })
 
-  it('takes one change of a space at a time, and the next once it is over', async () => {
+  it('serializes changes without overlapping copies and accepts the next after a failure', async () => {
     let finishCopy!: () => void
     m.copy.mockImplementationOnce(() => new Promise<number>(resolve => { finishCopy = () => resolve(1) }))
 
     const first = changeSpaceWorkingDir('space-1', '/work/new')
-    expect(await changeSpaceWorkingDir('space-1', '/work/other')).toEqual({ success: false, error: 'This workspace’s folder is already being changed.' })
     await vi.waitFor(() => expect(finishCopy).toBeDefined())
+    let secondFinished = false
+    const second = changeSpaceWorkingDir('space-1', '/work/other').then(result => {
+      secondFinished = true
+      return result
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(secondFinished).toBe(false)
+    expect(m.copy).toHaveBeenCalledTimes(1)
+    expect(calls).toEqual(['copy /work/old -> /work/new'])
+
     finishCopy()
     expect((await first).success).toBe(true)
+    expect((await second).success).toBe(true)
+    expect(calls.indexOf('copy /work/old -> /work/other')).toBeGreaterThan(calls.indexOf('files space-1 /work/new'))
 
     m.copy.mockRejectedValueOnce(new Error('EACCES'))
     expect((await changeSpaceWorkingDir('space-1', '/work/other')).success).toBe(false)

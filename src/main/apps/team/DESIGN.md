@@ -91,6 +91,10 @@ these scopes recursively through the normal dissolution path. Parent-epoch
 closure calls it before releasing the parent, and team dissolution covers every
 epoch, including removed members. Failed closes retain rows and leases for retry;
 the shared workspace release keeps dirty checkouts and independent installed people.
+Workspace deletion uses `dissolveTeam(..., { preserveInstalledMembers: true })`
+after its scoped allocation/engine barriers; the option propagates to private
+scopes and skips orphan app removal. Normal explicit team deletion retains its
+existing orphan-cleanup behavior.
 
 Deletion fences admission and cancels requests without sealing business epochs.
 Both host dissolution and joined-office cleanup await descendant disposal, then
@@ -121,6 +125,17 @@ contact edge.
 Participants do not install Apps or enter the people directory. The runtime
 adapts a local execution profile to the existing app-chat executor. Keeping a
 participant record does not keep an engine session alive or grant personal memory.
+
+Explicit workspace maintenance uses `participants.listLocalExecutions` and
+`ParticipantService.beginMaintenance`; neither query participates in startup or
+roster projection. The lease fences only selected local identities and their
+source-private descendants, aborts admitted workspace allocations and waits for
+creation chains before returning the final actor set. Engine-turn and transcript
+flush remains the caller's runtime responsibility. Failed stops or allocation
+cleanup prevent relocation. Release removes admission fences but does not revive
+cancelled requests. Shared epochs, unrelated members and remote profiles remain
+unchanged. App-backed private scopes rehome `owningSpaceId` in the caller's
+transaction alongside their owner-only execution profiles.
 
 ### Member-owned columns (v10, extended in v13)
 

@@ -16,6 +16,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { randomUUID } from 'crypto'
+import { acquireAppWorkspaceChange } from '../../../../src/main/apps/runtime/workspace-admission'
 import path from 'path'
 import fs from 'fs'
 
@@ -3998,6 +3999,115 @@ describe('AppRuntimeService', () => {
       expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
       expect(executeRun).toHaveBeenCalledTimes(1)
       expect(reconcileAwaitingDecision).toHaveBeenCalledWith(app.id)
+    })
+
+    it('cancels a manual run waiting for a global slot without stopping other people', async () => {
+      const apps = new Map(Array.from({ length: 11 }, (_, index) => [`person-${index}`, { ...app, id: `person-${index}` }]))
+      mockAppManager.getApp.mockImplementation((id: string) => apps.get(id))
+      for (const id of apps.keys()) persistMockApp(id)
+      const releases: Array<() => void> = []
+      vi.mocked(executeRun).mockImplementation(async (options: any) => {
+        await new Promise<void>(resolve => releases.push(resolve))
+        return { appId: options.app.id, runId: options.app.id, sessionKey: options.app.id, outcome: 'useful', startedAt: 0, finishedAt: 1, durationMs: 1 }
+      })
+      const service = createService()
+      const running = [...apps.keys()].slice(0, 10).map(id => service.triggerManually(id))
+      const queued = service.triggerManually('person-10')
+      const rejected = expect(queued).rejects.toThrow('changed workspace')
+      expect(service.getAppWorkspaceWorkCount('person-10')).toBe(1)
+      const release = await acquireAppWorkspaceChange(['person-10'])
+      try {
+        await service.stopAndDrainAppRuns('person-10')
+        await rejected
+        expect(service.getAppWorkspaceWorkCount('person-10')).toBe(0)
+        expect(executeRun).toHaveBeenCalledTimes(10)
+        expect(service.getAppWorkspaceWorkCount('person-0')).toBe(1)
+      } finally {
+        release()
+        releases.splice(0).forEach(finish => finish())
+        await Promise.all(running)
+      }
+    })
+
+    it('preserves an accepted decision queue during maintenance and continues after release', async () => {
+      seedQuestion()
+      store.acceptDecision(app.id, 'decision', answer)
+      const service = createService()
+      const release = await acquireAppWorkspaceChange([app.id])
+      await service.stopAndDrainAppRuns(app.id)
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      expect(store.getEntry('decision')?.continuation?.status).toBe('queued')
+      expect(executeRun).not.toHaveBeenCalled()
+      release()
+      await vi.waitFor(() => expect(executeRun).toHaveBeenCalledTimes(1))
+    })
+
+    it('waits for full stopped execution cleanup and retains answers arriving during maintenance', async () => {
+      seedQuestion()
+      let finish!: () => void
+      let signal!: AbortSignal
+      vi.mocked(executeRun).mockImplementationOnce(async (options: any) => {
+        signal = options.abortSignal
+        await new Promise<void>(resolve => { finish = resolve })
+        return { appId: app.id, runId: 'manual-run', sessionKey: 'manual-session', outcome: 'useful', startedAt: 0, finishedAt: 1, durationMs: 1 }
+      })
+      const service = createService()
+      const running = service.triggerManually(app.id)
+      const release = await acquireAppWorkspaceChange([app.id])
+      let drained = false
+      const stopping = service.stopAndDrainAppRuns(app.id).then(() => { drained = true })
+      await service.respondToEscalation(app.id, 'decision', answer)
+      expect(signal.aborted).toBe(true)
+      expect(drained).toBe(false)
+      expect(store.getEntry('decision')?.continuation?.status).toBe('queued')
+      finish()
+      await running
+      await stopping
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      release()
+      await vi.waitFor(() => expect(executeRun).toHaveBeenCalledTimes(2))
+    })
+
+    it('retains failed native cleanup after an execution ended and refuses relocation until retry succeeds', async () => {
+      const cleanup = vi.fn<[], Promise<void>>().mockRejectedValueOnce(new Error('native flush incomplete')).mockResolvedValue(undefined)
+      vi.mocked(executeRun).mockImplementationOnce(async (options: any) => {
+        options.onCleanupFailure(cleanup)
+        throw new Error('native flush incomplete')
+      })
+      const service = createService()
+      await expect(service.triggerManually(app.id)).rejects.toThrow('native flush incomplete')
+      expect(service.getAppWorkspaceWorkCount(app.id)).toBe(1)
+      const release = await acquireAppWorkspaceChange([app.id])
+      try {
+        await expect(service.stopAndDrainAppRuns(app.id)).rejects.toThrow('engine has not finished')
+        expect(service.getAppWorkspaceWorkCount(app.id)).toBe(1)
+        await service.stopAndDrainAppRuns(app.id)
+        expect(cleanup).toHaveBeenCalledTimes(2)
+        expect(service.getAppWorkspaceWorkCount(app.id)).toBe(0)
+      } finally { release() }
+    })
+
+    it('retries native cleanup registered by an execution while its stop is already draining', async () => {
+      let finish!: () => void
+      const cleanup = vi.fn(async () => {})
+      vi.mocked(executeRun).mockImplementationOnce(async (options: any) => {
+        await new Promise<void>(resolve => { finish = resolve })
+        options.onCleanupFailure(cleanup)
+        throw new Error('first native close failed')
+      })
+      const service = createService()
+      const running = service.triggerManually(app.id)
+      const rejected = expect(running).rejects.toThrow('first native close failed')
+      const release = await acquireAppWorkspaceChange([app.id])
+      try {
+        const stopping = service.stopAndDrainAppRuns(app.id)
+        finish()
+        await rejected
+        await stopping
+        expect(cleanup).toHaveBeenCalledOnce()
+        expect(service.getAppWorkspaceWorkCount(app.id)).toBe(0)
+      } finally { release() }
     })
 
     it('uses current permissions when queued execution finally obtains a resource slot', async () => {

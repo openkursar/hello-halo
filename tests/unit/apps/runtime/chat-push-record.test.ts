@@ -49,6 +49,7 @@ vi.mock('../../../../src/main/services/agent', () => ({ listResidentSessions: ()
 vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({ getActiveImChannelManager: () => null }))
 
 import { writeChatPush } from '../../../../src/main/apps/runtime/chat-record'
+import { acquireAppWorkspaceChange } from '../../../../src/main/apps/runtime/workspace-admission'
 import { chatPushConversationId, recordChatPush } from '../../../../src/main/apps/runtime/chat-push'
 import { disposeAppChatSink, getAppChatSink } from '../../../../src/main/apps/runtime/app-chat-sink'
 import { openSessionWriter, readSessionMessages, readSessionTranscript, readSessionMessageThoughts } from '../../../../src/main/apps/runtime/session-store'
@@ -103,6 +104,25 @@ describe('the shared destination for a push record and relay', () => {
 })
 
 describe('a push in the record of the chat it went to', () => {
+  it('waits without resending a delivered push and resolves its destination path after maintenance', async () => {
+    const conversationId = buildImSessionKey('dh', 'wecom-bot', 'group', 'ops-group')
+    const source = join(root, 'old-space')
+    const target = join(root, 'new-space')
+    registry.sessions.set('dh:wecom-bot:ops-group', { instanceId: 'inst-1' })
+    const revision = registry.sessions.get('dh:wecom-bot:ops-group')!
+    sessionEnvironments.set(conversationId, { spacePath: source })
+    const release = await acquireAppWorkspaceChange(['dh'])
+    const written = writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: 'Already delivered', via: 'message', pushedBy: 'ops-dh', sessionRevision: revision })
+    expect(existsSync(source)).toBe(false)
+    sessionEnvironments.set(conversationId, { spacePath: target })
+    registry.sessions.set('dh:wecom-bot:ops-group', { instanceId: 'replacement' })
+    release()
+    await written
+    expect(existsSync(source)).toBe(false)
+    expect(readChat(target, conversationId).map(message => message.content)).toEqual(['Already delivered'])
+    expect(registry.notePush).not.toHaveBeenCalled()
+  })
+
   it('reads as a message the digital human sent on its own, after what came before it', () => {
     const conversationId = buildImSessionKey('dh', 'wecom-bot', 'group', 'ops-group')
     registry.sessions.set('dh:wecom-bot:ops-group', { appId: 'dh', channel: 'wecom-bot', chatId: 'ops-group', instanceId: 'inst-1' })

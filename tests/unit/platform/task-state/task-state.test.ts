@@ -8,13 +8,17 @@
  * - Rows of conversations that no longer exist are refused and pruned
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../src/main/platform/store/types'
 import { TaskStateStore } from '../../../../src/main/platform/task-state/store'
 import { createTaskStateService } from '../../../../src/main/platform/task-state/service'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../src/main/platform/task-state/migrations'
 import type { TaskStateService } from '../../../../src/main/platform/task-state/service'
+
+const events = vi.hoisted(() => ({ renderer: vi.fn(), remote: vi.fn() }))
+vi.mock('../../../../src/main/foundation/window.service', () => ({ sendToRenderer: events.renderer }))
+vi.mock('../../../../src/main/http/websocket', () => ({ broadcastToAll: events.remote }))
 
 describe('TaskStateStore', () => {
   let dbManager: DatabaseManager
@@ -26,6 +30,8 @@ describe('TaskStateStore', () => {
     dbManager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
     store = new TaskStateStore(db)
   })
+
+  afterEach(() => dbManager.closeAll())
 
   it('upsertUnseen creates an unseen row', () => {
     store.upsertUnseen('conv-1', 'space-1', 'My Conversation', 1000)
@@ -90,6 +96,35 @@ describe('TaskStateStore', () => {
     expect(store.list().map(r => r.conversationId)).toEqual(['app-chat:a10'])
   })
 
+  it('repoints only the exact identity and colon descendants without changing bookkeeping', () => {
+    store.upsertUnseen('app-chat:a1', 'space-old', 'Unseen title', 1000)
+    store.upsertRead('app-chat:a1:local:direct:s1', 'space-old', 'Kept title', 'error', 2000)
+    store.setKept('app-chat:a1:local:direct:s1', true)
+    store.upsertUnseen('app-chat:a10', 'space-old', 'Other person', 3000)
+    store.upsertUnseen('app-chat:a1-other', 'space-old', 'Prefix sibling', 4000)
+    store.upsertUnseen('space-conversation', 'space-old', 'Workspace conversation', 5000)
+    const before = store.list()
+
+    expect(store.repointIdAndChildren('app-chat:a1', 'halo-temp')).toBe(2)
+    expect(store.list()).toEqual(before.map(row => row.conversationId === 'app-chat:a1' || row.conversationId.startsWith('app-chat:a1:')
+      ? { ...row, spaceId: 'halo-temp' }
+      : row))
+    expect(store.repointIdAndChildren('app-chat:a1', 'halo-temp')).toBe(0)
+    expect(store.repointIdAndChildren('app-chat:missing', 'halo-temp')).toBe(0)
+
+    store.deleteAllInSpace('space-old')
+    expect(store.list()).toHaveLength(2)
+  })
+
+  it('treats wildcard characters in the identity literally', () => {
+    store.upsertUnseen('app-chat:a_%', 'space-old', 'Exact', 1000)
+    store.upsertUnseen('app-chat:a_%:local:direct:s1', 'space-old', 'Child', 1000)
+    store.upsertUnseen('app-chat:abc', 'space-old', 'Unrelated', 1000)
+
+    expect(store.repointIdAndChildren('app-chat:a_%', 'space-new')).toBe(2)
+    expect(store.list().find(row => row.conversationId === 'app-chat:abc')?.spaceId).toBe('space-old')
+  })
+
   it('deleteAllInSpace only removes rows for that space', () => {
     store.upsertUnseen('conv-1', 'space-a', 'A', 1000)
     store.upsertUnseen('conv-2', 'space-b', 'B', 1000)
@@ -138,6 +173,13 @@ describe('TaskStateService', () => {
     store = new TaskStateStore(db)
     gone = new Set()
     service = createTaskStateService(store, (conversationId) => gone.has(conversationId))
+    events.renderer.mockClear()
+    events.remote.mockClear()
+  })
+
+  afterEach(() => {
+    service.dispose()
+    dbManager.closeAll()
   })
 
   it('persists the digital-human sessions listed beside conversations', () => {
@@ -154,6 +196,41 @@ describe('TaskStateService', () => {
     service.markUnseen('app-chat:some-app-id:team:team1:epoch1', 'space-1', '')
     service.markRead('app-chat:some-app-id:http:direct:x', 'space-1', '', 'error')
     expect(service.list()).toHaveLength(0)
+  })
+
+  it('normalizes stale app reports through the injected placement before checking existence', () => {
+    service.dispose()
+    let placement = 'space-new'
+    const resolveSpaceId = vi.fn((conversationId: string, spaceId: string) => conversationId.startsWith('app-chat:person') ? placement : spaceId)
+    const isGone = vi.fn((_conversationId: string, spaceId: string) => spaceId === 'space-old')
+    service = createTaskStateService(store, isGone, resolveSpaceId)
+    expect(resolveSpaceId).not.toHaveBeenCalled()
+
+    service.markUnseen('app-chat:person', 'space-old', 'Unseen')
+    expect(service.list()[0]).toMatchObject({ conversationId: 'app-chat:person', spaceId: 'space-new', state: 'unseen' })
+    expect(isGone).toHaveBeenLastCalledWith('app-chat:person', 'space-new')
+    placement = 'halo-temp'
+    service.markRead('app-chat:person:local:direct:s1', 'space-old', 'Read', 'error')
+    expect(service.list()[1]).toMatchObject({ conversationId: 'app-chat:person:local:direct:s1', spaceId: 'halo-temp', state: 'read' })
+    expect(isGone).toHaveBeenLastCalledWith('app-chat:person:local:direct:s1', 'halo-temp')
+
+    service.markUnseen('ordinary-conversation', 'ordinary-space', 'Ordinary')
+    expect(service.list()[2]).toMatchObject({ conversationId: 'ordinary-conversation', spaceId: 'ordinary-space' })
+    expect(resolveSpaceId).toHaveBeenCalledTimes(3)
+    service.list()
+    service.pruneGone()
+    expect(resolveSpaceId).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not resolve placement for channel sessions that cannot enter task state', () => {
+    service.dispose()
+    const resolveSpaceId = vi.fn((_conversationId: string, spaceId: string) => spaceId)
+    service = createTaskStateService(store, () => false, resolveSpaceId)
+
+    service.markUnseen('app-chat:person:wecom:direct:user', 'space-old', 'IM')
+    service.markRead('app-chat:person:team:team1:epoch1', 'space-old', 'Team', 'error')
+    expect(resolveSpaceId).not.toHaveBeenCalled()
+    expect(service.list()).toEqual([])
   })
 
   it('markUnseen/markRead/setKept/remove round-trip through list()', () => {
@@ -190,6 +267,41 @@ describe('TaskStateService', () => {
     expect(service.pruneGone()).toBe(2)
     expect(service.list().map(row => row.conversationId)).toEqual(['conv-3'])
     expect(service.pruneGone()).toBe(0)
+  })
+
+  it('repoints rows in the caller transaction and broadcasts only after explicit commit notification', () => {
+    service.markUnseen('app-chat:person', 'space-old', 'Unseen')
+    service.markRead('app-chat:person:local:direct:history', 'space-old', 'Read', 'error')
+    service.setKept('app-chat:person:local:direct:history', true)
+    service.markUnseen('app-chat:person-other', 'space-old', 'Other person')
+    const before = service.list()
+    events.renderer.mockClear()
+    events.remote.mockClear()
+    const db = dbManager.getAppDatabase()
+
+    expect(() => db.transaction(() => {
+      expect(service.repointAppConversations('person', 'halo-temp')).toBe(2)
+      expect(events.renderer).not.toHaveBeenCalled()
+      expect(events.remote).not.toHaveBeenCalled()
+      throw new Error('Placement failed')
+    })()).toThrow('Placement failed')
+    expect(service.list()).toEqual(before)
+    expect(events.renderer).not.toHaveBeenCalled()
+    expect(events.remote).not.toHaveBeenCalled()
+
+    db.transaction(() => {
+      expect(service.repointAppConversations('person', 'halo-temp')).toBe(2)
+      service.deleteAllInSpace('space-old')
+      expect(events.renderer).not.toHaveBeenCalled()
+      expect(events.remote).not.toHaveBeenCalled()
+    })()
+    expect(service.list()).toEqual(before.slice(0, 2).map(row => ({ ...row, spaceId: 'halo-temp' })))
+
+    service.notifyStateChanged()
+    expect(events.renderer).toHaveBeenCalledTimes(1)
+    expect(events.renderer).toHaveBeenCalledWith('task:state_changed', {})
+    expect(events.remote).toHaveBeenCalledTimes(1)
+    expect(events.remote).toHaveBeenCalledWith('task:state_changed', {})
   })
 
   it('dispose() stops the sweep timer without throwing', () => {

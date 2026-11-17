@@ -105,7 +105,9 @@ export {
 // whether anything in a space is running or about to, and whether anything started since
 export { invalidateSessionsForSpace, isSpaceBusy, countSessionAcquisitions } from './session-manager'
 // Close a space's idle sessions and wait for their processes to exit, before its folder is deleted
-export { closeSpaceSessions } from './session-manager'
+export { closeSpaceSessions, beginSpaceMaintenance, countSpaceWorkspaceWork, closeSessionAndWait } from './session-manager'
+/** For caller-owned sessions: capture pid before close, then require flush and child exit before releasing files. */
+export { waitForSessionCleanup } from './space-maintenance'
 
 // Delete a stored session that will never be resumed (CC-protocol engines);
 // copy a working directory's stored sessions to the one a space moved to

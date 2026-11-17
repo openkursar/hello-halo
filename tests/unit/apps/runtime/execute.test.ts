@@ -81,14 +81,14 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: vi.fn(() => ({ getAppWorkDir: () => '/tmp/app-1' })),
+  getAppManager: vi.fn(() => ({ getApp: vi.fn(), getAppWorkDir: () => '/tmp/app-1' })),
 }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveExecutionEnvironment: vi.fn(() => ({
     spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1',
   })),
-  validateExecutionEnvironment: vi.fn(),
-  validateEnvironmentConnections: vi.fn(),
+  validateExecutionEnvironment: vi.fn(environment => environment),
+  validateEnvironmentConnections: vi.fn(() => ({ changed: false, changedSpecIds: [] })),
   missingConnections: vi.fn(() => []),
 }))
 
@@ -148,6 +148,10 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   ...(await import('../../../../src/main/services/agent/sdk-config')),
   ...(await import('../../../../src/main/services/agent/resolved-sdk')),
   ...(await vi.importActual('../../../../src/main/services/agent/engine-handoff')),
+  ...(await vi.importActual('../../../../src/main/services/agent/working-dir')),
+  waitForSessionCleanup: vi.fn((await vi.importActual<typeof import('../../../../src/main/services/agent/space-maintenance')>(
+    '../../../../src/main/services/agent/space-maintenance',
+  )).waitForSessionCleanup),
   ensureEngineAvailable: vi.fn(async () => {}),
   getLegacyEngine: () => 'halo',
   resolveHistoricalEngine: (engine: string) => engine,
@@ -276,9 +280,12 @@ import {
   unregisterActiveSession,
   closeV2Session,
 } from '../../../../src/main/services/agent/session-manager'
-import { missingConnections, resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
+import { getAppManager } from '../../../../src/main/apps/manager'
+import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from '../../../../src/main/apps/runtime/execution-environment'
+import { ENVIRONMENT_NOTICE_TEXT } from '../../../../src/shared/transcript'
+import { WorkingDirectoryUnavailableError } from '../../../../src/main/services/agent'
 import { openSessionWriter, loadChatEngineState, saveChatEngineBinding } from '../../../../src/main/apps/runtime/session-store'
-import { ensureEngineAvailable } from '../../../../src/main/services/agent'
+import { ensureEngineAvailable, waitForSessionCleanup } from '../../../../src/main/services/agent'
 import { createScopedBrowserContext } from '../../../../src/main/services/ai-browser'
 
 // ============================================
@@ -358,6 +365,7 @@ function makeStore() {
     getRun: vi.fn(),
     getEntry: vi.fn(),
     pinRunEnvironment: vi.fn(),
+    replaceRunEnvironment: vi.fn(),
     insertRun: vi.fn(),
     completeRun: vi.fn(),
     updateRunSessionId: vi.fn(),
@@ -423,6 +431,137 @@ describe('executeRun — guards', () => {
     await expect(
       executeRun({ app, trigger: baseTrigger, store: makeStore(), memory: makeMemory() }),
     ).rejects.toBeInstanceOf(RunExecutionError)
+  })
+})
+
+describe('executeRun — environment preparation', () => {
+  beforeEach(() => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    vi.mocked(createSession).mockClear()
+    vi.mocked(acquireV2Session).mockClear()
+    vi.mocked(getApiCredentialsForSelection).mockClear()
+    vi.mocked(finalizeMemoryAfterTurn).mockClear()
+    vi.mocked(openSessionWriter).mockClear()
+  })
+
+  it('records a workspace resolution failure as a failed run and activity before any model or memory work', async () => {
+    vi.mocked(resolveExecutionEnvironment).mockImplementationOnce(() => { throw new Error('Work space is unavailable for app app-1') })
+    const store = makeStore()
+    const onRunStarted = vi.fn()
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory(), onRunStarted })
+
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toBe('Work space is unavailable for app app-1')
+    expect(store.insertRun).toHaveBeenCalledWith(expect.objectContaining({ runId: result.runId, status: 'running' }))
+    expect(store.completeRun).toHaveBeenCalledWith(result.runId, expect.objectContaining({ status: 'error', errorMessage: result.errorMessage }))
+    expect(store.insertEntry).toHaveBeenCalledWith(expect.objectContaining({
+      runId: result.runId, type: 'run_error', content: expect.objectContaining({ error: result.errorMessage }),
+    }))
+    expect(store.insertRun.mock.invocationCallOrder[0]).toBeLessThan(store.completeRun.mock.invocationCallOrder[0])
+    expect(onRunStarted).toHaveBeenCalledWith(expect.objectContaining({ runId: result.runId, isResuming: false }))
+    expect(getApiCredentialsForSelection).not.toHaveBeenCalled()
+    expect(createSession).not.toHaveBeenCalled()
+    expect(acquireV2Session).not.toHaveBeenCalled()
+    expect(openSessionWriter).not.toHaveBeenCalled()
+    expect(finalizeMemoryAfterTurn).not.toHaveBeenCalled()
+  })
+
+  it('records a missing working directory without creating a replacement native session', async () => {
+    vi.mocked(validateExecutionEnvironment).mockImplementationOnce(() => { throw new WorkingDirectoryUnavailableError('/missing-work', 'space-1') })
+    const store = makeStore()
+    const emitEntry = vi.fn()
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory(), emitEntry })
+
+    expect(result.outcome).toBe('error')
+    expect(store.insertRun).toHaveBeenCalledWith(expect.objectContaining({ runId: result.runId, environment: expect.objectContaining({ spaceId: 'space-1' }) }))
+    expect(store.completeRun).toHaveBeenCalledWith(result.runId, expect.objectContaining({ status: 'error' }))
+    expect(emitEntry).toHaveBeenCalledWith(expect.objectContaining({ runId: result.runId, type: 'run_error', content: expect.objectContaining({ error: result.errorMessage }) }))
+    expect(getApiCredentialsForSelection).not.toHaveBeenCalled()
+    expect(createSession).not.toHaveBeenCalled()
+    expect(acquireV2Session).not.toHaveBeenCalled()
+    expect(openSessionWriter).not.toHaveBeenCalled()
+  })
+
+  it.each(['continue_followup', 'escalation_followup'] as const)('%s recovers through the current installed person while retaining the original run and native session', async type => {
+    const current = makeApp({ spaceId: 'current-space' })
+    const manager = { getApp: vi.fn(() => current), getAppWorkDir: vi.fn(() => '/current-memory') }
+    vi.mocked(getAppManager).mockReturnValueOnce(manager as never)
+    const previous = { spaceId: 'deleted-space', spacePath: '/deleted-storage', workDir: '/deleted-work', memoryDir: '/deleted-memory' }
+    const recovered = { spaceId: 'current-space', spacePath: '/current-storage', workDir: '/current-work', memoryDir: '/current-memory' }
+    vi.mocked(validateExecutionEnvironment).mockImplementationOnce((environment, recovery) => {
+      expect(environment).toBe(previous)
+      expect(recovery).toMatchObject({ app: current, manager })
+      recovery?.onRecovered?.(recovered)
+      return recovered
+    })
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment: previous, sessionId: 'original-native' })
+    const trigger = type === 'continue_followup'
+      ? { type, description: 'Continue', continue: { sessionId: 'original-native' } }
+      : { type, description: 'Answer', escalation: { sessionId: 'original-native', originalQuestion: 'Proceed?', userResponse: { ts: 1, text: 'yes' } } }
+    const result = await executeRun({ app: makeApp({ spaceId: 'stale-default-space' }), trigger, store, memory: makeMemory(), existingRunId: 'original-run', existingSessionKey: 'original-thread' })
+
+    expect(result.outcome).toBe('useful')
+    expect(result.runId).toBe('original-run')
+    expect(result.sessionKey).toBe('original-thread')
+    expect(manager.getApp).toHaveBeenCalledWith('app-1')
+    expect(store.replaceRunEnvironment).toHaveBeenCalledWith('original-run', recovered)
+    expect(vi.mocked(acquireV2Session).mock.calls[0].slice(0, 5)).toEqual(['current-space', 'original-thread', expect.any(Object), 'original-native', '/current-work'])
+    expect(openSessionWriter).toHaveBeenCalledWith('/current-storage', 'app-1', 'original-run')
+    expect(store.insertRun).not.toHaveBeenCalled()
+    expect(createSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('executeRun — connection change notice', () => {
+  beforeEach(() => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    vi.mocked(openSessionWriter).mockClear()
+  })
+
+  it.each(['changed', 'pending'] as const)('records a %s connection notice once before the actual input and clears it only after persistence', async reason => {
+    const environment = { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1', pendingConnectionNotice: reason === 'pending' }
+    vi.mocked(resolveExecutionEnvironment).mockReturnValueOnce(environment)
+    vi.mocked(validateEnvironmentConnections).mockReturnValueOnce({ changed: reason === 'changed', changedSpecIds: reason === 'changed' ? ['docs'] : [] })
+    const writeTrigger = vi.fn((..._args: unknown[]) => ({ timestamp: '2026-11-16T00:00:00.000Z', inputId: 'written-notice' }))
+    vi.mocked(openSessionWriter).mockReturnValueOnce({ writeTrigger, writeEvent: vi.fn() } as never)
+    const saved: unknown[] = []
+    const store = makeStore()
+    store.replaceRunEnvironment.mockImplementation((_id: string, value: object) => saved.push({ ...value }))
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory() })
+
+    expect(result.outcome).toBe('useful')
+    expect(writeTrigger.mock.calls[0]).toEqual([ENVIRONMENT_NOTICE_TEXT, undefined, undefined, { source: 'environment-notice' }])
+    expect(writeTrigger.mock.calls[1][0]).toBe('INITIAL MESSAGE')
+    expect(writeTrigger).toHaveBeenCalledTimes(2)
+    expect(saved.at(-1)).not.toHaveProperty('pendingConnectionNotice')
+    expect(environment).not.toHaveProperty('pendingConnectionNotice')
+    if (reason === 'changed') expect(saved[0]).toHaveProperty('pendingConnectionNotice', true)
+    expect(nextSession.send).toHaveBeenCalledWith('INITIAL MESSAGE')
+  })
+
+  it('retains the pending notice when the transcript writer could not persist it', async () => {
+    const environment = { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1', pendingConnectionNotice: true }
+    vi.mocked(resolveExecutionEnvironment).mockReturnValueOnce(environment)
+    const writeTrigger = vi.fn()
+    vi.mocked(openSessionWriter).mockReturnValueOnce({ writeTrigger, writeEvent: vi.fn() } as never)
+    const store = makeStore()
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory() })
+
+    expect(result.outcome).toBe('useful')
+    expect(writeTrigger.mock.calls[0][0]).toBe(ENVIRONMENT_NOTICE_TEXT)
+    expect(writeTrigger.mock.calls[1][0]).toBe('INITIAL MESSAGE')
+    expect(environment.pendingConnectionNotice).toBe(true)
+    expect(store.replaceRunEnvironment).not.toHaveBeenCalled()
+  })
+
+  it('does not insert a notice when connection identity did not change', async () => {
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    const writer = vi.mocked(openSessionWriter).mock.results[0].value
+    expect(vi.mocked(writer.writeTrigger).mock.calls.map((call: unknown[]) => call[0])).toEqual(['INITIAL MESSAGE'])
   })
 })
 
@@ -727,7 +866,7 @@ describe('executeRun — abort handling', () => {
     expect(nextSession.send).not.toHaveBeenCalled()
     expect(nextSession.streamCalls).toBe(0)
     expect(result.outcome).toBe('error')
-    expect(result.errorMessage).toBe('Stopped before reporting results')
+    expect(result.errorMessage).toBe('This operation was aborted')
   })
 })
 
@@ -1188,9 +1327,9 @@ describe('executeRun — managed follow-up lifecycle', () => {
     nextSession = new FakeSession({
       throwOnStream: outcome === 'stream-error' ? new Error('stream failed') : undefined,
       script: [assistantReport()],
+      onYield: () => { if (outcome === 'abort') abort.abort() },
     })
     vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
-    if (outcome === 'abort') abort.abort()
     const store = makeStore()
     store.getRun.mockReturnValue({ environment: {
       spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1',
@@ -1258,16 +1397,173 @@ describe('executeRun — managed follow-up lifecycle', () => {
   })
 })
 
+describe('executeRun — maintenance cancellation during preparation', () => {
+  it.each(['continue_followup', 'escalation_followup', 'schedule'] as const)('%s stops after delayed credentials without waiting on session creation behind maintenance', async type => {
+    let credentials!: (value: Awaited<ReturnType<typeof getApiCredentialsForSelection>>) => void
+    vi.mocked(getApiCredentialsForSelection).mockImplementationOnce(() => new Promise(resolve => { credentials = resolve }))
+    vi.mocked(acquireV2Session).mockClear()
+    vi.mocked(createSession).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const controller = new AbortController()
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment: { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1' } })
+    const trigger = type === 'continue_followup'
+      ? { type, description: 'Continue', continue: { sessionId: 'original-native' } }
+      : type === 'escalation_followup'
+        ? { type, description: 'Answer', escalation: { sessionId: 'original-native', originalQuestion: 'Proceed?', userResponse: { ts: 1, text: 'yes' } } }
+        : baseTrigger
+    const running = executeRun({ app: makeApp(), store, memory: makeMemory(), trigger, abortSignal: controller.signal, ...(type === 'schedule' ? {} : { existingRunId: 'original-run', existingSessionKey: 'original-thread' }) })
+    await vi.waitFor(() => expect(credentials).toBeTypeOf('function'))
+    controller.abort(new Error('Workspace maintenance stopped this work'))
+    credentials({ provider: 'anthropic', model: 'test-model', apiKey: 'test-key', baseUrl: 'https://api.test.com' } as never)
+
+    const result = await running
+
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toBe('Workspace maintenance stopped this work')
+    expect(acquireV2Session).not.toHaveBeenCalled()
+    expect(createSession).not.toHaveBeenCalled()
+    expect(nextSession.send).not.toHaveBeenCalled()
+  })
+
+  it.each(['continue_followup', 'escalation_followup'] as const)('%s forwards cancellation to an acquisition waiting on the space fence', async type => {
+    const controller = new AbortController()
+    vi.mocked(acquireV2Session).mockClear()
+    vi.mocked(createSession).mockClear()
+    vi.mocked(acquireV2Session).mockImplementationOnce((...args) => {
+      const signal = args[9]?.maintenanceSignal
+      expect(signal).toBe(controller.signal)
+      return new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }))
+    })
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment: { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1' } })
+    const trigger = type === 'continue_followup'
+      ? { type, description: 'Continue', continue: { sessionId: 'original-native' } }
+      : { type, description: 'Answer', escalation: { sessionId: 'original-native', originalQuestion: 'Proceed?', userResponse: { ts: 1, text: 'yes' } } }
+    const running = executeRun({ app: makeApp(), store, memory: makeMemory(), trigger, abortSignal: controller.signal, existingRunId: 'original-run', existingSessionKey: 'original-thread' })
+    await vi.waitFor(() => expect(acquireV2Session).toHaveBeenCalledOnce())
+    controller.abort(new Error('Workspace maintenance stopped this work'))
+
+    expect((await running).errorMessage).toBe('Workspace maintenance stopped this work')
+    expect(createSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('executeRun — owned engine cleanup', () => {
+  it('does not settle a transient run until its closed engine has flushed', async () => {
+    let flush!: () => void
+    const flushed = new Promise<void>(resolve => { flush = resolve })
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const session = nextSession
+    const flushSession = vi.fn(() => flushed)
+    Object.assign(session, { pid: process.pid, flush: flushSession })
+    let settled = false
+    const running = executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+      .then(result => { settled = true; return result })
+
+    await vi.waitFor(() => expect(flushSession).toHaveBeenCalledOnce())
+    expect(session.close).toHaveBeenCalledOnce()
+    expect(settled).toBe(false)
+    flush()
+
+    expect((await running).outcome).toBe('useful')
+    expect(session.close).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a managed follow-up lease owned until flush and closes it only once', async () => {
+    let flush!: () => void
+    const flushed = new Promise<void>(resolve => { flush = resolve })
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const flushSession = vi.fn(() => flushed)
+    Object.assign(nextSession, { flush: flushSession })
+    closeManagedSession.mockClear()
+    releaseManagedSession.mockClear()
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment: { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1' } })
+    const running = executeRun({ app: makeApp(), store, memory: makeMemory(), existingRunId: 'original-run', existingSessionKey: 'original-thread', trigger: { type: 'continue_followup', description: 'Continue', continue: { sessionId: 'original-native' } } })
+
+    await vi.waitFor(() => expect(flushSession).toHaveBeenCalledOnce())
+    expect(closeManagedSession).toHaveBeenCalledOnce()
+    expect(releaseManagedSession).not.toHaveBeenCalled()
+    flush()
+
+    expect((await running).outcome).toBe('useful')
+    expect(closeManagedSession).toHaveBeenCalledOnce()
+    expect(releaseManagedSession).toHaveBeenCalledOnce()
+  })
+
+  it('captures the child PID before close removes it and passes it to the cleanup wait', async () => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    Object.assign(nextSession, { pid: 34567 })
+    nextSession.close.mockImplementation(() => { Object.assign(nextSession, { pid: null }) })
+    vi.mocked(waitForSessionCleanup).mockResolvedValueOnce(undefined)
+    vi.mocked(waitForSessionCleanup).mockClear()
+
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+
+    expect(waitForSessionCleanup).toHaveBeenCalledWith(nextSession, 34567)
+    expect(nextSession.close).toHaveBeenCalledOnce()
+  })
+
+  it('releases the owned follow-up lease even when persistence cleanup fails', async () => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    Object.assign(nextSession, { flush: vi.fn().mockRejectedValue(new Error('native persistence failed')) })
+    closeManagedSession.mockClear()
+    releaseManagedSession.mockClear()
+    vi.mocked(unregisterActiveSession).mockClear()
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment: { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1' } })
+    const onCleanupFailure = vi.fn()
+
+    await expect(executeRun({ app: makeApp(), store, memory: makeMemory(), existingRunId: 'original-run', existingSessionKey: 'original-thread', trigger: { type: 'continue_followup', description: 'Continue', continue: { sessionId: 'original-native' } }, onCleanupFailure })).rejects.toThrow('native persistence failed')
+
+    expect(onCleanupFailure).toHaveBeenCalledOnce()
+    expect(closeManagedSession).toHaveBeenCalledOnce()
+    expect(releaseManagedSession).toHaveBeenCalledOnce()
+    expect(unregisterActiveSession).toHaveBeenCalledWith('original-thread')
+  })
+
+  it('propagates failed flush and retains a retry that never closes the engine twice', async () => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const flush = vi.fn().mockRejectedValueOnce(new Error('flush failed')).mockResolvedValue(undefined)
+    Object.assign(nextSession, { flush })
+    const onCleanupFailure = vi.fn()
+    vi.mocked(createScopedBrowserContext).mockClear()
+
+    await expect(executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory(), onCleanupFailure })).rejects.toThrow('flush failed')
+
+    expect(onCleanupFailure).toHaveBeenCalledOnce()
+    expect(nextSession.close).toHaveBeenCalledOnce()
+    expect(vi.mocked(createScopedBrowserContext).mock.results[0].value.destroy).toHaveBeenCalledOnce()
+    await onCleanupFailure.mock.calls[0][0]()
+    expect(flush).toHaveBeenCalledTimes(2)
+    expect(nextSession.close).toHaveBeenCalledOnce()
+  })
+})
+
 describe('executeRun — original continuation context', () => {
-  it('refuses to infer an unpinned old execution environment from the current default', async () => {
+  it('recovers a missing pinned environment from the current workspace while keeping the original task', async () => {
     vi.mocked(resolveExecutionEnvironment).mockClear()
     vi.mocked(createSession).mockClear()
-    await expect(executeRun({
-      app: makeApp({ spaceId: 'new-space' }), store: makeStore(), memory: makeMemory(),
+    vi.mocked(acquireV2Session).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+    const store = makeStore()
+    store.getRun.mockReturnValue({ runId: 'old-run', sessionKey: 'old-thread', sessionId: 'old-engine' })
+    const result = await executeRun({
+      app: makeApp({ spaceId: 'new-space' }), store, memory: makeMemory(),
       existingRunId: 'old-run', existingSessionKey: 'old-thread',
       trigger: { type: 'continue_followup', description: 'Continue', continue: { sessionId: 'old-engine' } },
-    })).rejects.toThrow('original execution environment is unavailable')
-    expect(resolveExecutionEnvironment).not.toHaveBeenCalled()
+    })
+    expect(result.outcome).toBe('useful')
+    expect(result.runId).toBe('old-run')
+    expect(result.sessionKey).toBe('old-thread')
+    expect(resolveExecutionEnvironment).toHaveBeenCalled()
+    expect(store.replaceRunEnvironment).toHaveBeenCalledWith('old-run', expect.objectContaining({ spaceId: 'space-1' }))
+    expect(vi.mocked(acquireV2Session).mock.calls[0].slice(0, 5)).toEqual(['space-1', 'old-thread', expect.any(Object), 'old-engine', '/tmp/space-1'])
+    expect(store.insertRun).not.toHaveBeenCalled()
     expect(createSession).not.toHaveBeenCalled()
   })
 

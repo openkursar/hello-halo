@@ -148,7 +148,7 @@ vi.mock('../../../../src/main/services/space.service', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: vi.fn().mockReturnValue({ getApp: (id: string) => ({ id, spaceId: 'new-space' }) }),
+  getAppManager: vi.fn().mockReturnValue({ getApp: (id: string) => ({ id, spec: { type: 'automation' }, spaceId: 'new-space' }) }),
 }))
 const { environment, activityStore, resolveChatEnvironment, copySessionJsonl } = vi.hoisted(() => {
   const environment = { spaceId: 'old-space', spacePath: '/original-space', workDir: '/original-cwd', memoryDir: '/original-memory' }
@@ -161,6 +161,7 @@ const { environment, activityStore, resolveChatEnvironment, copySessionJsonl } =
 })
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveChatEnvironment,
+  resolveChatRecordEnvironment: () => environment,
   appChatRunId: (conversationId: string, appId: string) => conversationId === `app-chat:${appId}` ? 'chat' : `chat-${conversationId.slice(`app-chat:${appId}:`.length).replace(/:/g, '-')}`,
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy-file:${appId}:${runId}`,
 }))
@@ -209,10 +210,12 @@ vi.mock('../../../../src/main/services/memory-consolidation', () => ({
 import {
   clearAppChat,
   forkNativeChatSession,
+  createNativeChatSession,
   getAppChatConversationId,
   loadChatEngineMetadata,
 } from '../../../../src/main/apps/runtime/app-chat'
 import { getConfig } from '../../../../src/main/foundation/config.service'
+import { acquireAppWorkspaceChange, setWorkspaceRecovery } from '../../../../src/main/apps/runtime/workspace-admission'
 import { getAppManager } from '../../../../src/main/apps/manager'
 import { loadChatEngineState, saveChatEngineBinding, saveChatSessionId, reloadChatInstructions, openSessionWriter, readSessionMessages } from '../../../../src/main/apps/runtime/session-store'
 import { appChatRunId } from '../../../../src/main/apps/runtime/execution-environment'
@@ -234,20 +237,24 @@ const APP = 'target-app'
 const OTHER = 'other-app'
 
 describe('cold digital-human engine metadata', () => {
+  afterEach(() => {
+    vi.mocked(getAppManager).mockReturnValue({ getApp: (id: string) => ({ id, spec: { type: 'automation' }, spaceId: 'new-space' }) } as unknown as ReturnType<typeof getAppManager>)
+  })
+
   it.each([
     ['halo', 'anthropic'],
     ['anthropic', 'halo'],
   ] as const)('keeps current %s separate from desired %s before the next turn', (current, desired) => {
     const binding = { version: 1 as const, engineId: current, sessionId: 'native-session' }
-    const app = { id: APP, userOverrides: { engineId: desired } }
-    vi.mocked(getAppManager).mockReturnValueOnce({ getApp: () => app } as unknown as ReturnType<typeof getAppManager>)
+    const app = { id: APP, spec: { type: 'automation' }, userOverrides: { engineId: desired } }
+    vi.mocked(getAppManager).mockReturnValue({ getApp: () => app } as unknown as ReturnType<typeof getAppManager>)
     vi.mocked(loadChatEngineState).mockReturnValueOnce({ sessionId: binding.sessionId, binding })
     expect(loadChatEngineMetadata('/space', APP, `app-chat:${APP}`)).toEqual({ engineId: current, engineBinding: binding })
     expect(app.userOverrides.engineId).toBe(desired)
   })
 
   it.each(['halo', 'anthropic'] as const)('uses override %s when no binding exists', (engineId) => {
-    vi.mocked(getAppManager).mockReturnValueOnce({ getApp: () => ({ userOverrides: { engineId } }) } as unknown as ReturnType<typeof getAppManager>)
+    vi.mocked(getAppManager).mockReturnValue({ getApp: () => ({ spec: { type: 'automation' }, userOverrides: { engineId } }) } as unknown as ReturnType<typeof getAppManager>)
     vi.mocked(loadChatEngineState).mockReturnValueOnce({})
     expect(loadChatEngineMetadata('/space', APP, `app-chat:${APP}`)).toEqual({ engineId })
   })
@@ -325,29 +332,68 @@ describe('forkNativeChatSession trust boundary', () => {
     copySessionJsonl.mockClear()
   })
 
-  it('rejects a source owned by another app', () => {
+  it.each(['create', 'fork'] as const)('%s waits for startup data repair, then resolves the repaired location', async kind => {
+    let finish!: () => void
+    const recovery = new Promise<void>(resolve => { finish = resolve })
+    const clear = setWorkspaceRecovery(recovery)
+    const original = { ...environment }
+    try {
+      const result = kind === 'create'
+        ? createNativeChatSession(APP)
+        : forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))
+      expect(resolveChatEnvironment).not.toHaveBeenCalled()
+      expect(createLocalSession).not.toHaveBeenCalled()
+      environment.spaceId = 'repaired-space'
+      environment.spacePath = '/repaired-space'
+      clear()
+      finish()
+      await result
+      expect(resolveChatEnvironment).toHaveBeenCalled()
+      if (kind === 'fork') expect(copySessionJsonl).toHaveBeenCalledWith('/repaired-space', APP, expect.any(String), expect.any(String))
+    } finally {
+      Object.assign(environment, original)
+      clear()
+      finish()
+    }
+  })
+
+  it.each(['create', 'fork'] as const)('%s waits for app relocation without touching the old environment', async kind => {
+    const release = await acquireAppWorkspaceChange([APP])
+    try {
+      const result = kind === 'create'
+        ? createNativeChatSession(APP)
+        : forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))
+      expect(resolveChatEnvironment).not.toHaveBeenCalled()
+      expect(createLocalSession).not.toHaveBeenCalled()
+      release()
+      await result
+      expect(createLocalSession).toHaveBeenCalledOnce()
+    } finally { release() }
+  })
+
+  it('rejects a source owned by another app', async () => {
     const foreign = `${getAppChatConversationId(OTHER)}:local:direct:abc`
-    expect(() => forkNativeChatSession(APP, 'space-1', foreign)).toThrow(/Invalid sourceConversationId for fork/)
+    await expect(forkNativeChatSession(APP, 'space-1', foreign)).rejects.toThrow(/Invalid sourceConversationId for fork/)
     expect(createLocalSession).not.toHaveBeenCalled()
     expect(resolveChatEnvironment).not.toHaveBeenCalled()
   })
 
-  it('rejects the native default key of another app', () => {
-    expect(() => forkNativeChatSession(APP, 'space-1', getAppChatConversationId(OTHER)))
-      .toThrow(/Invalid sourceConversationId for fork/)
+  it('rejects the native default key of another app', async () => {
+    await expect(forkNativeChatSession(APP, 'space-1', getAppChatConversationId(OTHER)))
+      .rejects.toThrow(/Invalid sourceConversationId for fork/)
     expect(createLocalSession).not.toHaveBeenCalled()
     expect(resolveChatEnvironment).not.toHaveBeenCalled()
   })
 
-  it('rejects a non-app-chat source key', () => {
-    expect(() => forkNativeChatSession(APP, 'space-1', 'random-garbage'))
-      .toThrow(/Invalid sourceConversationId for fork/)
+  it('rejects a non-app-chat source key', async () => {
+    await expect(forkNativeChatSession(APP, 'space-1', 'random-garbage'))
+      .rejects.toThrow(/Invalid sourceConversationId for fork/)
     expect(createLocalSession).not.toHaveBeenCalled()
     expect(resolveChatEnvironment).not.toHaveBeenCalled()
   })
 
-  it('allows forking from the app’s own native default session', () => {
-    const result = forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))
+  it('allows forking from the app’s own native default session', async () => {
+    const result = await forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))
     expect(result.conversationId).toMatch(new RegExp(`^app-chat:${APP}:local:direct:`))
     expect(createLocalSession).toHaveBeenCalledTimes(1)
     expect(activityStore.pinSessionEnvironment).toHaveBeenCalledWith(result.conversationId, APP, environment)
@@ -355,9 +401,9 @@ describe('forkNativeChatSession trust boundary', () => {
     expect(createLocalSession).toHaveBeenCalledWith(APP, expect.any(String), expect.objectContaining({ pendingResumeSessionId: 'original-sdk-session' }))
   })
 
-  it('allows forking from the app’s own IM session', () => {
+  it('allows forking from the app’s own IM session', async () => {
     const imKey = `${getAppChatConversationId(APP)}:wecom-bot:direct:user-1`
-    const result = forkNativeChatSession(APP, 'space-1', imKey)
+    const result = await forkNativeChatSession(APP, 'space-1', imKey)
     expect(result.conversationId).toMatch(new RegExp(`^app-chat:${APP}:local:direct:`))
     expect(createLocalSession).toHaveBeenCalledTimes(1)
     expect(activityStore.pinSessionEnvironment).toHaveBeenCalledWith(result.conversationId, APP, environment)
@@ -385,7 +431,7 @@ describe('forked conversation instruction state', () => {
   })
 
   for (const source of ['default', 'im'] as const) {
-    it.each(['legacy-reload', 'modern-reload', 'legacy-unchanged'] as const)(`preserves %s instructions from the ${source} conversation`, format => {
+    it.each(['legacy-reload', 'modern-reload', 'legacy-unchanged'] as const)(`preserves %s instructions from the ${source} conversation`, async format => {
       const sourceConversationId = source === 'im'
         ? `${getAppChatConversationId(APP)}:wecom-bot:direct:owner`
         : getAppChatConversationId(APP)
@@ -401,7 +447,7 @@ describe('forked conversation instruction state', () => {
       const sourceFile = join(environment.spacePath, '.halo/apps', APP, 'runs', `${sourceRunId}.jsonl`)
       const sourceBytes = readFileSync(sourceFile, 'utf8')
 
-      const result = forkNativeChatSession(APP, 'space-1', sourceConversationId)
+      const result = await forkNativeChatSession(APP, 'space-1', sourceConversationId)
       expect(result.conversationId).not.toBe(sourceConversationId)
       const targetRunId = appChatRunId(result.conversationId, APP)
       const copied = loadChatEngineState(environment.spacePath, APP, targetRunId)
@@ -423,15 +469,15 @@ describe('forked conversation instruction state', () => {
     })
   }
 
-  it('preserves another supported engine without adding CC reload state', () => {
+  it('preserves another supported engine without adding CC reload state', async () => {
     const source = getAppChatConversationId(APP)
     const binding = { version: 1 as const, engineId: 'halo' as const, sessionId: 'halo-native' }
     saveChatEngineBinding(environment.spacePath, APP, 'chat', binding)
-    const result = forkNativeChatSession(APP, 'space-1', source)
+    const result = await forkNativeChatSession(APP, 'space-1', source)
     expect(loadChatEngineState(environment.spacePath, APP, appChatRunId(result.conversationId, APP))).toEqual({ sessionId: 'halo-native', binding })
   })
 
-  it('does not create a visible conversation when reload state could not be copied', () => {
+  it('does not create a visible conversation when reload state could not be copied', async () => {
     saveChatSessionId(environment.spacePath, APP, 'chat', 'source-native')
     reloadChatInstructions(environment.spacePath, APP)
     const file = join(environment.spacePath, '.halo/apps', APP, 'runs/_session-ids.json')
@@ -439,16 +485,16 @@ describe('forked conversation instruction state', () => {
     vi.mocked(renameSync).mockImplementationOnce(() => { throw Object.assign(new Error('unavailable'), { code: 'EBUSY' }) })
     vi.mocked(sendToRenderer).mockClear()
     vi.mocked(broadcastToAll).mockClear()
-    expect(() => forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))).toThrow('Could not preserve')
+    await expect(forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))).rejects.toThrow('Could not preserve')
     expect(createLocalSession).not.toHaveBeenCalled()
     expect(sendToRenderer).not.toHaveBeenCalled()
     expect(broadcastToAll).not.toHaveBeenCalled()
     expect(readFileSync(file, 'utf8')).toBe(before)
   })
 
-  it.each(['codex', 'dsh'] as EngineId[])('refuses an unsupported %s source before creating a destination', engineId => {
+  it.each(['codex', 'dsh'] as EngineId[])('refuses an unsupported %s source before creating a destination', async engineId => {
     saveChatEngineBinding(environment.spacePath, APP, 'chat', { version: 1, engineId, sessionId: 'unsupported-native' })
-    expect(() => forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))).toThrow('does not support branching')
+    await expect(forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))).rejects.toThrow('does not support branching')
     expect(createLocalSession).not.toHaveBeenCalled()
     expect(Object.keys(JSON.parse(readFileSync(join(environment.spacePath, '.halo/apps', APP, 'runs/_session-ids.json'), 'utf8')))).toEqual(['chat'])
   })

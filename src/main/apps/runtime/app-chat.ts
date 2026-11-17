@@ -55,10 +55,11 @@ import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable 
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
 import { opensWithSlashCommand } from '../../services/agent/opening-context'
-import { captureToolsetExecutionOptions, isCollaborationEnabled, emitHumanRequest, getToolset, acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, resolveHistoricalEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
+import { closeSessionAndWait, captureToolsetExecutionOptions, isCollaborationEnabled, emitHumanRequest, getToolset, acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, resolveHistoricalEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
+import { ENVIRONMENT_NOTICE_TEXT } from '../../../shared/transcript'
 import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
   closeV2Session,
@@ -73,6 +74,7 @@ import {
   bindAppChatEngine,
   peekAppChatSink,
   getConversationsWithActiveRound,
+  getAppChatSinkConversationIds,
   disposeAppChatSink,
   type AppChatRoundHandle,
 } from './app-chat-sink'
@@ -81,6 +83,7 @@ import {
   beginAppChatTurnStart,
   cancelAppChatTurnStarts,
   getStartingAppChatConversations,
+  pendingAppChatTurnStarts,
   isAppChatConversationGenerating,
   isAppChatTurnDispatched,
   onAppChatConversationChange,
@@ -184,6 +187,7 @@ import { getPendingConversationInputIds } from '../../services/conversation-inte
 import { holdConversationAfterStop } from '../../services/conversation-interop'
 import { getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
 import { createAppChatDelivery, isPersonRequest } from './app-chat-delivery'
+import { awaitWorkspaceDrain, pendingWorkspaceChange, pendingWorkspaceRecovery } from './workspace-admission'
 export { getAppChatConversationId, buildImSessionKey }
 
 // ============================================
@@ -530,6 +534,22 @@ export function disposeAppChatDelivery(): void {
 }
 
 export function sendAppChatMessage(request: AppChatRequest): Promise<void> {
+  const changing = pendingWorkspaceRecovery() ?? pendingWorkspaceChange(request.appId)
+  if (changing) {
+    const start = request.turnStart
+    start?.end()
+    start?.releaseSession()
+    if (start?.cancelled) {
+      const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
+      console.warn(`[AppChat][${request.appId}] Cancelled preparation discarded at workspace maintenance: conversation=${conversationId}`)
+      getImStreamHandle(conversationId)?.dispose?.()
+      clearImStreamHandle(conversationId)
+      handBackHeldMessage(request, conversationId, [])
+      emitAgentEvent('agent:complete', request.spaceId, conversationId, { type: 'complete', duration: 0 })
+      return Promise.resolve()
+    }
+    return changing.then(() => sendAppChatMessage({ ...request, turnStart: undefined }))
+  }
   try { assertCollaborationDelivery(request) } catch (error) { return Promise.reject(error) }
   const human = request.humanInput === true || ((!request.teamContext || request.teamContext.personalChat || (request.teamContext.kind ?? 'human_message') === 'human_message')
     && !request.relayOrigin && !request.recorded?.provenance
@@ -570,7 +590,26 @@ function assertCollaborationDelivery(request: AppChatRequest): void {
   }
 }
 
-async function startAppChatMessage(request: AppChatRequest): Promise<void> {
+const chatSettlements = new Map<string, Map<Promise<void>, string>>()
+
+function startAppChatMessage(request: AppChatRequest): Promise<void> {
+  const changing = pendingWorkspaceRecovery() ?? pendingWorkspaceChange(request.appId)
+  if (changing) {
+    request.turnStart?.end()
+    request.turnStart?.releaseSession()
+    return changing.then(() => startAppChatMessage({ ...request, turnStart: undefined }))
+  }
+  const settled = chatSettlements.get(request.appId) ?? new Map<Promise<void>, string>()
+  chatSettlements.set(request.appId, settled)
+  const work = runStartedAppChatMessage(request)
+  settled.set(work, request.conversationId ?? getAppChatConversationId(request.appId))
+  return work.finally(() => {
+    settled.delete(work)
+    if (settled.size === 0 && chatSettlements.get(request.appId) === settled) chatSettlements.delete(request.appId)
+  })
+}
+
+async function runStartedAppChatMessage(request: AppChatRequest): Promise<void> {
   const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
   // Taken before the first await, unless the caller already holds it: from
   // here the conversation reads busy.
@@ -671,6 +710,7 @@ async function runAppChatTurn(
   const resolvedApp = installedApp ?? participant?.app
   if (!resolvedApp) throw new Error(`App not found: ${appId}`)
   const app = resolvedApp
+  if (installedApp) manager.assertAppDataAvailable?.(appId)
   const participants = getTeamService()?.participants
   const sourceProvenance = request.recorded?.provenance ?? request.recordedMessages?.find(item => item.provenance?.source === 'team-message')?.provenance
   const sourceRequest = sourceProvenance?.source === 'team-message'
@@ -856,7 +896,9 @@ async function runAppChatTurn(
     ? getToolset(TEAM_MCP_SERVER_NAME)
     : undefined
   // ── 4. Build MCP servers ─────────────────────────────
-  validateEnvironmentConnections(environment, app, manager, 'chat')
+  const connectionChange = validateEnvironmentConnections(environment, app, manager, 'chat')
+  const announceConnectionChange = connectionChange.changed || environment.pendingConnectionNotice === true
+  if (connectionChange.changed) activityStore.replaceSessionEnvironment(conversationId, appId, { ...environment, pendingConnectionNotice: true })
   const disabledMcpIds = new Set(
     (app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled === false).map(dependency => dependency.id)
   )
@@ -1333,6 +1375,14 @@ async function runAppChatTurn(
   // the queue of messages awaiting an answer, so a session rebuild underneath it
   // never orphans a caller.
   const sink = getAppChatSink({ appId, conversationId, runId: chatRunId, spacePath, spaceId })
+  if (announceConnectionChange) {
+    const notice = sink.writeUserMessage(ENVIRONMENT_NOTICE_TEXT, undefined, undefined, { source: 'environment-notice' })
+    if (sink.getRecordedInputIds([notice])[0]) {
+      delete environment.pendingConnectionNotice
+      activityStore.replaceSessionEnvironment(conversationId, appId, environment)
+      sink.announceLiveInputs([notice], false)
+    }
+  }
   const instanceId = imSession?.sessionId?.split(':', 1)[0]
   const imChatId = instanceId && imSession ? imSession.sessionId.slice(instanceId.length + 1) : undefined
   const authorizationRevision = instanceId ? getActiveImChannelManager()?.getAuthorizationRevision(instanceId) : undefined
@@ -1554,13 +1604,12 @@ async function runAppChatTurn(
       // Busy reuse must not hand this turn another caller's permissions or
       // memory author tag; require the current inputs instead of a deferred rebuild.
       // A session records calls only if it was built to.
-      applied?.enforced || memoryActive || borrowedTeamTurn || sessionPlan.recoverNativeSession
-        ? {
-            ...(applied?.enforced || memoryActive || borrowedTeamTurn ? { requireFreshInputs: true } : {}),
-            ...(recordsCalls ? { creationContext: RECORDED_SESSION } : {}),
-            ...(sessionPlan.recoverNativeSession ? { recoverNativeSession: sessionPlan.recoverNativeSession } : {}),
-          }
-        : undefined,
+      {
+        maintenanceSignal: turnContext.start.signal,
+        ...(applied?.enforced || memoryActive || borrowedTeamTurn ? { requireFreshInputs: true } : {}),
+        ...(recordsCalls ? { creationContext: RECORDED_SESSION } : {}),
+        ...(sessionPlan.recoverNativeSession ? { recoverNativeSession: sessionPlan.recoverNativeSession } : {}),
+      },
       reportPreInitFailure
     )
     const v2Session = sessionLease.session
@@ -1910,6 +1959,40 @@ function holdAfterPersonStop(conversationId: string): void {
  *
  * @param appId - App ID to stop chat for
  */
+function workspaceChatIds(appId: string): string[] {
+  const ids = new Set([
+    ...getStartingAppChatConversations(), ...getConversationsWithActiveRound(), ...getRunningConsumerIds(),
+    ...v2Sessions.keys(), ...getAppChatSinkConversationIds(), ...chatSettlements.get(appId)?.values() ?? [],
+  ])
+  return [...ids].filter(id => (parseNativeChatKey(id)?.appId ?? parseAppChatKey(id)?.appId ?? parseTeamSessionKey(id)?.appId) === appId)
+}
+
+/** Live conversations, including preparation whose public busy hold was already retired. */
+export function countAppChats(appId: string): number {
+  const pending = new Set(chatSettlements.get(appId)?.values())
+  return workspaceChatIds(appId).filter(id => pending.has(id) || isAppChatConversationGenerating(id)).length
+}
+
+/** Requires scoped admission; consumers retire before their old-path sinks are discarded. */
+export async function stopAndDrainAppChats(appId: string): Promise<void> {
+  if (!pendingWorkspaceChange(appId)) throw new Error('Stopping workspace chats requires closed admission')
+  const ids = workspaceChatIds(appId)
+  const settling = [...chatSettlements.get(appId)?.keys() ?? []]
+  const starting = ids.flatMap(pendingAppChatTurnStarts)
+  await awaitWorkspaceDrain(appId, 'chat replies', (async () => {
+    await Promise.all(ids.map(stopConversation))
+    await Promise.all(ids.map(id => closeSessionAndWait(id, 'digital human workspace change')))
+    await Promise.allSettled([...settling, ...starting])
+    const remaining = workspaceChatIds(appId)
+    await Promise.all(remaining.map(id => closeSessionAndWait(id, 'digital human workspace change')))
+    for (const id of new Set([...ids, ...remaining])) {
+      disposeAppChatSink(id)
+      destroyChatBrowserContext(id, 'workspace-changed')
+    }
+  })())
+  console.log(`[AppChat][${appId}] Workspace chats drained: conversations=${ids.length}, preparations=${settling.length}`)
+}
+
 export async function stopAppChat(appId: string): Promise<void> {
   const toStop = collectAppConversationIds(appId).filter(isAppChatConversationGenerating)
   for (const convId of toStop) {
@@ -2455,7 +2538,9 @@ export interface NativeSessionResult {
  * created so the session appears in the list immediately. The renderer
  * localizes the display label (first-message preview / "New chat").
  */
-export function createNativeChatSession(appId: string): NativeSessionResult {
+export async function createNativeChatSession(appId: string): Promise<NativeSessionResult> {
+  let pending: Promise<void> | undefined
+  while ((pending = pendingWorkspaceRecovery() ?? pendingWorkspaceChange(appId))) await pending
   const registry = getImSessionRegistry()
   if (!registry) throw new Error('IM session registry not initialized')
 
@@ -2485,11 +2570,13 @@ export function createNativeChatSession(appId: string): NativeSessionResult {
  * Requires the active engine to support session forking; callers gate the UI on
  * the `sessionFork` capability before invoking this.
  */
-export function forkNativeChatSession(
+export async function forkNativeChatSession(
   appId: string,
   _spaceId: string,
   sourceConversationId: string
-): NativeSessionResult {
+): Promise<NativeSessionResult> {
+  let pending: Promise<void> | undefined
+  while ((pending = pendingWorkspaceRecovery() ?? pendingWorkspaceChange(appId))) await pending
   const registry = getImSessionRegistry()
   if (!registry) throw new Error('IM session registry not initialized')
 

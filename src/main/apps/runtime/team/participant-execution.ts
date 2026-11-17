@@ -11,7 +11,7 @@ export interface ResolvedParticipant {
 /** A work participant uses the ordinary app-chat executor without an App installation. */
 export function resolveParticipantExecution(
   store: TeamStore,
-  manager: Pick<AppManagerService, 'getApp'>,
+  manager: Pick<AppManagerService, 'getApp'> & Partial<Pick<AppManagerService, 'assertAppDataAvailable'>>,
   teamId: string,
   epochId: string,
   appId: string,
@@ -25,6 +25,7 @@ export function resolveParticipantExecution(
     console.warn(`[TeamParticipants] Source identity unavailable: team=${teamId} epoch=${epochId} app=${appId}`)
     throw new Error('The collaborator source identity is unavailable. Restore it before continuing this work.')
   }
+  if (source) manager.assertAppDataAvailable?.(source.id)
   const permissions = source ? {
     granted: execution.permissions.granted.filter(permission => source.permissions.granted.includes(permission)),
     denied: [...new Set([...execution.permissions.denied, ...source.permissions.denied])],

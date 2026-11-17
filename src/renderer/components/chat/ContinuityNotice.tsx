@@ -9,7 +9,7 @@ import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
 
 export function isContinuityNotice(message: Message): boolean {
-  return message.role === 'system' && message.source === 'continuity-notice'
+  return message.role === 'system' && (message.source === 'continuity-notice' || message.source === 'environment-notice')
 }
 
 export function ContinuityNotice({ message }: { message: Message }) {
@@ -20,7 +20,9 @@ export function ContinuityNotice({ message }: { message: Message }) {
         bg-secondary/50 rounded-full text-xs text-muted-foreground">
         <History size={12} className="shrink-0 text-muted-foreground/60" />
         <span className="min-w-0 break-words">
-          {t('Some earlier details could not be restored exactly; the conversation continues from its record.')}
+          {message.source === 'environment-notice'
+            ? t('Connections changed. This conversation will continue with the accounts currently available in this workspace.')
+            : t('Some earlier details could not be restored exactly; the conversation continues from its record.')}
         </span>
       </div>
     </div>

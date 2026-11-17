@@ -20,11 +20,12 @@ import {
   workingDirChangeProblem,
 } from '../services/space.service'
 import { getSpaceMemoryStatus as serviceGetSpaceMemoryStatus, consolidateSpaceMemoryNow } from '../services/memory-consolidation'
-import { closeSpaceSessions, copyStoredSessions, countSessionAcquisitions, invalidateSessionsForSpace, isSpaceBusy, retireWorkingDirs } from '../services/agent'
+import { copyStoredSessions, countSessionAcquisitions, invalidateSessionsForSpace, isSpaceBusy, retireWorkingDirs } from '../services/agent'
 import { rerootSpaceWatcher } from '../services/watcher-host.service'
 import { destroySpaceCache, rerootSpaceCache } from '../services/artifact-cache.service'
 import { resolve } from 'path'
 import type { MemorySettings } from '../../shared/types/memory'
+import type { SpaceDetailsRequestOptions } from '../../shared/types/space'
 
 export interface ControllerResponse<T = unknown> {
   success: boolean
@@ -32,8 +33,6 @@ export interface ControllerResponse<T = unknown> {
   error?: string
   code?: string
 }
-
-const SPACE_BUSY_DELETE = 'A reply, run or background task is still going in this workspace. Delete it once it has finished, or stop it first.'
 
 /**
  * Get the Halo temp space
@@ -79,35 +78,33 @@ export async function createSpace(input: {
   }
 }
 
-/**
- * Delete a space. Refused while anything runs in it. Otherwise its engine
- * processes and file watching stop first: Windows will not remove a folder
- * that a live process works in.
- */
+/** Runtime owns stopping work and preserving people; the service removes only the prepared space. */
 export async function deleteSpace(spaceId: string): Promise<ControllerResponse> {
   try {
-    if (isSpaceBusy(spaceId)) return { success: false, error: SPACE_BUSY_DELETE, code: 'SPACE_BUSY' }
-    await closeSpaceSessions(spaceId, 'space deleted')
-    // Checked before the file cache goes too, so a refused delete leaves the open file tree live.
-    if (isSpaceBusy(spaceId)) return { success: false, error: SPACE_BUSY_DELETE, code: 'SPACE_BUSY' }
-    await destroySpaceCache(spaceId)
-    // And again right before the folder goes: tearing the cache down yields.
-    if (isSpaceBusy(spaceId)) return { success: false, error: SPACE_BUSY_DELETE, code: 'SPACE_BUSY' }
-    const result = await serviceDeleteSpace(spaceId)
+    const { removeWorkspacePreservingPeople } = await import('../apps/runtime')
+    const result = await removeWorkspacePreservingPeople(spaceId, async () => {
+      await destroySpaceCache(spaceId)
+      return serviceDeleteSpace(spaceId)
+    })
     return { success: result }
   } catch (error: unknown) {
-    const err = error as Error
-    return { success: false, error: err.message }
+    console.error('[SpaceController] Workspace deletion failed; retained digital humans were not removed', { spaceId, error })
+    return { success: false, error: (error as Error).message }
   }
 }
 
 /**
  * Get a specific space by ID (with preferences for UI)
  */
-export function getSpace(spaceId: string): ControllerResponse {
+export async function getSpace(spaceId: string, options?: SpaceDetailsRequestOptions): Promise<ControllerResponse> {
   try {
     const space = serviceGetSpaceWithPreferences(spaceId)
     if (space) {
+      if (options?.includeDeletionImpact && !space.isTemp) {
+        const { getWorkspaceDeletionImpact } = await import('../apps/runtime')
+        const deletionImpact = await getWorkspaceDeletionImpact(spaceId)
+        return { success: true, data: { ...space, deletionImpact } }
+      }
       return { success: true, data: space }
     }
     return { success: false, error: 'Space not found' }
@@ -174,6 +171,11 @@ const STARTED_WHILE_COPYING = 'A reply or run started in this workspace while it
  * for the space stays where it is. The default space keeps its folder.
  */
 export async function changeSpaceWorkingDir(spaceId: string, workingDir: unknown): Promise<ControllerResponse> {
+  const { mutateWorkspace } = await import('../apps/runtime')
+  return mutateWorkspace(() => changeWorkingDir(spaceId, workingDir))
+}
+
+async function changeWorkingDir(spaceId: string, workingDir: unknown): Promise<ControllerResponse> {
   if (typeof workingDir !== 'string') return { success: false, error: 'Choose a folder by its full path.' }
   const problem = workingDirChangeProblem(spaceId, workingDir.trim())
   if (problem) return { success: false, error: problem }
@@ -275,7 +277,8 @@ export async function reorderSpaces(spaceIds: string[]): Promise<ControllerRespo
  */
 export async function forgetSpace(spaceId: string): Promise<ControllerResponse> {
   try {
-    const result = await serviceForgetSpace(spaceId)
+    const { removeWorkspacePreservingPeople } = await import('../apps/runtime')
+    const result = await removeWorkspacePreservingPeople(spaceId, () => serviceForgetSpace(spaceId))
     return { success: result }
   } catch (error: unknown) {
     const err = error as Error

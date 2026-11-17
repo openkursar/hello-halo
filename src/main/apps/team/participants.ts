@@ -47,6 +47,8 @@ export interface TeamParticipants {
   findByName(teamId: string, epochId: string, name: string): TeamParticipant | null
   list(teamId: string, epochId: string): TeamParticipant[]
   listByTeam(teamId: string): TeamParticipant[]
+  /** Owner-only profiles for explicit workspace maintenance; never used by roster projection. */
+  listLocalExecutions(): Array<{ participant: TeamParticipant; execution: ParticipantExecution }>
   insert(participant: TeamParticipant, execution?: ParticipantExecution): void
   applyReplica(participant: TeamParticipant, selfNodeId: string): void
   getExecution(teamId: string, epochId: string, appId: string): ParticipantExecution | null
@@ -85,6 +87,9 @@ export function createTeamParticipants(db: Database.Database, identityExists: (i
     findByName(teamId, epochId, name) { const found = named.get(teamId, epochId, name) as ParticipantRow | undefined; return found ? fromRow(found) : null },
     list: (teamId, epochId) => (list.all(teamId, epochId) as ParticipantRow[]).map(fromRow),
     listByTeam: teamId => (all.all(teamId) as ParticipantRow[]).map(fromRow),
+    listLocalExecutions: () => (db.prepare(`SELECT * FROM team_participants
+      WHERE origin = 'local' AND owner_node_id = ? AND execution_json IS NOT NULL`).all(SELF_NODE_ID) as ParticipantRow[])
+      .map(found => ({ participant: fromRow(found), execution: JSON.parse(found.execution_json!) as ParticipantExecution })),
     insert(participant, execution) {
       if (permanent.get(participant.appId) || identityExists(participant.appId)) throw new Error('A participant identity conflicts with an existing App or standing member.')
       if (!epoch.get(participant.teamId, participant.epochId)) throw new Error('The participant work scope does not belong to this team.')

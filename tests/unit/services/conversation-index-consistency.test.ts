@@ -10,6 +10,9 @@ import {
   listConversations, toggleStarConversation, updateConversation, type Conversation, type ConversationMeta,
 } from '../../../src/main/services/conversation.service'
 
+vi.mock('../../../src/main/services/app-bridge', () => ({
+  getAppManager: () => ({ listApps: () => [], deleteAppsInSpace: async () => {} }),
+}))
 vi.mock('../../../src/main/services/tlon', () => ({ getSeedKBIds: () => [] }))
 vi.mock('fs', async importOriginal => {
   const actual = await importOriginal<typeof import('fs')>()
