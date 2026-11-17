@@ -11,7 +11,9 @@ import type { InstalledApp } from '../../../src/shared/apps/app-types'
 import { expect } from './acceptance-app'
 
 export const legacyManagerVersion = 2
-export const currentManagerVersion = 10
+export const currentManagerVersion = 11
+// Manager-owned tables a v2 database never had; recreated by the migrations under test.
+const managerAddedTables = ['app_data_relocations']
 export const managerLegacyColumns = ['id', 'spec_id', 'space_id', 'spec_json', 'status', 'pending_escalation_id', 'user_config_json', 'user_overrides_json', 'permissions_json', 'installed_at', 'last_run_at', 'last_run_outcome', 'error_message', 'uninstalled_at']
 const addedColumns = ['upgrade_strategy', 'ignored_versions', 'knowledge_seeded', 'data_path', 'author_spec_json']
 const schema = readFileSync(fileURLToPath(new URL('./data/app-manager-v2.sql', import.meta.url)), 'utf8')
@@ -55,7 +57,7 @@ export function readManagerMigration(database: string, ids: string[]) {
 
 function otherTables(db: Database.Database) {
   const tables = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('installed_apps', '_migrations') ORDER BY name").all() as Array<{ name: string; sql: string }>
-  return tables.map(table => {
+  return tables.filter(table => !managerAddedTables.includes(table.name)).map(table => {
     const quoted = `"${table.name.replaceAll('"', '""')}"`
     const rows = (db.prepare(`SELECT * FROM ${quoted}`).all() as Row[]).map(row => JSON.stringify(row)).sort()
     return { ...table, count: rows.length, sha256: createHash('sha256').update(JSON.stringify(rows)).digest('hex') }
@@ -76,6 +78,7 @@ export function prepareLegacyManager(profile: string, child: Pick<ChildProcess, 
     const controls = otherTables(db)
     db.pragma('foreign_keys = OFF')
     db.transaction(() => {
+      for (const table of managerAddedTables) db.exec(`DROP TABLE IF EXISTS ${table}`)
       db.exec('DROP TABLE installed_apps')
       db.exec(schema)
       const insert = db.prepare(`INSERT INTO installed_apps (${managerLegacyColumns.join(', ')}) VALUES (${managerLegacyColumns.map(() => '?').join(', ')})`)
