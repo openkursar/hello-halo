@@ -54,6 +54,10 @@ the write and before history handoff. The source rewrites only that ID with the
 first unrecorded original and appends the other new originals. Their IDs and the
 already-recorded redelivery IDs are excluded from that turn's history handoff. Its writes are id-keyed; an
 assistant placeholder inserted concurrently is never overwritten by an old snapshot.
+Newly stored opener records are announced through one `agent:input-arrived` batch
+with `live: false` before engine handoff, including a successfully stored prefix
+if a later write fails. Recorded redeliveries are not announced again. The event
+carries original content and provenance, never the framed model input.
 
 Live delivery first obtains synchronous engine acceptance, then records each
 original message at arrival. A false handoff writes nothing, so the queued fallback

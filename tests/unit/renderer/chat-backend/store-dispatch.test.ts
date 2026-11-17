@@ -3,7 +3,7 @@
  * by where the conversation lives. Exercised on the real slices with only the
  * transport mocked, so what is asserted is what the page would observe.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { create } from 'zustand'
 
 const apiMock = vi.hoisted(() => ({
@@ -979,6 +979,211 @@ describe('opening a space conversation that is not cached', () => {
 
     expect(store.getState().conversationLoadErrors.get('orphan')).toBe('Conversation not found')
     expect(apiMock.getConversation).not.toHaveBeenCalled()
+  })
+})
+
+describe('reopening a cached space conversation during autonomous work', () => {
+  beforeEach(() => {
+    apiMock.getConversation.mockReset()
+    apiMock.isConversationDetailRetained.mockReturnValue(false)
+  })
+  afterEach(() => {
+    apiMock.getConversation.mockReset()
+    apiMock.isConversationDetailRetained.mockReturnValue(true)
+  })
+
+  const id = 'peer-recipient'
+  const prior = m('prior', 'assistant', 'Previous answer')
+  const opener = m('opener', 'system', 'Review the supplied fact', {
+    source: 'cross-conversation', metadata: { fromConversationId: 'peer', fromConversationTitle: 'Source', summary: 'New context' },
+  })
+  const conversation = { id, spaceId: SPACE, title: 'Recipient', createdAt: 't', updatedAt: 't', messageCount: 1, messages: [prior] } as unknown as Conversation
+
+  function cachedStore() {
+    const store = makeStore()
+    store.setState({
+      spaceStates: new Map([[SPACE, { conversations: [conversation], currentConversationId: id }]]),
+      conversationCache: new Map([[id, conversation]]),
+    })
+    return store
+  }
+
+  it('recovers a missed opener when the user opens the cached recipient before its turn starts', async () => {
+    const store = cachedStore()
+    await store.getState().openConversation(id, { warm: false })
+    expect(apiMock.getConversation).not.toHaveBeenCalled()
+    apiMock.isConversationDetailRetained.mockReturnValue(true)
+    apiMock.getConversation.mockResolvedValueOnce({ success: true, data: {
+      ...conversation, messages: [prior, opener, m('reply', 'assistant', '')], messagesFrom: prior.id, messageCount: 3,
+    } })
+
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    await vi.waitFor(() => expect(store.getState().conversationCache.get(id)!.messages).toHaveLength(3))
+
+    expect(apiMock.getConversation).toHaveBeenCalledOnce()
+    expect(apiMock.getConversation).toHaveBeenCalledWith(SPACE, id, { fromMessageId: prior.id })
+    expect(apiMock.ensureSessionWarm).not.toHaveBeenCalled()
+  })
+
+  it('does not reread a turn started by this window', async () => {
+    const store = cachedStore()
+    store.setState({ sessions: new Map([[id, { ...createEmptySessionState(), isGenerating: true, turnId: 1 }]]) })
+    apiMock.isConversationDetailRetained.mockReturnValue(true)
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    await Promise.resolve()
+
+    expect(apiMock.getConversation).not.toHaveBeenCalled()
+    expect(apiMock.getSessionState).not.toHaveBeenCalled()
+  })
+
+  it('recovers a missed opener with a tail read only when the running conversation is opened', async () => {
+    const store = cachedStore()
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    expect(apiMock.getConversation).not.toHaveBeenCalled()
+    apiMock.getConversation.mockResolvedValueOnce({ success: true, data: {
+      ...conversation, messages: [{ ...prior }, opener, m('reply', 'assistant', '')], messagesFrom: prior.id, messageCount: 3,
+    } })
+
+    await store.getState().openConversation(id, { warm: false })
+
+    expect(apiMock.getConversation).toHaveBeenCalledOnce()
+    expect(apiMock.getConversation).toHaveBeenCalledWith(SPACE, id, { fromMessageId: prior.id })
+    expect(store.getState().conversationCache.get(id)!.messages.map(message => message.id)).toEqual(['prior', 'opener', 'reply'])
+    expect(store.getState().conversationCache.get(id)!.messages[0]).toBe(prior)
+    expect(store.getState().sessions.get(id)?.isGenerating).toBe(true)
+  })
+
+  it('anchors before session recovery so a later live message cannot hide a missed opener', async () => {
+    const store = cachedStore()
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    const later = m('later', 'system', 'A subsequent report', {
+      source: 'cross-conversation', metadata: { fromConversationId: 'another', inputMode: 'live' },
+    })
+    let recover!: (value: unknown) => void
+    apiMock.getSessionState.mockReturnValueOnce(new Promise(resolve => { recover = resolve }))
+    apiMock.getConversation.mockResolvedValueOnce({ success: true, data: {
+      ...conversation, messages: [prior, opener, later], messagesFrom: prior.id, messageCount: 3,
+    } })
+    const opening = store.getState().openConversation(id, { warm: false })
+    store.getState().handleAgentInputArrived({ spaceId: SPACE, conversationId: id, messages: [later], live: true })
+    recover({ success: true, data: { isActive: true, thoughts: [] } })
+    await opening
+
+    expect(apiMock.getConversation).toHaveBeenCalledWith(SPACE, id, { fromMessageId: prior.id })
+    expect(store.getState().conversationCache.get(id)!.messages.map(message => message.id)).toEqual(['prior', 'opener', 'later'])
+  })
+
+  it('merges an idle refresh when the first input event creates only an empty session', async () => {
+    const store = cachedStore()
+    let completeRead!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValueOnce(new Promise(resolve => { completeRead = resolve }))
+    const refreshing = store.getState().refreshConversation(id)
+    store.getState().handleAgentInputArrived({ spaceId: SPACE, conversationId: id, messages: [opener], live: false })
+    completeRead({ success: true, data: { ...conversation, messages: [prior, opener], messageCount: 2 } })
+    await refreshing
+
+    expect(store.getState().conversationCache.get(id)!.messageCount).toBe(2)
+    expect(store.getState().conversationCache.get(id)!.messages.map(message => message.id)).toEqual(['prior', 'opener'])
+  })
+
+  it('does not reread an idle cached conversation', async () => {
+    const store = cachedStore()
+    await store.getState().openConversation(id, { warm: false })
+    expect(apiMock.getConversation).not.toHaveBeenCalled()
+    expect(store.getState().conversationCache.get(id)).toBe(conversation)
+  })
+
+  it('shows an announced opener immediately without reloading or treating it as a mid-turn arrival', async () => {
+    const store = cachedStore()
+    store.getState().handleAgentInputArrived({ spaceId: SPACE, conversationId: id, messages: [opener], live: false })
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    store.getState().handleAgentInputArrived({ spaceId: SPACE, conversationId: id, messages: [opener], live: false })
+
+    expect(store.getState().conversationCache.get(id)!.messages.map(message => message.id)).toEqual(['prior', 'opener'])
+    expect(store.getState().sessions.get(id)?.liveInputs ?? []).toEqual([])
+    expect(apiMock.getConversation).not.toHaveBeenCalled()
+  })
+
+  it('keeps newly announced records if a running-conversation read returns an older snapshot', async () => {
+    const store = cachedStore()
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    let completeRead!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValueOnce(new Promise(resolve => { completeRead = resolve }))
+    const opening = store.getState().openConversation(id, { warm: false })
+    await vi.waitFor(() => expect(apiMock.getConversation).toHaveBeenCalledOnce())
+    store.getState().handleAgentInputArrived({ spaceId: SPACE, conversationId: id, messages: [opener], live: false })
+    completeRead({ success: true, data: { ...conversation, messages: [{ ...prior }], messagesFrom: prior.id } })
+    await opening
+
+    expect(store.getState().conversationCache.get(id)!.messages.map(message => message.id)).toEqual(['prior', 'opener'])
+    expect(store.getState().conversationCache.get(id)!.messages[1].metadata).toEqual(opener.metadata)
+    expect(store.getState().sessions.get(id)?.liveInputs ?? []).toEqual([])
+  })
+
+  it('does not duplicate an opener when both the event and the tail read contain it', async () => {
+    const store = cachedStore()
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    let completeRead!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValueOnce(new Promise(resolve => { completeRead = resolve }))
+    const opening = store.getState().openConversation(id, { warm: false })
+    await vi.waitFor(() => expect(apiMock.getConversation).toHaveBeenCalledOnce())
+    store.getState().handleAgentInputArrived({ spaceId: SPACE, conversationId: id, messages: [opener], live: false })
+    const rowKey = store.getState().conversationCache.get(id)!.messages[1].clientKey
+    completeRead({ success: true, data: { ...conversation, messages: [{ ...prior }, { ...opener }], messagesFrom: prior.id } })
+    await opening
+
+    expect(store.getState().conversationCache.get(id)!.messages.map(message => message.id)).toEqual(['prior', 'opener'])
+    expect(store.getState().conversationCache.get(id)!.messages[1].clientKey).toBe(rowKey)
+  })
+
+  it('does not let an older opening read replace a reply that settled in the meantime', async () => {
+    const store = cachedStore()
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    let completeRead!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValueOnce(new Promise(resolve => { completeRead = resolve }))
+    const opening = store.getState().openConversation(id, { warm: false })
+    await vi.waitFor(() => expect(apiMock.getConversation).toHaveBeenCalledOnce())
+    const completed = { ...conversation, messages: [prior, opener, m('reply', 'assistant', 'Finished review')], messageCount: 3 }
+    apiMock.getConversation.mockResolvedValueOnce({ success: true, data: completed })
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: id })
+    const settled = store.getState().conversationCache.get(id)
+    completeRead({ success: true, data: { ...conversation, messages: [{ ...prior }, opener, m('reply', 'assistant', '')], messagesFrom: prior.id } })
+    await opening
+
+    expect(store.getState().conversationCache.get(id)).toBe(settled)
+    expect(store.getState().conversationCache.get(id)!.messages.at(-1)?.content).toBe('Finished review')
+    expect(store.getState().sessions.get(id)?.isGenerating).toBe(false)
+  })
+
+  it('does not let an older opening read replace a newer running turn', async () => {
+    const store = cachedStore()
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    let completeRead!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValueOnce(new Promise(resolve => { completeRead = resolve }))
+    const opening = store.getState().openConversation(id, { warm: false })
+    await vi.waitFor(() => expect(apiMock.getConversation).toHaveBeenCalledOnce())
+    store.getState().handleAgentInputArrived({ spaceId: SPACE, conversationId: id, messages: [opener], live: false })
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    const current = store.getState().conversationCache.get(id)
+    completeRead({ success: true, data: { ...conversation, messages: [{ ...prior }], messagesFrom: prior.id } })
+    await opening
+
+    expect(store.getState().conversationCache.get(id)).toBe(current)
+    expect(store.getState().sessions.get(id)?.turnId).toBe(2)
+  })
+
+  it('does not restore a conversation evicted while its tail read is in flight', async () => {
+    const store = cachedStore()
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    let completeRead!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValueOnce(new Promise(resolve => { completeRead = resolve }))
+    const opening = store.getState().openConversation(id, { warm: false })
+    await vi.waitFor(() => expect(apiMock.getConversation).toHaveBeenCalledOnce())
+    store.setState({ conversationCache: new Map() })
+    completeRead({ success: true, data: { ...conversation, messages: [{ ...prior }, { ...opener }], messagesFrom: prior.id } })
+    await opening
+
+    expect(store.getState().conversationCache.has(id)).toBe(false)
   })
 })
 

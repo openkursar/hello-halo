@@ -59,7 +59,14 @@ describe('chat conversation source', () => {
   beforeEach(() => {
     h.conversations.clear()
     h.addMessage.mockReset()
-    h.updateMessageById.mockReset()
+    h.updateMessageById.mockReset().mockImplementation((_space, conversationId, id, patch) => {
+      const conv = h.conversations.get(conversationId)
+      const at = conv?.messages.findIndex(item => item.id === id) ?? -1
+      if (!conv || at < 0) return null
+      const stored = { ...conv.messages[at], ...patch }
+      conv.messages[at] = stored
+      return stored
+    })
     h.sendMessage.mockReset()
     h.sendIntoLiveTurn.mockReset().mockReturnValue(true)
     h.emitAgentEvent.mockClear()
@@ -189,6 +196,84 @@ describe('chat conversation source', () => {
     ])
     expect(outcomes).toEqual([{}, { messageId: 'current-input' }, { messageId: 'last-input' }])
     expect(h.addMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('announces only new batch records after saving their original content and before send returns', async () => {
+    const conv = { id: 'c1', title: 'One', updatedAt: 'x', messages: [message('held', 'system', 'already recorded')] }
+    h.conversations.set('c1', conv)
+    h.addMessage.mockImplementation((_space, _conversation, record) => {
+      const stored = message('second', record.role, record.content, record)
+      conv.messages.push(stored)
+      return stored
+    })
+    h.sendMessage.mockImplementationOnce(async (params, options) => {
+      conv.messages.push(message('first', 'user', params.message))
+      options.onUserMessageRecorded('first')
+      expect(h.emitAgentEvent).toHaveBeenCalledOnce()
+      expect(h.emitAgentEvent).toHaveBeenCalledWith('agent:input-arrived', 'space-1', 'c1', {
+        live: false,
+        messages: [
+          { ...message('first', 'system', 'raw peer message'), source: 'cross-conversation', metadata: { fromConversationId: 'peer' } },
+          { ...message('second', 'system', 'raw team report'), source: 'team-message', metadata: { fromMemberName: 'Reviewer', inputMode: 'turn' } },
+        ],
+      })
+      expect(options.excludedHistoryMessageIds).toEqual(['held', 'first', 'second'])
+    })
+
+    const outcomes = await source.dispatchBatch!('space-1', 'c1', [
+      { turnInput: 'framed held message', record: { content: 'already recorded', source: 'cross-conversation', metadata: {} }, inputRecorded: true, recordedInputIds: ['held'] },
+      { turnInput: 'framed peer message', record: { content: 'raw peer message', source: 'cross-conversation', metadata: { fromConversationId: 'peer' } } },
+      { turnInput: 'framed team report', record: { content: 'raw team report', source: 'team-message', metadata: { fromMemberName: 'Reviewer' } } },
+    ])
+
+    expect(outcomes).toEqual([{}, { messageId: 'first' }, { messageId: 'second' }])
+    expect(h.sendMessage.mock.calls[0][0].message).toBe('framed held message\n\nframed peer message\n\nframed team report')
+  })
+
+  it('still announces saved records when a later record in the batch cannot be written', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const conv = { id: 'c1', title: 'One', updatedAt: 'x', messages: [] as FakeMessage[] }
+      h.conversations.set('c1', conv)
+      h.sendMessage.mockImplementationOnce(async (params, options) => {
+        conv.messages.push(message('first', 'user', params.message))
+        options.onUserMessageRecorded('first')
+      })
+      h.addMessage.mockImplementationOnce(() => { throw new Error('disk full') })
+      const outcomes = await source.dispatchBatch!('space-1', 'c1', ['first', 'second'].map(content => ({
+        turnInput: `framed ${content}`, record: { content, source: 'cross-conversation', metadata: { fromConversationId: 'peer' } },
+      })))
+
+      expect(outcomes).toEqual([{ messageId: 'first' }, {}])
+      expect(h.emitAgentEvent).toHaveBeenCalledWith('agent:input-arrived', 'space-1', 'c1', {
+        live: false, messages: [conv.messages[0]],
+      })
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('Started input could not be recorded'), expect.any(Error))
+      expect(h.sendMessage).toHaveBeenCalledOnce()
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('does not announce an opener whose patch did not reach storage', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const conv = { id: 'c1', title: 'One', updatedAt: 'x', messages: [] as FakeMessage[] }
+      h.conversations.set('c1', conv)
+      h.sendMessage.mockImplementationOnce(async (params, options) => {
+        conv.messages.push(message('first', 'user', params.message))
+        options.onUserMessageRecorded('first')
+      })
+      h.updateMessageById.mockReturnValueOnce(null)
+
+      expect(await source.dispatch('space-1', 'c1', {
+        turnInput: 'framed peer message', record: { content: 'raw peer message', source: 'cross-conversation', metadata: {} },
+      })).toEqual({})
+      expect(h.emitAgentEvent).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('delivery patch missed'))
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('does not create another transcript opener for a batch containing only recorded inputs', async () => {

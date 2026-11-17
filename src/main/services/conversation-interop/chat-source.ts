@@ -39,6 +39,7 @@ async function dispatchBatch(
     excludedHistoryMessageIds,
     onUserMessageRecorded: (messageId) => {
       recorded = true
+      const records: TranscriptMessage[] = []
       try {
         const delivered = getConversation(spaceId, conversationId)?.messages.find(message => message.id === messageId)
         if (!delivered) {
@@ -46,10 +47,15 @@ async function dispatchBatch(
           return
         }
         const message = messages[opener]
-        updateMessageById(spaceId, conversationId, messageId, {
+        const stored = updateMessageById(spaceId, conversationId, messageId, {
           content: message.record.content, role: 'system', source: message.record.source,
           metadata: { ...delivered.metadata, ...message.record.metadata, ...(message.record.source === 'team-message' ? { inputMode: 'turn' as const } : {}) },
         })
+        if (!stored) {
+          console.warn(`${LOG_TAG} delivery patch missed: conversation=${conversationId} message=${messageId} reason=record-not-updated`)
+          return
+        }
+        records.push(stored)
         outcomes[opener] = { messageId }
         excludedHistoryMessageIds.push(messageId)
         messages.forEach((item, index) => {
@@ -58,12 +64,15 @@ async function dispatchBatch(
             role: 'system', content: item.record.content, source: item.record.source,
             metadata: item.record.source === 'team-message' ? { ...item.record.metadata, inputMode: 'turn' } : item.record.metadata,
           })
+          records.push(additional)
           outcomes[index] = { messageId: additional.id }
           excludedHistoryMessageIds.push(additional.id)
         })
       } catch (error) {
         // Recording failures must not make the mailbox dispatch the accepted model input twice.
         console.error(`${LOG_TAG} Started input could not be recorded: conversation=${conversationId}`, error)
+      } finally {
+        if (records.length) emitAgentEvent('agent:input-arrived', spaceId, conversationId, { messages: records, live: false })
       }
     },
   })
