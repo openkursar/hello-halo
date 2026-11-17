@@ -28,12 +28,12 @@ export const test = base.extend<{ browserPolicy: BrowserPolicy | undefined; brow
     const productionEntry = getAppEntryPath()
     const testConfigDir = createTestConfigDir(productionEntry)
     const identity = crypto.randomUUID()
+    // Outside hashed out/{main,preload,renderer}: a killed test never runs its cleanup.
     const outputRoot = path.join(projectRoot, 'out', `.e2e-browser-runtime-${identity}`)
     const mainDirectory = path.join(outputRoot, 'main')
     fs.mkdirSync(mainDirectory, { recursive: true })
     fs.symlinkSync(path.join(projectRoot, 'node_modules'), path.join(mainDirectory, 'node_modules'), 'dir')
     fs.mkdirSync(path.join(outputRoot, 'preload'), { recursive: true })
-    fs.symlinkSync(path.join(projectRoot, 'out/renderer'), path.join(outputRoot, 'renderer'), 'dir')
     fs.copyFileSync(path.join(projectRoot, 'out/preload/browser-host.cjs'), path.join(outputRoot, 'preload/browser-host.cjs'))
     const product = JSON.parse(fs.readFileSync(path.join(projectRoot, 'out/main/product.json'), 'utf8'))
     for (const provider of product.authProviders ?? []) if (provider.path) provider.path = path.resolve(projectRoot, 'out/main', provider.path)
@@ -41,8 +41,8 @@ export const test = base.extend<{ browserPolicy: BrowserPolicy | undefined; brow
     fs.writeFileSync(path.join(mainDirectory, 'product.json'), JSON.stringify(product))
     const main = path.join(mainDirectory, 'index.cjs')
     const preload = path.join(outputRoot, 'preload/index.cjs')
-    const script = path.join(projectRoot, 'out/renderer', `.e2e-browser-runtime-${identity}.js`)
-    const html = path.join(projectRoot, 'out/renderer', `.e2e-browser-runtime-${identity}.html`)
+    const script = path.join(outputRoot, `.e2e-browser-runtime-${identity}.js`)
+    const html = path.join(outputRoot, `.e2e-browser-runtime-${identity}.html`)
     const bundledPackages = new Set(['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent'])
     await esbuild.build({
       entryPoints: [path.join(directory, browserServerMode ? 'browser-server-runtime-main.ts' : 'browser-runtime-main.ts')],
