@@ -38,6 +38,52 @@ The SDK root owns the Cargo workspace and pinned `rust-toolchain.toml`.
 | Checks, simulation, performance and package evidence | [TESTING.md](TESTING.md) |
 | Halo adapter or application outcome | Repository `src/main/services/agent/DESIGN.md` and `.agents/skills/acceptance-testing/SKILL.md`; verify both sides |
 
+## Harness contract
+
+The model sees only its input. Everything the runtime places there — system
+prompt, tool definitions, tool results, errors, reminders, summaries — is the
+Harness, and each piece steers the next decision. Write each one as a note to a
+capable colleague who cannot see anything else.
+
+Every model-facing text is:
+
+- **True.** The model cannot check the note against the world; an inaccurate
+  line becomes a wrong action. Never present partial, truncated, or skipped work
+  as complete.
+- **Dense.** Each sentence changes what the model does. Cut restatement,
+  emphasis, and advice it would follow anyway.
+- **General.** State the principle and its reason, not a rule for one scenario;
+  narrow rules misfire elsewhere and crowd out judgment. When only one case needs
+  help, improve that tool's feedback instead of adding prompt text.
+- **Readable.** Plain sentences a person understands on first reading. The model
+  is a reader, not a parser: a reason lets it handle cases the wording did not
+  foresee.
+
+Standing guidance (system prompt, tool definitions):
+
+- State permissions, protocol, safety, and truthful reporting as exact
+  requirements. State everything else as judgment with its reason.
+- Say each thing once, where it is used: tool-specific guidance in the tool
+  definition, cross-task guidance in the system prompt.
+
+Runtime feedback (tool results, errors, reminders):
+
+- Report three things separately: how the execution ended, whether the output
+  shown is complete, and where the rest can be obtained.
+- Never replay an operation to recover its output; running it again is the
+  agent's decision.
+- Loaded instructions and tool definitions are capabilities, not log previews:
+  deliver them whole or say what is missing.
+- Offer recovery only within the same permission and privacy boundaries.
+
+Changing the Harness:
+
+- Prefer established behavior and the smallest complete fix.
+- Prove the promised behavior with deterministic evidence. A smaller result or a
+  passing unit test does not show that task quality improved.
+- When experience cannot tell how the model will behave under the change, run a
+  real-model baseline/candidate comparison ([TESTING.md](TESTING.md)).
+
 ## Design and review
 
 Read [REVIEW.md](REVIEW.md) before SDK design or code review. It defines the
