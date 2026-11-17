@@ -34,7 +34,7 @@ vi.mock('../../../../src/main/apps/runtime/workspace-admission', async original 
   } }
 })
 
-import { changeAppDefaultSpace, previewAppSpaceChange, repairLegacyAppWorkspaces } from '../../../../src/main/apps/runtime/space-change'
+import { changeAppDefaultSpace, previewAppSpaceChange, relocateAppWorkspace, repairLegacyAppWorkspaces } from '../../../../src/main/apps/runtime/space-change'
 import { pendingWorkspaceChange } from '../../../../src/main/apps/runtime/workspace-admission'
 import { deleteWorkspacePreservingPeople } from '../../../../src/main/apps/runtime/workspace-deletion'
 
@@ -129,12 +129,18 @@ describe('workspace change orchestration', () => {
     expect(env.copy.mock.calls.map(call => call.slice(0, 3))).toEqual([[pathFor('source'), pathFor('destination'), undefined], [pathFor('legacy'), pathFor('destination'), undefined]])
     for (const call of env.copy.mock.calls) expect([...call[3]].sort()).toEqual(['chat-native', 'legacy-native', 'run-native', 'structured-native'])
     expect(deps.manager.relocateAutomationData.mock.calls[0].slice(0, 2)).toEqual(['person', 'destination'])
-    expect(deps.store.relocateAppEnvironments).toHaveBeenCalledWith('person', expect.objectContaining({ spaceId: 'destination', memoryDir: appRoot('destination'), mcpBindings: { declared: 'current-connection' } }), expect.objectContaining({ spaceId: 'destination', memoryDir: appRoot('destination') }))
+    expect(deps.store.relocateAppEnvironments).toHaveBeenCalledWith('person', expect.objectContaining({ spaceId: 'destination', memoryDir: appRoot('destination'), mcpBindings: { declared: 'current-connection' } }), expect.objectContaining({ spaceId: 'destination', memoryDir: appRoot('destination') }), undefined)
     expect(deps.rows.every(row => row.spaceId === 'destination')).toBe(true)
     expect(env.repoint).toHaveBeenCalledWith('person', 'destination')
     expect(env.send).toHaveBeenCalledWith('app:list_changed', { appId: 'person', change: 'updated' })
     expect(env.broadcast).toHaveBeenCalledWith('app:list_changed', { appId: 'person', change: 'updated' })
     expect(pendingWorkspaceChange('person')).toBeUndefined()
+  })
+
+  it('asks the store to announce only conversations that were in a deleted workspace', async () => {
+    const deps = fixture()
+    await relocateAppWorkspace(deps as never, 'person', 'destination', pathFor('source'))
+    expect(deps.store.relocateAppEnvironments).toHaveBeenCalledWith('person', expect.anything(), expect.anything(), { kind: 'deleted', fromSpacePath: pathFor('source') })
   })
 
   it('does not start memory drain or transfer until both running work drains finish', async () => {

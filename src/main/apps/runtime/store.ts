@@ -26,7 +26,7 @@ import type {
 import type { AppStatus } from '../manager'
 import { BLOCKED_STATUSES, blockedReason } from './app-state'
 import { EscalationAnswerValidationError } from './errors'
-import type { EscalationAnswer, EscalationAnswerPayload, RunTokenUsage } from '../../../shared/apps/app-types'
+import type { EscalationAnswer, EscalationAnswerPayload, RunTokenUsage, WorkspaceNoticeKind } from '../../../shared/apps/app-types'
 import { addRunTokenUsage, getEscalationAnswers, getEscalationQuestions } from '../../../shared/apps/app-types'
 
 // ============================================
@@ -946,16 +946,32 @@ export class ActivityStore {
       .run(JSON.stringify(environment), runId)
   }
 
-  /** Rewrite every historical environment in the caller's relocation transaction. */
-  relocateAppEnvironments(appId: string, chatEnvironment: ExecutionEnvironment, automationEnvironment: ExecutionEnvironment): number {
-    const replacement = `CASE WHEN json_extract(environment_json, '$.pendingConnectionNotice') = 1
+  /**
+   * Rewrite every historical environment in the caller's relocation transaction.
+   * Rows that were in `notice.fromSpacePath` are marked to announce the change; unannounced notices carry over.
+   */
+  relocateAppEnvironments(
+    appId: string,
+    chatEnvironment: ExecutionEnvironment,
+    automationEnvironment: ExecutionEnvironment,
+    notice?: { kind: WorkspaceNoticeKind; fromSpacePath: string },
+  ): number {
+    const connection = `CASE WHEN json_extract(environment_json, '$.pendingConnectionNotice') = 1
       OR COALESCE(json_extract(environment_json, '$.mcpBindings'), '{}') != json_extract(@environment, '$.mcpBindings')
       THEN json_set(@environment, '$.pendingConnectionNotice', json('true')) ELSE @environment END`
+    const replacement = `CASE
+      WHEN @noticeFrom IS NOT NULL AND json_extract(environment_json, '$.spacePath') = @noticeFrom
+        THEN json_set(${connection}, '$.pendingWorkspaceNotice', json_object('kind', @noticeKind))
+      WHEN json_extract(environment_json, '$.pendingWorkspaceNotice') IS NOT NULL
+        THEN json_set(${connection}, '$.pendingWorkspaceNotice', json_extract(environment_json, '$.pendingWorkspaceNotice'))
+      ELSE ${connection} END`
+    const noticeFrom = notice?.fromSpacePath ?? null
+    const noticeKind = notice?.kind ?? null
     return this.db.transaction(() =>
       this.db.prepare(`UPDATE app_session_environments SET environment_json = ${replacement} WHERE app_id = @appId`)
-        .run({ environment: JSON.stringify(chatEnvironment), appId }).changes
+        .run({ environment: JSON.stringify(chatEnvironment), appId, noticeFrom, noticeKind }).changes
       + this.db.prepare(`UPDATE automation_runs SET environment_json = ${replacement} WHERE app_id = @appId`)
-        .run({ environment: JSON.stringify(automationEnvironment), appId }).changes
+        .run({ environment: JSON.stringify(automationEnvironment), appId, noticeFrom, noticeKind }).changes
     )()
   }
 

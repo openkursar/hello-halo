@@ -60,6 +60,7 @@ import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
 import { ENVIRONMENT_NOTICE_TEXT } from '../../../shared/transcript'
+import { prepareWorkspaceNotice } from './workspace-notice'
 import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
   closeV2Session,
@@ -1333,6 +1334,12 @@ async function runAppChatTurn(
       sink.announceLiveInputs([notice], false)
     }
   }
+  const workspaceNotice = prepareWorkspaceNotice(environment, text => {
+    const notice = sink.writeUserMessage(text, undefined, undefined, { source: 'workspace-notice' })
+    if (!sink.getRecordedInputIds([notice])[0]) return false
+    sink.announceLiveInputs([notice], false)
+    return true
+  }, () => activityStore.replaceSessionEnvironment(conversationId, appId, environment))
   const instanceId = imSession?.sessionId?.split(':', 1)[0]
   const imChatId = instanceId && imSession ? imSession.sessionId.slice(instanceId.length + 1) : undefined
   const authorizationRevision = instanceId ? getActiveImChannelManager()?.getAuthorizationRevision(instanceId) : undefined
@@ -1621,7 +1628,8 @@ async function runAppChatTurn(
     // injected attachment-paths block.
     const turnText = formatCanvasContext(request.canvasContext)
       + formatTurnAttachments({ references: request.references, workDir })
-      + (imageFallback?.contextBlock ?? '') + (restrictionNotice ? `${restrictionNotice}\n\n` : '') + message
+      + (imageFallback?.contextBlock ?? '') + (restrictionNotice ? `${restrictionNotice}\n\n` : '')
+      + (workspaceNotice.context && !opensWithSlashCommand(message) ? `${workspaceNotice.context}\n\n` : '') + message
     const memoryPreamble = resumeSessionId || !memoryActive || opensWithSlashCommand(turnText)
       ? ''
       : await buildSessionMemoryPreamble(
@@ -1683,6 +1691,7 @@ async function runAppChatTurn(
         await sessionLease.send({ type: 'user', message: { role: 'user', content: messageContent } } as any, error => reportPreInitFailure(error as Error))
       }
       dispatchAccepted = true
+      if (!opensWithSlashCommand(message)) workspaceNotice.delivered()
     } catch (sendErr) {
       // Nothing reached CC, so no turn will arrive to settle this round.
       round.cancel()

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { Locator, Page } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
 import type { InstalledApp } from '../../../src/shared/apps/app-types'
+import { WORKSPACE_NOTICE_TEXT } from '../../../src/shared/transcript'
 import {
   test, expect, acceptance, appRoot, assertMoveEnvironments, chatBinding, connectMoveIm, createMoveChat,
   installMovePerson, movePreview, openMoveChat, openMoveConversationPage, openMoveWorkspaces, prepareLegacyMove, readMovePersistence, readMoveTranscript,
@@ -96,17 +97,21 @@ function continuityScript(model: AcceptanceModel) {
   return { gate, question, answer, context, resumed, chats, errors, phase(value: typeof phase) { phase = value } }
 }
 
+async function openHaloWorkspaceConversations(page: Page) {
+  await openMoveConversationPage(page)
+  const selector = page.getByTitle(/^Current workspace: .* — click to switch$/)
+  if (await selector.getAttribute('title') !== 'Current workspace: Halo Workspace — click to switch') {
+    await selector.click()
+    const dropdown = selector.locator('..')
+    await dropdown.getByRole('button').filter({ has: page.getByText('Halo Workspace', { exact: true }) }).click()
+    await expect(selector).toHaveAttribute('title', 'Current workspace: Halo Workspace — click to switch')
+  }
+}
+
 async function resumeDesktop(page: Page, person: InstalledApp, target: ManagedSpace, chat: MoveChat, question: string) {
   await openMoveWorkspaces(page)
   if (target.id === 'halo-temp') {
-    await openMoveConversationPage(page)
-    const selector = page.getByTitle(/^Current workspace: .* — click to switch$/)
-    if (await selector.getAttribute('title') !== 'Current workspace: Halo Workspace — click to switch') {
-      await selector.click()
-      const dropdown = selector.locator('..')
-      await dropdown.getByRole('button').filter({ has: page.getByText('Halo Workspace', { exact: true }) }).click()
-      await expect(selector).toHaveAttribute('title', 'Current workspace: Halo Workspace — click to switch')
-    }
+    await openHaloWorkspaceConversations(page)
   } else {
     await workspaceCard(page, target.name).click()
   }
@@ -367,13 +372,23 @@ for (const kind of ['central', 'project'] as const) {
       await expect.poll(async () => (await readMoveTranscript(page, person.id, halo.id, chat.conversationId)).some(message => message.content === `Retained native reply: ${question}`), { timeout: 30000 }).toBe(true)
       await waitForMoveChat(page, person.id, chat.conversationId)
       assertNativeContext(script, question, chat.first, chat.reply)
+      const notices = async (conversationId: string) => (await readMoveTranscript(page, person.id, halo.id, conversationId))
+        .filter(message => message.source === 'workspace-notice').map(message => message.content)
+      expect(await notices(chat.conversationId), 'The rescued conversation records the deletion once').toEqual([WORKSPACE_NOTICE_TEXT.deleted])
+      const toldModel = (input: string) => script.chats.filter(entry => entry.input === input).map(({ request }) => latestUserInput(request))
+      expect(toldModel(question).every(text => text.startsWith('[Workspace changed]\n'))).toBe(true)
       await bindIm(person.id)
       const imResume = `Resume rescued IM ${person.id}`
       await sendMoveIm(page, person.id, wecom, imResume)
       assertNativeContext(script, imResume, imFirst, `Retained native reply: ${imFirst}`)
+      expect(await notices(imId), 'The rescued IM conversation records the deletion once').toEqual([WORKSPACE_NOTICE_TEXT.deleted])
+      expect(toldModel(imResume).every(text => text.startsWith('[Workspace changed]\n'))).toBe(true)
     }
     await page.setViewportSize({ width: 1280, height: 900 })
-    await resumeDesktop(page, relocated, other, relocatedChat, `Resume unaffected person ${randomUUID()}`)
+    const unaffected = `Resume unaffected person ${randomUUID()}`
+    await resumeDesktop(page, relocated, other, relocatedChat, unaffected)
+    expect((await readMoveTranscript(page, relocated.id, other.id, relocatedChat.conversationId)).some(message => message.source === 'workspace-notice')).toBe(false)
+    expect(script.chats.filter(entry => entry.input === unaffected).some(({ request }) => latestUserInput(request).includes('[Workspace changed]'))).toBe(false)
     expect(readFileSync(join(appRoot(other, relocated.id), 'memory.md'), 'utf8')).toContain('Already relocated independent memory')
     expect(existsSync(projectFile)).toBe(kind === 'project')
     if (kind === 'project') expect(readFileSync(projectFile, 'utf8')).toBe('The linked project is independent.\n')

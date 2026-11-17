@@ -53,6 +53,8 @@ scenarios:
         zh: 确认框列出两位住在其中的数字人，说明它们连同记忆和全部对话搬至 Halo 工作区；长名称换行且操作可达。取消不搬迁也不删除任何内容。
       - en: After deletion both residents belong to Halo Workspace, retain their known memory and history, and can continue existing desktop and synthetic IM chats after restart. The person already moved elsewhere is unaffected.
         zh: 删除后，两位原住数字人归属 Halo 工作区，保留已知记忆和历史，重启后可继续已有桌面及模拟 IM 聊天；已搬去别处的数字人不受影响。
+      - en: Each affected conversation records one system timeline notice when it continues, and its next ordinary model input explains the workspace change. Restart and retry retain the notice without duplicating it; unaffected conversations receive none.
+        zh: 每个受影响对话继续时记录一条系统时间线提示，下一次普通模型输入也说明工作区变更；重启和重试保留且不重复提示，不影响其他对话。
       - en: The workspace's own data is removed only within the stated deletion scope. Linked project files stay in the project folder.
         zh: 工作区自己的数据只在说明的删除范围内移除；关联项目文件保留在项目文件夹。
     notes: Synthetic IM exercises local application routing, not a live external service.

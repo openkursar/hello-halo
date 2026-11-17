@@ -226,6 +226,36 @@ describe('execution environment relocation and recovery', () => {
     expect(warning).toHaveBeenCalledTimes(1)
   })
 
+  it('announces relocation only for rows that were in the deleted workspace and keeps unannounced notices', () => {
+    const original = resolveExecutionEnvironment(app, manager)
+    const elsewhere = buildExecutionEnvironment(app, manager, 'b', 'chat')
+    store.pinSessionEnvironment('app-chat:in-deleted', app.id, original)
+    store.pinSessionEnvironment('app-chat:elsewhere', app.id, elsewhere)
+    store.pinSessionEnvironment('app-chat:pending', app.id, { ...elsewhere, pendingWorkspaceNotice: { kind: 'missing' } })
+    store.insertRun({ runId: 'run', appId: app.id, sessionKey: 'run', status: 'ok', triggerType: 'manual', startedAt: 1, environment: original })
+    const destination = buildExecutionEnvironment(app, manager, 'b', 'chat')
+    store.relocateAppEnvironments(app.id, destination, buildExecutionEnvironment(app, manager, 'b'), { kind: 'deleted', fromSpacePath: original.spacePath })
+
+    store = new ActivityStore(database.getAppDatabase())
+    expect(store.getSessionEnvironment('app-chat:in-deleted')?.pendingWorkspaceNotice).toEqual({ kind: 'deleted' })
+    expect(store.getSessionEnvironment('app-chat:elsewhere')?.pendingWorkspaceNotice).toBeUndefined()
+    expect(store.getSessionEnvironment('app-chat:pending')?.pendingWorkspaceNotice).toEqual({ kind: 'missing' })
+    expect(store.getRun('run')?.environment?.pendingWorkspaceNotice).toEqual({ kind: 'deleted' })
+    store.relocateAppEnvironments(app.id, destination, destination)
+    expect(store.getSessionEnvironment('app-chat:in-deleted')?.pendingWorkspaceNotice).toEqual({ kind: 'deleted' })
+  })
+
+  it('queues a missing-workspace notice when recovery lands in another workspace, not for same-space storage', () => {
+    const key = 'app-chat:person'
+    const original = resolveChatEnvironment(app, manager, store, key)
+    app = { ...app, spaceId: 'b' }
+    rmSync(original.memoryDir, { recursive: true })
+    const recovered = resolveChatEnvironment(app, manager, store, key)
+    expect(recovered.spaceId).toBe('b')
+    expect(recovered.pendingWorkspaceNotice).toEqual({ kind: 'missing' })
+    expect(store.getSessionEnvironment(key)?.pendingWorkspaceNotice).toEqual({ kind: 'missing' })
+  })
+
   it('recreates missing same-space memory instead of blocking the existing conversation', () => {
     const key = 'app-chat:person'
     const original = resolveChatEnvironment(app, manager, store, key)

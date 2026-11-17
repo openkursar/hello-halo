@@ -19,6 +19,8 @@ import { getAppManager, type InstalledApp } from '../manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
 import { resolvePermission, type ExecutionEnvironment } from '../../../shared/apps/app-types'
 import { ENVIRONMENT_NOTICE_TEXT } from '../../../shared/transcript'
+import { prepareWorkspaceNotice } from './workspace-notice'
+import { opensWithSlashCommand } from '../../services/agent/opening-context'
 import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
 import type { ActivityStore } from './store'
 import type {
@@ -699,6 +701,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
           store.replaceRunEnvironment(runId, environment)
         }
       }
+    }
+    const workspaceNotice = prepareWorkspaceNotice(environment,
+      text => !!sessionWriter?.writeTrigger(text, undefined, undefined, { source: 'workspace-notice' }),
+      () => store.replaceRunEnvironment(runId, environment))
+    if (sessionWriter) {
       if (options.recordedInputs?.length) {
         for (const input of options.recordedInputs) sessionWriter.writeTrigger(input.text, undefined, undefined, undefined, input.references)
       } else {
@@ -761,9 +768,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       engineId,
       onSessionId: persistEngineSession,
       reportSaved: () => reportedAt === agentExecution.inputRevision,
+      onSent: () => { if (!opensWithSlashCommand(initialMessage)) workspaceNotice.delivered() },
     }
     let streamResult = await processStream(
-      formatReferencesBlock(followupReferences, workDir) + initialMessage,
+      formatReferencesBlock(followupReferences, workDir)
+        + (workspaceNotice.context && !opensWithSlashCommand(initialMessage) ? `${workspaceNotice.context}\n\n` : '') + initialMessage,
       turnContext
     )
 
@@ -1095,6 +1104,7 @@ interface RunTurnContext {
   onSessionId: (sessionId: string) => void
   /** A report was saved and no input has arrived since. */
   reportSaved: () => boolean
+  onSent?: () => void
 }
 
 /**
@@ -1200,7 +1210,7 @@ async function processStream(message: string, turn: RunTurnContext): Promise<Str
 
   try {
     await execution.submit(message, {
-      onSent: () => { if (runId) notifyActiveRunReady(runId) },
+      onSent: () => { turn.onSent?.(); if (runId) notifyActiveRunReady(runId) },
       onMessage: readMessage,
     })
   } catch (streamErr) {

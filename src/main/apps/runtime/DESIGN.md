@@ -2155,8 +2155,14 @@ Connection identity and availability remain distinct: pausing an instance does
 not change its identity, while replacement, removal or authorization changes update
 the binding to currently authorized instances. A durable environment notice is
 recorded before continuing with changed accounts. Independent runs still enforce
-declared connection prerequisites. Public runtime activity/state types re-export
-the shared renderer-safe contract.
+declared connection prerequisites. Deletion-related relocation and missing-workspace
+recovery also retain a per-conversation workspace notice. It is written as a system
+record in the timeline, not an IM reply, and supplied with the next model input.
+Recording and engine acceptance are separate checkpoints: failed preparation keeps
+the model context pending without rewriting the timeline notice; a slash command
+keeps it pending for the next ordinary turn. Explicit moves add no notice. A missing
+location does not prove that its data was deleted. Public runtime activity/state
+types re-export the shared renderer-safe contract.
 
 `getAppState` is a projection: automatic enablement, active execution, pending
 questions and accepted continuations coexist. Manual execution and answering do

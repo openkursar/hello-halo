@@ -1,11 +1,8 @@
 import { createServer } from 'node:net'
-import { createServer as createHttpServer } from 'node:http'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import express from 'express'
 import type { BrowserContext, Page } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
 import { test as base, expect } from './acceptance-management'
+import { serveBuiltRenderer, type RendererAssets } from './acceptance-renderer-redirect'
 
 interface BindingAttempt {
   requestedHost: string | null
@@ -133,18 +130,14 @@ export const test = base.extend<{ remoteDesktop: RemoteDesktop }>({
     let context: BrowserContext | undefined
     let remotePage: Page | undefined
     let guardInstalled = false
-    let assets: ReturnType<typeof createHttpServer> | undefined
+    let assets: RendererAssets | undefined
     try {
       const before = await managementApp.window.evaluate(() => (globalThis as unknown as { halo: HaloAPI }).halo.getRemoteStatus())
       expect(before).toMatchObject({ success: true, data: { enabled: false, server: { running: false } } })
       bindings.push({ phase: 'guard-installed', state: await managementApp.app.evaluate(installRemoteLoopbackGuard) })
       guardInstalled = true
       const packaged = await managementApp.app.evaluate(({ app }) => app.isPackaged)
-      if (!packaged) {
-        const project = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-        assets = createHttpServer(express().use(express.static(resolve(project, 'out/renderer'))))
-        await new Promise<void>((resolve, reject) => { assets!.once('error', reject); assets!.listen(5173, '127.0.0.1', resolve) })
-      }
+      if (!packaged) assets = await serveBuiltRenderer(managementApp.app)
       const enabled = await managementApp.window.evaluate(async port => (globalThis as unknown as { halo: HaloAPI }).halo.enableRemoteAccess(port), await freePort())
       expect(enabled.success).toBe(true)
       const status = enabled.data as RemoteStatus
@@ -200,8 +193,7 @@ export const test = base.extend<{ remoteDesktop: RemoteDesktop }>({
         catch (error) { failures.push(error) }
       }
       if (assets) {
-        assets.closeAllConnections()
-        try { await new Promise<void>((resolve, reject) => assets!.close(error => error ? reject(error) : resolve())) } catch (error) { failures.push(error) }
+        try { bindings.push({ phase: 'renderer-redirect-restored', state: { connections: await assets.close() } }) } catch (error) { failures.push(error) }
       }
       try { await info.attach('remote-loopback-boundary', { body: JSON.stringify({ bindings, requests, scope: 'Real remote UI and application handlers with a test-only loopback listener constraint; no LAN claim.' }, null, 2), contentType: 'application/json' }) }
       catch (error) { failures.push(error) }

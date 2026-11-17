@@ -294,7 +294,7 @@ import {
 } from '../../../../src/main/services/agent/session-manager'
 import { getAppManager } from '../../../../src/main/apps/manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from '../../../../src/main/apps/runtime/execution-environment'
-import { ENVIRONMENT_NOTICE_TEXT } from '../../../../src/shared/transcript'
+import { ENVIRONMENT_NOTICE_TEXT, WORKSPACE_NOTICE_TEXT } from '../../../../src/shared/transcript'
 import { WorkingDirectoryUnavailableError } from '../../../../src/main/services/agent'
 import { openSessionWriter, loadChatEngineState, saveChatEngineBinding } from '../../../../src/main/apps/runtime/session-store'
 import { ensureEngineAvailable, waitForSessionCleanup } from '../../../../src/main/services/agent'
@@ -554,6 +554,40 @@ describe('executeRun — connection change notice', () => {
     expect(environment).not.toHaveProperty('pendingConnectionNotice')
     if (reason === 'changed') expect(saved[0]).toHaveProperty('pendingConnectionNotice', true)
     expect(nextSession.send).toHaveBeenCalledWith('INITIAL MESSAGE')
+  })
+
+  it.each(['deleted', 'missing'] as const)('records a %s workspace notice once, tells the model and clears it after persistence', async kind => {
+    const environment = { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1', pendingWorkspaceNotice: { kind } }
+    vi.mocked(resolveExecutionEnvironment).mockReturnValueOnce(environment)
+    const writeTrigger = vi.fn((..._args: unknown[]) => ({ timestamp: '2026-11-17T00:00:00.000Z', inputId: 'workspace-notice' }))
+    vi.mocked(openSessionWriter).mockReturnValueOnce({ writeTrigger, writeEvent: vi.fn() } as never)
+    const saved: unknown[] = []
+    const store = makeStore()
+    store.replaceRunEnvironment.mockImplementation((_id: string, value: object) => saved.push({ ...value }))
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory() })
+
+    expect(result.outcome).toBe('useful')
+    expect(writeTrigger.mock.calls[0]).toEqual([WORKSPACE_NOTICE_TEXT[kind], undefined, undefined, { source: 'workspace-notice' }])
+    expect(writeTrigger.mock.calls[1][0]).toBe('INITIAL MESSAGE')
+    expect(environment).not.toHaveProperty('pendingWorkspaceNotice')
+    expect(saved.at(-1)).not.toHaveProperty('pendingWorkspaceNotice')
+    const sent = String(nextSession.send.mock.calls[0][0])
+    expect(sent.startsWith('[Workspace changed]\n')).toBe(true)
+    expect(sent.endsWith('\n\nINITIAL MESSAGE')).toBe(true)
+  })
+
+  it('leaves workspace model context pending when a continued run sends a slash command', async () => {
+    const environment = { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1', pendingWorkspaceNotice: { kind: 'deleted' as const } }
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment })
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+    const writeTrigger = vi.fn(() => ({ timestamp: 'now', inputId: 'workspace-notice' }))
+    vi.mocked(openSessionWriter).mockReturnValueOnce({ writeTrigger, writeEvent: vi.fn() } as never)
+    await executeRun({ app: makeApp(), store, memory: makeMemory(), existingRunId: 'old-run', existingSessionKey: 'old-thread',
+      trigger: { type: 'continue_followup', description: 'Continue', continue: { sessionId: 'original-native', userMessage: '/compact', interactive: true } } })
+    expect(nextSession.send).toHaveBeenCalledWith('/compact')
+    expect(environment.pendingWorkspaceNotice).toEqual({ kind: 'deleted', recorded: true })
   })
 
   it('retains the pending notice when the transcript writer could not persist it', async () => {

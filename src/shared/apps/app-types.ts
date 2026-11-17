@@ -202,7 +202,12 @@ export interface ExecutionEnvironment {
   /** Current connection identities; replaced accounts are announced before continuing. */
   mcpBindings?: Record<string, string>
   pendingConnectionNotice?: boolean
+  /** Recording the timeline notice and delivering model context survive retries independently. */
+  pendingWorkspaceNotice?: { kind: WorkspaceNoticeKind; recorded?: boolean }
 }
+
+/** `deleted`: the owner deleted the workspace and the data moved; `missing`: the workspace vanished outside Halo. */
+export type WorkspaceNoticeKind = 'deleted' | 'missing'
 
 export interface ActivitySource {
   /** `upgrade`: written when an author's new version was applied, outside any run. */

@@ -519,16 +519,16 @@ describe('provenance', () => {
       rmSync(dir, { recursive: true, force: true })
     })
 
-    it('preserves an environment notice as its own system record before the next input and reply', () => {
+    it.each(['environment-notice', 'workspace-notice'] as const)('preserves a %s as its own system record before the next input and reply', source => {
       const writer = openSessionWriter(dir, 'app-1', 'run-1')
-      const written = writer.writeTrigger('Connections changed.', undefined, undefined, { source: 'environment-notice' })
+      const written = writer.writeTrigger('Context changed.', undefined, undefined, { source })
       writer.writeTrigger('Continue the original task.')
       writer.writeEvent(assistant([text('Continuing.')], 3))
 
       expect(written).toMatchObject({ inputId: expect.any(String), timestamp: expect.any(String) })
       const messages = readSessionMessages(dir, 'app-1', 'run-1')
       expect(messages.map(message => [message.role, message.source, message.content])).toEqual([
-        ['system', 'environment-notice', 'Connections changed.'],
+        ['system', source, 'Context changed.'],
         ['user', undefined, 'Continue the original task.'],
         ['assistant', undefined, 'Continuing.'],
       ])

@@ -208,6 +208,8 @@ function recoverExecutionEnvironment(previous: ExecutionEnvironment, recovery: E
     .some(specId => previousBindings[specId] !== currentBindings[specId])) {
     environment.pendingConnectionNotice = true
   }
+  const workspace = previous.pendingWorkspaceNotice ?? (previous.spacePath !== environment.spacePath ? { kind: 'missing' as const } : undefined)
+  if (workspace) environment.pendingWorkspaceNotice = workspace
   recovery.onRecovered?.(environment)
   console.warn('[Runtime] Missing execution environment reconnected to current workspace', {
     appId: recovery.app.id, previousSpaceId: previous.spaceId, spaceId: environment.spaceId,

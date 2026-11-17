@@ -278,11 +278,13 @@ export async function relocateAppWorkspace(deps: SpaceChangeDependencies, appId:
       for (const workDir of workDirs) if (workDir && ids.size) await copyStoredSessions(workDir, destination.workDir, undefined, ids)
       for (const actor of teamPlan?.environments ?? []) await carryActorSessions(deps.store, actor.appId, actor.environment, actor.previousEnvironment)
       const chatEnvironment = buildExecutionEnvironment(app, deps.manager, newSpaceId, 'chat')
+      // Only conversations in a deleted workspace are told; an explicit move was chosen by the reader.
+      const notice = deletingSpacePath ? { kind: 'deleted' as const, fromSpacePath: deletingSpacePath } : undefined
       const moved = await deps.manager.relocateAutomationData(appId, newSpaceId, {
         sources,
         commitEnvironments: () => {
-          deps.store.relocateAppEnvironments(appId, chatEnvironment, destination)
-          for (const actor of teamPlan?.environments ?? []) deps.store.relocateAppEnvironments(actor.appId, actor.environment, actor.environment)
+          deps.store.relocateAppEnvironments(appId, chatEnvironment, destination, notice)
+          for (const actor of teamPlan?.environments ?? []) deps.store.relocateAppEnvironments(actor.appId, actor.environment, actor.environment, notice)
           teamPlan?.commitEnvironment()
           getTaskStateService()?.repointAppConversations(appId, newSpaceId)
         },
