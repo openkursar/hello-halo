@@ -155,7 +155,7 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
     spaceId: 'space', spacePath: m.workDir, workDir: m.workDir,
     memoryDir: join(m.workDir, '.halo', 'apps', 'handoff-app'),
   }),
-  validateEnvironmentConnections: vi.fn(),
+  validateEnvironmentConnections: vi.fn(() => ({ changed: false, changedSpecIds: [] })),
   appChatRunId: () => 'chat',
   resolveExecutionEnvironment: vi.fn(), validateExecutionEnvironment: vi.fn(), legacySessionEnvironmentKey: vi.fn(),
 }))

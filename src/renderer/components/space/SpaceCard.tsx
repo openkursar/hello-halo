@@ -56,22 +56,31 @@ export function SpaceCard({ space, onOpen }: SpaceCardProps) {
   const handleDelete = useCallback(async () => {
     setMenuOpen(false)
     let effect: Space['deletionEffect']
+    let impact: Space['deletionImpact']
     try {
-      const result = await api.getSpace(space.id)
+      const result = await api.getSpace(space.id, { includeDeletionImpact: true })
       if (!result.success || !result.data) throw new Error(result.error ?? 'Workspace details unavailable')
-      effect = (result.data as Space).deletionEffect
-      if (effect !== 'workspace-files' && effect !== 'halo-data-only') throw new Error('Workspace deletion impact unavailable')
+      const details = result.data as Space
+      effect = details.deletionEffect
+      impact = details.deletionImpact
+      if (effect !== 'workspace-files' && effect !== 'halo-data-only') throw new Error('Workspace deletion effect unavailable')
+      if (!impact || !Array.isArray(impact.digitalHumans) || !Number.isInteger(impact.activeWorkCount) || impact.activeWorkCount < 0) throw new Error('Workspace deletion impact unavailable')
     } catch (error) {
       console.warn('[SpaceCard] Delete refused: could not determine its impact', { spaceId: space.id, error })
       notifyFailure(t('Could not delete this workspace. Please try again.'))
       return
     }
 
+    const message = [
+      effect === 'halo-data-only'
+        ? t('Halo workspace data, including workspace conversations and any files stored with it, will be deleted. Your project files will be kept in the current project folder.')
+        : t('Workspace conversations and files will be deleted.'),
+      ...(impact.digitalHumans.length ? [t('These digital humans will move to Halo Workspace with their memory and all conversations: {{names}}.', { names: impact.digitalHumans.map(person => person.name).join(', ') })] : []),
+      ...(impact.activeWorkCount > 0 ? [t('Ongoing work that will stop when you confirm: {{count}}.', { count: impact.activeWorkCount })] : []),
+    ].join('\n\n')
     const confirmed = await showConfirm({
       title: t('Delete this workspace?'),
-      message: effect === 'halo-data-only'
-        ? t('Are you sure you want to delete this workspace?\n\nHalo workspace data, including conversation history and any files stored with it, will be deleted; your project files will be kept in the current project folder.')
-        : t('Are you sure you want to delete this workspace?\n\nAll conversations and files in the workspace will be deleted.'),
+      message,
       confirmLabel: t('Delete'),
       cancelLabel: t('Cancel'),
       variant: 'danger',
@@ -79,8 +88,7 @@ export function SpaceCard({ space, onOpen }: SpaceCardProps) {
     if (!confirmed) return
     trackHome('home.space.action', { action: 'delete', surface: 'manage' })
     const result = await deleteSpace(space.id)
-    if (result === 'busy') notifyFailure(t('This workspace is still running a reply or task. Stop it or wait for it to finish, then delete again.'))
-    else if (result === 'failed') notifyFailure(t('Could not delete this workspace. Please try again.'))
+    if (result !== 'deleted') notifyFailure(t('Could not delete this workspace. Some work may have stopped. Please try again.'))
   }, [space, showConfirm, t, deleteSpace])
 
   const handleForget = useCallback(async () => {

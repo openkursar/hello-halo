@@ -75,7 +75,7 @@ for (const kind of ['central', 'project'] as const) {
     await navigateToWorkspaces(window)
     await openWorkspaceMenu(window, space.name, 'Delete')
     const confirmation = window.getByRole('alertdialog', { name: 'Delete this workspace?', exact: true })
-    await expect(confirmation).toContainText(kind === 'project' ? 'your project files will be kept' : 'All conversations and files in the workspace will be deleted')
+    await expect(confirmation).toContainText(kind === 'project' ? 'Your project files will be kept' : 'Workspace conversations and files will be deleted.')
     await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click()
     expect((await listManagedSpaces(window)).some(item => item.id === space.id)).toBe(true)
     expect(readFileSync(file, 'utf8')).toBe(contents)

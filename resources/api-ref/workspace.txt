@@ -8,7 +8,7 @@ not here:
   running shell commands in the working directory -> terminal
 
 operations on this page:
-  POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
+  POST   /api/apps/<appId>/move-space                                Move a digital human and all its memory and conversations to another space
   GET    /api/artifacts/content                                      Read one file from a space
   GET    /api/artifacts/detect-type                                  Detect whether a file is text or binary and how it would be viewed
   POST   /api/artifacts/save                                         Overwrite a file's content
@@ -16,7 +16,7 @@ operations on this page:
   POST   /api/spaces                                                 Create a space
   GET    /api/spaces/$HALO_SPACE_ID                                  Read one space
   PUT    /api/spaces/$HALO_SPACE_ID                                  Rename a space or change its icon
-  DELETE /api/spaces/$HALO_SPACE_ID                                  Delete a space and everything inside it   !! destructive
+  DELETE /api/spaces/$HALO_SPACE_ID                                  Delete a workspace while preserving its digital humans   !! destructive
   GET    /api/spaces/$HALO_SPACE_ID/artifacts                        List files and folders in a space
   DELETE /api/spaces/$HALO_SPACE_ID/artifacts                        Move a file or folder to the trash
   POST   /api/spaces/$HALO_SPACE_ID/artifacts/children               Load one folder's children in the file tree
@@ -37,7 +37,7 @@ operations on this page:
   GET    /api/spaces/halo                                            Read the built-in temporary space
   PUT    /api/spaces/reorder                                         Set the display order of spaces
 
-POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
+POST   /api/apps/<appId>/move-space                                Move a digital human and all its memory and conversations to another space
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/apps/<appId>/move-space" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
@@ -45,7 +45,7 @@ POST   /api/apps/<appId>/move-space                                Set which spa
           -d '{"newSpaceId":"<spaceId — a uuid from GET /api/spaces>"}'
      # body: {"newSpaceId": "<spaceId — a uuid from GET /api/spaces>"}
      # out: {success:true,data:{}}
-     # note: Changes the default only: work already running, existing chat sessions and team work keep the environment they started in. A digital human must belong to a space, so newSpaceId is required — null is rejected. Nothing is stopped or restarted. 404 if appId does not exist; 400 if newSpaceId is an empty string.
+     # note: Confirm the move with the user first: ongoing runs and replies are stopped. Memory, all conversations and pending decisions move together; project files stay in their project folder. Read the destination space before choosing it. A digital human must belong to a space, so newSpaceId is required — null is rejected. 404 if appId does not exist; 400 if newSpaceId is an empty string.
 
 GET    /api/artifacts/content                                      Read one file from a space
      curl -s "$HALO_API_URL/api/artifacts/content?path=/absolute/path/inside/the/space" -H "Authorization: Bearer $HALO_API_TOKEN"
@@ -88,6 +88,7 @@ POST   /api/spaces                                                 Create a spac
 GET    /api/spaces/$HALO_SPACE_ID                                  Read one space
      curl -s "$HALO_API_URL/api/spaces/$HALO_SPACE_ID" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {"success":true,"data":{"id":"<uuid>","name":"Work","path":"/…"}}
+     # note: Add ?includeDeletionImpact=true only when preparing a deletion. The response then includes deletionEffect and deletionImpact {digitalHumans:[{id,name}],activeWorkCount}; ordinary reads do not compute that impact.
 
 PUT    /api/spaces/$HALO_SPACE_ID                                  Rename a space or change its icon
      # note: reversible — can be undone or corrected afterward.
@@ -98,13 +99,13 @@ PUT    /api/spaces/$HALO_SPACE_ID                                  Rename a spac
      # body: {"name":"Renamed space"}
      # out: {"success":true,"data":{...updated space}}
 
-DELETE /api/spaces/$HALO_SPACE_ID                                  Delete a space and everything inside it
+DELETE /api/spaces/$HALO_SPACE_ID                                  Delete a workspace while preserving its digital humans
      !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
      curl -sX DELETE "$HALO_API_URL/api/spaces/$HALO_SPACE_ID" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {"success":true}
-     # note: Deletes the space folder recursively, every conversation in it, and every digital human installed in it.
-     # note: Nothing is moved to a trash folder and there is no undo.
-     # note: Name what will be lost and get the user to agree before running this.
+     # note: Read GET /api/spaces/:spaceId?includeDeletionImpact=true before confirming: its digitalHumans move to Halo Workspace with memory and conversations intact, and activeWorkCount ongoing items are stopped.
+     # note: Workspace conversations and Halo-owned workspace files are permanently deleted. External project files are kept. Digital humans living elsewhere are preserved too, including legacy storage dependencies.
+     # note: Name the file loss, digital-human relocation and stopped work and get the user to agree before running this. There is no undo for deleted workspace data.
 
 GET    /api/spaces/$HALO_SPACE_ID/artifacts                        List files and folders in a space
      curl -s "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/artifacts" -H "Authorization: Bearer $HALO_API_TOKEN"

@@ -10,6 +10,7 @@ const { createSession, getActiveEngine, paths, readSessionToolContextMode, publi
   getActiveEngine: vi.fn(() => 'halo'),
   paths: { userData: '', home: '' },
 }))
+vi.mock('../../../../src/main/services/space.service', () => ({ hasSpace: () => true }))
 vi.mock('electron', () => ({ app: { getPath: vi.fn(() => paths.userData), getVersion: vi.fn(() => '0.0.0'), getAppPath: vi.fn(() => '/tmp/halo-resume-app'), isPackaged: false } }))
 vi.mock('os', async importOriginal => {
   const actual = await importOriginal<typeof import('os')>()

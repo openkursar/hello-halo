@@ -12,12 +12,15 @@ const m = vi.hoisted(() => ({
   prepareGoalInput: vi.fn((g: { objective: string; doneWhen?: string[] }) => ({ objective: g.objective.trim(), doneWhen: g.doneWhen ?? [] })),
   setGoalForTurn: vi.fn(),
   acquireV2Session: vi.fn(),
+  hasSpace: vi.fn(() => true),
+  credentials: vi.fn(async () => ({ provider: 'anthropic', model: 'm' })),
 }))
 
 vi.mock('../../../../src/main/services/agent/engine-routing', () => ({
   resolveConversationEngine: async () => 'halo',
   prepareConversationContinuation: (_spaceId: string, _conversationId: string, conversation: { sessionId?: string }, _engine: unknown, options?: { legacySessionId?: string }) => ({ engineId: 'halo', engineState: {}, resumeSessionId: options?.legacySessionId ?? conversation?.sessionId }),
 }))
+vi.mock('../../../../src/main/services/space.service', () => ({ hasSpace: m.hasSpace }))
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => ({ agent: {} }) }))
 vi.mock('../../../../src/main/services/conversation.service', () => ({
   addMessage: m.addMessage,
@@ -39,7 +42,7 @@ vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getWorkingDir: vi.fn(() => '/work'),
-  getApiCredentialsForSelection: vi.fn(async () => ({ provider: 'anthropic', model: 'm' })),
+  getApiCredentialsForSelection: m.credentials,
   getDbMcpServers: vi.fn(() => null),
 }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitHumanRequest: vi.fn(), emitAgentEvent: vi.fn() }))
@@ -83,12 +86,48 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({ an
 import { sendMessage } from '../../../../src/main/services/agent/send-message'
 import { emitAgentEvent } from '../../../../src/main/services/agent/events'
 import { WorkingDirectoryUnavailableError } from '../../../../src/main/services/agent/working-dir'
+import { beginSpaceOperationMaintenance } from '../../../../src/main/services/agent/space-maintenance'
 
 const request = { spaceId: 'space-1', conversationId: 'conv-1', message: 'go' }
 
 beforeEach(() => {
   vi.clearAllMocks()
   m.getConversation.mockReturnValue({ id: 'conv-1', sessionId: undefined })
+})
+
+describe('sendMessage maintenance admission', () => {
+  it('waits before recording new input, then refuses a deleted space without recreating data', async () => {
+    const fence = beginSpaceOperationMaintenance(request.spaceId)
+    try {
+      const sending = sendMessage(request)
+      const refused = expect(sending).rejects.toThrow('workspace was deleted')
+      await Promise.resolve()
+      expect(m.addMessage).not.toHaveBeenCalled()
+      expect(m.getConversation).not.toHaveBeenCalled()
+      m.hasSpace.mockReturnValueOnce(false)
+      fence.release()
+      await refused
+      expect(m.addMessage).not.toHaveBeenCalled()
+    } finally { fence.release() }
+  })
+
+  it('captures credential preparation and does not acquire or persist a failure after cancellation', async () => {
+    let resolve!: (value: { provider: string; model: string }) => void
+    m.credentials.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const sending = sendMessage(request)
+    await new Promise(done => setTimeout(done, 0))
+    const fence = beginSpaceOperationMaintenance(request.spaceId)
+    try {
+      expect(fence.conversationIds.has(request.conversationId)).toBe(true)
+      resolve({ provider: 'anthropic', model: 'm' })
+      await sending
+      await Promise.all(fence.state.operations.map(operation => operation.done))
+      expect(m.acquireV2Session).not.toHaveBeenCalled()
+      expect(m.addMessage).toHaveBeenCalledTimes(1)
+      expect(emitAgentEvent).toHaveBeenCalledWith('agent:complete', request.spaceId, request.conversationId, expect.any(Object))
+      expect(vi.mocked(emitAgentEvent).mock.calls.some(([channel]) => channel === 'agent:error')).toBe(false)
+    } finally { fence.release() }
+  })
 })
 
 describe('sendMessage in a workspace whose folder is gone', () => {

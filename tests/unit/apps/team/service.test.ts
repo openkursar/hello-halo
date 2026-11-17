@@ -482,6 +482,20 @@ describe('TeamService', () => {
       } finally { f.dbManager.closeAll() }
     })
 
+    it('preserves all installed people during workspace cleanup, including AI-provisioned members', async () => {
+      const team = await ctx.service.createTeam(manualInput({ memberSourcing: 'ai', members: [] }),
+        [{ memberName: 'ai1', role: 'r', responsibility: 'x' }])
+      const identities = ctx.store.listMembersByTeam(team.id).map(member => member.appId)
+      ctx.appManager.deleteApp.mockClear()
+      ctx.appManager.uninstall.mockClear()
+      await ctx.service.dissolveTeam(team.id, { preserveInstalledMembers: true })
+      expect(ctx.store.getTeamById(team.id)).toBeNull()
+      expect(ctx.appManager.deleteApp).not.toHaveBeenCalled()
+      expect(ctx.appManager.uninstall).not.toHaveBeenCalled()
+      expect(identities.length).toBeGreaterThan(1)
+      expect(ctx.deletedSpaces).toEqual([])
+    })
+
     it('deletes AI members + the provisioned lead, keeps manual members', async () => {
       // Manual member (existing-1) + AI member + provisioned lead.
       const team = await ctx.service.createTeam(

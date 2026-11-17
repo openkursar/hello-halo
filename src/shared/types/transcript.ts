@@ -91,6 +91,7 @@ export type TranscriptRole = 'user' | 'assistant' | 'system'
  *   delivered to the coordinating conversation
  * - `push`: a message the digital human sent to this chat on its own, outside
  *   the chat's turns (see {@link ChatPushVia}); stored as `role: 'assistant'`
+ * - `environment-notice`: records a change to the workspace's available connection accounts
  * - `continuity-notice`: tells whoever reads this chat in Halo that the engine
  *   could not restore its own record of earlier turns and the next reply
  *   continues from this transcript instead; never sent to an IM party
@@ -102,6 +103,7 @@ export type TranscriptSource =
   | 'team-message'
   | 'push'
   | 'continuity-notice'
+  | 'environment-notice'
 
 /**
  * What sent a pushed message: `notify_bot` (`message`), a run's result sent to

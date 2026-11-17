@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, statSync } from 'fs'
+import { mkdirSync, statSync } from 'fs'
 import { join } from 'path'
 import type { AppManagerService, InstalledApp } from '../manager'
 import type { ExecutionEnvironment, MissingConnection } from '../../../shared/apps/app-types'
@@ -7,30 +7,56 @@ import { getSpace, getSpaceDir } from '../../services/space.service'
 import { WorkingDirectoryUnavailableError } from '../../services/agent'
 import type { ActivityStore } from './store'
 
-/** Capture paths once; resuming a task must not reinterpret its default space. */
-export function resolveExecutionEnvironment(
+type EnvironmentManager = Pick<AppManagerService, 'getAppWorkDir' | 'listEffectiveMcpApps'>
+  & Partial<Pick<AppManagerService, 'getApp' | 'assertAppDataAvailable'>>
+
+/** Describe a relocation destination without creating it or reading legacy storage. */
+export function buildExecutionEnvironment(
   app: InstalledApp,
-  manager: Pick<AppManagerService, 'getAppWorkDir' | 'listEffectiveMcpApps'>,
+  manager: Pick<AppManagerService, 'listEffectiveMcpApps'>,
   spaceId: string | null = app.spaceId,
   mode: 'chat' | 'automation' = 'automation',
 ): ExecutionEnvironment {
   const space = spaceId ? getSpace(spaceId) : null
   if (!space || !spaceId) throw new Error(`Work space is unavailable for app ${app.id}`)
-  const workDir = getSpaceDir(spaceId)
-  if (!existsSync(space.path)) throw new Error('The work space storage is unavailable. Restore it before continuing.')
-  if (app.dataPath && !existsSync(app.dataPath)) throw new Error('The digital human memory directory is unavailable. Restore it before continuing.')
-  if (space.isTemp) mkdirSync(workDir, { recursive: true })
-  const declared = new Set((app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled !== false).map(dependency => dependency.id))
-  const denied = new Set((app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled === false).map(dependency => dependency.id))
   return {
     spaceId,
     spacePath: space.path,
-    workDir,
-    memoryDir: manager.getAppWorkDir(app.id),
-    mcpBindings: Object.fromEntries(manager.listEffectiveMcpApps(spaceId)
-      .filter(resource => resource.status === 'active' && (mode === 'chat' ? !denied.has(resource.specId) : declared.has(resource.specId)))
-      .map(resource => [resource.specId, resource.id])),
+    workDir: getSpaceDir(spaceId),
+    memoryDir: join(space.path, '.halo', 'apps', app.id),
+    mcpBindings: connectionBindings(app, manager.listEffectiveMcpApps(spaceId), mode),
   }
+}
+
+export function resolveExecutionEnvironment(
+  app: InstalledApp,
+  manager: EnvironmentManager,
+  spaceId: string | null = app.spaceId,
+  mode: 'chat' | 'automation' = 'automation',
+  storageOnly = false,
+): ExecutionEnvironment {
+  manager.assertAppDataAvailable?.(app.id)
+  const memoryDir = manager.getAppWorkDir(app.id)
+  const current = manager.getApp?.(app.id) ?? app
+  const environment = buildExecutionEnvironment(current, manager, spaceId === app.spaceId ? current.spaceId : spaceId, mode)
+  environment.memoryDir = memoryDir
+  const space = getSpace(environment.spaceId!)!
+  if (space.isTemp && !storageOnly) {
+    mkdirSync(environment.workDir, { recursive: true })
+  }
+  return storageOnly ? validateEnvironmentStorage(environment) : validateExecutionEnvironment(environment)
+}
+
+function connectionBindings(
+  app: InstalledApp,
+  effective: InstalledApp[],
+  mode: 'chat' | 'automation',
+): Record<string, string> {
+  const declared = new Set((app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled !== false).map(dependency => dependency.id))
+  const denied = new Set((app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled === false).map(dependency => dependency.id))
+  return Object.fromEntries(effective
+    .filter(resource => mode === 'chat' ? !denied.has(resource.specId) : declared.has(resource.specId))
+    .map(resource => [resource.specId, resource.id]))
 }
 
 export function appChatRunId(conversationId: string, appId: string): string {
@@ -44,19 +70,42 @@ export function teamEnvironmentKey(appId: string, teamId: string): string {
 
 export function resolveChatEnvironment(
   app: InstalledApp,
-  manager: Pick<AppManagerService, 'getAppWorkDir' | 'listEffectiveMcpApps'>,
-  store: Pick<ActivityStore, 'getSessionEnvironment' | 'pinSessionEnvironment'>,
+  manager: EnvironmentManager,
+  store: Pick<ActivityStore, 'getSessionEnvironment' | 'pinSessionEnvironment' | 'replaceSessionEnvironment'>,
+  conversationId: string,
+  teamId?: string,
+  storageOnly = false,
+): ExecutionEnvironment {
+  manager.assertAppDataAvailable?.(app.id)
+  const legacyKey = legacySessionEnvironmentKey(app.id, appChatRunId(conversationId, app.id))
+  const exact = store.getSessionEnvironment(conversationId)
+  const legacy = exact ? undefined : store.getSessionEnvironment(legacyKey)
+  const teamKey = teamId ? teamEnvironmentKey(app.id, teamId) : undefined
+  const candidate = exact ?? legacy ?? (teamKey ? store.getSessionEnvironment(teamKey) : undefined)
+  const validate = storageOnly ? validateEnvironmentStorage : validateExecutionEnvironment
+  const environment = candidate ? validate(candidate, {
+    app, manager,
+    mode: 'chat',
+    storageOnly,
+    onRecovered: recovered => {
+      store.replaceSessionEnvironment(conversationId, app.id, recovered)
+      if (legacy) store.replaceSessionEnvironment(legacyKey, app.id, recovered)
+      if (teamKey) store.replaceSessionEnvironment(teamKey, app.id, recovered)
+    },
+  }) : resolveExecutionEnvironment(app, manager, app.spaceId, 'chat', storageOnly)
+  if (teamKey) store.pinSessionEnvironment(teamKey, app.id, environment)
+  return store.pinSessionEnvironment(conversationId, app.id, environment)
+}
+
+/** Resolve transcript storage without requiring the user's project folder to be mounted. */
+export function resolveChatRecordEnvironment(
+  app: InstalledApp,
+  manager: EnvironmentManager,
+  store: Pick<ActivityStore, 'getSessionEnvironment' | 'pinSessionEnvironment' | 'replaceSessionEnvironment'>,
   conversationId: string,
   teamId?: string,
 ): ExecutionEnvironment {
-  const prior = store.getSessionEnvironment(conversationId)
-    ?? store.getSessionEnvironment(legacySessionEnvironmentKey(app.id, appChatRunId(conversationId, app.id)))
-  const teamKey = teamId ? teamEnvironmentKey(app.id, teamId) : undefined
-  const candidate = prior ?? (teamKey ? store.getSessionEnvironment(teamKey) : undefined)
-    ?? resolveExecutionEnvironment(app, manager, app.spaceId, 'chat')
-  validateExecutionEnvironment(candidate)
-  if (teamKey) store.pinSessionEnvironment(teamKey, app.id, candidate)
-  return store.pinSessionEnvironment(conversationId, app.id, candidate)
+  return resolveChatEnvironment(app, manager, store, conversationId, teamId, true)
 }
 
 export function validateEnvironmentConnections(
@@ -64,20 +113,17 @@ export function validateEnvironmentConnections(
   app: InstalledApp,
   manager: Pick<AppManagerService, 'listEffectiveMcpApps'>,
   mode: 'chat' | 'automation' = 'automation',
-): void {
-  if (!environment.mcpBindings || !environment.spaceId) return
-  const authorized = new Set((app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled !== false).map(dependency => dependency.id))
-  const denied = new Set((app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled === false).map(dependency => dependency.id))
-  const effective = manager.listEffectiveMcpApps(environment.spaceId)
-  for (const [specId, instanceId] of Object.entries(environment.mcpBindings)) {
-    if (mode === 'chat' ? denied.has(specId) : !authorized.has(specId)) continue
-    // Tool assembly handles availability; this check preserves connection identity.
-    const current = effective.find(resource => resource.specId === specId)
-    if (current?.id !== instanceId) {
-      console.warn('[Runtime] Original connection unavailable; continuation blocked', { appId: app.id, specId, instanceId })
-      throw new Error('An original connection is unavailable or was replaced. Restore it or start new work; Halo will not switch accounts automatically.')
-    }
+): { changed: boolean; changedSpecIds: string[] } {
+  if (!environment.spaceId) return { changed: false, changedSpecIds: [] }
+  const current = connectionBindings(app, manager.listEffectiveMcpApps(environment.spaceId), mode)
+  const previous = environment.mcpBindings ?? {}
+  const changedSpecIds = [...new Set([...Object.keys(previous), ...Object.keys(current)])]
+    .filter(specId => previous[specId] !== current[specId])
+  environment.mcpBindings = current
+  if (changedSpecIds.length > 0) {
+    console.warn('[Runtime] Execution connections updated to current authorized instances', { appId: app.id, changedSpecIds })
   }
+  return { changed: changedSpecIds.length > 0, changedSpecIds }
 }
 
 /**
@@ -117,28 +163,66 @@ export function legacySessionEnvironmentKey(appId: string, runId: string): strin
   return `legacy-file:${appId}:${runId}`
 }
 
-/**
- * An unavailable original environment blocks continuation instead of moving it.
- * A missing working directory is told apart: the person can point the space at
- * another folder from the chat, whereas history and memory must be restored.
- */
-export function validateExecutionEnvironment(environment: ExecutionEnvironment): void {
-  if (!environment.spaceId || !getSpace(environment.spaceId)) {
+interface EnvironmentRecovery {
+  app: InstalledApp
+  manager: EnvironmentManager
+  mode?: 'chat' | 'automation'
+  storageOnly?: boolean
+  onRecovered?: (environment: ExecutionEnvironment) => void
+}
+
+/** Installed people recover missing Halo storage; project folders retain their repair error. */
+export function validateExecutionEnvironment(environment: ExecutionEnvironment, recovery?: EnvironmentRecovery): ExecutionEnvironment {
+  recovery?.manager.assertAppDataAvailable?.(recovery.app.id)
+  const space = environment.spaceId ? getSpace(environment.spaceId) : null
+  if (!space) {
+    if (recovery) return recoverExecutionEnvironment(environment, recovery)
     throw new Error('The original work space is unavailable. Restore it before continuing.')
   }
+  const storageAvailable = isDirectory(environment.spacePath) && isDirectory(environment.memoryDir)
+  if (!storageAvailable && recovery) return recoverExecutionEnvironment(environment, recovery)
   if (!isDirectory(environment.workDir)) {
     console.warn(`[Runtime] Working directory does not exist: "${environment.workDir}" (space ${environment.spaceId})`)
-    throw new WorkingDirectoryUnavailableError(environment.workDir, environment.spaceId)
+    throw new WorkingDirectoryUnavailableError(environment.workDir, environment.spaceId!)
   }
-  for (const path of [environment.spacePath, environment.memoryDir]) {
-    if (!isDirectory(path)) {
-      throw new Error('The original history or memory is unavailable. Restore it before continuing.')
-    }
+  if (!storageAvailable) {
+    throw new Error('The original history or memory is unavailable. Restore it before continuing.')
   }
+  return environment
+}
+
+function validateEnvironmentStorage(environment: ExecutionEnvironment, recovery?: EnvironmentRecovery): ExecutionEnvironment {
+  recovery?.manager.assertAppDataAvailable?.(recovery.app.id)
+  if (!environment.spaceId || !getSpace(environment.spaceId) || !isDirectory(environment.spacePath) || !isDirectory(environment.memoryDir)) {
+    if (recovery) return recoverExecutionEnvironment(environment, recovery)
+    throw new Error('The original history or memory is unavailable. Restore it before continuing.')
+  }
+  return environment
+}
+
+function recoverExecutionEnvironment(previous: ExecutionEnvironment, recovery: EnvironmentRecovery): ExecutionEnvironment {
+  const environment = resolveExecutionEnvironment(recovery.app, recovery.manager, recovery.app.spaceId, recovery.mode, recovery.storageOnly)
+  const previousBindings = previous.mcpBindings ?? {}
+  const currentBindings = environment.mcpBindings ?? {}
+  if (previous.pendingConnectionNotice || [...new Set([...Object.keys(previousBindings), ...Object.keys(currentBindings)])]
+    .some(specId => previousBindings[specId] !== currentBindings[specId])) {
+    environment.pendingConnectionNotice = true
+  }
+  recovery.onRecovered?.(environment)
+  console.warn('[Runtime] Missing execution environment reconnected to current workspace', {
+    appId: recovery.app.id, previousSpaceId: previous.spaceId, spaceId: environment.spaceId,
+  })
+  return environment
 }
 
 function isDirectory(path: string | undefined): boolean {
-  return !!path && existsSync(path) && statSync(path).isDirectory()
+  if (!path) return false
+  try {
+    return statSync(path).isDirectory()
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return false
+    throw error
+  }
 }
 
 export function getLegacyAppDataPath(app: InstalledApp): string | undefined {

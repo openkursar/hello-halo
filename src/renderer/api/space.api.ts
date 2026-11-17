@@ -10,6 +10,7 @@ import type {
   ApiResponse,
 } from './_shared'
 import type { MemorySettings, MemoryStatus } from '../../shared/types/memory'
+import type { SpaceDetailsRequestOptions } from '../../shared/types/space'
 
 export const spaceApi = {
   // ===== Space =====
@@ -46,11 +47,12 @@ export const spaceApi = {
     return httpRequest('DELETE', `/api/spaces/${spaceId}`)
   },
 
-  getSpace: async (spaceId: string): Promise<ApiResponse> => {
+  getSpace: async (spaceId: string, options?: SpaceDetailsRequestOptions): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.getSpace(spaceId)
+      return window.halo.getSpace(spaceId, options)
     }
-    return httpRequest('GET', `/api/spaces/${spaceId}`)
+    const query = options?.includeDeletionImpact ? '?includeDeletionImpact=true' : ''
+    return httpRequest('GET', `/api/spaces/${spaceId}${query}`)
   },
 
   openSpaceFolder: async (spaceId: string): Promise<ApiResponse> => {

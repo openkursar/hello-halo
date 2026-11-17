@@ -7,6 +7,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const query = vi.fn()
+vi.mock('../../../../src/main/platform/memory', async importOriginal => ({
+  ...await importOriginal<Record<string, unknown>>(),
+  moveWithinWorkspace: vi.fn(),
+}))
 vi.mock('../../../../src/main/services/agent', () => ({
   query: (...args: unknown[]) => query(...args),
   tool: vi.fn(() => ({})),
@@ -19,7 +23,19 @@ vi.mock('../../../../src/main/services/agent', () => ({
 
 import { createConsolidationAgent, confineToWorkspace } from '../../../../src/main/services/memory-consolidation/runner'
 import { CONSOLIDATION_SYSTEM_PROMPT, buildConsolidationMessage } from '../../../../src/main/services/memory-consolidation/prompt'
-import { MEMORY_FILE_FORMAT, TOPIC_FILE_FORMAT } from '../../../../src/main/platform/memory'
+import { MEMORY_FILE_FORMAT, TOPIC_FILE_FORMAT, moveWithinWorkspace } from '../../../../src/main/platform/memory'
+import { buildInternalTaskSdkOptions, tool } from '../../../../src/main/services/agent'
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(yes => { resolve = yes })
+  return { promise, resolve }
+}
+
+const cancellableInput = (signal: AbortSignal) => ({
+  ws: { dir: '/ws' } as never, credentials: {} as never, spaceId: 's', ownerName: 'Ada',
+  ownerKind: 'space' as const, memoryBytes: 1, nowBytes: 1, topicCount: 0, tag: 't', signal,
+})
 
 function* script(): Generator<unknown> {
   yield { type: 'assistant', session_id: 'sess-1' }
@@ -89,6 +105,88 @@ describe('consolidation agent rounds', () => {
     expect(second.prompt).toContain('Merge .incoming/topics/x.md.')
     expect(second.prompt).toContain('Topic "a.md" has no description.')
     expect(first.prompt).not.toContain('continuing')
+  })
+
+  it('does not start a query when cancelled before or during option preparation', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(createConsolidationAgent(cancellableInput(controller.signal)).start()).rejects.toMatchObject({ name: 'AbortError' })
+    expect(query).not.toHaveBeenCalled()
+
+    const preparing = deferred<any>()
+    vi.mocked(buildInternalTaskSdkOptions).mockReturnValueOnce(preparing.promise)
+    const next = new AbortController()
+    const round = createConsolidationAgent(cancellableInput(next.signal)).start()
+    next.abort()
+    preparing.resolve({ engineId: 'halo' })
+    await expect(round).rejects.toMatchObject({ name: 'AbortError' })
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it('propagates external abort to the active query and awaits its shutdown', async () => {
+    const entered = deferred()
+    const shutdown = deferred()
+    let queryController: AbortController | undefined
+    query.mockImplementation(({ options }) => (async function* () {
+      queryController = options.abortController
+      entered.resolve()
+      await shutdown.promise
+      yield { type: 'result', subtype: 'success', result: 'done' }
+    })())
+    const controller = new AbortController()
+    const round = createConsolidationAgent(cancellableInput(controller.signal)).start()
+    await entered.promise
+    controller.abort()
+    expect(queryController?.signal.aborted).toBe(true)
+    let ended = false
+    const result = round.catch(error => { ended = true; return error })
+    await Promise.resolve()
+    expect(ended).toBe(false)
+    shutdown.resolve()
+    expect(await result).toMatchObject({ name: 'AbortError' })
+  })
+
+  it('awaits in-flight memory_move and refuses a late move after query cancellation', async () => {
+    const entered = deferred()
+    const shutdown = deferred()
+    const moved = deferred<string>()
+    let move!: (args: { from: string; to: string }) => Promise<unknown>
+    vi.mocked(moveWithinWorkspace).mockReturnValueOnce(moved.promise)
+    query.mockImplementation(() => (async function* () {
+      move = vi.mocked(tool).mock.calls.at(-1)![3] as typeof move
+      void move({ from: 'a.md', to: 'b.md' })
+      entered.resolve()
+      await shutdown.promise
+      yield { type: 'result', subtype: 'success' }
+    })())
+    const controller = new AbortController()
+    const round = createConsolidationAgent(cancellableInput(controller.signal)).start()
+    await entered.promise
+    controller.abort()
+    shutdown.resolve()
+    let ended = false
+    const result = round.catch(error => { ended = true; return error })
+    await Promise.resolve()
+    expect(ended).toBe(false)
+    await expect(move({ from: 'c.md', to: 'd.md' })).resolves.toMatchObject({ isError: true })
+    expect(moveWithinWorkspace).toHaveBeenCalledOnce()
+    moved.resolve('moved')
+    expect(await result).toMatchObject({ name: 'AbortError' })
+  })
+
+  it('keeps an ordinary round timeout distinct from external cancellation', async () => {
+    vi.useFakeTimers()
+    try {
+      const preparing = deferred<any>()
+      vi.mocked(buildInternalTaskSdkOptions).mockReturnValueOnce(preparing.promise)
+      const round = createConsolidationAgent(cancellableInput(new AbortController().signal)).start()
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      preparing.resolve({ engineId: 'halo' })
+      expect(await round).toEqual({ ok: false, reason: 'timed out after 600s' })
+      expect(query).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a round that runs out of turns says so, for the harness to decide', async () => {

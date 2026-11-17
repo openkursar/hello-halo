@@ -32,7 +32,7 @@ operations on this page:
   POST   /api/apps/<appId>/im-chat/stop                              Stop a digital human's in-progress reply in a bound IM chat (keeps history)
   GET    /api/apps/<appId>/memory                                    Read the state of a digital human's memory
   POST   /api/apps/<appId>/memory/consolidate                        Consolidate a digital human's memory now
-  POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
+  POST   /api/apps/<appId>/move-space                                Move a digital human and all its memory and conversations to another space
   PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (notification level, model)
   POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
   DELETE /api/apps/<appId>/permanent                                 Permanently delete a digital human and all its data
@@ -222,7 +222,7 @@ POST   /api/apps/<appId>/memory/consolidate                        Consolidate a
      # out: {success:true,data:{started:boolean,reason?:"already-running"|"empty"|"not-found"}}
      # note: Returns once started; runs in the background with the digital human's model. Keeps a restorable snapshot.
 
-POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
+POST   /api/apps/<appId>/move-space                                Move a digital human and all its memory and conversations to another space
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/apps/<appId>/move-space" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
@@ -230,7 +230,7 @@ POST   /api/apps/<appId>/move-space                                Set which spa
           -d '{"newSpaceId":"<spaceId — a uuid from GET /api/spaces>"}'
      # body: {"newSpaceId": "<spaceId — a uuid from GET /api/spaces>"}
      # out: {success:true,data:{}}
-     # note: Changes the default only: work already running, existing chat sessions and team work keep the environment they started in. A digital human must belong to a space, so newSpaceId is required — null is rejected. Nothing is stopped or restarted. 404 if appId does not exist; 400 if newSpaceId is an empty string.
+     # note: Confirm the move with the user first: ongoing runs and replies are stopped. Memory, all conversations and pending decisions move together; project files stay in their project folder. Read the destination space before choosing it. A digital human must belong to a space, so newSpaceId is required — null is rejected. 404 if appId does not exist; 400 if newSpaceId is an empty string.
 
 PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (notification level, model)
      # note: reversible — can be undone or corrected afterward.

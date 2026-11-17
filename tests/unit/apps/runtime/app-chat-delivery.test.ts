@@ -50,6 +50,7 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
 vi.mock('../../../../src/main/apps/runtime/im-permission-registry', () => ({ getImPermissionContext: () => undefined }))
 
 import { createAppChatDelivery, isPersonRequest } from '../../../../src/main/apps/runtime/app-chat-delivery'
+import { acquireAppWorkspaceChange } from '../../../../src/main/apps/runtime/workspace-admission'
 
 const KEY = 'app-chat:person'
 const request = (message: string, extra: Partial<AppChatRequest> = {}): AppChatRequest => ({
@@ -83,6 +84,24 @@ async function idle(conversationId = KEY): Promise<void> {
 }
 
 describe('digital-human message admission', () => {
+  it('neither injects nor opens buffered input during scoped maintenance, then drains after release', async () => {
+    env.busy = true
+    env.identity = 'owner'
+    const run = vi.fn(async (_request: AppChatRequest) => {})
+    const delivery = createAppChatDelivery(run)
+    const release = await acquireAppWorkspaceChange(['person'])
+    const sent = delivery.send(request('arrived while moving'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(env.inject).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+    env.busy = false
+    env.identity = undefined
+    release()
+    await sent
+    expect(run).toHaveBeenCalledOnce()
+    delivery.dispose()
+  })
+
   it('reports mailbox admission once before waiting for the source reply', async () => {
     env.busy = true
     env.identity = 'owner'

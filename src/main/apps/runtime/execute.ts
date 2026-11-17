@@ -17,7 +17,8 @@ import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { getAppManager, type InstalledApp } from '../manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
-import { resolvePermission } from '../../../shared/apps/app-types'
+import { resolvePermission, type ExecutionEnvironment } from '../../../shared/apps/app-types'
+import { ENVIRONMENT_NOTICE_TEXT } from '../../../shared/transcript'
 import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
 import type { ActivityStore } from './store'
 import type {
@@ -53,6 +54,7 @@ import {
   resolveCredentialsForSdk,
   buildUserSessionSdkOptions,
   toEngineSystemPrompt,
+  waitForSessionCleanup,
   type AgentExecution,
   type V2SessionLease,
 } from '../../services/agent'
@@ -118,6 +120,8 @@ export interface ExecuteRunOptions {
   recordedInputs?: RunSupplement[]
   /** Accepted additions still pending when a safety cut closes the engine remain unprocessed. */
   onPendingInputAbandoned?: () => void
+  /** Retain failed writer cleanup so workspace maintenance can retry it before moving files. */
+  onCleanupFailure?: (cleanup: () => Promise<void>) => void
   /**
    * Fired exactly once, after the run record is inserted/reopened and before
    * the AI session is built. Used by the runtime service to dispatch the
@@ -226,13 +230,21 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   const manager = getAppManager()
   if (!manager) throw new RunExecutionError(app.id, runId, 'App manager is unavailable')
   const originalRun = existingRunId ? store.getRun(existingRunId) : undefined
-  const originalEnvironment = originalRun?.environment
-  if (existingRunId && !originalEnvironment) {
-    throw new RunExecutionError(app.id, runId, 'The original execution environment is unavailable; restore it before continuing')
+  let selectedEnvironment: ExecutionEnvironment | undefined
+  let environmentFailure: unknown
+  try {
+    const current = manager.getApp(app.id) ?? app
+    selectedEnvironment = originalRun?.environment
+      ? validateExecutionEnvironment(originalRun.environment, {
+        app: current, manager,
+        onRecovered: recovered => store.replaceRunEnvironment(runId, recovered),
+      })
+      : resolveExecutionEnvironment(current, manager)
+    if (existingRunId) store.replaceRunEnvironment(existingRunId, selectedEnvironment)
+    app = { ...current, spaceId: selectedEnvironment.spaceId }
+  } catch (error) {
+    environmentFailure = error
   }
-  const environment = originalEnvironment ?? resolveExecutionEnvironment(app, manager)
-  if (existingRunId) store.pinRunEnvironment(existingRunId, environment)
-  app = { ...app, spaceId: environment.spaceId }
 
   const runTag = runId.slice(0, 8)
   const selfInstance = describeSelfInstance({
@@ -257,7 +269,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       triggerType: trigger.type,
       triggerData: trigger.eventPayload ?? (trigger.escalation ? { escalation: trigger.escalation } : undefined),
       startedAt,
-      environment,
+      environment: selectedEnvironment,
     })
   }
 
@@ -284,11 +296,13 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   // Closed once, through its lease when it has one: by a stop the engine did
   // not answer in time, or when the run ends.
   let sessionClosed = false
+  let sessionPid: number | null | undefined
   const closeSession = (): void => {
     if (sessionClosed) return
-    sessionClosed = true
+    sessionPid ??= session.pid
     if (sessionLease) sessionLease.close()
     else session.close()
+    sessionClosed = true
   }
 
   // Sender key while the run can message other conversations (opened in try, closed in finally)
@@ -298,23 +312,29 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   let scopedBrowserCtx: ReturnType<typeof createScopedBrowserContext> | undefined
 
   // ── Build memory scope (before try so it's available in catch) ─────
-  const memoryScope: MemoryCallerScope = {
+  const memoryScope: MemoryCallerScope | undefined = selectedEnvironment ? {
     type: 'app',
-    spaceId: app.spaceId!, // Automation apps always have a spaceId
-    // Use space.path (not workingDir) to match the directory layout that
-    // AppManager creates: {space.path}/.halo/apps/{appId}/memory/
-    spacePath: environment.spacePath,
+    spaceId: selectedEnvironment.spaceId!,
+    spacePath: selectedEnvironment.spacePath,
     appId: app.id,
-    appDataPath: environment.memoryDir,
-  }
+    appDataPath: selectedEnvironment.memoryDir,
+  } : undefined
 
   try {
+    if (environmentFailure) throw environmentFailure
+    if (!selectedEnvironment || !memoryScope) throw new Error('The digital human workspace is unavailable')
+    const environment = selectedEnvironment
     if ((trigger.type === 'continue_followup' || trigger.type === 'escalation_followup') &&
       (!existingRunId || !existingSessionKey || !(trigger.continue?.sessionId || trigger.escalation?.sessionId))) {
       throw new Error('The original execution context is unavailable; no replacement task was started')
     }
     validateExecutionEnvironment(environment)
-    validateEnvironmentConnections(environment, app, manager)
+    const connectionChange = validateEnvironmentConnections(environment, app, manager)
+    const announceConnectionChange = connectionChange.changed || environment.pendingConnectionNotice === true
+    if (connectionChange.changed) {
+      environment.pendingConnectionNotice = true
+      store.replaceRunEnvironment(runId, environment)
+    }
     // Checked before anything reaches a model: a run short of a connection it
     // declares does not start, and the timeline says what to install or enable.
     const unusable = missingConnections(app, manager, app.spaceId!)
@@ -621,14 +641,18 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const escalationResumeId = trigger.escalation?.sessionId
     const continueResumeId = trigger.continue?.sessionId
     const sessionPlan = prepareAppEngineSession({ engineId, explicitEngine: Boolean(app.userOverrides?.engineId), state: engineState, legacySessionId, spacePath: environment.spacePath, appId: app.id, runId, conversationId: sessionKey })
+    if (engineId === 'anthropic' && sessionPlan.resumeSessionId && engineState.useCurrentInstructions) {
+      sdkOptions.systemPromptSnapshot = false
+    }
     if (sessionPlan.engineHandoffContent) sdkOptions.engineHandoffContent = sessionPlan.engineHandoffContent
     if (sessionPlan.strictNativeResume) sdkOptions.strictNativeResume = true
-    const resumeGates = { streamOwner: 'caller' as const, recoverNativeSession: sessionPlan.recoverNativeSession }
+    const resumeGates = { streamOwner: 'caller' as const, recoverNativeSession: sessionPlan.recoverNativeSession, maintenanceSignal: abortSignal }
 
     // No displayModel: automation runs drive their own processStream(), so they
     // must not start a persistent session consumer (that would fight over the
     // stream). workDir is the 5th positional arg — passing it as displayModel
     // would silently spawn a consumer.
+    abortSignal?.throwIfAborted()
     if (trigger.type === 'escalation_followup' && escalationResumeId) {
       console.log(`[Runtime][${runTag}] Restoring session for escalation followup: ${escalationResumeId}`)
       sessionLease = await acquireV2Session(
@@ -668,6 +692,13 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const followupReferences = trigger.type === 'continue_followup' ? trigger.continue?.references : undefined
     if (spacePath) {
       sessionWriter = openSessionWriter(spacePath, app.id, runId)
+      if (announceConnectionChange) {
+        const written = sessionWriter.writeTrigger(ENVIRONMENT_NOTICE_TEXT, undefined, undefined, { source: 'environment-notice' })
+        if (written) {
+          delete environment.pendingConnectionNotice
+          store.replaceRunEnvironment(runId, environment)
+        }
+      }
       if (options.recordedInputs?.length) {
         for (const input of options.recordedInputs) sessionWriter.writeTrigger(input.text, undefined, undefined, undefined, input.references)
       } else {
@@ -980,7 +1011,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     }
 
     // Save error session summary to memory (no compaction on the error path)
-    await finalizeMemoryAfterTurn(memory, memoryScope, {
+    if (memoryScope) await finalizeMemoryAfterTurn(memory, memoryScope, {
       appName: app.spec.name,
       runId,
       trigger,
@@ -1018,22 +1049,30 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 9. Close session ────────────────────────────────────
     // Always close the session. Escalation follow-up recovers context
     // via CC's disk-based resume (sessionId), not process reuse.
-    if (session) {
-      try {
-        closeSession()
-        console.log(`[Runtime][${runTag}] Session closed`)
-      } catch (closeErr) {
-        console.error(`[Runtime] Failed to close session: run=${runId}:`, closeErr)
-      } finally {
-        sessionLease?.release()
-        if (managedSessionActive) unregisterActiveSession(sessionKey)
+    try {
+      if (session) {
+        const cleanup = async (): Promise<void> => {
+          closeSession()
+          await waitForSessionCleanup(session, sessionPid)
+        }
+        try {
+          await cleanup()
+          console.log(`[Runtime][${runTag}] Session closed`)
+        } catch (closeErr) {
+          console.error(`[Runtime] Failed to close session: run=${runId}:`, closeErr)
+          options.onCleanupFailure?.(cleanup)
+          throw closeErr
+        } finally {
+          sessionLease?.release()
+          if (managedSessionActive) unregisterActiveSession(sessionKey)
+        }
       }
-    }
-
-    // ── 10. Destroy scoped browser context (cleans up owned views) ──
-    if (scopedBrowserCtx) {
-      scopedBrowserCtx.destroy()
-      console.log(`[Runtime][${runTag}] Scoped browser context destroyed`)
+    } finally {
+      // ── 10. Destroy scoped browser context (cleans up owned views) ──
+      if (scopedBrowserCtx) {
+        scopedBrowserCtx.destroy()
+        console.log(`[Runtime][${runTag}] Scoped browser context destroyed`)
+      }
     }
   }
 }

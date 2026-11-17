@@ -30,6 +30,10 @@ export interface TaskStateService {
   remove(conversationId: string): void
   /** Drop every row of one digital human's conversations (app permanently deleted). */
   removeAppConversations(appId: string): void
+  /** Synchronous, silent write for a caller's transaction; notify only after commit. */
+  repointAppConversations(appId: string, spaceId: string): number
+  /** Refresh desktop and remote clients after a committed batch mutation. */
+  notifyStateChanged(): void
   deleteAllInSpace(spaceId: string): void
   /** Drop rows of conversations that no longer exist. Returns how many went. */
   pruneGone(): number
@@ -41,6 +45,9 @@ export interface TaskStateService {
  * that own conversations; must answer false when it cannot tell.
  */
 export type ConversationGoneCheck = (conversationId: string, spaceId: string) => boolean
+
+/** Resolves the current placement lazily when a client reports a conversation. */
+export type ConversationSpaceResolver = (conversationId: string, reportedSpaceId: string) => string
 
 
 function broadcast(): void {
@@ -54,7 +61,8 @@ function broadcast(): void {
 
 export function createTaskStateService(
   store: TaskStateStore,
-  isConversationGone: ConversationGoneCheck
+  isConversationGone: ConversationGoneCheck,
+  resolveSpaceId: ConversationSpaceResolver = (_conversationId, spaceId) => spaceId
 ): TaskStateService {
   // A client can report a conversation after it was deleted (a turn ending as
   // its session is torn down). Its row would have nothing to open, so nothing
@@ -87,13 +95,17 @@ export function createTaskStateService(
     list: () => store.list(),
 
     markUnseen(conversationId, spaceId, title) {
-      if (!isFollowedConversationId(conversationId) || dropIfGone(conversationId, spaceId)) return
+      if (!isFollowedConversationId(conversationId)) return
+      spaceId = resolveSpaceId(conversationId, spaceId)
+      if (dropIfGone(conversationId, spaceId)) return
       store.upsertUnseen(conversationId, spaceId, title, Date.now())
       broadcast()
     },
 
     markRead(conversationId, spaceId, title, originalStatus) {
-      if (!isFollowedConversationId(conversationId) || dropIfGone(conversationId, spaceId)) return
+      if (!isFollowedConversationId(conversationId)) return
+      spaceId = resolveSpaceId(conversationId, spaceId)
+      if (dropIfGone(conversationId, spaceId)) return
       store.upsertRead(conversationId, spaceId, title, originalStatus, Date.now())
       broadcast()
     },
@@ -112,6 +124,12 @@ export function createTaskStateService(
       store.deleteIdAndChildren(getAppChatConversationId(appId))
       broadcast()
     },
+
+    repointAppConversations(appId, spaceId) {
+      return store.repointIdAndChildren(getAppChatConversationId(appId), spaceId)
+    },
+
+    notifyStateChanged: broadcast,
 
     deleteAllInSpace(spaceId) {
       store.deleteAllInSpace(spaceId)

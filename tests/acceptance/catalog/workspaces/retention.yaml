@@ -11,7 +11,10 @@ basis: observed
 references:
   - src/main/services/space.service.ts
   - src/renderer/components/space/EditSpaceDialog.tsx
+  - src/renderer/components/space/SpaceCard.tsx
+  - src/main/apps/runtime/space-change.ts
   - tests/e2e/specs/acceptance-workspaces.spec.ts
+  - tests/e2e/specs/acceptance-digital-human-workspace-move.spec.ts
 promises:
   edit:
     en: Workspace names, icons and order can be changed without moving project contents.
@@ -19,7 +22,77 @@ promises:
   remove:
     en: Workspace removal follows the selected removal action and its confirmation.
     zh: 移除空间按选择的操作及确认范围执行。
+  rescue:
+    en: Deleting a workspace moves its digital humans to Halo Workspace with their memory and all conversations intact, and preserves any person already moved elsewhere. The confirmation names affected people and counts ongoing work that will stop; cancellation leaves everything in place.
+    zh: 删除工作区会将住在其中的数字人连同记忆和全部对话搬到 Halo 工作区，也不损伤已搬去别处的数字人。确认框列出受影响数字人及会停止的进行中工作数量；取消保留原状。
+  stop:
+    en: Replies, tasks and chat questions waiting for an answer do not prevent confirmed workspace deletion. Halo stops the affected work and ends workspace chat questions before deleting data, while rescuing digital-human history.
+    zh: 正在回复、运行中的任务及等待回答的聊天问题不阻止确认删除工作区。Halo 先停止受影响工作、结束工作区聊天提问，再删除数据，同时保留数字人历史。
 scenarios:
+  - id: workspaces.retention.rescue-people
+    title:
+      en: Rescue digital humans when their workspace is deleted
+      zh: 删除工作区时安置其中的数字人
+    verifies: [remove, rescue]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      kind: [central, project]
+    preconditions:
+      - en: A disposable workspace contains two digital humans with known memory and desktop and synthetic IM conversation history. Another digital human has already moved to a different workspace. Project fixtures contain known files.
+        zh: 可丢弃工作区中有两位数字人，已有已知记忆、桌面与模拟 IM 历史；另一位数字人已经搬至其他工作区。项目资料包含已知文件。
+    steps:
+      - en: At 375px width, open Delete and inspect the affected people and data scope, cancel once, then reopen and confirm deletion. Open each rescued person's existing conversations, continue chatting and restart.
+        zh: 在 375px 窄屏打开删除，查看受影响数字人及数据范围，先取消再重开确认删除；打开每位被安置数字人的已有对话、继续聊天并重启。
+    expected:
+      - en: The confirmation names both resident people and says they move to Halo Workspace with memory and all conversations. Long names wrap without hiding actions. Cancellation moves or deletes nothing.
+        zh: 确认框列出两位住在其中的数字人，说明它们连同记忆和全部对话搬至 Halo 工作区；长名称换行且操作可达。取消不搬迁也不删除任何内容。
+      - en: After deletion both residents belong to Halo Workspace, retain their known memory and history, and can continue existing desktop and synthetic IM chats after restart. The person already moved elsewhere is unaffected.
+        zh: 删除后，两位原住数字人归属 Halo 工作区，保留已知记忆和历史，重启后可继续已有桌面及模拟 IM 聊天；已搬去别处的数字人不受影响。
+      - en: The workspace's own data is removed only within the stated deletion scope. Linked project files stay in the project folder.
+        zh: 工作区自己的数据只在说明的删除范围内移除；关联项目文件保留在项目文件夹。
+    notes: Synthetic IM exercises local application routing, not a live external service.
+  - id: workspaces.retention.stop-active-work
+    title:
+      en: Delete after confirming stopped work, including a waiting chat question
+      zh: 确认停止工作后删除，包含等待回答的聊天问题
+    verifies: [remove, rescue, stop]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - A disposable workspace has a running workspace reply, a running digital-human task and a separate workspace chat waiting for an answer. The digital human has known memory and history.
+    steps:
+      - Inspect the deletion confirmation and cancel once. Open it again and confirm deletion without manually stopping work or answering the chat question.
+    expected:
+      - The confirmation explains the affected people and the backend-reported number of ongoing items that will stop. Cancellation leaves the workspace, work and question unchanged.
+      - Confirmation stops affected work, ends the workspace chat question and deletes the workspace without a busy-work rejection. The digital human remains usable in Halo Workspace with memory and history preserved.
+  - id: workspaces.retention.rescue-legacy-dependent
+    title:
+      en: Preserve a legacy partial-move person's data before deleting its former workspace
+      zh: 删除原工作区前保护旧版半搬家数字人的数据
+    verifies: [remove, rescue]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - A controlled legacy person belongs to another workspace but still has surviving memory or old conversation data in the workspace being deleted; its destination also has newer conversation files.
+    steps:
+      - Delete the former workspace, then inspect the person's current workspace, continue old and new conversations and restart.
+    expected:
+      - Surviving person data is combined into its current workspace before source deletion, preserving both old and new conversations and conflicting files. The person is not moved to Halo Workspace because it already belongs elsewhere.
+      - Its memory and conversations remain usable after deletion and restart without restoring the source workspace.
+    notes: This deletion-time safeguard is separate from upgrade repair. The stopped isolated fixture leaves data_path empty and retains source-pinned environments and genuine source transcripts, so startup does not merge the surviving source before the deletion action. Native engine snapshots are not edited.
   - id: workspaces.retention.rename
     title:
       en: Rename and reorder workspaces

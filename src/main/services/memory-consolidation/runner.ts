@@ -40,6 +40,7 @@ export interface ConsolidationAgentInput {
   nowBytes: number
   topicCount: number
   tag: string
+  signal?: AbortSignal
 }
 
 export type ConsolidationRoundOutcome =
@@ -66,9 +67,15 @@ export function createConsolidationAgent(input: ConsolidationAgentInput): Consol
   async function round(prompt: string): Promise<ConsolidationRoundOutcome> {
     const { ws, tag } = input
     const abortController = new AbortController()
-    const timer = setTimeout(() => abortController.abort(), ROUND_TIMEOUT_MS)
+    const cancel = () => abortController.abort()
+    input.signal?.addEventListener('abort', cancel, { once: true })
+    if (input.signal?.aborted) cancel()
+    const timer = setTimeout(cancel, ROUND_TIMEOUT_MS)
+    const pendingMoves = new Set<Promise<unknown>>()
     try {
-      const sdkOptions = await buildOptions(input, abortController)
+      input.signal?.throwIfAborted()
+      const sdkOptions = await buildOptions(input, abortController, pendingMoves)
+      abortController.signal.throwIfAborted()
 
       let summary = ''
       let turns = 0
@@ -89,14 +96,19 @@ export function createConsolidationAgent(input: ConsolidationAgentInput): Consol
           break
         }
       }
+      input.signal?.throwIfAborted()
       if (abortController.signal.aborted) return { ok: false, reason: `timed out after ${ROUND_TIMEOUT_MS / 1000}s` }
       console.log(`[MemoryConsolidation][${tag}] Round finished in ${ws.dir}: ${turns} turns`)
       return { ok: true, summary, turns, exhausted }
     } catch (err) {
+      input.signal?.throwIfAborted()
       if (abortController.signal.aborted) return { ok: false, reason: `timed out after ${ROUND_TIMEOUT_MS / 1000}s` }
       return { ok: false, reason: `agent failed: ${(err as Error).message}` }
     } finally {
       clearTimeout(timer)
+      input.signal?.removeEventListener('abort', cancel)
+      abortController.abort()
+      await Promise.allSettled(pendingMoves)
     }
   }
 
@@ -108,7 +120,8 @@ export function createConsolidationAgent(input: ConsolidationAgentInput): Consol
 
 async function buildOptions(
   input: ConsolidationAgentInput,
-  abortController: AbortController
+  abortController: AbortController,
+  pendingMoves: Set<Promise<unknown>>
 ): Promise<Record<string, any>> {
   const { ws, tag } = input
   const sdkOptions = await buildInternalTaskSdkOptions({
@@ -125,7 +138,7 @@ async function buildOptions(
     systemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
     tools: [...TOOLS],
     allowedTools: [...TOOLS, `mcp__${MCP_SERVER}__memory_move`],
-    mcpServers: { [MCP_SERVER]: createMoveServer(ws) },
+    mcpServers: { [MCP_SERVER]: createMoveServer(ws, abortController.signal, pendingMoves) },
     maxTurns: MAX_TURNS_PER_ROUND,
     // No user skills, CLAUDE.md or project settings: they are about other work.
     settingSources: [],
@@ -136,14 +149,14 @@ async function buildOptions(
   delete sdkOptions.disallowedTools
 
   if (getEngineCapabilities(sdkOptions.engineId)?.features.hooks) {
-    addSdkHooks(sdkOptions, confineToWorkspace(ws.dir, tag))
+    addSdkHooks(sdkOptions, confineToWorkspace(ws.dir, tag, abortController.signal))
   } else {
     console.warn(`[MemoryConsolidation][${tag}] Engine ${sdkOptions.engineId} runs no hooks — workspace confinement is by instruction only`)
   }
   return sdkOptions
 }
 
-function createMoveServer(ws: ConsolidationWorkspace): unknown {
+function createMoveServer(ws: ConsolidationWorkspace, signal: AbortSignal, pending: Set<Promise<unknown>>): unknown {
   const memoryMove = tool(
     'memory_move',
     'Move, rename or remove a topic file or category folder. Paths are relative to the topics/ folder ' +
@@ -156,11 +169,20 @@ function createMoveServer(ws: ConsolidationWorkspace): unknown {
       merged_into: z.string().optional().describe('When removing: the topic (relative to topics/) that absorbed it'),
     },
     async (args) => {
+      let operation: Promise<string> | undefined
       try {
-        const text = await moveWithinWorkspace(ws, args.from, args.to ?? null, args.merged_into)
+        if (signal.aborted) {
+          console.warn(`[MemoryConsolidation] Refused memory_move in ${ws.dir}: consolidation is cancelled`)
+          signal.throwIfAborted()
+        }
+        operation = moveWithinWorkspace(ws, args.from, args.to ?? null, args.merged_into)
+        pending.add(operation)
+        const text = await operation
         return { content: [{ type: 'text' as const, text }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: (err as Error).message }], isError: true }
+      } finally {
+        if (operation) pending.delete(operation)
       }
     }
   )
@@ -174,8 +196,18 @@ function createMoveServer(ws: ConsolidationWorkspace): unknown {
  * the filesystem ignores case, case-insensitively — the same form the memory
  * write guard uses.
  */
-export function confineToWorkspace(root: string, tag: string): Record<string, unknown[]> {
+export function confineToWorkspace(root: string, tag: string, signal?: AbortSignal): Record<string, unknown[]> {
   const pre = async (hookInput: { cwd?: string; tool_name?: string; tool_input?: unknown }): Promise<Record<string, unknown>> => {
+    if (signal?.aborted) {
+      console.warn(`[MemoryConsolidation][${tag}] Refused file tool: consolidation is cancelled`)
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Memory consolidation has been cancelled.',
+        },
+      }
+    }
     const toolInput = (hookInput.tool_input ?? {}) as Record<string, unknown>
     const base = hookInput.cwd ?? root
     const candidates: string[] = []

@@ -132,7 +132,7 @@ vi.mock('../../../../src/main/services/space.service', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: vi.fn().mockReturnValue({ getApp: (id: string) => ({ id, spaceId: 'new-space' }) }),
+  getAppManager: vi.fn().mockReturnValue({ getApp: (id: string) => ({ id, spec: { type: 'automation' }, spaceId: 'new-space' }) }),
 }))
 const { environment, activityStore, resolveChatEnvironment, copySessionJsonl } = vi.hoisted(() => {
   const environment = { spaceId: 'old-space', spacePath: '/original-space', workDir: '/original-cwd', memoryDir: '/original-memory' }
@@ -145,6 +145,7 @@ const { environment, activityStore, resolveChatEnvironment, copySessionJsonl } =
 })
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveChatEnvironment,
+  resolveChatRecordEnvironment: () => environment,
   appChatRunId: (conversationId: string, appId: string) => conversationId === `app-chat:${appId}` ? 'chat' : `chat-${conversationId.slice(`app-chat:${appId}:`.length).replace(/:/g, '-')}`,
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy-file:${appId}:${runId}`,
 }))

@@ -941,6 +941,43 @@ export class ActivityStore {
       .run(JSON.stringify(environment), runId)
   }
 
+  replaceRunEnvironment(runId: string, environment: ExecutionEnvironment): void {
+    this.db.prepare('UPDATE automation_runs SET environment_json = ? WHERE run_id = ?')
+      .run(JSON.stringify(environment), runId)
+  }
+
+  /** Rewrite every historical environment in the caller's relocation transaction. */
+  relocateAppEnvironments(appId: string, chatEnvironment: ExecutionEnvironment, automationEnvironment: ExecutionEnvironment): number {
+    const replacement = `CASE WHEN json_extract(environment_json, '$.pendingConnectionNotice') = 1
+      OR COALESCE(json_extract(environment_json, '$.mcpBindings'), '{}') != json_extract(@environment, '$.mcpBindings')
+      THEN json_set(@environment, '$.pendingConnectionNotice', json('true')) ELSE @environment END`
+    return this.db.transaction(() =>
+      this.db.prepare(`UPDATE app_session_environments SET environment_json = ${replacement} WHERE app_id = @appId`)
+        .run({ environment: JSON.stringify(chatEnvironment), appId }).changes
+      + this.db.prepare(`UPDATE automation_runs SET environment_json = ${replacement} WHERE app_id = @appId`)
+        .run({ environment: JSON.stringify(automationEnvironment), appId }).changes
+    )()
+  }
+
+  listAppNativeSessionIds(appId: string): string[] {
+    return (this.db.prepare(`SELECT DISTINCT session_id FROM automation_runs
+      WHERE app_id = ? AND session_id IS NOT NULL`).all(appId) as Array<{ session_id: string }>).map(row => row.session_id)
+  }
+
+  listAppEnvironments(appId: string): ExecutionEnvironment[] {
+    const rows = this.db.prepare(`SELECT environment_json FROM app_session_environments WHERE app_id = ?
+      UNION SELECT environment_json FROM automation_runs WHERE app_id = ? AND environment_json IS NOT NULL`)
+      .all(appId, appId) as Array<{ environment_json: string }>
+    return rows.map(row => JSON.parse(row.environment_json))
+  }
+
+  listAppIdsPinnedInSpace(spaceId: string): string[] {
+    const rows = this.db.prepare(`SELECT app_id FROM app_session_environments WHERE ${PINNED_IN_SPACE}
+      UNION SELECT app_id FROM automation_runs WHERE environment_json IS NOT NULL AND ${PINNED_IN_SPACE}`)
+      .all({ spaceId }) as Array<{ app_id: string }>
+    return rows.map(row => row.app_id)
+  }
+
   getSessionEnvironment(sessionKey: string): ExecutionEnvironment | undefined {
     const row = this.db.prepare('SELECT environment_json FROM app_session_environments WHERE session_key = ?').get(sessionKey) as { environment_json: string } | undefined
     return row ? JSON.parse(row.environment_json) : undefined
@@ -948,6 +985,14 @@ export class ActivityStore {
 
   pinSessionEnvironment(sessionKey: string, appId: string, environment: ExecutionEnvironment): ExecutionEnvironment {
     this.db.prepare('INSERT OR IGNORE INTO app_session_environments VALUES (?, ?, ?)').run(sessionKey, appId, JSON.stringify(environment))
+    return this.getSessionEnvironment(sessionKey)!
+  }
+
+  replaceSessionEnvironment(sessionKey: string, appId: string, environment: ExecutionEnvironment): ExecutionEnvironment {
+    const result = this.db.prepare(`INSERT INTO app_session_environments (session_key, app_id, environment_json) VALUES (?, ?, ?)
+      ON CONFLICT(session_key) DO UPDATE SET environment_json = excluded.environment_json
+      WHERE app_session_environments.app_id = excluded.app_id`).run(sessionKey, appId, JSON.stringify(environment))
+    if (!result.changes) throw new Error('The session environment belongs to another execution actor')
     return this.getSessionEnvironment(sessionKey)!
   }
 

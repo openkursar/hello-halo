@@ -1,14 +1,4 @@
-/**
- * WorkspaceMigrationDialog
- *
- * Changes which workspace a digital human starts new work in. Opened from the
- * person's action menus; settings carries no copy of it, so the menu entry is
- * the flow rather than a link to it.
- *
- * The move is previewed before it is applied: running work, pending decisions
- * and existing sessions all keep their original environment, so the preview is
- * the only place the user can see what actually shifts.
- */
+/** Moves a digital human with its memory and conversations after previewing the impact. */
 
 import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
@@ -22,7 +12,7 @@ import { CapabilityDialog } from './CapabilityDialog'
 
 interface WorkspaceMigrationDialogProps {
   appId: string
-  /** The workspace the digital human currently starts new work in. */
+  /** The workspace the digital human currently belongs to. */
   spaceId: string | null
   onClose: () => void
 }
@@ -54,11 +44,11 @@ export function WorkspaceMigrationDialog({ appId, spaceId, onClose }: WorkspaceM
     if (!preview) return
     setBusy(true); setError(null)
     try {
-      if (!await moveAppToSpace(appId, preview.toSpaceId)) throw new Error(t('Could not change the workspace. Existing work is unchanged; retry after checking availability.'))
+      if (!await moveAppToSpace(appId, preview.toSpaceId)) throw new Error(t('Could not move to this workspace. Running work may have stopped. Check availability and try again.'))
       // The dialog closes on success, so the confirmation has to outlive it.
       useNotificationStore.getState().show({
         title: t('Workspace updated'),
-        body: t('Default workspace updated for new work. Existing work and files were retained.'),
+        body: t('Memory and all conversations moved to the new workspace. Project files stayed where they were.'),
         variant: 'success',
         duration: 4000,
       })
@@ -70,19 +60,19 @@ export function WorkspaceMigrationDialog({ appId, spaceId, onClose }: WorkspaceM
   }
 
   return (
-    <CapabilityDialog title={t('Change default workspace')} onClose={() => { if (!busy) onClose() }}>
-      <div className="space-y-4 p-4">
-        <label className="block text-sm">{t('Workspace for new work')}
+    <CapabilityDialog title={t('Change workspace')} onClose={() => { if (!busy) onClose() }}>
+      <div className="space-y-4 break-words p-4">
+        <label className="block text-sm">{t('Workspace')}
           <select disabled={busy} value={target} onChange={event => { setTarget(event.target.value); setPreview(null); setError(null) }} className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2">
             <option value="" disabled>{t('Choose a workspace')}</option>
             {choices.map(space => <option key={space.id} value={space.id}>{space.name}</option>)}
           </select>
         </label>
-        <p className="text-sm text-muted-foreground">{t('New independent work starts here. Existing work keeps its original environment; team work keeps its team environment.')}</p>
-        <p className="text-sm text-muted-foreground">{t('Files and history are not moved. Personal memory and existing work remain available. Changes to permissions still apply to continuing work.')}</p>
+        <p className="text-sm text-muted-foreground">{t('Memory and all conversations move to the new workspace together. Files in the project folder stay where they are.')}</p>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {preview && <div className="space-y-3 rounded-lg border border-border p-3 text-sm">
-          <p>{t('{{running}} active runs, {{pending}} decisions and {{sessions}} existing sessions keep their original environment.', { running: preview.activeRunCount, pending: preview.pendingDecisionCount, sessions: preview.retainedSessionCount })}</p>
+          {preview.activeRunCount + preview.activeChatCount > 0 && <p className="text-halo-warning">{t('Ongoing work that will stop when you confirm: {{count}}.', { count: preview.activeRunCount + preview.activeChatCount })}</p>}
+          <p>{t('Pending decisions to keep: {{pending}}. Conversations to move: {{sessions}}.', { pending: preview.pendingDecisionCount, sessions: preview.retainedSessionCount })}</p>
           {[
             { label: t('Skills added'), values: preview.addedSkills },
             { label: t('Skills no longer inherited'), values: preview.removedSkills },
@@ -97,7 +87,7 @@ export function WorkspaceMigrationDialog({ appId, spaceId, onClose }: WorkspaceM
           <button disabled={busy} onClick={onClose} className="rounded-lg border border-border px-3 py-2 text-sm">{t('Cancel')}</button>
           {!preview
             ? <button disabled={busy || !target || target === spaceId} onClick={() => void check()} className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50">{busy ? t('Checking...') : t('Preview change')}</button>
-            : <button disabled={busy} onClick={() => void apply()} className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50">{busy && <Loader2 className="h-4 w-4 animate-spin" />}{t('Use for new work')}</button>}
+            : <button disabled={busy} onClick={() => void apply()} className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50">{busy && <Loader2 className="h-4 w-4 animate-spin" />}{t('Move here')}</button>}
         </div>
       </div>
     </CapabilityDialog>

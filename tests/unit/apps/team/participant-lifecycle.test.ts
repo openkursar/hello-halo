@@ -55,6 +55,31 @@ function fixture(options: { limit?: number; onCreated?: () => Promise<void> } = 
 }
 
 describe('collaboration request lifecycle', () => {
+  it('fences idle-source descendants and awaits an allocation already publishing before workspace maintenance settles', async () => {
+    let release!: () => void
+    const publishing = new Promise<void>(resolve => { release = resolve })
+    const f = fixture({ onCreated: () => publishing })
+    f.source.sourceAppId = 'lead'
+    const allocation = f.spawn('pending')
+    const refused = expect(allocation).rejects.toThrow(/identity is retained/)
+    await vi.waitFor(() => expect(store.participants.list('team', 'work')).toHaveLength(1))
+    const lease = f.service.beginMaintenance({ appIds: ['lead'] })
+    let settled = false
+    const drained = lease.drain().then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    await expect(f.spawn('too-late')).rejects.toMatchObject({ code: 'workspace_changing' })
+    expect(() => f.service.beginRequest(sourceId, 'new-request')).toThrow(/changing workspace/)
+    release()
+    await refused; await drained
+    const member = store.participants.list('team', 'work')[0]
+    expect(lease.actorIds).toContain(member.appId)
+    expect(f.stop.mock.calls.map(([input]) => input.appId)).toEqual([member.appId])
+    expect(f.deliveries).toHaveLength(0)
+    lease.release()
+    f.service.beginRequest(sourceId, 'fresh-owner-request')
+  })
+
   it('retains the handle and reports failure when the initial assignment is undelivered', async () => {
     const f = fixture()
     vi.spyOn(f.bus, 'send').mockResolvedValue({ messageId: 'not-delivered', delivery: 'undelivered' })

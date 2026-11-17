@@ -62,6 +62,75 @@ const running = new Set<string>()
 const checking = new Set<string>()
 const busySkips = new Map<string, number>()
 
+interface ConsolidationWork {
+  controller: AbortController
+  done: Promise<void>
+}
+
+const activeWork = new Map<string, Set<ConsolidationWork>>()
+const suspensions = new Map<string, number>()
+
+export interface MemoryConsolidationSuspension {
+  /** Wait for all admitted work, including file operations and workspace cleanup. */
+  drain(): Promise<void>
+  release(): void
+}
+
+/** Fence these memories before stopping their writers or relocating their files. */
+export function suspendMemoryConsolidation(layouts: Iterable<MemoryLayout>): MemoryConsolidationSuspension {
+  const keys = new Set([...layouts].map(layout => layout.file))
+  for (const key of keys) suspensions.set(key, (suspensions.get(key) ?? 0) + 1)
+  const pending: Promise<void>[] = []
+  for (const key of keys) {
+    for (const work of activeWork.get(key) ?? []) {
+      pending.push(work.done)
+      work.controller.abort()
+    }
+  }
+  let released = false
+  return {
+    drain: async () => { await Promise.all(pending) },
+    release: () => {
+      if (released) return
+      released = true
+      for (const key of keys) {
+        const count = suspensions.get(key) ?? 0
+        if (count <= 1) suspensions.delete(key)
+        else suspensions.set(key, count - 1)
+      }
+    },
+  }
+}
+
+function launchWork(req: ConsolidationRequest, run: (signal: AbortSignal) => Promise<unknown>, finish: () => void): void {
+  const key = req.layout.file
+  const controller = new AbortController()
+  const work: ConsolidationWork = {
+    controller,
+    done: Promise.resolve().then(() => {
+      controller.signal.throwIfAborted()
+      return run(controller.signal)
+    }).then(() => undefined).catch(err => {
+      if (controller.signal.aborted) {
+        if (err !== controller.signal.reason) {
+          console.error(`[MemoryConsolidation][${req.tag}] In-flight work failed while cancelling:`, err)
+        }
+        console.warn(`[MemoryConsolidation][${req.tag}] Cancelled for memory relocation; no further consolidation work will start`)
+      } else {
+        console.error(`[MemoryConsolidation][${req.tag}] Unexpected failure:`, err)
+      }
+    }).finally(() => {
+      finish()
+      const entries = activeWork.get(key)
+      entries?.delete(work)
+      if (entries?.size === 0) activeWork.delete(key)
+    }),
+  }
+  let entries = activeWork.get(key)
+  if (!entries) activeWork.set(key, entries = new Set())
+  entries.add(work)
+}
+
 /**
  * After a turn: consolidate if due. Returns at once; the work runs detached and
  * never throws to the caller.
@@ -70,11 +139,13 @@ export function requestConsolidation(req: ConsolidationRequest): void {
   const key = req.layout.file
   // Claimed before the first await, so two turns ending together cannot both
   // start — the second would delete the first one's working folder.
+  if (suspensions.has(key)) {
+    console.warn(`[MemoryConsolidation][${req.tag}] Automatic trigger skipped: memory is suspended for relocation`)
+    return
+  }
   if (running.has(key) || checking.has(key)) return
   checking.add(key)
-  void consolidateIfDue(req)
-    .catch(err => console.error(`[MemoryConsolidation][${req.tag}] Unexpected failure:`, err))
-    .finally(() => checking.delete(key))
+  launchWork(req, signal => consolidateIfDue(req, signal), () => checking.delete(key))
 }
 
 /**
@@ -82,15 +153,17 @@ export function requestConsolidation(req: ConsolidationRequest): void {
  * interval or other executions. Returns once started. An automatic trigger
  * that is only checking does not block it — it yields once it sees this run.
  */
-export function consolidateNow(req: ConsolidationRequest): { started: boolean; reason?: 'already-running' | 'empty' } {
+export function consolidateNow(req: ConsolidationRequest): { started: boolean; reason?: 'already-running' | 'empty' | 'suspended' } {
   const key = req.layout.file
+  if (suspensions.has(key)) {
+    console.warn(`[MemoryConsolidation][${req.tag}] Owner request skipped: memory is suspended for relocation`)
+    return { started: false, reason: 'suspended' }
+  }
   if (running.has(key)) return { started: false, reason: 'already-running' }
   if (!existsSync(req.layout.file)) return { started: false, reason: 'empty' }
   running.add(key)
   console.log(`[MemoryConsolidation][${req.tag}] Requested by the owner`)
-  void runHarness(req)
-    .catch(err => console.error(`[MemoryConsolidation][${req.tag}] Unexpected failure:`, err))
-    .finally(() => running.delete(key))
+  launchWork(req, signal => runHarness(req, signal), () => running.delete(key))
   return { started: true }
 }
 
@@ -117,7 +190,7 @@ export async function getMemoryStatus(layout: MemoryLayout): Promise<MemoryStatu
   return { ...(await readMemoryStatus(layout)), consolidating: isConsolidating(layout) }
 }
 
-async function consolidateIfDue(req: ConsolidationRequest): Promise<void> {
+async function consolidateIfDue(req: ConsolidationRequest, signal: AbortSignal): Promise<void> {
   const { layout, settings, tag } = req
   const key = layout.file
   const opts = { nowCapBytes: nowCapFor(req) }
@@ -126,10 +199,12 @@ async function consolidateIfDue(req: ConsolidationRequest): Promise<void> {
     // Automatic consolidation is off: memory is not reorganised, only History
     // kept from growing without bound (see isArchiveDue).
     const due = await isArchiveDue(layout, settings.cadence)
+    signal.throwIfAborted()
     if (!due.archiveDue) return
     if (!claimRun(key)) return
     try {
       const trimmed = await trimHistoryFallback(layout, historyKeepFor(settings.cadence))
+      signal.throwIfAborted()
       if (trimmed) {
         console.log(`[MemoryConsolidation][${tag}] Auto-consolidation off; ${due.reasons.join(', ')} → archived old History`)
         await recordArchive(layout, settings.cadence)
@@ -141,6 +216,7 @@ async function consolidateIfDue(req: ConsolidationRequest): Promise<void> {
   }
 
   const due = await isConsolidationDue(layout, settings.cadence, opts)
+  signal.throwIfAborted()
   if (!due.due) return
 
   if (req.isBusy?.()) {
@@ -151,11 +227,12 @@ async function consolidateIfDue(req: ConsolidationRequest): Promise<void> {
       return
     }
   }
+  signal.throwIfAborted()
   busySkips.delete(key)
   if (!claimRun(key)) return
   console.log(`[MemoryConsolidation][${tag}] Due: ${due.reasons.join(', ')}`)
   try {
-    await runHarness(req)
+    await runHarness(req, signal)
   } finally {
     running.delete(key)
   }
@@ -169,10 +246,11 @@ async function consolidateIfDue(req: ConsolidationRequest): Promise<void> {
  *
  * @returns Whether a consolidation was committed
  */
-async function runHarness(req: ConsolidationRequest): Promise<boolean> {
+async function runHarness(req: ConsolidationRequest, signal: AbortSignal): Promise<boolean> {
   const { layout, settings, tag } = req
   const started = Date.now()
   const before = await buildMemorySnapshot(layout)
+  signal.throwIfAborted()
   console.log(
     `[MemoryConsolidation][${tag}] Starting: memory=${before.sizeBytes}B now=${before.nowBytes}B ` +
     `topics=${before.topics.topicCount} cadence=${settings.cadence}`
@@ -181,17 +259,21 @@ async function runHarness(req: ConsolidationRequest): Promise<boolean> {
   let credentials: ResolvedSdkCredentials
   try {
     credentials = await req.resolveCredentials()
+    signal.throwIfAborted()
   } catch (err) {
+    signal.throwIfAborted()
     console.error(`[MemoryConsolidation][${tag}] No model available:`, err)
-    await giveUp(req, `no model available: ${(err as Error).message}`)
+    await giveUp(req, `no model available: ${(err as Error).message}`, signal)
     return false
   }
 
   let ws: ConsolidationWorkspace | null = null
   try {
     ws = await prepareConsolidation(layout)
+    signal.throwIfAborted()
     const agent = createConsolidationAgent({
       ws,
+      signal,
       credentials,
       spaceId: req.spaceId,
       ownerName: req.ownerName,
@@ -213,6 +295,7 @@ async function runHarness(req: ConsolidationRequest): Promise<boolean> {
     let pendingConflict: string | null = null
     let handedOver = new Map<string, string>()
     for (let round = 0; ; round++) {
+      signal.throwIfAborted()
       if (!outcome.ok) {
         lastReason = outcome.reason
         break
@@ -228,6 +311,7 @@ async function runHarness(req: ConsolidationRequest): Promise<boolean> {
       }
 
       const validation = await validateConsolidation(ws, settings.cadence)
+      signal.throwIfAborted()
       if (!validation.ok) {
         lastReason = `rejected: ${validation.reason}`
         console.warn(`[MemoryConsolidation][${tag}] Round ${round + 1} ${lastReason}`)
@@ -238,6 +322,7 @@ async function runHarness(req: ConsolidationRequest): Promise<boolean> {
       }
 
       const unmerged = await untouchedTargets(ws, handedOver)
+      signal.throwIfAborted()
       if (unmerged.length > 0 && pendingConflict) {
         lastReason = `changes made meanwhile not merged into ${unmerged.join(', ')}`
         console.warn(`[MemoryConsolidation][${tag}] Round ${round + 1} ${lastReason}`)
@@ -262,6 +347,7 @@ async function runHarness(req: ConsolidationRequest): Promise<boolean> {
         return true
       }
 
+      signal.throwIfAborted()
       lastReason = `conflict: ${result.reason}`
       console.warn(
         `[MemoryConsolidation][${tag}] Round ${round + 1} ${lastReason}; carried ${result.changes.carriedHistory} History ` +
@@ -271,14 +357,19 @@ async function runHarness(req: ConsolidationRequest): Promise<boolean> {
       rebaseWorkspace(ws, result.liveBaseline)
       pendingConflict = buildConflictFeedback(result.changes)
       handedOver = await fingerprintMergeTargets(ws, mergeTargets(result.changes))
+      signal.throwIfAborted()
       outcome = await agent.followUp([pendingConflict])
     }
 
-    await giveUp(req, lastReason)
+    await giveUp(req, lastReason, signal)
     return false
   } catch (err) {
+    if (signal.aborted && err !== signal.reason) {
+      console.error(`[MemoryConsolidation][${tag}] In-flight consolidation operation failed while cancelling:`, err)
+    }
+    signal.throwIfAborted()
     console.error(`[MemoryConsolidation][${tag}] Consolidation threw, memory unchanged:`, err)
-    await giveUp(req, `error: ${(err as Error).message}`)
+    await giveUp(req, `error: ${(err as Error).message}`, signal)
     return false
   } finally {
     if (ws) {
@@ -302,14 +393,17 @@ async function untouchedTargets(ws: ConsolidationWorkspace, handedOver: Map<stri
  * is actually over its limit — a failed "consolidate now" on a small memory
  * leaves it as it was — and the memory cools down until it grows.
  */
-async function giveUp(req: ConsolidationRequest, reason: string): Promise<void> {
+async function giveUp(req: ConsolidationRequest, reason: string, signal: AbortSignal): Promise<void> {
   const { layout, settings, tag } = req
   const opts = { nowCapBytes: nowCapFor(req) }
   try {
+    signal.throwIfAborted()
     const assessment = await assessConsolidation(layout, settings.cadence, opts)
+    signal.throwIfAborted()
     const trimmed = assessment.overHistory || assessment.overTotal
       ? await trimHistoryFallback(layout, historyKeepFor(settings.cadence))
       : false
+    signal.throwIfAborted()
     const { cooldownUntilBytes } = await recordFailedAttempt(
       layout, settings.cadence, trimmed ? 'trimmed' : 'failed', reason, opts
     )
@@ -319,6 +413,10 @@ async function giveUp(req: ConsolidationRequest, reason: string): Promise<void> 
       (cooldownUntilBytes ? `; next automatic attempt once memory.md reaches ${cooldownUntilBytes}B` : '')
     )
   } catch (err) {
+    if (signal.aborted && err !== signal.reason) {
+      console.error(`[MemoryConsolidation][${tag}] In-flight fallback operation failed while cancelling:`, err)
+    }
+    signal.throwIfAborted()
     console.error(`[MemoryConsolidation][${tag}] Fallback failed:`, err)
   }
 }

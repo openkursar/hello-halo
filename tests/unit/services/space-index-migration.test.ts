@@ -6,6 +6,10 @@ import { dirname, join } from 'node:path'
 import { _resetActivityState, _resetSpaceRegistry, getSpaceDir, getSpaceWithPreferences, listSpaces } from '../../../src/main/services/space.service'
 import { createMigrationCommand, installLegacySpaceIndex, migrationFileIdentity, spaceIndexFixture } from '../../e2e/fixtures/acceptance-space-index-migration'
 
+vi.mock('../../../src/main/services/app-bridge', () => ({
+  getAppManager: () => ({ listApps: () => [], deleteAppsInSpace: async () => {} }),
+}))
+
 const exited = { exitCode: 0, signalCode: null }
 
 beforeEach(() => {

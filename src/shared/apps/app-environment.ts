@@ -3,6 +3,7 @@ export interface AppSpaceChangePreview {
   fromSpaceId: string | null
   toSpaceId: string
   activeRunCount: number
+  activeChatCount: number
   pendingDecisionCount: number
   retainedSessionCount: number
   addedSkills: string[]

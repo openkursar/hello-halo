@@ -249,10 +249,12 @@ export class AppManagerStore {
 
     this.stmtGetBySpecAndSpace = db.prepare(`
       SELECT ${APP_COLUMNS} FROM installed_apps WHERE spec_id = ? AND space_id = ?
+      ORDER BY status = 'uninstalled', installed_at DESC, id LIMIT 1
     `)
 
     this.stmtGetBySpecGlobal = db.prepare(`
       SELECT ${APP_COLUMNS} FROM installed_apps WHERE spec_id = ? AND space_id IS NULL
+      ORDER BY status = 'uninstalled', installed_at DESC, id LIMIT 1
     `)
 
     this.stmtListAll = db.prepare(`
@@ -398,9 +400,48 @@ export class AppManagerStore {
 
   // ── Read ───────────────────────────────────────
 
-  pinDataPath(appId: string, dataPath: string): void {
-    this.db.prepare('UPDATE installed_apps SET data_path = COALESCE(data_path, ?) WHERE id = ?')
-      .run(dataPath, appId)
+  clearDataPath(appId: string): void {
+    this.db.prepare('UPDATE installed_apps SET data_path = NULL WHERE id = ?').run(appId)
+  }
+
+  listLegacyDataAppIds(): string[] {
+    return (this.db.prepare(`SELECT id FROM installed_apps WHERE data_path IS NOT NULL
+      AND json_extract(spec_json, '$.type') = 'automation'`).all() as Array<{ id: string }>).map(row => row.id)
+  }
+
+  listDataRelocations(): Array<{ appId: string; journalPath: string; targetSpaceId: string; committed: boolean }> {
+    return (this.db.prepare('SELECT app_id, journal_path, target_space_id, committed FROM app_data_relocations').all() as
+      Array<{ app_id: string; journal_path: string; target_space_id: string; committed: number }>).map(row => ({
+      appId: row.app_id, journalPath: row.journal_path, targetSpaceId: row.target_space_id, committed: row.committed === 1,
+    }))
+  }
+
+  getDataRelocation(appId: string): { appId: string; journalPath: string; targetSpaceId: string; committed: boolean } | undefined {
+    const row = this.db.prepare('SELECT journal_path, target_space_id, committed FROM app_data_relocations WHERE app_id = ?')
+      .get(appId) as { journal_path: string; target_space_id: string; committed: number } | undefined
+    return row ? { appId, journalPath: row.journal_path, targetSpaceId: row.target_space_id, committed: row.committed === 1 } : undefined
+  }
+
+  beginDataRelocation(appId: string, journalPath: string, targetSpaceId: string): void {
+    this.db.prepare('INSERT INTO app_data_relocations(app_id, journal_path, target_space_id) VALUES (?, ?, ?)')
+      .run(appId, journalPath, targetSpaceId)
+  }
+
+  commitDataRelocation(appId: string, spaceId: string, commitEnvironments: () => unknown): void {
+    this.db.transaction(() => {
+      const changed = this.db.prepare('UPDATE installed_apps SET space_id = ?, data_path = NULL WHERE id = ?')
+        .run(spaceId, appId).changes
+      if (changed !== 1) throw new Error('Digital human disappeared during relocation')
+      const result = commitEnvironments()
+      if (result && typeof (result as unknown as Promise<unknown>).then === 'function') {
+        throw new Error('Relocation records must commit synchronously')
+      }
+      this.db.prepare('UPDATE app_data_relocations SET committed = 1 WHERE app_id = ?').run(appId)
+    })()
+  }
+
+  finishDataRelocation(appId: string): void {
+    this.db.prepare('DELETE FROM app_data_relocations WHERE app_id = ?').run(appId)
   }
 
   /**
@@ -641,6 +682,7 @@ export class AppManagerStore {
       DELETE FROM installed_apps
       WHERE status = 'uninstalled' AND uninstalled_at IS NOT NULL AND uninstalled_at < ?
         AND json_extract(spec_json, '$.type') != 'skill'
+        AND NOT EXISTS (SELECT 1 FROM app_data_relocations relocation WHERE relocation.app_id = installed_apps.id)
     `)
     const result = stmt.run(cutoff)
     return result.changes

@@ -8,6 +8,7 @@ import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() }
 }))
+vi.mock('../../../../src/main/services/space.service', () => ({ hasSpace: () => true }))
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/tmp'), getAppPath: vi.fn(() => '/tmp/halo-test-app'), getVersion: vi.fn(() => '0.0.0'), isPackaged: false }
 }))

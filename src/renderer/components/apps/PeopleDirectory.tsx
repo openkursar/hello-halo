@@ -341,7 +341,7 @@ function PersonCardMenu({ app, tags, onTagsSaved }: { app: PeopleDirectorySummar
             <Tag className="h-3.5 w-3.5 text-muted-foreground" />{t('Tags…')}
           </button>
           <button onClick={() => { setOpen(false); setShowWorkspaceDialog(true) }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted/60">
-            <FolderInput className="h-3.5 w-3.5 text-muted-foreground" />{t('Move to another workspace')}
+            <FolderInput className="h-3.5 w-3.5 text-muted-foreground" />{t('Change workspace')}
           </button>
           <div className="my-1 border-t border-border" />
           <button onClick={() => void handleUninstall()} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-halo-error transition-colors hover:bg-halo-error/10">

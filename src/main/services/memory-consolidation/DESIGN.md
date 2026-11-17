@@ -31,7 +31,33 @@ public turn-end event, the same way `conversation-interop` does.
   no attempt: it is recorded apart (platform/memory `recordArchive`), so it
   neither counts as a failure nor delays consolidation once turned back on.
 - "Consolidate now": ignores thresholds, cooldown and busy; returns once started
-  (`already-running` / `empty` otherwise). Settings poll the status.
+  (`already-running` / `empty` / `suspended` otherwise). Settings poll the status.
+
+### Relocating or deleting memory
+
+`suspendMemoryConsolidation(layouts)` synchronously fences each `layout.file` and
+cancels its admitted automatic checks and automatic/manual runs. The returned
+lease exposes `drain()` and an idempotent `release()`; overlapping leases are
+reference-counted. Unrelated memories continue normally. Callers acquire before
+stopping turns (whose finalizers can request consolidation), drain after those
+writers stop, and release only after relocation or rollback. Space deletion also
+includes the space's own memory layout.
+
+Every admitted task is retained until its complete promise settles, including
+credentials, preparation, query shutdown, commit/fallback operations, bookkeeping
+and workspace cleanup. Cancellation between stages starts neither a query,
+commit nor fallback trim, and records no failed attempt or cooldown. An operation
+already touching disk is awaited rather than abandoned; a successful in-flight
+commit finishes its success bookkeeping before draining. The runner forwards the
+external abort to each query, checks it again after option preparation and awaits
+in-flight `memory_move` calls before workspace cleanup. Existing query round
+timeouts remain model failures, distinct from relocation cancellation.
+
+`drain()` has no success-shaped timeout: a stalled model shutdown or filesystem
+operation keeps it pending. A caller imposing a deadline must retain source
+files and treat that deadline as a failed relocation, not evidence of draining.
+The fence owns no timers or background jobs; ordinary admission is an O(1) map
+lookup, and tracking entries are removed when work or leases finish.
 
 ## The harness
 

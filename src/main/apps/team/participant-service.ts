@@ -7,8 +7,12 @@ import { buildTeamSessionKey, isRemoteMember, parseSpaceCoordinatorAppId, type T
 import type { TeamStore } from './types'
 import type { RecipientAddress } from './recipient-fences'
 import type { ParticipantExecution } from './participants'
-import { parseRunSenderKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
+import { appChatAppId, parseRunSenderKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 import { getWorkMember, listWorkMembers } from './work-members'
+
+function sourceOwnerAppId(source: string): string | null {
+  return appChatAppId(source) ?? parseRunSenderKey(source)?.appId ?? null
+}
 
 export interface CollaborationCaller {
   teamId: string
@@ -26,7 +30,21 @@ interface ParticipantRuntime {
   stopMemberTurn(input: { teamId: string; epochId: string; appId: string; controller?: TeamStopController; expectedRequestId?: string }): Promise<boolean>
 }
 
+export interface ParticipantMaintenanceScope {
+  appIds?: readonly string[]
+  sourceConversationIds?: readonly string[]
+}
+
+export interface ParticipantMaintenance {
+  readonly actorIds: readonly string[]
+  /** Cancels exact local requests and waits for all admitted allocations, not engine turns. */
+  drain(): Promise<void>
+  release(): void
+}
+
 export interface ParticipantService {
+  beginMaintenance(scope: ParticipantMaintenanceScope): ParticipantMaintenance
+  isMaintaining(appId: string, conversationId?: string): boolean
   recipientFence(target: RecipientAddress): string
   acceptRecipientFence(target: RecipientAddress, fence?: string): boolean
   invalidateRecipientFences(teamId: string, epochId: string): void
@@ -73,6 +91,14 @@ export function createParticipantService(deps: {
   const inputs = new Map<string, string>()
   const stopped = new Set<string>()
   const creation = new Map<string, Promise<unknown>>()
+  const allocations = new Map<Promise<unknown>, { caller: CollaborationCaller; controller: AbortController }>()
+  const maintenance = new Set<{ actors: Set<string>; sources: Set<string> }>()
+  const isMaintaining = (appId: string, conversationId?: string) => [...maintenance].some(scope =>
+    scope.actors.has(appId) || (!!conversationId && (scope.sources.has(conversationId)
+      || scope.actors.has(sourceOwnerAppId(conversationId) ?? ''))))
+  const assertAvailable = (appId: string, conversationId?: string) => {
+    if (isMaintaining(appId, conversationId)) throw new CollaborationRefusal('workspace_changing', 'This collaborator is changing workspace. Try again after the move finishes.')
+  }
   const key = (caller: CollaborationCaller) => buildTeamSessionKey(caller.callerAppId, caller.teamId, caller.epochId)
   const scopeKey = (caller: CollaborationCaller) => `${caller.teamId}:${caller.epochId}`
   const fail = (code: string, message: string, caller: CollaborationCaller): never => {
@@ -110,6 +136,7 @@ export function createParticipantService(deps: {
   }
 
   function beginRequest(conversationId: string, id: string): void {
+    assertAvailable(sourceOwnerAppId(conversationId) ?? '', conversationId)
     inputs.delete(conversationId)
     inputs.set(conversationId, id)
     if (inputs.size > 1024) inputs.delete(inputs.keys().next().value!)
@@ -136,10 +163,12 @@ export function createParticipantService(deps: {
   }
 
   function captureSource(conversationId: string, signal?: AbortSignal): () => void {
+    assertAvailable(sourceOwnerAppId(conversationId) ?? '', conversationId)
     const observed = sourceGenerations.get(conversationId) ?? 0
     const id = sourceRequestId(conversationId)
     return () => {
       signal?.throwIfAborted()
+      assertAvailable(sourceOwnerAppId(conversationId) ?? '', conversationId)
       if ((sourceGenerations.get(conversationId) ?? 0) !== observed || store.requests.cancelled(id)) {
         throw new CollaborationRefusal('source_stopped', 'The originating request was stopped. No collaborator assignment was dispatched.')
       }
@@ -151,6 +180,7 @@ export function createParticipantService(deps: {
     const observed = generations.get(key(caller)) ?? 0
     const check = () => {
       signal?.throwIfAborted()
+      assertAvailable(caller.callerAppId, sourceOf(caller))
       const epoch = store.getEpochById(caller.epochId)
       if (!epoch || epoch.teamId !== caller.teamId || epoch.endedAt !== null || epoch.workItem?.status === 'completed') {
         fail('work_closed', 'This work context is closed. Continue it from its originating conversation.', caller)
@@ -193,12 +223,16 @@ export function createParticipantService(deps: {
   }
 
   async function spawn(caller: CollaborationCaller, input: SpawnInput, source: ParticipantSource, signal?: AbortSignal): Promise<TeamParticipant> {
-    const check = capture(caller, signal)
+    const controller = new AbortController()
+    const abort = () => controller.abort(signal?.reason)
+    if (signal?.aborted) abort()
+    const check = capture(caller, controller.signal)
     const owner = getWorkMember(store, caller.teamId, caller.epochId, caller.callerAppId)!
     if (isRemoteMember(owner)) fail('owner_mismatch', 'A collaborator must be created on its caller’s own machine.', caller)
     if (!source.modelSelection.modelSourceId || !source.modelSelection.modelId || !source.engineId) {
       fail('execution_unconfigured', 'The host has not supplied the source execution model and engine.', caller)
     }
+    signal?.addEventListener('abort', abort, { once: true })
     const chainKey = scopeKey(caller)
     const task = (creation.get(chainKey) ?? Promise.resolve()).then(async () => {
       check()
@@ -219,7 +253,7 @@ export function createParticipantService(deps: {
       }
       const directory = join(source.environment.spacePath, 'collaboration', id)
       const workspace = await openMemberWorkspace({ member: { id, cwd: input.cwd, isolation: input.isolation },
-        parentCwd: source.environment.workDir, metadataDirectory: join(directory, 'workspace'), signal: signal ?? new AbortController().signal })
+        parentCwd: source.environment.workDir, metadataDirectory: join(directory, 'workspace'), signal: controller.signal })
       let inserted = false
       try {
         check()
@@ -245,8 +279,15 @@ export function createParticipantService(deps: {
         return member
       } catch (error) {
         if (!inserted) {
-          await releaseMemberWorkspace(workspace)
-          await rm(directory, { recursive: true, force: true }).catch(cleanup => console.warn('[TeamParticipants] Cancelled allocation metadata cleanup failed', cleanup))
+          const cleanupFailures: unknown[] = []
+          try { await releaseMemberWorkspace(workspace) } catch (cleanup) { cleanupFailures.push(cleanup) }
+          if (!cleanupFailures.length) {
+            try { await rm(directory, { recursive: true, force: true }) } catch (cleanup) { cleanupFailures.push(cleanup) }
+          }
+          if (cleanupFailures.length) {
+            console.error('[TeamParticipants] Cancelled allocation cleanup failed', cleanupFailures)
+            throw new AggregateError(cleanupFailures, 'The cancelled collaborator allocation could not be cleaned up.')
+          }
         } else {
           console.warn(`[TeamParticipants] Allocated participant retained: team=${caller.teamId} epoch=${caller.epochId} app=${id} reason=${error instanceof Error ? error.message : String(error)}`)
           throw new CollaborationRefusal('participant_retained', `Collaborator ${member.memberName} was created with handle ${id}, but dispatch is unconfirmed. Its identity is retained. Read the board and send any further assignment to this same handle; do not repeat spawn_agent.`, caller)
@@ -254,9 +295,14 @@ export function createParticipantService(deps: {
         throw error
       }
     })
+    allocations.set(task, { caller, controller })
     const settled = task.catch(() => {})
     creation.set(chainKey, settled)
-    void settled.finally(() => { if (creation.get(chainKey) === settled) creation.delete(chainKey) })
+    void settled.finally(() => {
+      allocations.delete(task)
+      signal?.removeEventListener('abort', abort)
+      if (creation.get(chainKey) === settled) creation.delete(chainKey)
+    })
     return task
   }
 
@@ -380,7 +426,78 @@ export function createParticipantService(deps: {
     }
   }
 
+  function beginMaintenance(input: ParticipantMaintenanceScope): ParticipantMaintenance {
+    const scope = { actors: new Set(input.appIds), sources: new Set(input.sourceConversationIds) }
+    const selected = () => {
+      const local = store.participants.listLocalExecutions()
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const { participant, execution } of local) {
+          const source = store.getTeamById(participant.teamId)?.coordinatorConversationId
+          if (scope.actors.has(participant.appId) || scope.actors.has(participant.parentAppId)
+            || (!!execution.sourceAppId && scope.actors.has(execution.sourceAppId))
+            || (!!source && (scope.sources.has(source) || scope.actors.has(sourceOwnerAppId(source) ?? '')))) {
+            if (!scope.actors.has(participant.appId)) { scope.actors.add(participant.appId); changed = true }
+            if (source) scope.sources.add(source)
+          }
+        }
+      }
+      return local.filter(({ participant }) => scope.actors.has(participant.appId))
+    }
+    maintenance.add(scope)
+    selected()
+    const pending: Promise<unknown>[] = []
+    for (const [task, allocation] of allocations) {
+      const source = sourceOf(allocation.caller)
+      if (!scope.actors.has(allocation.caller.callerAppId) && !scope.sources.has(source)
+        && !scope.actors.has(sourceOwnerAppId(source) ?? '')) continue
+      allocation.controller.abort(new Error('The collaborator workspace is changing.'))
+      pending.push(task)
+    }
+    for (const source of scope.sources) {
+      sourceGenerations.set(source, (sourceGenerations.get(source) ?? 0) + 1)
+      const request = store.requests.current(source)
+      const parsed = parseTeamSessionKey(source)
+      const ownsRequest = !parsed || inputs.has(source) || !!store.participants.get(parsed.teamId, parsed.epochId, parsed.appId)
+      if (request && ownsRequest) store.requests.cancel(request)
+      for (const id of store.sourceBindings.revokeSource(source)) store.requests.cancel(id)
+    }
+    let draining: Promise<void> | undefined
+    let released = false
+    return {
+      get actorIds() { return [...scope.actors] },
+      drain() {
+        if (released) return Promise.reject(new Error('The participant maintenance scope was released.'))
+        return draining ??= (async () => {
+          const allocated = await Promise.allSettled(pending)
+          const allocationFailures = allocated.flatMap(result => {
+            if (result.status !== 'rejected') return []
+            const error = result.reason
+            if (error?.name === 'AbortError' || (error instanceof CollaborationRefusal
+              && ['participant_retained', 'workspace_changing', 'execution_stopped'].includes(error.code))) return []
+            return [error]
+          })
+          const targets = selected()
+          const results = await Promise.allSettled(targets.map(async ({ participant, execution }) => {
+            const caller = { teamId: participant.teamId, epochId: participant.epochId, callerAppId: participant.appId }
+            markStopped(caller)
+            runtime().bus.cancelSession(key(caller))
+            const assignment = store.requests.assignment(key(caller))
+            await runtime().stopMemberTurn({ teamId: participant.teamId, epochId: participant.epochId,
+              appId: participant.appId, ...(execution.requestId && assignment?.requestId === execution.requestId
+                ? { expectedRequestId: execution.requestId } : {}) })
+          }))
+          const failures = [...allocationFailures, ...results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])]
+          if (failures.length) throw new AggregateError(failures, 'Some collaborator turns could not be stopped. Workspace data was not moved.')
+        })()
+      },
+      release() { released = true; maintenance.delete(scope) },
+    }
+  }
+
   return {
+    beginMaintenance, isMaintaining,
     recipientFence: target => store.recipientFences.read(target),
     acceptRecipientFence: (target, fence) => store.recipientFences.accepts(target, fence),
     invalidateRecipientFences: (teamId, epochId) => store.recipientFences.clearEpoch(teamId, epochId),
@@ -406,6 +523,7 @@ export function createParticipantService(deps: {
       return { ...(id ? { requestId: id } : {}), stopped: stopped.has(conversationId) || (!!id && store.requests.cancelled(id)) }
     },
     adoptRequest(caller, id, controller) {
+      if (isMaintaining(caller.callerAppId, sourceOf(caller))) return false
       const execution = store.participants.getExecution(caller.teamId, caller.epochId, caller.callerAppId)
       if (store.requests.cancelled(id)) return false
       if (stopped.has(key(caller)) || execution?.stopped) {
@@ -441,6 +559,7 @@ export function createParticipantService(deps: {
     canRead: (caller, targetId) => !caller.origin && controls(caller, targetId),
     continueTarget(caller, targetId, proposed) {
       capture(caller)()
+      assertAvailable(targetId)
       const execution = store.participants.getExecution(caller.teamId, caller.epochId, targetId)
       const targetKey = buildTeamSessionKey(targetId, caller.teamId, caller.epochId)
       const team = store.getTeamById(caller.teamId)

@@ -13,7 +13,8 @@ import {
   type UnwrittenStoppedInput,
 } from './app-chat-live-turn'
 import { getImPermissionContext } from './im-permission-registry'
-import { getAppChatConversationId } from '../../../shared/apps/im-keys'
+import { getAppChatConversationId, parseAppChatKey, parseNativeChatKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
+import { onWorkspaceChangeReleased, pendingWorkspaceChange } from './workspace-admission'
 import { peekAppChatSink, type AppChatRoundHandle } from './app-chat-sink'
 import { isBorrowedTeamTurn } from './capability-policy'
 
@@ -80,6 +81,7 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
     })
   }
   const dispatches = new Map<string, symbol>()
+  const workspaceWaiters = new Map<string, Set<string>>()
   const releaseDispatch = (conversationId: string, generation: symbol): void => {
     if (dispatches.get(conversationId) !== generation) return
     dispatches.delete(conversationId)
@@ -99,7 +101,16 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
     return false
   }
   const gate = createTurnGate<ChatDelivery>({
-    isBusy: isAppChatConversationGenerating,
+    isBusy: conversationId => {
+      const appId = parseNativeChatKey(conversationId)?.appId ?? parseAppChatKey(conversationId)?.appId ?? parseTeamSessionKey(conversationId)?.appId
+      if (appId && pendingWorkspaceChange(appId)) {
+        const conversations = workspaceWaiters.get(appId) ?? new Set<string>()
+        conversations.add(conversationId)
+        workspaceWaiters.set(appId, conversations)
+        return true
+      }
+      return isAppChatConversationGenerating(conversationId)
+    },
     getJobIdentity: job => job.identity,
     getActiveIdentity: getAppChatTurnIdentity,
     mergeJobs: jobs => ({ identity: jobs[0].identity, messages: jobs.flatMap(job => job.messages) }),
@@ -130,6 +141,7 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
       return { identity: messages[0].request.refreshBeforeDelivery ? authorityOf(messages[0].request) : job.identity, messages }
     },
     deliverMidTurn: (conversationId, job) => {
+      if (job.messages.some(message => pendingWorkspaceChange(message.request.appId))) return false
       const messages = job.messages.filter(stillRelevant)
       if (messages.length === 0) return true
       const sink = peekAppChatSink(conversationId)
@@ -248,6 +260,11 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
     },
   })
 
+  const stopWorkspaceChanges = onWorkspaceChangeReleased(appId => {
+    const conversations = workspaceWaiters.get(appId)
+    workspaceWaiters.delete(appId)
+    for (const conversationId of conversations ?? []) gate.drain(conversationId)
+  })
   const events = onAgentEvent(event => {
     if (event.channel === 'agent:turn-start' && !event.relayed) gate.notifyReady(event.conversationId)
   })
@@ -312,6 +329,8 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
       disposed = true
       events.dispose()
       stopChanges()
+      stopWorkspaceChanges()
+      workspaceWaiters.clear()
       gate.discard(() => true, 'runtime shut down')
       dispatches.clear()
     },

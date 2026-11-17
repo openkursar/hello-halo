@@ -323,7 +323,8 @@ const { app, environment, activityStore } = vi.hoisted(() => ({
 vi.mock('../../../../src/main/apps/manager', () => ({ getAppManager: () => ({ getApp: () => app }) }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveChatEnvironment: () => environment,
-  validateEnvironmentConnections: vi.fn(),
+  resolveChatRecordEnvironment: () => environment,
+  validateEnvironmentConnections: vi.fn(() => ({ changed: false, changedSpecIds: [] })),
   validateExecutionEnvironment: vi.fn(),
   resolveExecutionEnvironment: () => environment,
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy:${appId}:${runId}`,

@@ -41,7 +41,7 @@ export type {
 
 export type { TeamService, TeamServiceDeps } from './service'
 export type { TeamParticipants, ParticipantExecution } from './participants'
-export type { ParticipantService, ParticipantSource, CollaborationCaller } from './participant-service'
+export type { ParticipantService, ParticipantSource, CollaborationCaller, ParticipantMaintenance, ParticipantMaintenanceScope } from './participant-service'
 export type { CollaborationSourceBinding, CollaborationSourceBindings } from './source-bindings'
 export type { TeamParticipant } from '../../../shared/apps/team-types'
 export { getWorkMember, findWorkMember, listWorkMembers, isWorkEdgeAllowed, workMemberPrincipalId } from './work-members'

@@ -20,6 +20,7 @@
 import { v2Sessions, getConsumerHandle, activeSessions, hasPendingSessionInput } from './session-manager'
 import { buildMessageContent } from './message-utils'
 import type { ImageAttachment } from './types'
+import { isSpaceUnderMaintenance } from './space-maintenance'
 
 const LOG_TAG = '[Agent][LiveTurn]'
 
@@ -49,6 +50,7 @@ export function sendIntoLiveTurn(conversationId: string, text: string, images: I
     console.warn(`${LOG_TAG} No live session for ${conversationId}; not delivered`)
     return false
   }
+  if (isSpaceUnderMaintenance(info.spaceId)) return false
   if (!hasLiveTurn(conversationId)) {
     console.warn(`${LOG_TAG} No turn in flight for ${conversationId}; not delivered`)
     return false

@@ -131,6 +131,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   hasPendingSessionInput: () => false,
   v2Sessions: engine.v2Sessions,
   closeV2Session: engine.closeV2Session,
+  closeSessionAndWait: async (id: string) => { engine.closeV2Session(id) },
   acquireV2Session: engine.acquireV2Session,
   getConsumerHandle: () => null,
   getRunningConsumerIds: () => [],
@@ -151,6 +152,7 @@ const { sink } = vi.hoisted(() => ({
     writeUserMessage: vi.fn(() => ({ role: 'user', content: '' })),
     setTurnIdentity: vi.fn(),
     markInputsStopped: vi.fn(),
+    getRecordedInputIds: () => [],
     beginRound: vi.fn(() => ({
       done: Promise.resolve(),
       cancel: vi.fn(),
@@ -168,6 +170,7 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   peekAppChatSink: () => undefined,
   hasActiveAppChatRound: () => false,
   getConversationsWithActiveRound: () => [],
+  getAppChatSinkConversationIds: () => [],
   disposeAppChatSink: vi.fn(),
 }))
 
@@ -362,7 +365,8 @@ vi.mock('../../../../src/main/apps/manager', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveChatEnvironment: () => environment,
-  validateEnvironmentConnections: vi.fn(),
+  resolveChatRecordEnvironment: () => environment,
+  validateEnvironmentConnections: vi.fn(() => ({ changed: false, changedSpecIds: [] })),
   validateExecutionEnvironment: vi.fn(),
   resolveExecutionEnvironment: () => environment,
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy:${appId}:${runId}`,
@@ -401,9 +405,12 @@ import {
   closeTeamSession,
   restartAppChat,
   stopAppChatConversation,
+  stopAndDrainAppChats,
+  countAppChats,
   type AppChatRequest,
 } from '../../../../src/main/apps/runtime/app-chat'
-import { isAppChatConversationGenerating } from '../../../../src/main/apps/runtime/app-chat-live-turn'
+import { beginAppChatTurnStart, isAppChatConversationGenerating } from '../../../../src/main/apps/runtime/app-chat-live-turn'
+import { acquireAppWorkspaceChange, setWorkspaceRecovery } from '../../../../src/main/apps/runtime/workspace-admission'
 import { destroyAllChatBrowserContexts, hasChatBrowserContext } from '../../../../src/main/apps/runtime/app-chat-browser'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
 
@@ -453,6 +460,83 @@ describe('a chat reset while a message is on its way to the engine', () => {
     engine.open()
     destroyAllChatBrowserContexts('test-cleanup')
     vi.restoreAllMocks()
+  })
+
+  it('workspace drain waits for cancelled preparation and closes a session acquired before its finally', async () => {
+    const { turn } = await startHeldInAcquire(imTurn())
+    expect(countAppChats(app.id)).toBe(1)
+    const release = await acquireAppWorkspaceChange([app.id])
+    let drained = false
+    const stopping = stopAndDrainAppChats(app.id).then(() => { drained = true })
+    await Promise.resolve()
+    expect(drained).toBe(false)
+    engine.open()
+    await turn
+    await stopping
+    expect(countAppChats(app.id)).toBe(0)
+    expect(engine.v2Sessions.has(IM_KEY)).toBe(false)
+    expect(engine.send).not.toHaveBeenCalled()
+    release()
+  })
+
+  it('passes cancellation into acquisition so space maintenance cannot deadlock app preparation', async () => {
+    let admittedSignal: AbortSignal | undefined
+    engine.acquireV2Session.mockImplementationOnce(async (...args: unknown[]) => {
+      admittedSignal = (args[9] as { maintenanceSignal: AbortSignal }).maintenanceSignal
+      await new Promise<void>((_resolve, reject) => {
+        admittedSignal!.addEventListener('abort', () => reject(new Error('Chat preparation stopped')), { once: true })
+      })
+      throw new Error('Unreachable')
+    })
+    const turn = sendAppChatMessage(imTurn())
+    await vi.waitFor(() => expect(admittedSignal).toBeDefined())
+    const release = await acquireAppWorkspaceChange([app.id])
+    try {
+      await stopAndDrainAppChats(app.id)
+      await turn
+      expect(admittedSignal?.aborted).toBe(true)
+      expect(engine.send).not.toHaveBeenCalled()
+    } finally {
+      release()
+    }
+  })
+
+  it('waits for an externally-owned turn preparation and never restarts its cancelled input', async () => {
+    const start = beginAppChatTurnStart(IM_KEY)
+    const release = await acquireAppWorkspaceChange([app.id])
+    let drained = false
+    const stopping = stopAndDrainAppChats(app.id).then(() => { drained = true })
+    await Promise.resolve()
+    expect(start.cancelled).toBe(true)
+    expect(drained).toBe(false)
+    await sendAppChatMessage({ ...imTurn(), turnStart: start })
+    await stopping
+    release()
+    expect(engine.acquireV2Session).not.toHaveBeenCalled()
+    expect(engine.send).not.toHaveBeenCalled()
+  })
+
+  it('waits for startup data repair without waiting for runtime readiness', async () => {
+    let finish!: () => void
+    const recovery = new Promise<void>(resolve => { finish = resolve })
+    const clear = setWorkspaceRecovery(recovery)
+    const turn = sendAppChatMessage(imTurn())
+    expect(engine.acquireV2Session).not.toHaveBeenCalled()
+    clear()
+    finish()
+    await turn
+    expect(engine.send).toHaveBeenCalledOnce()
+  })
+
+  it('new messages wait before adopting a turn-start hold and start only after release', async () => {
+    const release = await acquireAppWorkspaceChange([app.id])
+    const start = beginAppChatTurnStart(IM_KEY)
+    const turn = sendAppChatMessage({ ...imTurn(), turnStart: start })
+    expect(isAppChatConversationGenerating(IM_KEY)).toBe(false)
+    expect(engine.acquireV2Session).not.toHaveBeenCalled()
+    release()
+    await turn
+    expect(engine.send).toHaveBeenCalledOnce()
   })
 
   it('an IM clear during a cold start: the session the turn then acquires is closed, so the next message starts fresh', async () => {

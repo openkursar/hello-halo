@@ -40,7 +40,7 @@ import { cleanupTerminalHandlers } from '../ipc/terminal'
 import { initializeSearchHandlers, cleanupSearchHandlers } from '../ipc/search'
 import { registerPerfHandlers } from '../ipc/perf'
 import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-bash'
-import { cleanupAllCaches } from '../services/artifact-cache.service'
+import { cleanupAllCaches, destroySpaceCache } from '../services/artifact-cache.service'
 import { flushSpaceActivity } from '../services/space.service'
 import { onConversationDeleted, isConversationGone, deleteEphemeralConversations } from '../services/conversation.service'
 import { disposeSearchContext } from '../services/web-search'
@@ -70,8 +70,8 @@ import { initTaskState } from '../platform/task-state'
 import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { combinedDisposable } from '../platform/event'
 import { initMemory } from '../platform/memory'
-import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, deliverRunCollaborationSource, releaseTeamEpochSessions, getAppRuntime } from '../apps/runtime'
+import { initAppManager, shutdownAppManager, getAppManager } from '../apps/manager'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, deliverRunCollaborationSource, releaseTeamEpochSessions, getAppRuntime, beginWorkspaceRecovery, setWorkspaceInitialization, removeWorkspacePreservingPeople } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService, collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
@@ -193,6 +193,15 @@ function startModelCatalogFreshness(): void {
  * by initAppRuntime().
  */
 async function initPlatformAndApps(): Promise<void> {
+  const recovery = beginWorkspaceRecovery()
+  const initialization = initializePlatformAndApps(recovery.complete)
+  const clearInitialization = setWorkspaceInitialization(initialization)
+  try { await initialization }
+  catch (error) { recovery.fail(error); throw error }
+  finally { clearInitialization() }
+}
+
+async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Promise<void> {
   console.log('[Bootstrap] Platform+Apps initialization starting...')
   const t0 = performance.now()
 
@@ -209,6 +218,10 @@ async function initPlatformAndApps(): Promise<void> {
     isConversationGone: (conversationId, spaceId) => isSpaceConversationId(conversationId)
       ? isConversationGone(spaceId, conversationId)
       : nativeChatAppId(conversationId) ? isNativeChatGone(conversationId) : false,
+    resolveSpaceId: (conversationId, spaceId) => {
+      const appId = nativeChatAppId(conversationId)
+      return appId ? getAppManager()?.getApp(appId)?.spaceId ?? spaceId : spaceId
+    },
   })
 
   // ── Phase 1: Platform services (parallel) ───────────────────────────────
@@ -279,6 +292,7 @@ async function initPlatformAndApps(): Promise<void> {
   // (FileWatcherSource, WebhookSource), activates Apps, and starts the router.
   const runtime = await initAppRuntime({
     db, appManager, scheduler, memory, background,
+    onWorkspaceDataReady,
     relayActionAccess: {
       ensureServer: async () => (await import('../http/self-api')).ensureSelfApiServer(),
       issueGrant: async request => (await import('../http/self-api')).issueSelfApiGrant(request),
@@ -1240,9 +1254,12 @@ async function initPlatformAndApps(): Promise<void> {
         // Fire-and-forget on dissolve orphan cleanup: deleteSpace is async but
         // the service contract is sync (best-effort); errors are logged inside.
         deleteMemberSpace: (spaceId) => {
-          void deleteSpace(spaceId).catch((err) =>
-            console.warn('[Bootstrap] Team member space delete failed:', err)
-          )
+          void removeWorkspacePreservingPeople(spaceId, async () => {
+            await destroySpaceCache(spaceId)
+            return deleteSpace(spaceId)
+          }).then(removed => {
+            if (!removed) console.warn('[Bootstrap] Team member space deletion did not finish', { spaceId })
+          }).catch((error) => console.warn('[Bootstrap] Team member space delete failed:', error))
         },
         // Resolve a space to the directory its agent works in, so relative
         // artifact refs (e.g. "brief.md") open the file the member published.

@@ -12,9 +12,13 @@ references:
   - src/renderer/components/apps/AppConfigPanel.tsx
   - tests/e2e/specs/people-settings.spec.ts
   - src/main/apps/manager/service.ts
+  - src/main/apps/runtime/space-change.ts
+  - src/renderer/components/apps/WorkspaceMigrationDialog.tsx
   - tests/e2e/specs/acceptance-people.spec.ts
   - src/main/apps/team/service.ts
   - tests/e2e/specs/acceptance-people-settings-reload.spec.ts
+  - tests/e2e/specs/acceptance-digital-human-workspace-move.spec.ts
+  - tests/e2e/specs/acceptance-workspace-move-collaborator.spec.ts
 promises:
   reload:
     en: Explicitly restarting a chat after saving a digital human's instructions applies those instructions to the original conversation without losing its history or the engine's native guidance; new chats and later application restarts retain the saved instructions.
@@ -28,6 +32,12 @@ promises:
   workspace:
     en: Changing or retiring a person preserves or removes workspace data only as stated by the action.
     zh: 修改或停用数字人只按操作说明保留或移除工作数据。
+  move:
+    en: Changing a digital human's workspace moves its memory, all conversations and pending decisions together without moving project files. The preview explains which ongoing work will stop; cancellation changes nothing. Deleting the former workspace afterwards does not affect the person.
+    zh: 更换数字人的工作区时，记忆、全部对话和待回答决定一起搬迁，项目文件不动。预览说明会停止的进行中工作；取消不产生变化。之后删除原工作区不会影响该数字人。
+  recovery:
+    en: A digital human left partly moved by an older version becomes usable automatically after upgrade, including when the former workspace is gone. Surviving memory and conversations are merged into its current workspace without discarding conflicting files; already deleted memory cannot be recovered.
+    zh: 旧版本造成的半搬家数字人在升级后自动恢复可用，即使原工作区已经不存在。仍存在的记忆与对话合并到当前工作区，冲突文件不丢弃；已删除的记忆无法找回。
   legible:
     en: Settings sections and long person names remain usable on narrow screens.
     zh: 设置分组和长数字人名称在窄屏仍可使用。
@@ -41,6 +51,128 @@ promises:
     en: Web search can be switched off for one digital human; while off it does not search the web in its chats, IM chats, team work or scheduled runs, and nobody it works for can turn it back on. Opening a page it is given and the AI Browser are separate and stay as they are. Memory stays on.
     zh: 可以为某位数字人关闭网页搜索；关闭后它在自己的对话、IM 对话、团队协作和定时运行中都不再搜索网页，它服务的任何人都无法重新打开。打开给定的网页链接和 AI 浏览器是独立能力，不受影响。记忆始终开启。
 scenarios:
+  - id: people.settings.move-collaborator
+    title:
+      en: Keep an idle collaborator's original work through a digital-human workspace move
+      zh: 数字人搬家时保留空闲协作者的原工作
+    verifies: [workspace]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      placement: [default]
+    preconditions:
+      - en: An isolated digital human's original local chat creates a real temporary collaborator. Its first native turn finishes with a known private reply. The collaborator uses the default internal working directory.
+        zh: 隔离数字人的原本地聊天创建真实临时协作者，协作者首次原生运行完成并产生已知私有回复；协作者使用默认内部工作目录。
+    steps:
+      - en: Move the digital human through the workspace preview and confirmation, delete its former workspace and restart the application. Continue the same collaborator through its original team/member conversation and then continue the source digital-human chat separately.
+        zh: 通过工作区预览及确认搬迁数字人，删除原工作区并重启应用；通过原团队成员对话继续同一协作者，再单独继续数字人来源聊天。
+    expected:
+      - en: The collaborator keeps its identity, work scope, permissions, local metadata and original native transcript. Its metadata and transcript storage move with the digital human; the default internal working directory follows the destination.
+        zh: 协作者保留身份、工作范围、权限、本地元数据及原生历史；其元数据和历史存储跟随数字人搬迁，默认内部工作目录跟随目标工作区。
+      - en: After restart the same collaborator receives its prior private assistant reply in native model context and responds in its original member conversation. The owner's original chat retains its own history and native identity and can continue independently.
+        zh: 重启后，同一协作者的原生模型上下文收到先前私有助手回复，并在原成员对话中回应；所有者原聊天保留自身历史及原生身份，可独立继续。
+    notes: Model replacement uses only the local scripted endpoint. Participant execution records and native bindings are read-only evidence; no app handlers or native engine snapshots are replaced.
+  - id: people.settings.move-delete-origin
+    title:
+      en: Move a digital human completely and delete the former workspace
+      zh: 数字人彻底搬家后删除原工作区
+    verifies: [move]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: An isolated digital human has known memory, desktop and synthetic WeCom conversation history, a pending decision, one ongoing task and a configured schedule. The destination workspace has a separate project folder.
+        zh: 隔离数字人已有已知记忆、桌面与模拟企业微信对话历史、一项待回答决定、一项进行中任务及定时配置；目标工作区有独立项目文件夹。
+    steps:
+      - en: Open Change workspace from the person's menu, select the destination, inspect the preview and cancel once.
+        zh: 从数字人菜单打开更换工作区，选择目标，查看预览并先取消一次。
+      - en: Preview again and confirm Move here, then delete the former workspace.
+        zh: 再次预览并确认搬到这里，然后删除原工作区。
+      - en: Continue the same desktop and synthetic WeCom conversations, answer the pending decision, open the person's page and let the configured scheduled task run. Restart and inspect the conversations and memory again.
+        zh: 继续原桌面及模拟企业微信对话、回答待决定问题、打开数字人页面并让配置好的定时任务执行；重启后再次检查对话和记忆。
+    expected:
+      - en: The preview says memory and all conversations move together, project files stay and one ongoing item will stop. Cancellation does not stop work or move any data.
+        zh: 预览说明记忆与全部对话一起搬迁、项目文件不动且会停止一项进行中工作；取消不停止工作也不搬迁数据。
+      - en: Confirmation stops that task, retains the pending decision and moves the person's complete history and surviving memory. Project folders are unchanged by the move.
+        zh: 确认会停止该任务、保留待回答决定并搬迁数字人的完整历史和仍存在的记忆；搬迁不改变项目文件夹。
+      - en: After the former workspace is deleted, the original desktop and IM histories remain visible, both chats continue, the decision can be answered and scheduled work can run. The person's page and retained memory remain usable after restart.
+        zh: 删除原工作区后，原桌面及 IM 历史仍可查看，两种对话均可继续，决定可回答且定时任务可执行；重启后数字人页面及保留记忆仍可用。
+    notes: Synthetic WeCom verifies the local application protocol path, not delivery through a live external IM service.
+  - id: people.settings.move-active-chat
+    title:
+      en: Count a running reply before moving at narrow width
+      zh: 窄屏搬家前显示正在回复的停止数量
+    verifies: [move, legible]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - A digital human has one active chat reply, one active task and a pending decision; the destination has long skill and connection names.
+    steps:
+      - At 375px width, open Change workspace and preview the destination, then cancel. Reopen and confirm the move.
+    expected:
+      - The preview counts two ongoing items that will stop, separately describes decisions and sessions moving, and keeps long names and actions readable without horizontal overflow.
+      - Cancellation leaves both active items running. Confirmation stops both, moves the pending decision and preserves conversation history.
+  - id: people.settings.legacy-move-repair
+    title:
+      en: Repair a legacy partial move automatically after upgrade
+      zh: 升级后自动修复旧版半搬家
+    verifies: [recovery]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      origin: [available, deleted]
+    preconditions:
+      - en: An isolated legacy fixture assigns a digital human to a destination while memory and old conversation environments still point to its former workspace. New conversation files already exist in the destination. The available-origin fixture includes distinct source-only and destination-only files and a conflicting filename; the deleted-origin fixture has lost its original memory directory.
+        zh: 隔离旧版资料中，数字人已归属目标工作区，但记忆与旧对话环境仍指向原工作区，目标中已有新对话文件；原工作区仍在的资料包含各自独有文件和同名冲突文件，原工作区已删除的资料已丢失原记忆目录。
+    steps:
+      - en: Start the upgraded application without manually repairing files or settings, open the person's old conversations, send a message and execute its scheduled work. Restart once more.
+        zh: 不手动修文件或设置，启动新版应用，打开数字人旧对话、发送消息并执行其定时任务，再重启一次。
+    expected:
+      - en: The person's page, old conversation continuation and scheduled work are usable without restoring the former workspace or requiring a user migration step.
+        zh: 无需恢复原工作区或用户手动迁移，数字人页面、旧对话续聊及定时任务即可使用。
+      - en: When the origin still exists, surviving memory and conversations are combined with the destination data, both versions of conflicting files survive and the source version has a .from-<origin-workspace-id> suffix. When the origin was deleted, lost memory is not presented as recovered.
+        zh: 原工作区仍存在时，保留记忆和对话与目标数据合并，冲突文件两个版本均保留，源版本带 .from-<原工作区ID> 后缀；原工作区已删除时，不把丢失记忆说成已找回。
+      - en: Subsequent restarts and deletion of an available former workspace do not remove the restored person's memory or history or make it unusable again.
+        zh: 后续重启及删除仍存在的原工作区，不会删掉已恢复数字人的记忆和历史，也不会使其再次不可用。
+    notes: Both origin variants use separate stopped-app legacy fixtures with app-owned records and files; native engine snapshots are not edited.
+  - id: people.settings.missing-workspace-recovery
+    title:
+      en: Continue retained conversations when their pinned workspace is missing
+      zh: 原绑定工作区不存在时继续保留的对话
+    verifies: [workspace]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: An isolated digital human belongs to an available workspace and has genuine native desktop and synthetic WeCom conversation history retained there. Its data_path is empty, but old session environments still point to a missing former workspace. Original memory has been deleted.
+        zh: 隔离数字人归属可用工作区，其中保留真实原生桌面对话及模拟企业微信历史；data_path 为空，但旧会话环境仍指向不存在的原工作区，原记忆已删除。
+    steps:
+      - en: Start the application without repairing files or settings, continue the original desktop and synthetic WeCom conversations and let its configured schedule run. Restart and continue the original desktop conversation again.
+        zh: 不修复文件或设置，启动应用，继续原桌面及模拟企业微信对话，并让配置的定时任务运行；重启后再次继续原桌面对话。
+    expected:
+      - en: Both original conversations continue in the person's current workspace with their original native session identities and prior user and assistant context. Used session environments are rewritten to the current workspace without asking the user to restore the former workspace.
+        zh: 两种原对话均在数字人当前工作区继续，保留原生会话身份及先前用户和助手上下文；已使用会话环境改写为当前工作区，无需用户恢复原工作区。
+      - en: Scheduled work succeeds and the original desktop conversation remains usable after restart. Already deleted memory is not presented as recovered.
+        zh: 定时工作执行成功，重启后原桌面对话仍可用；已删除记忆不被说成已恢复。
+    notes: The stopped isolated fixture changes only app-owned records and files; native engine snapshots are not edited. Synthetic WeCom verifies the local protocol path, not live external delivery.
   - id: people.settings.im-continue-instructions
     title:
       en: Continue an old Claude Code IM conversation in the client
@@ -51,7 +183,7 @@ scenarios:
     evidence: app-e2e
     mode: scripted
     automation: automated
-    requirements: [halo-sdk]
+    requirements: [local-claude-code]
     variants:
       binding: [legacy-reload, modern-reload, legacy-unchanged]
     preconditions:

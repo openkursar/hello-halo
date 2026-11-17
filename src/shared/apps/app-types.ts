@@ -199,8 +199,9 @@ export interface ExecutionEnvironment {
   spacePath: string
   workDir: string
   memoryDir: string
-  /** Connections resolved for this environment; a missing instance must not fall back by name. */
+  /** Current connection identities; replaced accounts are announced before continuing. */
   mcpBindings?: Record<string, string>
+  pendingConnectionNotice?: boolean
 }
 
 export interface ActivitySource {

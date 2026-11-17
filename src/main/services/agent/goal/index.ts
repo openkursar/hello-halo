@@ -20,6 +20,7 @@ import { getEngineCapabilities } from '../resolved-sdk'
 import { ensureSessionWarm, v2Sessions, getSessionEngineId, isSessionBusy } from '../session-manager'
 import type { V2SDKSession } from '../types'
 import { getGoalDraft, setGoalDraft } from './draft'
+import { assertSpaceOperationCurrent, runSpaceOperation } from '../space-maintenance'
 
 type GoalSession = V2SDKSession & Required<Pick<V2SDKSession, 'getGoal' | 'setGoal'>>
 
@@ -29,11 +30,17 @@ export function isGoalSupported(engineId?: EngineId): boolean {
 
 /** Current goal of a conversation, or null when it has none or the engine keeps no goals. */
 export async function getConversationGoal(spaceId: string, conversationId: string): Promise<Goal | null> {
+  return runSpaceOperation(spaceId, conversationId, signal => getConversationGoalInner(spaceId, conversationId, signal))
+}
+
+async function getConversationGoalInner(spaceId: string, conversationId: string, signal: AbortSignal): Promise<Goal | null> {
   const conversation = getConversation(spaceId, conversationId)
   if (!conversation) return null
   const engineId = await resolveConversationEngine(conversation, getSessionEngineId(conversationId), isSessionBusy(conversationId))
   if (!isGoalSupported(engineId)) return null
-  const { session } = await resolveGoalSession(spaceId, conversationId)
+  assertSpaceOperationCurrent(signal)
+  const { session } = await resolveGoalSession(spaceId, conversationId, signal)
+  assertSpaceOperationCurrent(signal)
   if (session) return session.getGoal()
   return getGoalDraft(conversationId)
 }
@@ -50,15 +57,21 @@ export async function setConversationGoal(
   conversationId: string,
   input: GoalInput | null
 ): Promise<Goal | null> {
+  return runSpaceOperation(spaceId, conversationId, signal => setConversationGoalInner(spaceId, conversationId, input, signal))
+}
+
+async function setConversationGoalInner(spaceId: string, conversationId: string, input: GoalInput | null, signal: AbortSignal): Promise<Goal | null> {
   const engineId = await resolveConversationEngine(getConversation(spaceId, conversationId), getSessionEngineId(conversationId), isSessionBusy(conversationId))
   assertGoalSupported(engineId)
   const normalized = input ? prepareGoalInput(input, engineId) : null
-  const { session, persisted } = await resolveGoalSession(spaceId, conversationId)
+  assertSpaceOperationCurrent(signal)
+  const { session, persisted } = await resolveGoalSession(spaceId, conversationId, signal)
+  assertSpaceOperationCurrent(signal)
   if (!session && persisted) {
     console.error(`[Agent][${conversationId}] Goal not set: the conversation's session could not be started`)
     throw new Error('The conversation session is not available; try again in a moment')
   }
-  return applyUserGoal(spaceId, conversationId, session, persisted, normalized)
+  return applyUserGoal(spaceId, conversationId, session, persisted, normalized, signal)
 }
 
 /**
@@ -107,9 +120,11 @@ async function applyUserGoal(
   conversationId: string,
   session: GoalSession | null,
   persisted: boolean,
-  input: GoalInput | null
+  input: GoalInput | null,
+  signal?: AbortSignal,
 ): Promise<Goal | null> {
   const goal = session ? await session.setGoal(input) : input ? draftFrom(input) : null
+  signal?.throwIfAborted()
   setGoalDraft(conversationId, persisted ? null : goal)
 
   console.log(
@@ -135,7 +150,8 @@ function assertGoalSupported(engineId?: EngineId): void {
  */
 async function resolveGoalSession(
   spaceId: string,
-  conversationId: string
+  conversationId: string,
+  signal: AbortSignal,
 ): Promise<{ session: GoalSession | null; persisted: boolean }> {
   const conversation = getConversation(spaceId, conversationId)
   // Only space conversations have a goal. Digital-human and IM sessions share
@@ -151,7 +167,8 @@ async function resolveGoalSession(
   if (!session) {
     // Shares any creation already in flight, so a set racing the
     // conversation-switch warm-up lands on the session that warm-up creates.
-    await ensureSessionWarm(spaceId, conversationId)
+    await ensureSessionWarm(spaceId, conversationId, signal)
+    assertSpaceOperationCurrent(signal)
     session = liveGoalSession(conversationId)
   }
   return { session, persisted }

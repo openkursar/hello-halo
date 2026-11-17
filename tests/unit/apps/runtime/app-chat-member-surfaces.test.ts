@@ -321,6 +321,7 @@ vi.mock('../../../../src/main/apps/manager', () => ({
 vi.mock('../../../../src/main/apps/runtime/execution-environment', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/apps/runtime/execution-environment')>()),
   resolveChatEnvironment: () => environment,
+  resolveChatRecordEnvironment: () => environment,
   validateExecutionEnvironment: vi.fn(),
   resolveExecutionEnvironment: () => environment,
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy:${appId}:${runId}`,
@@ -698,7 +699,7 @@ describe('memory context across session lifecycles', () => {
     expect(mountedSurfaces().systemPrompt).toContain(`Your History author tag is \`${tag}\``)
     expect(mountedSurfaces().systemPrompt).toContain('never invent authors for old entries')
     expect(send.mock.calls.flat().join('\n')).not.toMatch(/Running right now|No other instance|You are `team#/)
-    expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true })
+    expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true, maintenanceSignal: expect.any(AbortSignal) })
   })
 
   it('gives a fork its destination author even when resuming the source transcript', async () => {
@@ -762,7 +763,7 @@ describe('memory context across session lifecycles', () => {
       await sendAppChatMessage(turn)
       expect(mountedSurfaces().systemPrompt).toMatch(/Your History author tag is `im#[a-f0-9]{4}`/)
       expect(mountedSurfaces().systemPrompt).not.toMatch(/Your History author tag is `im-guest#/)
-      expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true })
+      expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true, maintenanceSignal: expect.any(AbortSignal) })
       expect(send.mock.calls.map(([message]) => message)).toEqual(['answer', 'answer'])
       expect(send.mock.calls.every(([, onFailure]) => typeof onFailure === 'function')).toBe(true)
     } finally {
@@ -860,7 +861,7 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
     expect(options.disallowedTools ?? []).not.toContain('Bash')
     expect(options.permissionMode).toBeUndefined()
     // A session records calls only if it was built to.
-    expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true, creationContext: 'delegation-audit' })
+    expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true, creationContext: 'delegation-audit', maintenanceSignal: expect.any(AbortSignal) })
   })
 
   it('reads what is installed only when the switches leave the answer to it', async () => {

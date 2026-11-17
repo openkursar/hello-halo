@@ -17,6 +17,7 @@
  */
 
 import { emitAgentEvent } from './events'
+import { isSpaceUnderMaintenance } from './space-maintenance'
 
 // ============================================
 // Types
@@ -93,6 +94,7 @@ export interface RecoverablePendingQuestion {
 }
 
 interface PendingQuestionEntry {
+  spaceId: string
   resolve: (answers: Record<string, string>) => void
   reject: (reason?: unknown) => void
   /** Owning conversation, for recovery lookups by conversationId. */
@@ -166,6 +168,23 @@ export function rejectAllQuestions(): void {
   }
 }
 
+export function rejectQuestionsForConversation(conversationId: string): void {
+  for (const [id, entry] of pendingQuestions) {
+    if (entry.conversationId === conversationId) rejectQuestion(id, 'Workspace maintenance stopped this work')
+  }
+}
+
+export function getQuestionConversationsForSpace(spaceId: string): string[] {
+  return [...new Set([...pendingQuestions.values()].filter(entry => entry.spaceId === spaceId).map(entry => entry.conversationId))]
+}
+
+/** Cancels only questions whose owning engine session belongs to this space. */
+export function rejectQuestionsForSpace(spaceId: string): void {
+  for (const [id, entry] of pendingQuestions) {
+    if (entry.spaceId === spaceId) rejectQuestion(id, 'Workspace maintenance stopped this work')
+  }
+}
+
 // ============================================
 // Permission Handler Factory
 // ============================================
@@ -217,6 +236,7 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
     }
 
     const { spaceId, conversationId } = deps
+    if (isSpaceUnderMaintenance(spaceId)) return { behavior: 'deny', message: 'Workspace maintenance stopped this work.' }
     const id = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const questions = input.questions as AskUserQuestionItem[] | undefined
     if (!Array.isArray(questions) || questions.length < 1 || questions.length > 4
@@ -230,7 +250,7 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
     const startedAt = Date.now()
     let removeAbortListener: (() => void) | undefined
     const answersPromise = new Promise<Record<string, string>>((resolve, reject) => {
-      pendingQuestions.set(id, { resolve, reject, conversationId, questions })
+      pendingQuestions.set(id, { resolve, reject, spaceId, conversationId, questions })
 
       // Clean up on abort (user stops generation)
       if (options.signal) {
