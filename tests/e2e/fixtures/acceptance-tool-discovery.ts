@@ -2,8 +2,34 @@ import type { ModelRequest, ModelReply, ModelToolCall } from './acceptance-model
 
 export type ModelToolPlan = { call: ModelToolCall } | { error: string }
 
+interface DiscoveryEntry {
+  name: string
+  version: string
+  description?: string
+  input_schema?: unknown
+  already_loaded?: boolean
+}
+
 function matches(actual: string, requested: string): boolean {
   return actual === requested || actual.endsWith(`__${requested}`)
+}
+
+/** The SDK answers with `tools`; the native engine answers with `targets` reached through CallTool. */
+function discoveryEntries(payload: unknown): DiscoveryEntry[] | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const body = payload as { tools?: unknown; targets?: unknown }
+  if (Array.isArray(body.tools)) return body.tools as DiscoveryEntry[]
+  if (!Array.isArray(body.targets)) return undefined
+  return body.targets.map(item => {
+    const target = (item ?? {}) as { tool?: unknown; version?: unknown; description?: unknown; arguments_schema?: unknown; already_loaded?: unknown }
+    return {
+      name: target.tool as string,
+      version: target.version as string,
+      description: target.description as string | undefined,
+      input_schema: target.arguments_schema,
+      already_loaded: target.already_loaded === true ? true : undefined,
+    }
+  })
 }
 
 /** A scripted model reads definitions from its search result, never from a private tool registry. */
@@ -27,24 +53,24 @@ export function planModelTool(request: ModelRequest, name: string, input: Record
   }
   const current = request.toolResults.find(item => item.id === fullId && searchCalls.has(item.id)) ?? request.toolResults.find(item => item.id === searchId && searchCalls.has(item.id))
   if (current?.error) return { error: `ToolSearch failed for ${name}: ${current.text}` }
-  const known = new Map<string, Record<string, unknown>>()
-  const latest = new Map<string, Record<string, unknown>>()
+  const known = new Map<string, DiscoveryEntry>()
+  const latest = new Map<string, DiscoveryEntry>()
   for (const receipt of request.toolResults) {
     if (!searchCalls.has(receipt.id) || receipt.error) continue
-    let payload: { tools?: unknown[] }
+    let payload: unknown
     try { payload = JSON.parse(receipt.text) } catch {
       if (receipt === current) return { error: `ToolSearch did not return JSON definitions for ${name}` }
       continue
     }
-    if (!Array.isArray(payload?.tools)) {
+    const entries = discoveryEntries(payload)
+    if (!entries) {
       if (receipt === current) return { error: `ToolSearch did not return definitions for ${name}` }
       continue
     }
-    const matching = payload.tools.filter(entry => entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string' && matches((entry as { name: string }).name, name))
+    const matching = entries.filter(entry => entry && typeof entry === 'object' && typeof entry.name === 'string' && matches(entry.name, name))
     if (receipt === current && matching.length === 0) return { error: `Expected one discovered ${name}; received 0` }
-    for (const entry of payload.tools) {
-      if (!entry || typeof entry !== 'object') continue
-      const tool = entry as Record<string, unknown>
+    for (const tool of entries) {
+      if (!tool || typeof tool !== 'object') continue
       if (typeof tool.name !== 'string' || !matches(tool.name, name)) continue
       if (typeof tool.version !== 'string') return { error: `Invalid discovered version for ${name}` }
       latest.set(tool.name, tool)
