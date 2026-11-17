@@ -13,9 +13,10 @@ import { buildCanvasContext } from './canvas-context'
 import { cacheConversation, cacheLoadedThoughts } from './cache'
 import { recoverSessionState } from './recover'
 import { beginTurn, endTurnWithError, finishedTurnState } from './turn'
-import { createPendingUserMessage, joinFromAnchor, reconcileTranscript, rereadAnchor } from './reconcile'
+import { createPendingUserMessage, isPendingMessage, joinFromAnchor, reconcileTranscript, rereadAnchor } from './reconcile'
 import type { ChatBackend, SendRequest, BackendContext, OpenOptions } from './types'
 import { noteTurnEnded } from '../../../services/home-telemetry'
+import { mergeArrivingMessages } from '../../../utils/live-inputs'
 
 function metaFromConversation(conversation: Conversation): ConversationMeta {
   return {
@@ -71,7 +72,12 @@ async function load(ctx: BackendContext, spaceId: string, conversationId: string
 async function open(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }, options?: OpenOptions): Promise<void> {
   if (!ctx.get().conversationCache.has(conversationId)) await load(ctx, spaceId, conversationId)
 
+  const cached = ctx.get().conversationCache.get(conversationId)
   await recoverSessionState(ctx, conversationId)
+  if (cached && ctx.get().sessions.get(conversationId)?.isGenerating) {
+    const anchor = cached.messages.findLast(message => !isPendingMessage(message))?.id
+    await refresh(ctx, { spaceId, conversationId }, anchor)
+  }
   if (options?.warm === false) return
 
   // A ready V2 session means the first message does not pay the cold start.
@@ -94,13 +100,8 @@ function merged(state: { conversationCache: Map<string, Conversation> }, read: C
   return { ...read, messages: reconcileTranscript(cached.messages, read.messages, { dropUnconfirmed }).messages }
 }
 
-/**
- * Re-read after a finished turn: only messages from the turn's own user
- * message on cross the process boundary; the rest is what the cache holds.
- */
-async function readFinishedTurn(ctx: BackendContext, spaceId: string, conversationId: string): Promise<Conversation | null> {
-  const held = ctx.get().conversationCache.get(conversationId)
-  const fromMessageId = held ? rereadAnchor(held.messages) : undefined
+/** Read the changed tail; the view already holds everything before its anchor. */
+async function readFromAnchor(ctx: BackendContext, spaceId: string, conversationId: string, fromMessageId?: string): Promise<Conversation | null> {
   const response = await api.getConversation(spaceId, conversationId, fromMessageId ? { fromMessageId } : undefined)
   if (!response.success || !response.data) return null
   const { messagesFrom, ...read } = response.data as Conversation & { messagesFrom?: string }
@@ -112,15 +113,31 @@ async function readFinishedTurn(ctx: BackendContext, spaceId: string, conversati
   return whole.success && whole.data ? whole.data as Conversation : null
 }
 
-async function refresh(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }): Promise<void> {
+async function refresh(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }, fromMessageId?: string): Promise<void> {
+  const held = ctx.get().conversationCache.get(conversationId)
+  const turn = ctx.get().sessions.get(conversationId)
   try {
-    const response = await api.getConversation(spaceId, conversationId)
-    if (!response.success || !response.data) return
-    const updated = response.data as Conversation
-    ctx.set((state) => ({
-      conversationCache: cacheConversation(state, merged(state, updated, !state.sessions.get(conversationId)?.isGenerating)),
-      conversationLoadErrors: withLoadError(state, conversationId, null),
-    }))
+    const read = await readFromAnchor(ctx, spaceId, conversationId, fromMessageId)
+    if (!read) return
+    ctx.set((state) => {
+      const cached = state.conversationCache.get(conversationId)
+      const session = state.sessions.get(conversationId)
+      if (held && !cached) return state
+      if ((session?.turnId ?? 0) !== (turn?.turnId ?? 0) || !!session?.isGenerating !== !!turn?.isGenerating) return state
+      let updated = merged(state, read, !session?.isGenerating)
+      if (held && cached && cached.messages !== held.messages) {
+        // Input events can overtake an earlier transcript response.
+        const known = new Set(held.messages.map(message => message.id))
+        const arrivals = cached.messages.filter(message => !known.has(message.id)
+          && (message.role === 'system' || message.source === 'injection' || message.source === 'push'))
+        const messages = mergeArrivingMessages(updated.messages, arrivals)
+        updated = { ...updated, messages, messageCount: updated.messageCount + messages.length - updated.messages.length }
+      }
+      return {
+        conversationCache: cacheConversation(state, updated),
+        conversationLoadErrors: withLoadError(state, conversationId, null),
+      }
+    })
   } catch (error) {
     console.error('[ChatStore] Failed to refresh conversation:', error)
   }
@@ -278,7 +295,8 @@ async function inject(ctx: BackendContext, conversationId: string, message: stri
 async function settleTurn(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }, turnId: number): Promise<void> {
   const { set } = ctx
   try {
-    const read = await readFinishedTurn(ctx, spaceId, conversationId)
+    const held = ctx.get().conversationCache.get(conversationId)
+    const read = await readFromAnchor(ctx, spaceId, conversationId, held ? rereadAnchor(held.messages) : undefined)
     if (read) {
       // One commit for cache, metadata and session, so the streamed turn is
       // replaced by its persisted form without a frame in between.

@@ -6,7 +6,8 @@ import { test, expect, acceptance, readAcceptanceConversation, sendAcceptanceMes
 import { createAutomationToolGate } from '../fixtures/acceptance-automation'
 import { conversationRow, readManagedConversation, seedManagedConversation, seedManagedSpace } from '../fixtures/acceptance-management'
 import type { ModelReply, ModelRequest } from '../fixtures/acceptance-model'
-import { navigateToChat, navigateToSettings } from '../fixtures/helpers'
+import { navigateToChat, navigateToSettings, setTheme } from '../fixtures/helpers'
+import { resizeFileWindow } from '../fixtures/acceptance-file-navigation'
 
 test.setTimeout(120000)
 
@@ -91,6 +92,8 @@ test('another conversation receives one attributed message at its next tool boun
     expect(requests.filter(item => item.side === 'target')).toHaveLength(1)
 
     await openInteropConversation(window, target.title)
+    await expect(window.getByText(`From @${sender.title}:`, { exact: true })).toBeVisible()
+    await expect(window.getByText(summary, { exact: true })).toBeVisible()
     gate.release()
     await expect(window.locator('.message-assistant').last()).toContainText(targetAnswer)
     await waitForAcceptanceIdle(window, target.id)
@@ -126,6 +129,113 @@ test('another conversation receives one attributed message at its next tool boun
     await info.attach('conversation-delivery-boundary', { body: JSON.stringify({ sender: sender.id, target: target.id, control: control.id, sourceTurn, targetTurn, note, requests, issues }, null, 2), contentType: 'application/json' })
   }
 })
+
+for (const recipient of ['visible', 'cached-background', 'unopened'] as const) {
+  test(`a ${recipient} recipient shows the incoming source before its new turn ends`, acceptance('assistant-tools.interop.opener', { recipient }), async ({ acceptanceApp, model, window }, info) => {
+    await navigateToChat(window)
+    const sender = await seedManagedConversation(window, 'halo-temp', 'Review source', [])
+    const target = await seedManagedConversation(window, 'halo-temp', 'Review recipient', [{ role: 'assistant', content: 'Earlier work stays visible.' }])
+    const control = await seedManagedConversation(window, 'halo-temp', 'Unaddressed evidence', [{ role: 'user', content: 'Leave this conversation unchanged.' }])
+    const sending = createAutomationToolGate(acceptanceApp.profile, 'opener-send')
+    const working = createAutomationToolGate(acceptanceApp.profile, 'opener-work')
+    const note = `Review supplied context ${randomUUID()}`
+    const summary = 'Review the supplied context'
+    const question = `Send this peer context to ${target.id}: ${note}`
+    const answer = 'The attributed peer request is complete.'
+    const sourceAnswer = 'The context was delivered.'
+    const requests: Array<{ side: string; request: ModelRequest }> = []
+    const issues: ScriptIssue[] = []
+    model.respond(request => {
+      if (request.text.includes(question)) {
+        requests.push({ side: 'source', request })
+        if (request.toolResults.some(result => result.id === 'send-opener')) return { text: sourceAnswer }
+        if (request.toolResults.some(result => result.id === 'send-gate')) return callTool(request, 'conversation_send', { target: target.id, message: note, summary, waitForReply: false }, 'send-opener', issues)
+        return callTool(request, 'Bash', { command: sending.command, timeout: 60000, run_in_background: false }, 'send-gate', issues)
+      }
+      requests.push({ side: 'target', request })
+      if (request.toolResults.some(result => result.id === 'work-gate')) return { text: answer }
+      return callTool(request, 'Bash', { command: working.command, timeout: 60000, run_in_background: false }, 'work-gate', issues)
+    })
+    try {
+      await navigateToSettings(window)
+      if (recipient === 'cached-background') await openInteropConversation(window, target.title)
+      await openInteropConversation(window, sender.title)
+      await sendAcceptanceMessage(window, question)
+      await expect.poll(sending.started, { timeout: 30000 }).toBe(true)
+      if (recipient === 'visible') await openInteropConversation(window, target.title)
+      await window.evaluate(() => {
+        const state = globalThis as unknown as { halo: HaloAPI; openerArrivals?: unknown[] }
+        state.openerArrivals = []
+        state.halo.onAgentInputArrived(event => state.openerArrivals!.push(event))
+      })
+      sending.release()
+      await expect.poll(working.started, { timeout: 30000 }).toBe(true)
+      if (recipient !== 'visible') await openInteropConversation(window, target.title)
+      const sourceLabel = window.getByText(`From @${sender.title}:`, { exact: true })
+      await expect(sourceLabel).toBeVisible()
+      await expect(window.getByText(summary, { exact: true })).toBeVisible()
+      const stored = await readAcceptanceConversation(window, 'halo-temp', target.id)
+      const deliveries = stored.messages.filter(message => message.content === note)
+      expect(deliveries).toHaveLength(1)
+      const delivery = deliveries[0]
+      expect(delivery).toMatchObject({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: sender.id, fromConversationTitle: sender.title, summary } })
+      const card = window.locator(`[data-message-id="${delivery.id}"]`)
+      await expect(card).toHaveCount(1)
+      await expect.poll(async () => {
+        const state = await window.evaluate(id => (window as unknown as { halo: HaloAPI }).halo.getSessionState(id), target.id)
+        return (state.data as { isActive?: boolean })?.isActive
+      }).toBe(true)
+      expect(requests.filter(item => item.side === 'target')).toHaveLength(1)
+      const received = await window.evaluate(() => (globalThis as unknown as { openerArrivals: unknown[] }).openerArrivals)
+      if (recipient === 'visible') {
+        expect(received).toContainEqual(expect.objectContaining({ conversationId: target.id, live: false, messages: [expect.objectContaining({ id: delivery.id, content: note, source: 'cross-conversation' })] }))
+        for (const width of [1200, 390]) {
+          await resizeFileWindow(acceptanceApp.app, window, width, 800)
+          for (const theme of ['dark', 'light'] as const) {
+            await setTheme(window, theme)
+            await expect(sourceLabel).toBeVisible()
+            await window.mouse.move(width - 12, 90)
+            await expect.poll(() => window.getByRole('tooltip').evaluateAll(elements => elements.filter(element => getComputedStyle(element).opacity !== '0').length)).toBe(0)
+            await window.evaluate(async () => {
+              await Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity)
+                .map(animation => animation.finished.catch(() => undefined)))
+            })
+            await window.screenshot({ path: info.outputPath(`opener-running-${width}-${theme}.png`), scale: 'css' })
+          }
+        }
+        await resizeFileWindow(acceptanceApp.app, window, 1200, 800)
+      }
+      if (!await card.getByText(note, { exact: true }).isVisible()) await card.getByRole('button').first().click()
+      await expect(card.getByText(note, { exact: true })).toBeVisible()
+      await expect(card.getByText("sent by that conversation's AI", { exact: true })).toBeVisible()
+      await card.getByRole('button', { name: sender.title, exact: true }).click()
+      await expect(window.getByRole('banner').getByText(sender.title, { exact: true })).toBeVisible()
+      await openInteropConversation(window, target.title)
+      await expect(sourceLabel).toBeVisible()
+      working.release()
+      await expect(window.locator('.message-assistant').last()).toContainText(answer)
+      await waitForAcceptanceIdle(window, target.id)
+      await waitForAcceptanceIdle(window, sender.id)
+      await openInteropConversation(window, sender.title)
+      await openInteropConversation(window, target.title)
+      await expect(window.locator(`[data-message-id="${delivery.id}"]`)).toHaveCount(1)
+      const finished = await readAcceptanceConversation(window, 'halo-temp', target.id)
+      expect(finished.messages.filter(message => message.content === note)).toEqual([delivery])
+      expect(finished.messages.filter(message => message.role === 'user')).toEqual([])
+      expect((await readManagedConversation(window, 'halo-temp', control.id)).messages).toEqual(control.messages)
+      const targetRequests = requests.filter(item => item.side === 'target')
+      expect(targetRequests).toHaveLength(2)
+      expect(targetRequests[0].request.text).toContain(`Message from another conversation ("${sender.title}"), not from your user.`)
+      expect(targetRequests[0].request.text.split(note)).toHaveLength(2)
+      expect(issues).toEqual([])
+      expect(model.exchanges).toHaveLength(5)
+      await info.attach('opener-arrival-evidence', { body: JSON.stringify({ recipient, sender: sender.id, target: target.id, delivery, received, requests, issues }, null, 2), contentType: 'application/json' })
+    } finally {
+      sending.release()
+      working.release()
+    }
+  })
+}
 
 test('the real conversation tool lists and reads its own workspace while rejecting missing and foreign targets', acceptance('assistant-tools.interop.read'), async ({ model, window }, info) => {
   await navigateToChat(window)

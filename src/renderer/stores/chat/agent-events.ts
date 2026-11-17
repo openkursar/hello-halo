@@ -6,7 +6,7 @@ import { api, createEmptySessionState } from './internal'
 import type { AgentEventBase, Thought, ToolCall } from './internal'
 import { nextTextBlockVersion } from './text-block-version'
 import { selectViewedConversationId } from './active'
-import { conversationKind, backendFor } from './backend'
+import { conversationKind, backendFor, openOnce } from './backend'
 import { startedTurnState } from './backend/turn'
 import { noteTurnEnded } from '../../services/home-telemetry'
 import { acceptsDetailEvent, releaseTurnDetail } from './detail-retention'
@@ -409,8 +409,12 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentInputArrived' | 'hand
     // A turn this page did not send (another client, another conversation
     // delivering into this one) has its input written to the transcript only:
     // read it in so the message it answers is on screen while it streams.
-    if (!startedHere && conversationKind(conversationId) === 'digital-human' && get().conversationCache.has(conversationId)) {
-      void backendFor(conversationId).refresh({ set, get }, { spaceId, conversationId })
+    if (!startedHere && get().conversationCache.has(conversationId)) {
+      if (conversationKind(conversationId) === 'digital-human') {
+        void backendFor(conversationId).refresh({ set, get }, { spaceId, conversationId })
+      } else if (conversationKind(conversationId) === 'space' && api.isConversationDetailRetained(conversationId)) {
+        void openOnce({ set, get }, { spaceId, conversationId }, { warm: false })
+      }
     }
   },
 
