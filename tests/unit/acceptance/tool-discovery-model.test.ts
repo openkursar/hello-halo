@@ -32,6 +32,17 @@ describe('scripted model tool discovery', () => {
       .toMatchObject({ call: { name: 'CallTool', id: 'work' } })
   })
 
+  it('reads the native engine targets the same way as SDK tools', () => {
+    const native = (targets: unknown[]) => ({ id: 'work-search', text: JSON.stringify({ invoke_via: 'CallTool', targets }), error: false })
+    const target = { tool: definition.name, version: 'abc123', description: definition.description, arguments_schema: definition.input_schema }
+    expect(planModelTool(request(gateways, [native([target])]), 'lookup', { id: '42' }, 'work'))
+      .toEqual({ call: { id: 'work', name: 'CallTool', input: { tool: definition.name, arguments: '{"id":"42"}' } } })
+    const issues: string[] = []
+    const incomplete = { tool: definition.name, version: 'abc123', description: definition.description }
+    replyWithModelTool(request(gateways, [native([incomplete])]), 'lookup', {}, 'work', issues)
+    expect(issues).toHaveLength(1)
+  })
+
   it('does not take an unrelated result as its discovery receipt', () => {
     expect(planModelTool(request(gateways, [result('other', [definition])]), 'lookup', {}, 'work'))
       .toMatchObject({ call: { name: 'ToolSearch' } })
