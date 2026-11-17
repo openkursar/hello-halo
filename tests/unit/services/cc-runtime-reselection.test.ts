@@ -32,8 +32,8 @@ vi.mock('../../../src/renderer/api', () => ({ api: {} }))
 import { getCcRuntimeStatus } from '../../../src/main/services/cc-runtime'
 import { selectCcRuntimeForUse } from '../../../src/main/controllers/cc-runtime.controller'
 import { getEngineAvailability } from '../../../src/main/services/agent/engine-availability'
-import { CcInstallationList } from '../../../src/renderer/components/settings/cc-runtime/InstallationList'
-import { CcDownloadPanel } from '../../../src/renderer/components/settings/cc-runtime/DownloadPanel'
+import { RuntimeInstallationList } from '../../../src/renderer/components/settings/external-runtime/InstallationList'
+import { RuntimeDownloadPanel } from '../../../src/renderer/components/settings/external-runtime/DownloadPanel'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -51,10 +51,11 @@ describe('explicit reselection of an automatic Claude Code path', () => {
     expect((await getEngineAvailability(['anthropic']))[0]).toMatchObject({ available: false, reason: expect.stringContaining('Select an installation once in the Halo desktop app under Settings > Advanced') })
     expect(state.check).not.toHaveBeenCalled()
     expect(state.launch).not.toHaveBeenCalled()
-    const list = renderToStaticMarkup(createElement(CcInstallationList, { installations: before.installations, selectedPath: before.selectedPath, onSelect: vi.fn(), onCheck: vi.fn() }))
+    const list = renderToStaticMarkup(createElement(RuntimeInstallationList, { runtimeId: 'anthropic', installations: before.installations, selectedPath: before.selectedPath, onSelect: vi.fn(), onCheck: vi.fn() }))
     expect(list).toContain('Use this version')
     expect(list).not.toContain('disabled=""')
-    const download = renderToStaticMarkup(createElement(CcDownloadPanel, {
+    const download = renderToStaticMarkup(createElement(RuntimeDownloadPanel, {
+      runtimeId: 'anthropic',
       status: { ...before, installations: [{ ...before.installations[0], version: before.recommendedVersion }] },
       busy: false, installing: false, onSelect: vi.fn(), onInstall: vi.fn(), onRefresh: vi.fn(), onFindLocal: vi.fn(),
     }))

@@ -137,14 +137,24 @@ function resolveAsarUnpack(base) {
 }
 
 const base = loadBaseConfig()
-const { prepareDistributionStaging } = require('./scripts/lib/distribution-staging.cjs')
 const declaredResourceDirectories = product.content.trayIconDir ? [product.content.trayIconDir.replace(/^\.\//, '').replace(/\/$/, '')] : []
-const distributionStage = prepareDistributionStaging(ROOT, resolveProviderFiles(), declaredResourceDirectories)
-process.once('exit', () => fs.rmSync(distributionStage, { recursive: true, force: true }))
+
+// Staging copies the production dependency tree, so it runs only when a packager
+// reads the app directory, not when a script loads this file for product fields.
+let distributionStage
+function distributionDirectory() {
+  if (!distributionStage) {
+    const { prepareDistributionStaging } = require('./scripts/lib/distribution-staging.cjs')
+    const stage = prepareDistributionStaging(ROOT, resolveProviderFiles(), declaredResourceDirectories)
+    process.once('exit', () => fs.rmSync(stage, { recursive: true, force: true }))
+    distributionStage = stage
+  }
+  return distributionStage
+}
 
 module.exports = {
   ...base,
-  directories: { ...base.directories, app: distributionStage },
+  get directories() { return { ...base.directories, app: distributionDirectory() } },
   asarUnpack: resolveAsarUnpack(base),
   productName: field('name'),
   protocols: [{ name: field('name'), schemes: [product.content.deepLinkScheme || 'halo'] }],
