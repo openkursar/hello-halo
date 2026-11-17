@@ -396,7 +396,8 @@ const { app, environment } = vi.hoisted(() => {
   }
 })
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: () => ({ getApp: () => app, getAppWorkDir: () => '/tmp/halo-matrix/app' }),
+  // A run reads the installed record, so overrides live there, not only on the caller's copy.
+  getAppManager: () => ({ getApp: () => ({ ...app, userOverrides: { disabledTools: state.appDisabledTools } }), getAppWorkDir: () => '/tmp/halo-matrix/app' }),
 }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveChatEnvironment: () => environment,
