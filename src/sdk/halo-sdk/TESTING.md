@@ -59,9 +59,25 @@ remain visible and be reported separately from regressions; neither skipping the
 nor historical passing subsets establishes current completion. Compiled
 `validation/*.test.mjs` checks are separate and must still be selected below.
 
-`npm run build` and npm's `prepack` rebuild `dist/`; coordinate shared outputs with
-other work. Test against a fixed source revision or recorded dirty snapshot.
-Do not reuse an old build after changing its inputs.
+`npm run build` and npm's `prepack` build into a same-level staging directory and
+publish `dist/` only after the full build succeeds. A failed build keeps the
+previous distribution. Publication uses two directory renames with rollback;
+it is not an atomic switch for other processes reading `dist/`. Use an isolated
+SDK checkout and distribution when another task must keep reading throughout
+publication. Concurrent builders serialize on `.build-lock/held`; its unique
+owner token prevents an expired owner's cleanup from deleting a successor.
+An unknown or legacy lock is left for inspection. Confirm the recorded process
+and its child builds have stopped before manually removing a legacy lock.
+
+Install-only flows use `npm run build:if-missing`. The dependency-free
+`node scripts/build.mjs --check-distribution` command validates exported entries,
+retained runtime files, declarations, assets and native checksums without
+rebuilding. The host install helper uses this same check. `npm run build:native`
+also works without JavaScript output for source tests; when a full distribution
+exists, it preserves that output and refreshes the native asset manifest.
+`npm run clean` remains explicitly destructive; do not run it while another task
+uses the distribution. Test against a fixed source revision or recorded dirty
+snapshot. Do not reuse an old build after changing its inputs.
 Source tests that enter the native facade require a current `dist/native` build.
 The source loader compares the native source fingerprint with that build's
 manifest and refuses a stale library; rebuild after changing native inputs.

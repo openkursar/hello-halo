@@ -2,6 +2,9 @@ node_modules/
 /bindings/node/harness/generated/
 /bindings/node/native/generated/
 dist/
+.dist-staging-*/
+.dist-previous-*/
+.build-lock/
 *.tsbuildinfo
 .DS_Store
 coverage/

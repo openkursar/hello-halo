@@ -77,6 +77,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:if-missing": "node scripts/build.mjs --if-missing",
     "dev": "node scripts/generate-native-text.mjs && tsc --watch",
     "prepack": "npm run build",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",

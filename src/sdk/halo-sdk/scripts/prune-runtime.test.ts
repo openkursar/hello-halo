@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { analyzeRuntime, pruneRuntime } from './prune-runtime.mjs';
@@ -53,6 +53,18 @@ describe('distributed SDK runtime closure', () => {
       await expect(access(join(directory, file))).resolves.toBeUndefined();
     }
     expect((await analyzeRuntime(directory)).removed).toEqual([]);
+  });
+
+  it('prunes a staging directory with the same package-relative report paths as dist', async () => {
+    const directory = await fixture();
+    const staging = join(directory, '.dist-staging-test');
+    await rename(join(directory, 'dist'), staging);
+    const report = await pruneRuntime(directory, { distDirectory: staging });
+    expect(report.removed.map((file: { path: string }) => file.path)).toEqual(['dist/retired.js', 'dist/retired.js.map']);
+    expect(report.runtime.every((file: { path: string }) => file.path.startsWith('dist/'))).toBe(true);
+    await expect(access(join(staging, 'retired.js'))).rejects.toThrow();
+    expect(JSON.parse(await readFile(join(staging, 'runtime-manifest.json'), 'utf8')).removed
+      .map((file: { path: string }) => file.path)).toEqual(['dist/retired.js', 'dist/retired.js.map']);
   });
 
   it('adds statically named createRequire dependencies to the runtime roots', async () => {

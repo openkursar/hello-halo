@@ -74,7 +74,7 @@ test('failed builds and source changes during compilation leave no valid stamp',
   await assert.rejects(verifyBuild(root), /No controlled acceptance build/)
 })
 
-test('SDK source and compiled distribution are separate identities even without a private Git checkout', async context => {
+test('SDK source edits stay provenance while the compiled distribution is the app identity', async context => {
   const { root, write } = await fixture(context)
   await write('node_modules/@hello-halo/agent-sdk/package.json', JSON.stringify({ name: '@hello-halo/agent-sdk', version: '1.0.0' }))
   await write('node_modules/@hello-halo/agent-sdk/src/index.ts', 'source')
@@ -84,14 +84,30 @@ test('SDK source and compiled distribution are separate identities even without 
   assert.equal(record.sdk.revision, null)
   assert.equal(record.sdk.dirty, null)
   assert.equal(record.sdk.provenance, 'distribution-without-revision')
+  assert.match(record.sdk.descriptor.sha256, /^[0-9a-f]{64}$/)
   await write('node_modules/@hello-halo/agent-sdk/dist/index.js', 'changed compiled')
-  await assert.rejects(verifyBuild(root), /SDK source, revision or compiled/)
+  await assert.rejects(verifyBuild(root), /SDK compiled distribution or package descriptor/)
   await write('node_modules/@hello-halo/agent-sdk/dist/index.js', 'compiled')
   await write('node_modules/@hello-halo/agent-sdk/src/index.ts', 'changed source')
-  await assert.rejects(verifyBuild(root), /SDK source, revision or compiled/)
+  assert.equal((await verifyBuild(root)).id, record.id)
+  await write('node_modules/@hello-halo/agent-sdk/package.json', JSON.stringify({ name: '@hello-halo/agent-sdk', version: '1.0.1' }))
+  await assert.rejects(verifyBuild(root), /SDK compiled distribution or package descriptor/)
+  await write('node_modules/@hello-halo/agent-sdk/package.json', JSON.stringify({ name: '@hello-halo/agent-sdk', version: '1.0.0' }))
+  assert.equal((await verifyBuild(root)).id, record.id)
 })
 
-test('SDK Rust compiler output is excluded without hiding core or binding source changes', async context => {
+test('SDK source edits during the build leave the compiled distribution valid', async context => {
+  const { root, write, build } = await fixture(context)
+  const sdk = 'node_modules/@hello-halo/agent-sdk'
+  await write(`${sdk}/package.json`, JSON.stringify({ name: '@hello-halo/agent-sdk', version: '1.0.0' }))
+  await write(`${sdk}/src/index.ts`, 'source')
+  await write(`${sdk}/dist/index.js`, 'compiled')
+  await write('build.cjs', build + `fs.appendFileSync('${sdk}/src/index.ts','// changed during build');`)
+  const record = await buildApplication(root)
+  assert.equal((await verifyBuild(root)).id, record.id)
+})
+
+test('SDK compiler output and source changes are excluded while the distribution stays tracked', async context => {
   const { root, write, build } = await fixture(context)
   const sdk = 'node_modules/@hello-halo/agent-sdk'
   await write(`${sdk}/package.json`, JSON.stringify({ name: '@hello-halo/agent-sdk', version: '1.0.0' }))
@@ -108,10 +124,11 @@ test('SDK Rust compiler output is excluded without hiding core or binding source
   for (const file of ['crates/halo-core/src/lib.rs', 'bindings/node/crate/src/lib.rs', 'Cargo.toml']) {
     const original = await fs.readFile(path.join(root, sdk, file))
     await write(`${sdk}/${file}`, 'changed source')
-    await assert.rejects(verifyBuild(root), /SDK source, revision or compiled/)
+    assert.equal((await verifyBuild(root)).id, record.id)
     await write(`${sdk}/${file}`, original)
   }
-  assert.equal((await verifyBuild(root)).id, record.id)
+  await write(`${sdk}/dist/index.js`, 'changed compiled')
+  await assert.rejects(verifyBuild(root), /SDK compiled distribution or package descriptor/)
 })
 
 test('build tooling follows actual imports without parsing generated program strings as dependencies', async context => {
