@@ -19,6 +19,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSy
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import esbuild from 'esbuild'
+import distributionPolicy from '../../scripts/lib/distribution-policy.cjs'
 
 const require = createRequire(import.meta.url)
 const {
@@ -432,6 +433,7 @@ async function build() {
       // Not minified on purpose: engine stack traces reaching Halo's logs are
       // the only diagnostic available for a crash inside the child.
       minify: false,
+      sourcemap: false,
       legalComments: 'none',
       logLevel: quiet ? 'silent' : 'warning',
       metafile: true,
@@ -447,6 +449,9 @@ async function build() {
   const engineVersion = writeManifest()
   installPrivateExternals()
   installNativeCompanions()
+  const cleanup = distributionPolicy.sanitizeStaging(OUT_DIR)
+  log(`distribution cleanup: removed=${cleanup.removed}, transformed=${cleanup.transformed}`)
+  distributionPolicy.assertTree(OUT_DIR)
 
   const sizeMB = (Buffer.byteLength(code) / 1024 / 1024).toFixed(1)
   log(

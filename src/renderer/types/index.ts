@@ -20,6 +20,7 @@ import type { ApiProvider } from '../../shared/types/ai-sources';
 import type { FileChangesSummary } from '../../shared/file-changes';
 import type { GoalInput } from '../../shared/types/goal';
 import type { CcRuntimeConfig } from '../../shared/types/cc-runtime';
+import type { RuntimeConfig } from '../../shared/types/external-runtime';
 import type {
   TranscriptMessage,
   ToolCall,
@@ -162,8 +163,9 @@ export interface SystemConfig {
 // Agent behavior configuration
 export interface AgentConfig {
   maxTurns: number;         // Maximum tool call turns per message
-  sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh';  // Agent SDK engine (requires restart)
+  sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh';
   ccRuntime?: CcRuntimeConfig;
+  codexRuntime?: RuntimeConfig;
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
   enableDigitalHumans?: boolean; // Enable Digital Humans MCP tools (automation app management)

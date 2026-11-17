@@ -105,12 +105,13 @@ export async function execute(root,args,options){
     './source.mjs': `export async function sourceIdentity(){return ${JSON.stringify(revision)}}`,
     './build.mjs': `export async function verifyBuild(){return {id:'controlled-build',builtAt:'2026-01-01T00:00:00Z',inputs:{rootSha256:'inputs'},artifacts:{rootSha256:'artifacts'},sdk:{state:'absent'},platform:process.platform,architecture:process.arch,node:process.versions.node}}`,
     './package.mjs': packageStub,
+    './canvas-package-readiness.mjs': 'export async function canvasPrunedPackageFailure(){return null}',
     './process.mjs': processStub,
     '../adapters/cluster.mjs': clusterStub,
   }
   const compiled = path.join(root, 'execution.mjs')
   await build({ entryPoints: [path.join(repository, 'scripts/acceptance/lib/execution.mjs')], outfile: compiled, bundle: true, platform: 'node', format: 'esm', packages: 'external', logLevel: 'silent', plugins: [{ name: 'isolated-runtime-facilities', setup(build) {
-    build.onResolve({ filter: /^\.\/(source|build|package|process)\.mjs$|^\.\.\/adapters\/cluster\.mjs$/ }, args => args.importer === path.join(repository, 'scripts/acceptance/lib/execution.mjs') ? { path: args.path, namespace: 'runtime-facility' } : undefined)
+    build.onResolve({ filter: /^\.\/(source|build|package|process|canvas-package-readiness)\.mjs$|^\.\.\/adapters\/cluster\.mjs$/ }, args => args.importer === path.join(repository, 'scripts/acceptance/lib/execution.mjs') ? { path: args.path, namespace: 'runtime-facility' } : undefined)
     build.onLoad({ filter: /.*/, namespace: 'runtime-facility' }, args => ({ contents: stubs[args.path], loader: 'js', resolveDir: repository }))
   } }] })
   const { runPlan } = await import(pathToFileURL(compiled).href)

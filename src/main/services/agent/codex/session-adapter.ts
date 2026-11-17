@@ -28,10 +28,11 @@
  */
 
 import { randomUUID } from 'crypto'
+import { resolveExternalRuntimeLaunch, type RuntimeLaunch } from '../../external-runtime'
+import { EngineUnavailableError } from '../resolved-sdk'
 import { NativeSessionResumeError } from '../../../../shared/types/engine-session'
 import {
   createCodexConnection,
-  resolveBundledCodexBinary,
   type CodexConnection,
 } from './transport/connection'
 import { JsonRpcClient } from './transport/jsonrpc-client'
@@ -123,7 +124,7 @@ export class CodexAppServerSession {
     supportedCommands: () => Promise<unknown[]>
   }
 
-  private constructor(options: CodexResolvedOptions, sessionId: string, opts: AdapterOptions) {
+  private constructor(options: CodexResolvedOptions, sessionId: string, opts: AdapterOptions, private readonly launch: RuntimeLaunch) {
     this.initialSessionId = sessionId
     this.options = options
     this.opts = opts
@@ -157,6 +158,8 @@ export class CodexAppServerSession {
   }
 
   static async create(sdkOptions: Record<string, any>): Promise<CodexAppServerSession> {
+    const launch = await resolveExternalRuntimeLaunch('codex', { signal: sdkOptions.abortController?.signal })
+    if (!launch) throw new EngineUnavailableError('codex', 'No compatible Codex installation is selected')
     const options = await resolveCodexOptions(sdkOptions)
     const sessionId = (sdkOptions.resume as string | undefined) || randomUUID()
     const adapter = new CodexAppServerSession(options, sessionId, {
@@ -164,7 +167,7 @@ export class CodexAppServerSession {
       conversationId: sdkOptions.conversationId,
       resume: sdkOptions.resume,
       strictNativeResume: sdkOptions.strictNativeResume === true,
-    })
+    }, launch)
     await adapter.start()
     return adapter
   }
@@ -184,17 +187,8 @@ export class CodexAppServerSession {
   }
 
   private async doStart(): Promise<void> {
-    const resolvedBinary = resolveBundledCodexBinary()
-    if (!resolvedBinary) {
-      throw new Error(
-        '[Codex] Could not find the codex binary. Make sure @openai/codex and its platform package are installed.',
-      )
-    }
-
     const connection = createCodexConnection({
-      binaryPath: resolvedBinary.binaryPath,
-      isJsShim: resolvedBinary.isJsShim,
-      pathDirs: resolvedBinary.pathDirs,
+      launch: this.launch,
       env: this.options.env,
       cwd: this.options.cwd,
       onStderr: (line) => {

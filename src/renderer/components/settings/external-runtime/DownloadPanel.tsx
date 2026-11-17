@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronRight, Download, Loader2, Settings2 } from 'lucide-react'
-import type { CcDownloadSource, CcInstallation, CcInstallRequest, CcReleaseInfo, CcRuntimeIssue, CcRuntimeStatus } from '../../../../shared/types/cc-runtime'
+import type { RuntimeId, RuntimeDownloadSource as CcDownloadSource, RuntimeInstallation as CcInstallation, RuntimeInstallRequest as CcInstallRequest, RuntimeReleaseInfo as CcReleaseInfo, RuntimeIssue as CcRuntimeIssue, RuntimeStatus as CcRuntimeStatus } from '../../../../shared/types/external-runtime'
 import { api } from '../../../api'
 import { useTranslation } from '../../../i18n'
-import { useCcRuntimeMessages } from './messages'
+import { useRuntimeMessages } from './messages'
 import { ccIssue, ccResult } from './response'
 import { RuntimeButton, runtimeInputClass } from './ui'
 
 interface Props {
+  runtimeId: RuntimeId
   status: CcRuntimeStatus
   installing: boolean
   busy: boolean
@@ -22,9 +23,9 @@ const normalizeVersion = (input: string) => input.trim().replace(/^v(?=\d)/i, ''
 const validVersion = (input: string) => input.length <= 80 && (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(input) || input === 'latest' || input === 'stable')
 const usable = (item: CcInstallation) => ['unchecked', 'verified', 'compatible'].includes(item.compatibility)
 
-export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect, onRefresh, onFindLocal }: Props) {
+export function RuntimeDownloadPanel({ runtimeId, status, installing, busy, onInstall, onRefresh, onFindLocal }: Props) {
   const { t } = useTranslation()
-  const messages = useCcRuntimeMessages()
+  const messages = useRuntimeMessages(runtimeId)
   const [version, setVersion] = useState('')
   const [sourceId, setSourceId] = useState(status.sourceId)
   const [sourceUrl, setSourceUrl] = useState(status.sources.find(source => source.id === 'custom')?.baseUrl ?? '')
@@ -41,8 +42,9 @@ export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect,
   const normalized = normalizeVersion(version)
   const installed = status.installations.find(item => item.version === normalized && usable(item))
   const recommended = status.installations.find(item => item.version === status.recommendedVersion && usable(item))
-  const selectedRecommended = Boolean(recommended && recommended.path === status.selectedPath)
-  const selectedCustom = Boolean((installed?.path ?? preview?.installedPath) && (installed?.path ?? preview?.installedPath) === status.selectedPath)
+  const sourceUnchanged = sourceId === status.sourceId && (sourceId !== 'custom' || sourceUrl.trim() === status.sources.find(source => source.id === 'custom')?.baseUrl)
+  const selectedRecommended = sourceUnchanged && Boolean(preview?.version === status.recommendedVersion && preview.installedPath && preview.installedPath === status.selectedPath)
+  const selectedCustom = sourceUnchanged && Boolean(preview?.installedPath && preview.installedPath === status.selectedPath)
   const disabled = busy || installing || saving || checking
   // A build's own source may come without a name of its own.
   const label = (source: CcDownloadSource) => source.name || (source.id === 'preset' ? t('Default download source') : source.id)
@@ -66,7 +68,8 @@ export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect,
       ? [...status.sources.filter(source => source.id !== 'custom'), { id: 'custom', name: t('Custom source'), baseUrl: sourceUrl.trim() }]
       : status.sources
     try {
-      ccResult(await api.ccRuntimeConfigure({ sources, sourceId }))
+      ccResult(await api.configureExternalRuntime(runtimeId, { sources, sourceId }))
+      if (!mounted.current || requestRevision !== revision.current) return
       await onRefresh()
       if (mounted.current && requestRevision === revision.current) setSaved(true)
     } catch (error) {
@@ -82,16 +85,12 @@ export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect,
     setVersionFailure(null)
     setPreview(null)
     if (!validVersion(normalized)) { setVersionFailure({ issue: 'invalid-version' }); return }
-    if (installed) {
-      setPreview({ version: normalized, installedPath: installed.path })
-      return
-    }
     const requestRevision = revision.current
     setChecking(true)
     try {
       await saveSource()
-      if (requestRevision !== revision.current) return
-      const result = ccResult(await api.ccRuntimeLookup({ version: normalized, sourceId }))
+      if (!mounted.current || requestRevision !== revision.current) return
+      const result = ccResult(await api.lookupExternalRuntime(runtimeId, { version: normalized, sourceId }))
       if (mounted.current && requestRevision === revision.current) setPreview(result)
     } catch (error) {
       if (mounted.current && requestRevision === revision.current) setVersionFailure({ issue: ccIssue(error) })
@@ -115,14 +114,14 @@ export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect,
       <label className="block space-y-1 text-xs font-medium">
         <span>{t('Download source')}</span>
         <select aria-label={t('Download source')} className={runtimeInputClass} value={sourceId} disabled={installing || saving} onChange={event => { invalidate(); setSourceId(event.target.value) }}>
-          {status.sources.filter(source => source.id !== 'custom').map(source => <option key={source.id} value={source.id}>{source.id === 'official' ? t('Official (Anthropic)') : label(source)}</option>)}
+          {status.sources.filter(source => source.id !== 'custom').map(source => <option key={source.id} value={source.id}>{source.id === 'official' ? runtimeId === 'codex' ? t('Official (OpenAI)') : t('Official (Anthropic)') : label(source)}</option>)}
           <option value="custom">{t('Custom source / internal mirror')}</option>
         </select>
       </label>
       {sourceId === 'custom' && <label className="block space-y-1 text-xs font-medium">
         <span>{t('Mirror base URL')}</span>
-        <input aria-label={t('Mirror base URL')} type="url" className={runtimeInputClass} value={sourceUrl} disabled={installing || saving} onChange={event => { invalidate(); setSourceUrl(event.target.value) }} placeholder={t('URL of the Claude Code release mirror')} />
-        <span className="block font-normal text-muted-foreground">{t('The mirror must provide the release manifest and files in the official download layout.')}</span>
+        <input aria-label={t('Mirror base URL')} type="url" className={runtimeInputClass} value={sourceUrl} disabled={installing || saving} onChange={event => { invalidate(); setSourceUrl(event.target.value) }} placeholder={runtimeId === 'codex' ? t('URL of the npm-compatible registry') : t('URL of the Claude Code release mirror')} />
+        <span className="block font-normal text-muted-foreground">{runtimeId === 'codex' ? t('Use an npm-compatible registry. The registry must provide package metadata and reachable download URLs; Halo does not fall back to the official source.') : t('The mirror must provide the release manifest and files in the official download layout.')}</span>
       </label>}
       {sourceFailure && <p role="alert" className="text-xs text-destructive">{messages.issue(sourceFailure.issue)}</p>}
       <div className="flex flex-wrap items-center gap-2">
@@ -140,11 +139,10 @@ export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect,
     <div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <p className="text-sm font-medium">{t('Recommended version: {{version}}', { version: status.recommendedVersion })}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{recommended ? t('Already installed. No download needed.') : t('Downloaded only when you choose to install.')}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{recommended ? t('Version {{version}} is already installed.', { version: status.recommendedVersion }) : t('Downloaded only when you choose to install.')}</p>
       </div>
       <RuntimeButton primary={!selectedRecommended} className="shrink-0" disabled={disabled || selectedRecommended} onClick={() => {
-        if (recommended) onSelect(recommended)
-        else void download(status.recommendedVersion)
+        void download(status.recommendedVersion)
       }}>
         {selectedRecommended ? <Check className="h-4 w-4" /> : <Download className="h-4 w-4" />}
         {selectedRecommended ? t('Selected') : recommended ? t('Use installed version') : t('Install recommended version')}
@@ -174,9 +172,7 @@ export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect,
             : t('Version {{version}} is available from this source.', { version: preview.version })}</p>
           {preview.size && !installed && <p className="text-xs text-muted-foreground">{t('Download size: {{size}} MB', { size: Math.ceil(preview.size / 1048576) })}</p>}
           <RuntimeButton primary disabled={disabled || selectedCustom} onClick={() => {
-            const local = installed ?? status.installations.find(item => item.path === preview.installedPath)
-            if (local) onSelect(local)
-            else void download(preview.version)
+            void download(preview.version)
           }}>{selectedCustom ? t('Selected') : installed || preview.installedPath ? t('Use installed version') : t('Install and use')}</RuntimeButton>
         </div>}
       </div>

@@ -70,6 +70,9 @@ async function doctor() {
     await check('built-application', async () => { const descriptor = await readJson(path.join(root, 'package.json')); await fs.access(path.resolve(root, descriptor.main)) })
     await check('controlled-build', () => verifyBuild(root))
     await check('halo-sdk', async () => { const errors = await prerequisiteFailures(root, { requirements: ['halo-sdk'] }); if (errors.length) throw new Error(errors.join('; ')) }, false)
+    for (const requirement of ['local-claude-code', 'local-codex']) {
+      await check(requirement, async () => { const errors = await prerequisiteFailures(root, { requirements: [requirement] }); if (errors.length) throw new Error(errors.join('; ')) }, false)
+    }
   }
   const ready = checks.every(check => !check.required || check.status === 'ready')
   output({ version: 1, ready, platform: process.platform, arch: process.arch, checks })

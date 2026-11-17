@@ -36,6 +36,7 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
   const sources = useAppStore(state => state.config?.aiSources)
   const navigate = useAppStore(state => state.navigate)
   const openClaudeCodeSettings = useAppStore(state => state.openClaudeCodeSettings)
+  const openExternalRuntimeSettings = useAppStore(state => state.openExternalRuntimeSettings)
   const activeTarget = useActiveModelTarget()
   const target = explicitTarget ?? activeTarget
   const [dismissed, setDismissed] = useState(false)
@@ -47,13 +48,14 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
     : undefined
   const selected = selection && engineSourceOf(selection)
   const delegated = !getEngineSourceCompatibility('halo', selected).compatible
-  const availability = useEngineAvailability(engine === 'anthropic' || delegated || Boolean(failure), failure)
+  const availability = useEngineAvailability(engine === 'anthropic' || engine === 'codex' || delegated || Boolean(failure), failure)
   const ccAvailable = availability ? Boolean(availability.engines.find(item => item.engineId === 'anthropic')?.available) : undefined
+  const codexAvailable = availability ? Boolean(availability.engines.find(item => item.engineId === 'codex')?.available) : undefined
   const accountCompatibility = engine ? getEngineSourceCompatibility(engine, selected) : { compatible: true as const }
   const fellBack = !engineId && requested === 'anthropic' && hasExplicitCcSelection(ccRuntime, sources) && engine === 'halo'
   const canMove = target.kind === 'digital-human' || Boolean(spaceId && target.conversation)
 
-  const issue = engine ? resolveEngineIssue({ engine, delegated, accountCompatible: accountCompatibility.compatible, group: Boolean(selection?.group), ccAvailable }) : null
+  const issue = engine ? resolveEngineIssue({ engine, delegated, accountCompatible: accountCompatibility.compatible, group: Boolean(selection?.group), ccAvailable, codexAvailable }) : null
   const notice = resolveEngineNotice({ issue, failed: Boolean(failure), fellBack, dismissed })
   if (!notice) return null
 
@@ -86,7 +88,11 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
                 ? t('Claude Code is selected for this conversation. In the Halo desktop app on the host computer, select a Claude Code installation once under Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.')
                 : t('Claude Code is selected for this conversation. Select a Claude Code installation once in Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.')
               : t('This conversation runs on Claude Code, which is not available on this computer. Install or connect Claude Code, or continue with Halo SDK.')
-            : notice.kind === 'failure'
+            : issue === 'codex-missing'
+              ? api.isRemoteMode()
+                ? t('This conversation runs on Codex, which is not available on the host computer. Install or connect Codex in the Halo desktop app on the host computer. Your history and engine choice are kept.')
+                : t('This conversation runs on Codex, which is not available on this computer. Install or connect Codex, or continue with Halo SDK. Your history and engine choice are kept.')
+              : notice.kind === 'failure'
               ? t('This conversation’s engine or account cannot run on this computer. Check the engine and account in Settings.')
               : t('Halo SDK is currently running. To use Claude Code, connect it in Settings > Advanced. Your chat history is kept; no restart is needed.')
   const action = 'min-h-11 rounded-md px-2.5 py-1.5 font-medium text-primary hover:bg-primary/10 disabled:opacity-50 sm:min-h-0 sm:px-0 sm:py-0 sm:hover:bg-transparent sm:hover:underline'
@@ -103,10 +109,13 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
               {issue === 'cc-missing' && !hasExplicitCcSelection(ccRuntime, sources) ? t('Select Claude Code in Settings') : issue === 'cc-missing' ? t('Install or connect Claude Code') : t('Set up Claude Code')}
             </button>
           )}
+          {issue === 'codex-missing' && !api.isRemoteMode() && (
+            <button type="button" className={action} onClick={() => openExternalRuntimeSettings('codex')}>{t('Install or connect Codex')}</button>
+          )}
           {issue === 'account-cc-ready' && canMove && (
             <button type="button" className={action} disabled={saving} onClick={() => void moveTo('anthropic')}>{t('Use Claude Code')}</button>
           )}
-          {issue === 'cc-missing' && canMove && (
+          {(issue === 'cc-missing' || issue === 'codex-missing') && canMove && (
             <button type="button" className={action} disabled={saving} onClick={() => void moveTo('halo')}>{t('Continue with Halo SDK')}</button>
           )}
           {(issue === 'account-needs-cc' || issue === 'account-cc-ready' || issue === 'codex-account') && (

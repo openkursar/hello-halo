@@ -1,10 +1,11 @@
 import { AlertCircle, Check, CheckCircle2, ChevronRight, Loader2, RefreshCw } from 'lucide-react'
-import type { CcInstallation } from '../../../../shared/types/cc-runtime'
+import type { RuntimeId, RuntimeInstallation as CcInstallation } from '../../../../shared/types/external-runtime'
 import { useTranslation } from '../../../i18n'
-import { useCcRuntimeMessages } from './messages'
+import { useRuntimeMessages } from './messages'
 import { RuntimeButton } from './ui'
 
 interface CcInstallationListProps {
+  runtimeId: RuntimeId
   installations: CcInstallation[]
   selectedPath?: string
   busyPath?: string
@@ -14,21 +15,23 @@ interface CcInstallationListProps {
   label?: string
 }
 
-export function CcInstallationList({ installations, selectedPath, busyPath, disabled, onSelect, onCheck, label }: CcInstallationListProps) {
+export function RuntimeInstallationList({ runtimeId, installations, selectedPath, busyPath, disabled, onSelect, onCheck, label }: CcInstallationListProps) {
   const { t } = useTranslation()
-  const messages = useCcRuntimeMessages()
+  const messages = useRuntimeMessages(runtimeId)
 
   if (installations.length === 0) return null
 
   return (
-    <ul role="list" aria-label={label ?? t('Installed Claude Code versions')} className="space-y-2">
+    <ul role="list" aria-label={label ?? (runtimeId === 'codex' ? t('Installed Codex versions') : t('Installed Claude Code versions'))} className="space-y-2">
       {installations.map(item => {
         const selected = item.path === selectedPath
         const busy = item.path === busyPath
         const usable = item.compatibility === 'verified' || item.compatibility === 'compatible'
         const selectable = usable || item.compatibility === 'unchecked'
         const blocked = disabled || Boolean(busyPath)
-        const title = item.version ? t('Claude Code {{version}}', { version: item.version }) : t('Claude Code')
+        const title = runtimeId === 'codex'
+          ? item.version ? t('Codex {{version}}', { version: item.version }) : t('Codex')
+          : item.version ? t('Claude Code {{version}}', { version: item.version }) : t('Claude Code')
 
         return (
           <li key={item.path} className="min-w-0">

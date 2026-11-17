@@ -38,7 +38,7 @@ interface EngineEntry {
 }
 
 const entries = new Map<EngineId, EngineEntry>(ENGINE_IDS.map(id => [id, { id, borrowers: new Set() }]))
-const FALLBACK_ORDER: EngineId[] = ['halo', 'codex']
+const FALLBACK_ORDER: EngineId[] = ['halo']
 let defaultEngine: EngineId | null = null
 let startupEngine: EngineId | null = null
 let degradedFrom: EngineId | null = null
@@ -57,7 +57,7 @@ export class EngineUnavailableError extends Error {
 function preference(): { engineId: EngineId; key: string } {
   const agent = getConfig().agent
   const engineId = resolveHistoricalEngine(isEngineId(agent?.sdkEngine) ? agent.sdkEngine : 'halo')
-  return { engineId, key: JSON.stringify([engineId, agent?.ccRuntime?.selectedPath ?? '']) }
+  return { engineId, key: JSON.stringify([engineId, agent?.ccRuntime?.selectedPath ?? '', agent?.codexRuntime?.selectedPath ?? '']) }
 }
 
 function entryFor(engineId: EngineId): EngineEntry {
@@ -148,11 +148,20 @@ async function resolveCurrentDefault(): Promise<EngineId> {
       if (resolvedDefaultKey === preference().key && defaultEngine) return defaultEngine
       continue
     }
-    if (defaultEngine && resolvedDefaultKey === wanted.key && wanted.engineId !== 'anthropic') return defaultEngine
+    if (defaultEngine && resolvedDefaultKey === wanted.key && wanted.engineId !== 'anthropic' && wanted.engineId !== 'codex') return defaultEngine
     const resolution = (async () => {
       for (const engineId of [...new Set([wanted.engineId, ...FALLBACK_ORDER])]) {
         try { await ensureModule(engineId) } catch (error) {
-          if (!(error instanceof EngineUnavailableError) || wanted.engineId === 'anthropic') throw error
+          if (error instanceof EngineUnavailableError && (wanted.engineId === 'anthropic' || wanted.engineId === 'codex') && preference().key === wanted.key) {
+            const previous = defaultEngine
+            defaultEngine = null
+            resolvedDefaultKey = undefined
+            degradedFrom = null
+            if (previous) void closeEntry(entryFor(previous))
+            throw error
+          }
+          if (!(error instanceof EngineUnavailableError) || wanted.engineId === 'anthropic' || wanted.engineId === 'codex') throw error
+          console.warn('[SDK] Configured engine unavailable; trying bundled fallback', { engineId })
           continue
         }
         if (preference().key !== wanted.key) return engineId
@@ -178,8 +187,8 @@ export function initSdk(): Promise<void> {
   return initializeSdkOnce(async () => {
     try { startupEngine = await resolveCurrentDefault() }
     catch (error) {
-      if (error instanceof EngineUnavailableError && error.engineId === 'anthropic') {
-        console.warn('[SDK] Selected Claude Code is unavailable; startup retained the selection without fallback', { engineId: error.engineId, reason: error.message })
+      if (error instanceof EngineUnavailableError && (error.engineId === 'anthropic' || error.engineId === 'codex')) {
+        console.warn('[SDK] Selected external engine is unavailable; startup retained the selection without fallback', { engineId: error.engineId, reason: error.message })
       } else console.error('[SDK] No agent engine could be initialized:', error)
     }
   })
@@ -193,7 +202,11 @@ export async function resolveDefaultEngine(): Promise<EngineId> {
 }
 
 /** Synchronous compatibility view; execution paths use resolveDefaultEngine before binding. */
-export function getDefaultEngine(): EngineId { return defaultEngine ?? 'halo' }
+export function getDefaultEngine(): EngineId {
+  const wanted = preference().engineId
+  if (wanted === 'codex' || wanted === 'anthropic') return wanted
+  return defaultEngine ?? 'halo'
+}
 export function getStartupEngine(): EngineId { return startupEngine ?? getDefaultEngine() }
 export function getActiveEngine(): EngineId | null { return defaultEngine }
 export function getDegradedFromEngine(): EngineId | null { return degradedFrom }

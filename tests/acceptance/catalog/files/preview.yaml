@@ -168,6 +168,25 @@ scenarios:
     expected:
       - en: The canvas shows real written and edited content; the disk file and conversation remain after restart.
         zh: 画布显示真实创建及编辑内容；重启后磁盘文件与对话均保留。
+  - id: files.preview.pdf-distribution
+    title: Read a complex PDF in the packaged application without native canvas
+    verifies: [open]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    requirements: [packaged-app, canvas-pruned-package]
+    variants:
+      viewer: [desktop, remote]
+    preconditions:
+      - The controlled package contains no native canvas package and uses isolated data and a real remote session where applicable.
+      - An independently validated synthetic two-page PDF includes Chinese CID text, an unembedded standard font and an RGB image.
+    steps:
+      - Open the PDF from the file rail, inspect painted content, navigate pages and change zoom.
+    expected:
+      - The appropriate real viewer paints the document, preserves its source bytes and remains usable while changing pages and zoom.
+    notes: The remote binding checks ink regions, image colors, successful CMap and standard-font requests, page boundaries and zoom dimensions through the real HTTP frontend. The desktop binding uses the actual native PDF toolbar page and zoom controls and asserts the image palette, its geometry, increased painted size after zoom and distinct second-page pixels. Screenshots preserve actual visual content for glyph inspection; ink presence alone is not an OCR glyph-accuracy oracle. A package retaining native canvas cannot supply this evidence.
   - id: files.preview.pdf-canvas
     title:
       en: Read a local PDF and return to it

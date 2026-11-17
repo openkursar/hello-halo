@@ -15,6 +15,8 @@ import { startLiveBroker } from './live-broker.mjs'
 import { discoverClusterTests, executeClusterTests } from '../adapters/cluster.mjs'
 import { verifyPackagedApplication } from './package.mjs'
 import { macClipboardFailure } from './clipboard-readiness.mjs'
+import { externalRuntimeFailure } from './external-runtime-readiness.mjs'
+import { canvasPrunedPackageFailure } from './canvas-package-readiness.mjs'
 export { execute } from './process.mjs'
 
 export function cleanEnvironment(source = process.env) {
@@ -204,6 +206,7 @@ export async function prerequisiteFailures(root, scenario, { liveReady = false, 
   if (scenario.mode === 'live' && !liveReady) problems.push('Live execution requires an explicit, credentialed budget broker configuration')
   const requirements = new Set(scenario.requirements ?? [])
   if (scenario.variant?.engine === 'anthropic') requirements.add('local-claude-code')
+  if (scenario.variant?.engine === 'codex') requirements.add('local-codex')
   if (scenario.variant?.engine === 'halo') requirements.add('halo-sdk')
   for (const requirement of requirements) {
     if (requirement === 'halo-sdk') {
@@ -217,6 +220,9 @@ export async function prerequisiteFailures(root, scenario, { liveReady = false, 
     } else if (requirement === 'packaged-app') {
       if (!process.env.HALO_E2E_PACKAGED_APP) problems.push('A packaged application was not supplied through HALO_E2E_PACKAGED_APP')
       else await fs.access(process.env.HALO_E2E_PACKAGED_APP).catch(() => problems.push('The supplied packaged application does not exist'))
+    } else if (requirement === 'canvas-pruned-package') {
+      const missing = await canvasPrunedPackageFailure(root, process.env.HALO_E2E_PACKAGED_APP)
+      if (missing) problems.push(missing)
     } else if (requirement === 'live-model') {
       if (scenario.mode !== 'live') problems.push('Live model prerequisites require live execution mode')
     } else if (requirement === 'windows-tools') {
@@ -247,9 +253,9 @@ export async function prerequisiteFailures(root, scenario, { liveReady = false, 
           problems.push(`Temporary file-link probe cleanup failed (${error.code ?? 'unknown'})`)
         })
       }
-    } else if (requirement === 'local-claude-code') {
-      if (!process.env.HALO_ACCEPTANCE_CLAUDE_CLI) problems.push('A separately installed external command-line engine was not configured')
-      else await fs.access(process.env.HALO_ACCEPTANCE_CLAUDE_CLI).catch(() => problems.push('The configured external command-line engine does not exist'))
+    } else if (requirement === 'local-claude-code' || requirement === 'local-codex') {
+      const missing = await externalRuntimeFailure(requirement === 'local-codex' ? 'codex' : 'anthropic')
+      if (missing) problems.push(missing)
     } else if (['external-im', 'native-dialog', 'multi-host', 'signing', 'mobile-device', 'test-registry', 'test-mail-account'].includes(requirement)) {
       if (!process.env[`HALO_ACCEPTANCE_${requirement.replaceAll('-', '_').toUpperCase()}`]) problems.push(`The ${requirement} environment has not been configured`)
     } else problems.push(`No readiness check is registered for prerequisite: ${requirement}`)

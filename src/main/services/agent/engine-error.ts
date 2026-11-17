@@ -17,7 +17,7 @@ export function isEngineSetupError(error: unknown): boolean {
 export function engineErrorDetail(error: unknown): { errorType: 'engine_unavailable' } | undefined {
   if (!isEngineSetupError(error)) return undefined
   const engineId = (error as { engineId?: unknown }).engineId
-  return error instanceof Error && error.name === 'EngineUnavailableError' && engineId !== 'anthropic'
+  return error instanceof Error && error.name === 'EngineUnavailableError' && engineId !== 'anthropic' && engineId !== 'codex'
     ? undefined
     : { errorType: 'engine_unavailable' }
 }

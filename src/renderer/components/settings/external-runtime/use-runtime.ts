@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../../api'
-import type { CcInstallation, CcInstallRequest, CcRuntimeIssue, CcRuntimeStatus } from '../../../../shared/types/cc-runtime'
+import type { RuntimeId, RuntimeInstallation as CcInstallation, RuntimeInstallRequest as CcInstallRequest, RuntimeIssue as CcRuntimeIssue, RuntimeStatus as CcRuntimeStatus } from '../../../../shared/types/external-runtime'
 import { ccIssue, ccResult } from './response'
 
 export const isInstalling = (status: CcRuntimeStatus | null) =>
@@ -11,7 +11,7 @@ type Failure = { issue?: CcRuntimeIssue }
 const terminalKey = (status: CcRuntimeStatus | null) => status?.install.issue
   ? `${status.install.phase}:${status.install.version}:${status.install.issue}` : ''
 
-export function useCcRuntime(onUse: () => Promise<boolean>) {
+export function useRuntime(runtimeId: RuntimeId, onUse: () => Promise<boolean>) {
   const [status, setStatus] = useState<CcRuntimeStatus | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -24,18 +24,24 @@ export function useCcRuntime(onUse: () => Promise<boolean>) {
   const pendingAction = useRef(false)
   const pendingInstall = useRef(false)
   const latestRead = useRef(0)
+  const reconciledCompletion = useRef('')
   const onUseRef = useRef(onUse)
   onUseRef.current = onUse
 
   const refresh = useCallback(async () => {
     const read = ++latestRead.current
-    const next = ccResult(await api.ccRuntimeStatus())
+    const next = ccResult(await api.getExternalRuntimeStatus(runtimeId))
     if (mounted.current && read === latestRead.current) {
       setStatus(next)
       setLoadFailed(false)
+      const completion = next.install.phase === 'complete' ? `${next.selectedPath}:${next.install.version}` : ''
+      if (completion && completion !== reconciledCompletion.current) {
+        reconciledCompletion.current = completion
+        await onUseRef.current()
+      }
     }
     return next
-  }, [])
+  }, [runtimeId])
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -47,12 +53,19 @@ export function useCcRuntime(onUse: () => Promise<boolean>) {
   useEffect(() => {
     mounted.current = true
     void reload()
-    return () => { mounted.current = false }
+    return () => { mounted.current = false; latestRead.current++ }
   }, [reload])
+
+  const [visible, setVisible] = useState(() => typeof document === 'undefined' || !document.hidden)
+  useEffect(() => {
+    const update = () => setVisible(!document.hidden)
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [])
 
   const installing = installPending || isInstalling(status)
   useEffect(() => {
-    if (!installing) return
+    if (!installing || !visible) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
@@ -62,7 +75,7 @@ export function useCcRuntime(onUse: () => Promise<boolean>) {
     }
     timer = setTimeout(poll, 250)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [installing, refresh])
+  }, [installing, visible, refresh])
 
   const run = async <T,>(next: Operation, task: () => Promise<T>): Promise<T | undefined> => {
     if (pendingAction.current) return
@@ -74,26 +87,26 @@ export function useCcRuntime(onUse: () => Promise<boolean>) {
     try { return await task() }
     catch (error) { if (mounted.current) setFailure({ issue: ccIssue(error) }) }
     finally {
-      try { await refresh() } catch { if (mounted.current) setLoadFailed(true) }
+      try { if (mounted.current) await refresh() } catch { if (mounted.current) setLoadFailed(true) }
       pendingAction.current = false
       if (mounted.current) setOperation(null)
     }
   }
 
   const select = (item: CcInstallation) => run({ kind: 'select', path: item.path }, async () => {
-    ccResult(await api.ccRuntimeSelect(item.path))
-    const activated = await onUseRef.current()
+    ccResult(await api.selectExternalRuntime(runtimeId, item.path))
+    const activated = mounted.current ? await onUseRef.current() : false
     if (mounted.current) setNotice(activated ? 'selected' : 'preserved')
   })
 
   const probe = (path: string) => run({ kind: 'check', path }, async () => {
-    const result = ccResult(await api.ccRuntimeProbe(path))
-    if (result.path === status?.selectedPath) await onUseRef.current()
+    const result = ccResult(await api.probeExternalRuntime(runtimeId, path))
+    if (mounted.current && result.path === status?.selectedPath) await onUseRef.current()
     return result
   })
   const scan = () => run({ kind: 'scan' }, async () => {
-    const result = ccResult(await api.ccRuntimeScan())
-    if (result.installations.some(item => item.path === status?.selectedPath)) await onUseRef.current()
+    const result = ccResult(await api.scanExternalRuntime(runtimeId))
+    if (mounted.current && result.installations.some(item => item.path === status?.selectedPath)) await onUseRef.current()
     return result
   })
 
@@ -105,20 +118,20 @@ export function useCcRuntime(onUse: () => Promise<boolean>) {
     setNotice(null)
     setIgnoredTerminal('')
     try {
-      ccResult(await api.ccRuntimeInstall(request))
-      const activated = await onUseRef.current()
+      ccResult(await api.installExternalRuntime(runtimeId, request))
+      const activated = mounted.current ? await onUseRef.current() : false
       if (mounted.current) setNotice(activated ? 'ready' : 'preserved')
     } catch (error) {
       if (mounted.current) setFailure({ issue: ccIssue(error) })
     } finally {
       pendingInstall.current = false
       if (mounted.current) setInstallPending(false)
-      try { await refresh() } catch { if (mounted.current) setLoadFailed(true) }
+      try { if (mounted.current) await refresh() } catch { if (mounted.current) setLoadFailed(true) }
     }
   }
 
   const cancel = async () => {
-    try { ccResult(await api.ccRuntimeCancel()); await refresh() }
+    try { ccResult(await api.cancelExternalRuntime(runtimeId)); await refresh() }
     catch (error) { if (mounted.current) setFailure({ issue: ccIssue(error) }) }
   }
 

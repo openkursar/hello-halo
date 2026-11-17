@@ -8,6 +8,7 @@ import { resolve } from 'path'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { bootSplashScript } from './vite.boot-script'
+import { productionDistribution } from './vite.distribution-policy'
 
 // Artifact images load straight from the Halo computer, which a LAN serves
 // over plain http; the page policy shared with the desktop allows remote
@@ -31,7 +32,7 @@ export default defineConfig({
     '__HALO_BAIDU_SITE_ID__': JSON.stringify('')
   },
 
-  plugins: [react(), allowHttpImages, bootSplashScript(resolve(__dirname, 'src/renderer'))],
+  plugins: [react(), allowHttpImages, bootSplashScript(resolve(__dirname, 'src/renderer')), productionDistribution()],
 
   resolve: {
     alias: {
@@ -44,6 +45,7 @@ export default defineConfig({
   },
 
   build: {
+    sourcemap: false,
     outDir: resolve(__dirname, 'dist-mobile'),
     emptyOutDir: true,
     // Optimize chunk splitting for mobile

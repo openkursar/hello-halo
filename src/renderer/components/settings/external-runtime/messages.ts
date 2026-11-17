@@ -1,23 +1,23 @@
-import type { CcCompatibility, CcRuntimeIssue } from '../../../../shared/types/cc-runtime'
+import type { RuntimeId, RuntimeCompatibility as CcCompatibility, RuntimeIssue as CcRuntimeIssue } from '../../../../shared/types/external-runtime'
 import { useTranslation } from '../../../i18n'
 
-export function useCcRuntimeMessages() {
+export function useRuntimeMessages(runtimeId: RuntimeId) {
   const { t } = useTranslation()
 
   const issue = (value?: CcRuntimeIssue): string => {
     switch (value) {
-      case 'not-found': return t('Claude Code was not found at this path. Choose its executable or installation folder.')
+      case 'not-found': return runtimeId === 'codex' ? t('Codex was not found at this path. Choose its executable or installation folder.') : t('Claude Code was not found at this path. Choose its executable or installation folder.')
       case 'not-executable': return t('This file cannot be executed. Check its permissions or choose another installation.')
-      case 'unsupported-launcher': return t('Choose the Claude Code executable, its cli.js file, or its installation folder.')
-      case 'version-unrecognized': return t('This program did not report a recognized Claude Code version.')
+      case 'unsupported-launcher': return runtimeId === 'codex' ? t('Choose the Codex executable or its installation folder.') : t('Choose the Claude Code executable, its cli.js file, or its installation folder.')
+      case 'version-unrecognized': return t('This program did not report a recognized version.')
       case 'version-too-old': return t('This version is too old for Halo. Install the recommended version.')
       case 'probe-timeout': return t('The check timed out. Retry the check or choose another installation.')
       case 'probe-busy': return t('Other installation checks are still running. Please try again shortly.')
       case 'protocol-unsupported': return t('This installation does not support the interfaces Halo needs.')
-      case 'process-failed': return t('Claude Code could not start. Check the installation and try again.')
+      case 'process-failed': return t('The program could not start. Check the installation and try again.')
       case 'install-busy': return t('An installation is already in progress.')
       case 'invalid-source': return t('Enter an HTTP or HTTPS download source without embedded credentials.')
-      case 'invalid-version': return t('Enter a version number such as 2.1.310, or use stable or latest.')
+      case 'invalid-version': return runtimeId === 'codex' ? t('Enter a version number such as 0.128.0, or use stable or latest.') : t('Enter a version number such as 2.1.310, or use stable or latest.')
       case 'version-not-found': return t('This download source does not provide that version. Install it on this computer yourself and find the local installation, or use the recommended version.')
       case 'source-unreachable': return t('The download source could not be reached. Check your connection, proxy or source address, then retry.')
       case 'source-timeout': return t('The download source took too long to respond. Try again or choose another source.')

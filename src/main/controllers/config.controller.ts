@@ -167,12 +167,16 @@ export function updateConfig(updates: Record<string, unknown>, snapshotEpoch?: n
     const reloadRequired = reloadRequiredBeforeSave(snapshotEpoch)
     if (reloadRequired) return reloadRequired
     const agent = updates.agent
-    if (agent && typeof agent === 'object' && 'ccRuntime' in agent) {
-      const stored = (existing.agent as Record<string, unknown> | undefined)?.ccRuntime
-      if (JSON.stringify(agent.ccRuntime) !== JSON.stringify(stored)) {
-        console.warn('[Config] Ignored externally supplied CC runtime settings; preserving the runtime manager selection')
+    if (agent && typeof agent === 'object') {
+      const preferences = { ...agent } as Record<string, unknown>
+      for (const key of ['ccRuntime', 'codexRuntime'] as const) {
+        if (!(key in preferences)) continue
+        const stored = (existing.agent as Record<string, unknown> | undefined)?.[key]
+        if (JSON.stringify(preferences[key]) !== JSON.stringify(stored)) {
+          console.warn('[Config] Ignored externally supplied runtime settings; preserving the runtime manager selection', { runtime: key })
+        }
+        delete preferences[key]
       }
-      const { ccRuntime: _runtime, ...preferences } = agent
       updates.agent = preferences
     }
     if (updates.agent && typeof updates.agent === 'object') {
@@ -181,9 +185,6 @@ export function updateConfig(updates: Record<string, unknown>, snapshotEpoch?: n
       if ('sdkEngine' in preferences && !isEngineId(preferences.sdkEngine)) throw new Error('Unknown agent engine')
       if (isEngineId(preferences.sdkEngine) && preferences.sdkEngine !== (storedAgent?.sdkEngine ?? 'halo') && !isEngineId(storedAgent?.legacySdkEngine)) {
         preferences.legacySdkEngine = getDefaultEngine()
-      }
-      if (preferences.sdkEngine === 'anthropic' && Object.keys(agent as object).length === 1) {
-        preferences.ccRuntime = { ...(storedAgent?.ccRuntime as object), selectionOrigin: 'user' }
       }
       updates.agent = preferences
     }

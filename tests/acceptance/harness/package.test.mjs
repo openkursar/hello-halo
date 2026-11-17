@@ -100,7 +100,12 @@ const path = require('node:path');
   if (process.platform === 'darwin') await fs.writeFile(path.join(app,'Contents/Info.plist'), require('plist').build({CFBundleExecutable:'Acceptance Package Test'}));
   const staging = path.join(output, 'staging'); await fs.mkdir(staging);
   for (const name of ['out','package.json','product.json']) await fs.cp(name,path.join(staging,name),{recursive:true});
-  if (${sdk}) await fs.cp('node_modules/@hello-halo/agent-sdk',path.join(staging,'node_modules/@hello-halo/agent-sdk'),{recursive:true});
+  await fs.rm(path.join(staging,'out/.acceptance-build.json'),{force:true});
+  if (${sdk}) {
+    await fs.cp('node_modules/@hello-halo/agent-sdk',path.join(staging,'node_modules/@hello-halo/agent-sdk'),{recursive:true});
+    await fs.rm(path.join(staging,'node_modules/@hello-halo/agent-sdk/src'),{recursive:true,force:true});
+    await fs.rm(path.join(staging,'node_modules/@hello-halo/agent-sdk/dist/index.js.map'),{force:true});
+  }
   ${behavior}
   await require('@electron/asar').createPackageWithOptions(staging,path.join(resources,'app.asar'),{unpackDir:'node_modules/@hello-halo/agent-sdk'});
   await require(path.resolve(config.afterPack))({outDir:output});
@@ -118,7 +123,7 @@ test('controlled directory packaging binds the executable, application output an
   assert.equal((await verifyPackagedApplication(root, record.executable)).id, record.id)
   assert.equal(record.application.sdk.state, 'present')
   assert.equal(record.application.sdk.sourceRevision, null)
-  assert.equal(record.application.sdk.packagedRuntime.count, 3)
+  assert.equal(record.application.sdk.packagedRuntime.count, 2)
   assert.equal(record.signing, process.platform === 'darwin' ? 'local-adhoc' : 'unsigned')
   assert.equal(JSON.stringify(record).includes(root), false)
   const output = path.join(root, 'tests/acceptance/output/packages', record.id)
@@ -162,8 +167,8 @@ test('package SDK verification reads copied runtime bytes and rejects omitted wo
   }
 })
 
-test('an SDK source map may be excluded by the packaging configuration without hiding missing runtime code', async context => {
-  const { root } = await fixture(context, { sdk: true, behavior: `await fs.rm(path.join(staging,'node_modules/@hello-halo/agent-sdk/dist/index.js.map'));` })
+test('an SDK source map is excluded by the packaging configuration without hiding missing runtime code', async context => {
+  const { root } = await fixture(context, { sdk: true })
   const record = await packageApplication(root)
   assert.equal(record.application.sdk.packagedRuntime.count, 2)
   await verifyPackagedApplication(root, record.executable)
@@ -280,7 +285,7 @@ test('a failed builder or source mutation during packaging leaves no package sta
 
 test('a package symlink cannot hide content outside the captured application', async context => {
   const { root } = await fixture(context, { behavior: `await fs.symlink(path.resolve('src/main.ts'),path.join(resources,'outside'));` })
-  await assert.rejects(packageApplication(root), /link leaves its captured components/)
+  await assert.rejects(packageApplication(root), /link leaves its captured components|Unexpected symlink/)
 })
 
 for (const source of ['declaration', 'lock-declaration', 'lock-package', 'installed-package', 'distribution-version']) {

@@ -16,6 +16,10 @@ import { createHash } from 'node:crypto'
 const runtime = vi.hoisted(() => ({ launch: null as any, config: {} as any, resolve: vi.fn() }))
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => runtime.config }))
 vi.mock('../../../../src/main/services/cc-runtime', () => ({ resolveCcRuntimeLaunch: runtime.resolve }))
+vi.mock('../../../../src/main/services/external-runtime', () => ({
+  resolveExternalRuntimeLaunch: runtime.resolve,
+  getExternalRuntimeStatus: async () => ({ selected: null }),
+}))
 const HALO_PACKAGE = '@hello-halo/agent-sdk'
 
 function appNodeModules(): string {
@@ -109,6 +113,36 @@ describe('engine availability', () => {
     expect((await getEngineAvailability(['anthropic']))[0]).toMatchObject({ available: true, version: '2.1.89' })
     runtime.launch = null
     expect((await getEngineAvailability(['anthropic']))[0].available).toBe(false)
+  })
+
+  it('does not launch or discover an unselected Codex', async () => {
+    const { getEngineAvailability } = await loadProbe()
+    expect((await getEngineAvailability(['codex']))[0].available).toBe(false)
+    expect(runtime.resolve).not.toHaveBeenCalled()
+  })
+
+  it('checks only the selected external Codex and observes changed health', async () => {
+    runtime.config = { agent: { codexRuntime: { selectedPath: '/fixture/codex' } } }
+    runtime.launch = { version: '0.128.0' }
+    const { getEngineAvailability } = await loadProbe()
+    expect((await getEngineAvailability(['codex']))[0]).toMatchObject({ available: true, version: '0.128.0' })
+    expect(runtime.resolve).toHaveBeenCalledWith('codex')
+    runtime.launch = null
+    expect((await getEngineAvailability(['codex']))[0].available).toBe(false)
+  })
+
+  it('does not launch selected CC to render the engine settings list', async () => {
+    runtime.config = { agent: { ccRuntime: { selectedPath: '/fixture/claude', selectionOrigin: 'user' } } }
+    const { getEngineAvailability } = await loadProbe()
+    await getEngineAvailability()
+    expect(runtime.resolve).not.toHaveBeenCalled()
+  })
+
+  it('does not launch Codex to render the engine settings list', async () => {
+    runtime.config = { agent: { codexRuntime: { selectedPath: '/fixture/codex' } } }
+    const { getEngineAvailability } = await loadProbe()
+    await getEngineAvailability()
+    expect(runtime.resolve).not.toHaveBeenCalled()
   })
 
   it('treats a package with no entry file as unavailable', async () => {
