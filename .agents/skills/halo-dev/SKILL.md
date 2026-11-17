@@ -51,6 +51,7 @@ For Halo application work, after its mandatory entry docs:
   - Existing component structure in `src/renderer/components/`
   - Existing stores in `src/renderer/stores/`
   - Existing hooks in `src/renderer/hooks/`
+  - `product-principles` §9 before changing how a screen is operated, even inside a bug fix
 
 ## Source of Truth Priority
 

@@ -487,11 +487,13 @@ import {
   createTeamRuntime,
   createDefaultSessionDeps,
   setActiveTeamRuntime,
+  getActiveTeamRuntime,
   TEAM_CHECK_JOB_KIND,
   type TeamRuntime,
   type OrchestrationSessionDeps,
 } from '../../../../../src/main/apps/runtime/team'
 import { sendAppChatMessage } from '../../../../../src/main/apps/runtime/app-chat'
+import { registerExecutionHost } from '../fixtures/execution-host'
 import { withExternalOrigin, withOwnerResolvedSpace } from '../../../../../src/main/apps/runtime/federation/session-deps'
 import type { SerializedWakeRequest } from '../../../../../src/main/apps/runtime/federation/types'
 import { beginDelegatedTurn, decideDelegatedTool } from '../../../../../src/main/apps/runtime/delegation-gate'
@@ -641,6 +643,7 @@ async function restart(): Promise<void> {
 }
 
 beforeEach(() => {
+  registerExecutionHost(getActiveTeamRuntime)
   h.reset()
   folderRoot = mkdtempSync(join(tmpdir(), 'halo-team-permission-'))
   const dbManager = createDatabaseManager(':memory:')

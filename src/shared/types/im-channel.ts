@@ -39,6 +39,38 @@ import type { CapabilityPolicy } from '../apps/capability-policy'
  */
 export type GuestPolicy = CapabilityPolicy
 
+/** Metadata of the IM chat a turn runs in. */
+export interface ImSessionContext {
+  /** IM channel type (e.g. 'wecom-bot') */
+  channel: string
+  /** Chat type */
+  chatType: 'direct' | 'group'
+  /** Display name for the session (customName > chatName > chatId) */
+  displayName: string
+  /** Composite session ID: instanceId:chatId (used in notify_bot directory) */
+  sessionId: string
+  /** Sender identity for direct chats */
+  senderIdentity?: { id: string; name: string }
+}
+
+/**
+ * Per-message permission context of an IM sender.
+ *
+ * Updated on every inbound dispatch — always reflects the latest sender.
+ */
+export interface ImPermissionContext {
+  /** Platform-side user ID of the message sender */
+  senderId: string
+  /** Display name of the sender */
+  senderName: string
+  /** Whether this sender is in the channel instance's owners list */
+  isOwner: boolean
+  /** Resolved guest policy (from channel instance config). Only meaningful when !isOwner. */
+  guestPolicy?: GuestPolicy
+  /** Owner user IDs for security prompt injection. Present when owners are configured. */
+  ownerIds?: string[]
+}
+
 // ============================================
 // ImChannelInstanceConfig (Persisted)
 // ============================================

@@ -15,7 +15,7 @@ Each session owns its engine. The global setting is a default for new sessions;
 digital humans may override it in Advanced settings. Existing sessions retain
 their engine until an explicit safe transition, without restarting the app.
 
-**Core value**: Wrap complex technical concepts (Agent Loop / CLI / tool calling) into an intuitive human interaction model. Every UI surface must feel polished, responsive, and production-ready.
+**Core value**: Wrap complex technical concepts (Agent Loop / CLI / tool calling) into an intuitive human interaction model. Every UI surface follows the `product-principles` philosophy.
 
 ### Product Form
 

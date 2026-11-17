@@ -2,7 +2,7 @@
 // beforePack hook - Pre-packaging validation
 //
 // Runs before electron-builder packages the app.
-// Validates product.json configuration to catch issues early.
+// Validates product.json and bundled resources to catch issues early.
 //
 // To add a new validation check:
 //   1. Write a function: function checkXxx(productConfig) { ... }
@@ -64,6 +64,23 @@ function checkAuthProviders(config) {
   return null;
 }
 
+/**
+ * Validate the bundled CJK font and its license are present.
+ *
+ * Why: runtimes/office/build.mjs only warns when the download fails so
+ * contributors are not blocked; a release must not ship without the font,
+ * and the OFL requires the license to travel with it.
+ */
+function checkOfficeFonts() {
+  const dir = path.join(__dirname, '..', 'resources', 'office-runtime', 'fonts');
+  for (const file of ['NotoSansSC-Regular.otf', 'OFL-NotoSansSC.txt']) {
+    if (!fs.existsSync(path.join(dir, file))) {
+      return `Missing resources/office-runtime/fonts/${file} - run "npm run runtime:office" with network access`;
+    }
+  }
+  return null;
+}
+
 // ============================================================================
 // Check registry - add new checks here
 // ============================================================================
@@ -71,6 +88,7 @@ function checkAuthProviders(config) {
 const CHECKS = [
   checkUpdateConfig,
   checkAuthProviders,
+  checkOfficeFonts,
 ];
 
 // ============================================================================

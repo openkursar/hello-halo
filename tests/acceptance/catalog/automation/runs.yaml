@@ -13,6 +13,7 @@ references:
   - tests/e2e/specs/digital-human-lifecycle.spec.ts
   - src/renderer/components/apps/SessionDetailView.tsx
   - tests/e2e/specs/acceptance-automation.spec.ts
+  - tests/e2e/specs/acceptance-run-collaboration.spec.ts
 promises:
   progress:
     en: A manual run exposes its actual current process and persisted result.
@@ -26,7 +27,76 @@ promises:
   recovery:
     en: A failed or stopped run remains distinguishable from successful completion.
     zh: 失败或停止的任务与成功完成可以区分。
+  collaboration:
+    en: Independent runs can delegate workspace checks and finish only after their collaborators have returned evidence and the digital human has reported the result. Explicit delegation restrictions and stopping remain effective.
+    zh: 独立执行可以委派工作区检查，仅在协作者回报证据且数字人汇报结果后完成；明确的委派限制与停止操作仍有效。
 scenarios:
+  - id: automation.runs.collaboration
+    title:
+      en: Complete delegated checks from each independent trigger
+      zh: 从各独立触发入口完成委派检查
+    verifies: [collaboration, progress]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      trigger: [manual, schedule, webhook]
+    preconditions:
+      - en: An isolated application uses the real Halo engine and a local scripted provider. Three disposable files contain distinct random values.
+        zh: 隔离应用使用真实 Halo 引擎与本地脚本供应商，三个临时文件包含不同随机值。
+    steps:
+      - en: Start through Run now, a real schedule boundary or an HTTP webhook. Create three collaborators, each reading one actual file and reporting to the lead; delay one with a test-owned local tool gate until the lead yields.
+        zh: 通过立即运行、真实计划到期或 HTTP webhook 启动。创建三个协作者，各读取真实文件并向负责人回报；通过测试自有本地工具门控延迟一位，直到负责人让出执行。
+      - en: Release the last collaborator and inspect the combined report. In the manual variant continue through the run composer without starting another run.
+        zh: 释放最后一位协作者，检查汇总报告。手动变体通过任务输入框继续，不启动另一项任务。
+    expected:
+      - en: The run remains active while the delayed collaborator works, every assigned read and report succeeds, the input files stay unchanged and one final combined report completes the run.
+        zh: 延迟协作者工作期间任务保持活动，各项读取与回报成功，输入文件不变，一份最终汇总报告结束任务。
+      - en: The manual follow-up receives the original results and appends to the same run history.
+        zh: 手动追问收到原始结果，追加在同一任务历史中。
+    notes:
+      en: Scripted provider responses verify real application orchestration and file tools, not live-model delegation quality. Only the manual variant verifies follow-up.
+      zh: 脚本供应商验证真实应用编排与文件工具，不证明真实模型委派质量。仅手动变体验证追问。
+  - id: automation.runs.collaboration-stop
+    title:
+      en: Stop an execution with a delayed collaborator
+      zh: 停止包含延迟协作者的执行
+    verifies: [collaboration, recovery]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - en: Stop through the real UI while a collaborator waits in a local tool, release the tool and restart the application.
+        zh: 协作者等待本地工具时通过真实界面停止，释放工具并重启应用。
+    expected:
+      - en: The stopped run remains an error with a stop explanation and has no successful completion report after reopening.
+        zh: 重开后停止任务保持错误状态并说明停止原因，没有成功完成报告。
+  - id: automation.runs.collaboration-disabled
+    title:
+      en: Honor explicit delegation restrictions during independent execution
+      zh: 独立执行遵守明确的委派限制
+    verifies: [collaboration]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: The owner explicitly disables Task and spawn_agent in the global agent configuration.
+        zh: 主人在全局智能体配置中明确禁用 Task 与 spawn_agent。
+    steps:
+      - en: Start an independent run and inspect actual provider tool advertisements and its collaboration association.
+        zh: 启动独立任务，检查实际供应商工具目录与协作关联。
+    expected:
+      - en: No delegation tool is advertised, no collaboration is created and an ordinary report can still complete the run.
+        zh: 工具目录没有委派工具，不创建协作，普通报告仍可结束任务。
   - id: automation.runs.start
     title:
       en: Run a digital human once

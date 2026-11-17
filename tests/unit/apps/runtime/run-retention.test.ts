@@ -97,6 +97,17 @@ describe('clearOldRunTranscripts', () => {
     expect(clearOldRunTranscripts(store, APP, null)).toBe(0)
   })
 
+  it('hands every retired run to its owner, and a failing owner cannot hold the record back', () => {
+    seedRuns(RUN_TRANSCRIPTS_KEPT + 2)
+    const cleared: string[] = []
+    expect(clearOldRunTranscripts(store, APP, null, run => {
+      cleared.push(run.runId)
+      if (run.runId === runId(1)) throw new Error('owner unavailable')
+    })).toBe(2)
+    expect(cleared.sort()).toEqual([runId(1), runId(2)])
+    expect(store.getRun(runId(1))?.transcriptClearedAt).toEqual(expect.any(Number))
+  })
+
   it('drains a backlog a pass at a time', () => {
     seedRuns(RUN_TRANSCRIPTS_KEPT + 120)
 

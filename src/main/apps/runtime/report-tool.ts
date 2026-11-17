@@ -38,6 +38,8 @@ export interface ReportToolContext {
   plansDir?: string
   /** Drives team-specific report routing when present. */
   teamContext?: TeamTriggerContext
+  canComplete?: () => boolean
+  onReported?: () => void
 }
 
 /** Callback invoked when an escalation entry is created */
@@ -213,6 +215,11 @@ export function createReportToolServer(
         ? input.type
         : 'run_complete'
 
+      if ((safeType === 'run_complete' || safeType === 'run_skipped') && runContext.canComplete?.() === false) {
+        console.warn(`[Runtime][${runTag}] Final report refused: collaborators or accepted input still pending`)
+        return textResult('The run still has collaborator work or unread input. Review the reports before publishing the final result. End this turn to receive their updates.', true)
+      }
+
       // Only an escalation offers the user a way to answer, so questions on any
       // other type are dropped. A blank one is dropped for the same reason: it
       // would render a row the Send button then waits on forever.
@@ -324,6 +331,8 @@ export function createReportToolServer(
           return textResult(`Failed to save report: ${err instanceof Error ? err.message : String(err)}`, true)
         }
       }
+
+      if (persisted) runContext.onReported?.()
 
       if (persisted && team) {
         try {

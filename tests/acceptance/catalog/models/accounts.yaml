@@ -28,6 +28,9 @@ promises:
   visibility:
     en: The account editor conceals credentials by default and reveals them only through an explicit visibility action.
     zh: 账户编辑器默认隐藏凭证，仅通过明确的显隐操作展示。
+  editor-position:
+    en: Account editors open inside the clicked card or row, retaining the same DOM container without an intermediate jump. When the opened body fits below, the container's top stays within one pixel; otherwise the page scrolls smoothly upward just far enough to show the body, never pushing the header above the top margin, and follows the body while its content loads until the person scrolls, clicks or types. Headers identify the account and the first field is visible. Switching discards only the earlier draft and the target moves only with that reveal scroll. Cancel restores entry focus; saved edits remain visible and new accounts are revealed, highlighted once and focused. Escape closes a dropdown, never the inline draft.
+    zh: 账户编辑器在被点卡片或行内展开，保留同一容器，过程中不闪跳。下方放得下时容器顶部误差不超过一像素；放不下时页面平滑上移，刚好露出展开内容，且不把头部推过顶部留白；内容加载变高时继续跟随，直到用户滚动、点击或按键。头部标明账户，首字段可见。切换仅丢弃原草稿，被点目标只随这次露出滚动移动；取消恢复入口焦点，保存后卡片可见，新账户展示并高亮一次、获得焦点。Esc 只关下拉，不丢弃原地草稿。
   drafts:
     en: Cancelling account creation, editing or deletion leaves the saved account configuration unchanged.
     zh: 取消新增、编辑或删除账户时，已保存的账户配置保持不变。
@@ -44,6 +47,205 @@ promises:
     en: A model's settings show only what the user changed; the user's values survive every model-list refresh, the account server's values apply where the user set nothing, and a value equal to the server's counts as the server's.
     zh: 模型配置只把用户改过的值视为自定义；用户的值在每次刷新模型列表后保留，用户未设置之处采用账户服务端的值，与服务端相同的值视为服务端的值。
 scenarios:
+  - id: models.accounts.in-place
+    title: Open and dismiss account editors from a long scrolled settings list
+    verifies: [editor-position, drafts]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      width: ['1280', '390']
+    preconditions:
+      - An isolated profile contains only fictional API-key and OAuth accounts in a long list. No real OAuth authentication is performed.
+    steps:
+      - From a nonzero settings scroll position open Add AI Provider at its own row, then Edit Provider and Edit Account inside their cards.
+      - Open and dismiss a provider dropdown with Escape, then press Escape again without discarding the draft; cancel each editor explicitly.
+    expected:
+      - The same clicked DOM container stays within one pixel of its initial top when its body fits, or rises only as far as needed to show the body without passing the top margin; its preceding sibling keeps its distance and its header and first field are visible.
+      - No edit dialog appears. Cancel restores entry focus and position without saving drafts or making provider requests.
+  - id: models.accounts.in-place-save
+    title: Reveal a newly saved account and retain the position when updating it
+    verifies: [editor-position, save, current]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      width: ['1280', '390']
+    steps:
+      - Open a new provider at the add row in a long scrolled account list, save a fictional local account, then rename it and the fictional OAuth account in their own cards.
+    expected:
+      - The newly created account is in the viewport and becomes current according to the existing account selection behavior.
+      - Updating preserves the account identity, current selection and settings position.
+  - id: models.accounts.in-place-failure
+    title: Keep an account draft when a save is refused or still pending
+    verifies: [editor-position, save, drafts]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - An isolated application opens fictional existing API-key and OAuth accounts. Only the account-update IPC handler is replaced with a controlled refusal and deferred refusal.
+    steps:
+      - Change the API account name, save, inspect the visible failure, and retry with two immediate submissions.
+      - Press Escape during the deferred write, then release the refusal and cancel the editor.
+      - Edit the OAuth account name, refuse its save and inspect the retained draft and failure reason before cancelling.
+    expected:
+      - The draft remains visible with an error and is never reported saved; the stored account is unchanged. The OAuth editor preserves the returned failure reason.
+      - Pending writes disable dismissal and duplicate submission. After failure, cancelling restores the entry focus and settings position.
+    notes: The injected application handler makes this UI evidence, not proof of real persistence failures or vendor authentication.
+  - id: models.accounts.in-place-login
+    title: Keep sign-in progress and retryable errors in the clicked provider row
+    verifies: [editor-position, auth, drafts]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      flow: [device, redirect]
+    preconditions:
+      - An isolated application replaces only OAuth start, completion and cancellation handlers with a synthetic login; no real authentication or external browser is used.
+    steps:
+      - Open ChatGPT sign-in from a long scrolled list, inspect the injected error, retry and inspect the device code or authorization input, then cancel explicitly.
+    expected:
+      - Error and progress stay in the clicked row, which rises only as far as needed to show them. Escape leaves the panel open. Opening an account editor does not cancel login, and starting login does not close the account editor. Cancel names the same provider and login, restores entry focus, and changes no accounts.
+    notes: This UI boundary verifies progress rendering and cancellation wiring, not a real vendor sign-in.
+  - id: models.accounts.in-place-switch
+    title: Keep the target from jumping when closing a partially visible upper editor
+    verifies: [editor-position, drafts]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      width: ['1280', '390']
+    expected:
+      - In every sampled animation frame the target keeps the same connected DOM node and never moves down; any upward movement equals the page scroll of that frame, ending where its body is shown without passing the top margin. The earlier draft closes without saving or provider requests.
+  - id: models.accounts.in-place-bottom
+    title: Reveal a bottom-edge editor by scrolling up just enough
+    verifies: [editor-position]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      width: ['1280', '390']
+    expected:
+      - The clicked card remains the same DOM node and rises smoothly, never moving down, until its body is shown or its header reaches the top margin; header and first field end in view.
+  - id: models.accounts.in-place-delete
+    title: Confirm account removal and focus the neighboring card
+    verifies: [drafts, editor-position]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      width: ['1280', '390']
+    expected:
+      - An alertdialog names the account; Escape and Cancel leave it unchanged. Confirm removes it and focuses the neighboring card.
+  - id: models.accounts.in-place-delete-failure
+    title: Show a refused deletion at the retained account card
+    verifies: [drafts]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    notes: The deletion handler is replaced with a refusal; this does not establish real persistence failure behavior.
+    expected:
+      - The card retains the account and shows Delete failed as an alert beside its controls.
+  - id: models.accounts.in-place-partial-save
+    title: Retry a partially saved account without adding a duplicate
+    verifies: [save, drafts]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    notes: Selection is refused by an injected application handler after a real isolated account write.
+    expected:
+      - Both attempts retain the same saved identity and open draft; only one account exists.
+  - id: models.accounts.in-place-preset
+    title: Configure a preset inside its own row
+    verifies: [editor-position, current]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      width: ['1280', '390']
+    notes: A synthetic auth-provider catalog points exclusively to the local endpoint and includes documentation and fallback models; this is not vendor evidence.
+    expected:
+      - The preset row stays still when opened, Cancel restores focus, and Save reveals and highlights its new current account while removing the preset row.
+  - id: models.accounts.in-place-touch
+    title: Focus the inline region on a coarse-pointer device
+    verifies: [editor-position]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    expected:
+      - With touch emulation and pointer coarse confirmed at 390 pixels, opening an editor focuses its region rather than an input.
+  - id: models.accounts.in-place-preset-partial
+    title: Retain the preset row after a partially successful save
+    verifies: [editor-position, save, drafts]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    notes: A synthetic preset catalog and refused selection handler exercise local UI recovery, not live authentication.
+    expected:
+      - A successful account write followed by selection refusal leaves the same preset row and draft mounted; retry updates the same identity with no duplicate account.
+  - id: models.accounts.in-place-login-success
+    title: Reveal a newly reported OAuth account when inline sign-in completes
+    verifies: [editor-position, auth]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    notes: Synthetic login completion and a config response reporting a new fictional OAuth account verify UI placement only. No account is actually authenticated or persisted.
+    expected:
+      - Completion closes the login panel, reveals the new account and gives it focus and a single highlight; the actual stored account configuration remains unchanged.
+  - id: models.accounts.in-place-visual
+    title: Capture the six inline settings states in both themes and widths
+    verifies: [editor-position]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      width: ['1280', '390']
+      theme: [dark, light]
+    notes: Synthetic provider catalog and login handlers render controlled local UI states; screenshots do not establish authentication or persistence.
+    expected:
+      - Edit, add, preset, group-create, device and delete screenshots are produced with no horizontal overflow for owner review.
   - id: models.accounts.deepseek-preset
     title:
       en: Configure current DeepSeek Flash without rewriting an existing account

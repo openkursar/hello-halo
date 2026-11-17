@@ -8,13 +8,14 @@
  * use is changed from the model picker.
  */
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ChevronDown, Loader2 } from 'lucide-react'
 import type { AISource } from '../../types'
 import type { ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { ModelConfigPanel } from './ModelConfigPanel'
+import { accountSaveFailureReason } from './account-save-error'
 import { groupModels, useModelGroupLabel } from '../ai-config/model-list-parts'
 
 interface OAuthAccountEditorProps {
@@ -22,9 +23,10 @@ interface OAuthAccountEditorProps {
   /** Runs after the account is saved; reloads settings and closes the editor. */
   onSaved: () => Promise<void>
   onCancel: () => void
+  onSavingChange?: (saving: boolean) => void
 }
 
-export function OAuthAccountEditor({ source, onSaved, onCancel }: OAuthAccountEditorProps) {
+export function OAuthAccountEditor({ source, onSaved, onCancel, onSavingChange }: OAuthAccountEditorProps) {
   const { t } = useTranslation()
   const groupLabel = useModelGroupLabel()
   const models = source.availableModels ?? []
@@ -34,14 +36,17 @@ export function OAuthAccountEditor({ source, onSaved, onCancel }: OAuthAccountEd
     source.modelOverrides ?? {}
   )
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
 
   const catalogModel = models.find(model => model.id === modelId)
   const trimmedName = name.trim()
 
   const handleSave = async () => {
-    if (!trimmedName || saving) return
+    if (!trimmedName || savingRef.current) return
+    savingRef.current = true
     setSaving(true)
+    onSavingChange?.(true)
     setError(null)
     try {
       // An empty map is sent rather than omitted: an absent field would leave
@@ -49,14 +54,19 @@ export function OAuthAccountEditor({ source, onSaved, onCancel }: OAuthAccountEd
       const result = await api.aiSourcesUpdateSource(source.id, { name: trimmedName, modelOverrides })
       if (!result.success) throw new Error(result.error || t('Failed to save account'))
       await onSaved()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('Failed to save account'))
+    } catch (failure) {
+      const reason = accountSaveFailureReason(failure, [source.apiKey, source.accessToken, source.refreshToken])
+      console.warn(`[OAuthAccountEditor] Account save failed; the draft remains open: ${reason}`)
+      setError(failure instanceof Error ? failure.message : t('Failed to save account'))
+    } finally {
+      savingRef.current = false
       setSaving(false)
+      onSavingChange?.(false)
     }
   }
 
   return (
-    <div className="space-y-4 p-3 sm:p-4 bg-secondary/30 rounded-lg border border-border">
+    <div className="space-y-4">
       <div>
         <label htmlFor="oauthAccountName" className="block text-sm font-medium text-muted-foreground mb-1">
           {t('Display Name')}
@@ -113,6 +123,7 @@ export function OAuthAccountEditor({ source, onSaved, onCancel }: OAuthAccountEd
 
       {modelId && (
         <ModelConfigPanel
+          variant="inline"
           modelId={modelId}
           overrides={modelOverrides}
           onChange={setModelOverrides}
@@ -127,20 +138,18 @@ export function OAuthAccountEditor({ source, onSaved, onCancel }: OAuthAccountEd
         </div>
       )}
 
-      <div className="flex flex-col sm:flex-row gap-3 pt-2">
+      <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:items-center sm:justify-end">
         <button
           onClick={onCancel}
           disabled={saving}
-          className="flex-1 px-4 py-2 bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground
-                   rounded-lg transition-colors disabled:opacity-50"
+          className="min-h-11 sm:min-h-9 rounded-lg bg-secondary px-4 text-sm text-foreground hover:bg-surface-hover disabled:opacity-50"
         >
           {t('Cancel')}
         </button>
         <button
           onClick={handleSave}
           disabled={saving || !trimmedName}
-          className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg
-                   hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-50 sm:min-h-9"
         >
           {saving && <Loader2 size={16} className="animate-spin" />}
           {t('Save')}

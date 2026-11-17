@@ -71,7 +71,7 @@ import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { combinedDisposable } from '../platform/event'
 import { initMemory } from '../platform/memory'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, releaseTeamEpochSessions, getAppRuntime } from '../apps/runtime'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, deliverRunCollaborationSource, releaseTeamEpochSessions, getAppRuntime } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService, collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
@@ -85,7 +85,8 @@ import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtim
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck, TeamOfficeStatusKind, TeamVersionMismatch } from '../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey, nativeChatAppId, isSpaceConversationId } from '../../shared/apps/im-keys'
-import { disposeJoinedOfficeWork, createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, releaseTeamMailOnTurnStart, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir, registerCollaborationLifecycle, deliverOwnedCollaborationSource, observeOwnedCollaborationSources } from '../apps/runtime/team'
+import { bindConversationLifecycle } from '../services/agent'
+import { disposeJoinedOfficeWork, createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, releaseTeamMailOnTurnStart, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir, deliverOwnedCollaborationSource, observeOwnedCollaborationSources, createConversationWorkHost } from '../apps/runtime/team'
 import { readTeamMemberMessages, isAppChatConversationGenerating, sendAppChatMessage } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
 import { createSpace, deleteSpace, getSpace, getSpaceDir } from '../services/space.service'
@@ -145,7 +146,7 @@ let digitalHumanConversations: { dispose(): void } | null = null
 let flushRelayCapture: (() => void) | null = null
 let onSystemResume: (() => void) | null = null
 let stopReleasingTeamMail: (() => void) | null = null
-let stopCollaborationLifecycle: (() => void) | null = null
+let stopConversationLifecycle: (() => void) | null = null
 let stopOwnedCollaborationSources: (() => void) | null = null
 let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
 let stopModelCatalogFreshness: (() => void) | null = null
@@ -1129,6 +1130,8 @@ async function initPlatformAndApps(): Promise<void> {
         // mailbox or a vanished conversation reads as undelivered — loud, so
         // the sending member is told instead of waiting forever.
         deliverToSpaceCoordinator: async (request) => {
+          const run = await deliverRunCollaborationSource(request)
+          if (run.handled) return run.disposition
           const owned = await deliverOwnedCollaborationSource(request, sendAppChatMessage)
           if (owned.handled) return owned.disposition
           const { teamId, epochId, requestId } = request.persist.metadata
@@ -1289,8 +1292,8 @@ async function initPlatformAndApps(): Promise<void> {
       if (!activityStore) throw new Error('Activity storage is unavailable while removing collaboration actors.')
       activityStore.deleteParticipantActors(teamId, epochId)
     })
-    stopCollaborationLifecycle?.()
-    stopCollaborationLifecycle = registerCollaborationLifecycle(getTeamService()!.participants)
+    stopConversationLifecycle?.()
+    stopConversationLifecycle = bindConversationLifecycle(createConversationWorkHost())
     stopOwnedCollaborationSources?.()
     stopOwnedCollaborationSources = observeOwnedCollaborationSources()
 
@@ -1750,8 +1753,8 @@ export async function cleanupExtendedServices(): Promise<void> {
     // the App Manager goes away (the service holds an App Manager reference).
     stopOwnedCollaborationSources?.()
     stopOwnedCollaborationSources = null
-    stopCollaborationLifecycle?.()
-    stopCollaborationLifecycle = null
+    stopConversationLifecycle?.()
+    stopConversationLifecycle = null
     shutdownTeamService()
     stopReleasingTeamMail?.()
     stopReleasingTeamMail = null

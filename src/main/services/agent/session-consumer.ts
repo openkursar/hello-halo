@@ -301,6 +301,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
           type: 'complete',
           duration: Date.now() - turnStartTime,
           tokenUsage: result.tokenUsage,
+          resultUsage: result.turnUsage,
         })
         if (state.consumerAbort.signal.aborted) break
 

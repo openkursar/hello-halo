@@ -337,6 +337,8 @@ import type { MessageBus } from '../../../../src/main/apps/runtime/team/message-
 import type { TeamStore } from '../../../../src/main/apps/team'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
 import { setActiveImChannelManager } from '../../../../src/main/apps/runtime/im-channels'
+import { registerExecutionHost } from './fixtures/execution-host'
+import { getActiveTeamRuntime } from '../../../../src/main/apps/runtime/team'
 import { capabilityPolicyFromPreset, fullCapabilityPolicy } from '../../../../src/shared/apps/capability-policy'
 import type { TeamEnvelope, TeamTriggerContext } from '../../../../src/shared/apps/team-types'
 
@@ -453,6 +455,7 @@ function teamToolsOrigin(): string | undefined {
 }
 
 beforeEach(() => {
+  registerExecutionHost(getActiveTeamRuntime as any)
   authority.current!.reset()
   buildUserSessionSdkOptions.mockClear()
   createTeamMcpServer.mockClear()

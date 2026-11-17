@@ -54,7 +54,7 @@ import { eventPayloadForModel, renderEventInput } from './event-input'
 import { tryInjectIntoActiveRun, isRunActive, listActiveRuns, onActiveRunReady, getActiveRun, markRunInputsStopped, type RunSupplement } from './active-runs'
 import { automaticEnabled, blockedReason, deriveRuntimeStatus } from './app-state'
 import { getActiveTeamRuntime } from './team'
-import { getTeamStore } from '../team'
+import { getTeamService, getTeamStore, releaseRunCollaboration } from '../team'
 import { resolveParticipantExecution } from './team/participant-execution'
 import { getEscalationQuestions, formatEscalationAnswer, totalRunTokens, type RunTokenUsage } from '../../../shared/apps/app-types'
 import type { ContentReference } from '../../../shared/types/content-reference'
@@ -770,7 +770,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       }
 
       try {
-        clearOldRunTranscripts(store, app.id, app.spaceId ? deps.getSpacePath(app.spaceId) : null)
+        clearOldRunTranscripts(store, app.id, app.spaceId ? deps.getSpacePath(app.spaceId) : null, run => {
+          const teamStore = getTeamStore()
+          const teamService = getTeamService()
+          if (teamStore && teamService) releaseRunCollaboration(teamStore, teamService, app.id, run.runId)
+        })
       } catch (retentionErr) {
         console.error(`[Runtime][${runTag}] Failed to clear old run transcripts:`, retentionErr)
       }

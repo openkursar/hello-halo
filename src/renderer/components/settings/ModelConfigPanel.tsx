@@ -51,6 +51,7 @@ interface ModelConfigPanelProps {
   catalogCapability?: CatalogModelCapability
   /** `ModelOption.supportsVision` for this model, when the source states one. */
   catalogSupportsVision?: boolean
+  variant?: 'panel' | 'inline'
 }
 
 type ActiveTab = 'visual' | 'json'
@@ -60,7 +61,8 @@ export function ModelConfigPanel({
   overrides,
   onChange,
   catalogCapability,
-  catalogSupportsVision
+  catalogSupportsVision,
+  variant = 'panel'
 }: ModelConfigPanelProps) {
   const { t } = useTranslation()
 
@@ -304,12 +306,11 @@ export function ModelConfigPanel({
 
   // ── Main render ───────────────────────────────────────────────────────
   return (
-    <div className="border border-border rounded-lg overflow-hidden">
+    <div className={variant === 'inline' ? 'min-w-0' : 'border border-border rounded-lg overflow-hidden'}>
       {/* Collapse header */}
       <button
         onClick={() => setIsOpen(o => !o)}
-        className="w-full flex items-center justify-between px-3 py-2.5 bg-secondary/40 hover:bg-secondary/60
-                   transition-colors text-sm font-medium text-foreground"
+        className={`w-full flex items-center justify-between py-2.5 transition-colors text-sm font-medium text-foreground ${variant === 'inline' ? 'text-left hover:text-primary' : 'px-3 bg-secondary/40 hover:bg-secondary/60'}`}
       >
         <span>{t('Model Configuration')}</span>
         {isOpen
@@ -320,7 +321,7 @@ export function ModelConfigPanel({
 
       {/* Collapsible body */}
       {isOpen && (
-        <div className="p-3 space-y-3 border-t border-border bg-background">
+        <div className={variant === 'inline' ? 'space-y-3 pt-2' : 'p-3 space-y-3 border-t border-border bg-background'}>
           {loading ? (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground py-2">
               <Loader2 className="w-3 h-3 animate-spin" />

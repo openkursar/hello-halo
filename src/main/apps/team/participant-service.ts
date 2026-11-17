@@ -7,7 +7,7 @@ import { buildTeamSessionKey, isRemoteMember, parseSpaceCoordinatorAppId, type T
 import type { TeamStore } from './types'
 import type { RecipientAddress } from './recipient-fences'
 import type { ParticipantExecution } from './participants'
-import { parseTeamSessionKey } from '../../../shared/apps/im-keys'
+import { parseRunSenderKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 import { getWorkMember, listWorkMembers } from './work-members'
 
 export interface CollaborationCaller {
@@ -32,6 +32,8 @@ export interface ParticipantService {
   invalidateRecipientFences(teamId: string, epochId: string): void
   registerSource(conversationId: string): void
   hasSource(conversationId: string): boolean
+  /** Release the run key's source state once its execution has ended; other sources keep theirs with the conversation. */
+  releaseRunSource(conversationId: string, requestId: string): void
   beginRequest(conversationId: string, requestId: string): void
   requestAllowed(requestId: string): boolean
   sourceRequestId(conversationId: string): string
@@ -384,6 +386,15 @@ export function createParticipantService(deps: {
     invalidateRecipientFences: (teamId, epochId) => store.recipientFences.clearEpoch(teamId, epochId),
     registerSource: conversationId => { endpoints.add(conversationId) },
     hasSource: conversationId => endpoints.has(conversationId),
+    releaseRunSource(conversationId, requestId) {
+      const current = inputs.get(conversationId)
+      if (!parseRunSenderKey(conversationId) || (current !== undefined && current !== requestId)) return
+      inputs.delete(conversationId)
+      endpoints.delete(conversationId)
+      usedSources.delete(conversationId)
+      stopped.delete(conversationId)
+      sourceGenerations.delete(conversationId)
+    },
     capture, spawn, stop, markStopped, beginRequest, requestId, sourceRequestId, captureSource, stopSource,
     requestAllowed: id => !store.requests.cancelled(id),
     sourceGeneration: conversationId => sourceGenerations.get(conversationId) ?? 0,

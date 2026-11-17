@@ -11,6 +11,8 @@ import type { RedirectLoginView } from '../../hooks/useOAuthLogin'
 
 interface OAuthRedirectLoginProps {
   title: string
+  hideTitle?: boolean
+  variant?: 'panel' | 'inline'
   redirect: RedirectLoginView
   onOpenWindow: () => void
   onSubmitCode: () => void
@@ -21,6 +23,8 @@ interface OAuthRedirectLoginProps {
 
 export function OAuthRedirectLogin({
   title,
+  hideTitle = false,
+  variant = 'panel',
   redirect,
   onOpenWindow,
   onSubmitCode,
@@ -35,7 +39,7 @@ export function OAuthRedirectLogin({
 
   return (
     <div className="w-full min-w-0 space-y-5">
-      <div className="flex items-center gap-3">
+      {!hideTitle && <div className="flex items-center gap-3">
         <div className="w-9 h-9 shrink-0 rounded-lg flex items-center justify-center bg-primary/15 text-primary">
           <Globe size={20} />
         </div>
@@ -43,7 +47,7 @@ export function OAuthRedirectLogin({
           <h3 className="font-medium text-foreground truncate">{title}</h3>
           <p className="text-xs text-muted-foreground">{remote ? t('Manual login') : t('Choose a login method')}</p>
         </div>
-      </div>
+      </div>}
 
       {redirect.error && (
         <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
@@ -72,7 +76,7 @@ export function OAuthRedirectLogin({
         </>
       )}
 
-      <div className="p-4 bg-card border border-border rounded-xl space-y-3">
+      <div className={variant === 'inline' ? 'space-y-3' : 'p-4 bg-card border border-border rounded-xl space-y-3'}>
         <h4 className="text-sm font-medium text-foreground">{t('Manual login')}</h4>
         <p className="text-xs text-muted-foreground">
           {t('Open or copy the link, sign in, then paste the authorization code below.')}

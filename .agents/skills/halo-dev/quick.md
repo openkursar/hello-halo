@@ -134,6 +134,7 @@
 | Add event source/filter behavior | `src/main/platform/event/*` | `src/main/bootstrap/extended.ts` |
 | Change memory behavior | `src/main/platform/memory/index.ts` | `memory/prompt.ts`, `memory/guard.ts`, `tests/unit/platform/memory/*` |
 | Change Halo SDK internals (loop / prompt / tools / Worker / collaboration) | **Read `src/sdk/halo-sdk/AGENTS.md` first** | SDK checks and module docs are routed there; host changes also follow the row below |
+| Change what an execution waits for, accepts while running, stops with, or counts, or who may delegate (sub-agents, on any entry) | **Read `src/main/services/agent/DESIGN.md` §4 first**, then `services/agent/execution/` | Team side: `apps/runtime/team/execution-work.ts` (`run-work.ts`, `chat-work.ts`). The entries (`execute.ts`, `app-chat.ts`) open an execution and must not manage collaborators; the space chat's team toolset in `runtime/index.ts` is the broker's capability server, not an execution — `tests/unit/architecture/agent-execution-boundary.guard.test.ts` |
 | Change Halo engine integration (session / stream / permissions / MCP) | **Read `src/main/services/agent/DESIGN.md` first**, then jump to named file | Co-edits depend on the exact concern — see DESIGN.md routing |
 | Change external Claude Code discovery, compatibility checks or downloads | **Read `src/main/services/cc-runtime/DESIGN.md` first** | Shared types and `cc-runtime` typed RPC; `agent/cc` consumes the service public API and owns protocol execution. |
 | Change digital-team coordination (send/wait/blackboard/orchestration) | **Read `src/main/apps/runtime/federation/DESIGN.md` first**, then `src/main/apps/runtime/team/*` | `apps/team/store.ts`, `tests/unit/apps/runtime/team/*`; kernel stays transport-free |
@@ -209,6 +210,7 @@
 4. Test at < 640px viewport width.
 5. If it affects Canvas layout, consider `useCanvasLifecycle` and `useLayoutPreferences` hooks.
 6. If it shows files/artifacts, handle Web mode limitations (no local file open).
+7. If it changes how something is operated (where it is edited, inline vs dialog), follow `product-principles` §9: show the change, get approval, screenshot dark and light at desktop and 390px.
 
 ### F) Change behavior the AI guides describe
 

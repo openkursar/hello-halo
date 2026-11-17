@@ -29,32 +29,14 @@
  *     On restart, the next inbound message re-creates the entry.
  */
 
-import type { GuestPolicy } from '../../../shared/types/im-channel'
+import type { GuestPolicy, ImPermissionContext } from '../../../shared/types/im-channel'
 
-// Re-export GuestPolicy so consumers can import from a single location
-export type { GuestPolicy }
+// Re-exported so consumers can import from a single location
+export type { GuestPolicy, ImPermissionContext }
 
 // ============================================
 // Types
 // ============================================
-
-/**
- * Per-message permission context stored in the registry.
- *
- * Updated on every inbound dispatch — always reflects the latest sender.
- */
-export interface ImPermissionContext {
-  /** Platform-side user ID of the message sender */
-  senderId: string
-  /** Display name of the sender */
-  senderName: string
-  /** Whether this sender is in the channel instance's owners list */
-  isOwner: boolean
-  /** Resolved guest policy (from channel instance config). Only meaningful when !isOwner. */
-  guestPolicy?: GuestPolicy
-  /** Owner user IDs for security prompt injection. Present when owners are configured. */
-  ownerIds?: string[]
-}
 
 // ============================================
 // Registry (module-level singleton)

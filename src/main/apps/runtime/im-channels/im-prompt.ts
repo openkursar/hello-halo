@@ -17,18 +17,9 @@
  * file must never branch on `channel`.
  */
 
-export interface ImSessionContext {
-  /** IM channel type (e.g. 'wecom-bot') */
-  channel: string
-  /** Chat type */
-  chatType: 'direct' | 'group'
-  /** Display name for the session (customName > chatName > chatId) */
-  displayName: string
-  /** Composite session ID: instanceId:chatId (used in notify_bot directory) */
-  sessionId: string
-  /** Sender identity for direct chats */
-  senderIdentity?: { id: string; name: string }
-}
+import type { ImSessionContext } from '../../../../shared/types/im-channel'
+
+export type { ImSessionContext }
 
 // ============================================
 // Entry layer

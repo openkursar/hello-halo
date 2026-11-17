@@ -27,9 +27,11 @@ import type {
   StopReason
 } from './types'
 import type { Goal, GoalChangeSource } from '../../../shared/types/goal'
+import type { RunTokenUsage } from '../../../shared/apps/app-types'
 import { emitAgentEvent } from './events'
 import { createDeltaCoalescer, type DeltaCoalescer } from './delta-coalescer'
 import { parseSDKMessage } from './message-utils'
+import { readResultUsage } from './result-usage'
 import {
   extractRealAssistantUsage,
   extractStreamDeltaUsage,
@@ -248,6 +250,8 @@ export interface StreamResult {
   thoughts: Thought[]
   /** Token usage from the result message */
   tokenUsage: TokenUsage | null
+  /** The turn's cumulative usage from its result frame; null when the engine reported none. */
+  turnUsage?: RunTokenUsage | null
   /** Captured session ID (from system/result messages, for session persistence) */
   capturedSessionId?: string
   /** Whether the stream was interrupted (no result message or error_during_execution) */
@@ -380,6 +384,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
   // The `result` frame is never a source: it carries the turn total.
   let lastSingleUsage: SingleCallUsage | null = null
   let tokenUsage: TokenUsage | null = null
+  let turnUsage: RunTokenUsage | null = null
 
   // Telemetry: timestamp of the previous llm.invocation emit. Used to derive
   // PER-CALL durationMs (delta from the previous call's emit, or from t0 for
@@ -617,6 +622,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
       hasMeaningfulContent: finalContent.trim().length > 0,
       thoughts,
       tokenUsage,
+      turnUsage,
       capturedSessionId,
       isInterrupted: !receivedResult || hadErrorDuringExecution,
       wasAborted,
@@ -716,6 +722,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         }
         // Extract token usage
         tokenUsage = buildTokenUsage(msg, lastSingleUsage, displayModel, contextWindow)
+        turnUsage = readResultUsage(msg) ?? null
         console.log(`[Agent][${conversationId}] Drain complete — result consumed after ${Date.now() - drainStartTime}ms`)
         break
       }
@@ -1365,6 +1372,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
 
       // Extract token usage from result message
       tokenUsage = buildTokenUsage(msg, lastSingleUsage, displayModel, contextWindow)
+      turnUsage = readResultUsage(msg) ?? null
       if (tokenUsage) {
         console.log(`[Agent][${conversationId}] Token usage (single API):`, tokenUsage)
       }
@@ -1439,7 +1447,8 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
     emitAgentEvent('agent:complete', spaceId, conversationId, {
       type: 'complete',
       duration: 0,
-      tokenUsage
+      tokenUsage,
+      resultUsage: turnUsage,
     })
   }
 

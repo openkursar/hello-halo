@@ -30,6 +30,7 @@ interface ProviderCatalogDropdownProps {
 export function ProviderCatalogDropdown({ value, onChange, placeholder }: ProviderCatalogDropdownProps) {
   const { t } = useTranslation()
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
 
@@ -105,8 +106,18 @@ export function ProviderCatalogDropdown({ value, onChange, placeholder }: Provid
   )
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative" ref={dropdownRef} onKeyDown={event => {
+      if (event.key !== 'Escape' || !open) return
+      event.preventDefault()
+      event.stopPropagation()
+      setOpen(false)
+      setQuery('')
+      triggerRef.current?.focus({ preventScroll: true })
+    }}>
       <button
+        ref={triggerRef}
+        type="button"
+        aria-expanded={open}
         onClick={() => setOpen(!open)}
         className="w-full flex items-center justify-between px-3 py-2.5 bg-input border border-border rounded-lg
                  text-foreground hover:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"

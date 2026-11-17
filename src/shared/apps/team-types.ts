@@ -55,6 +55,14 @@ export type EpochOutcome = 'output' | 'no_action' | 'escalation' | 'failed'
 
 // ── Persistent entities ──
 
+/** Where a member's files for one piece of work live on this machine. */
+export interface TeamFolderPaths {
+  /** The folder of this piece of work, shared by the members on this machine. */
+  shared: string
+  /** The caller's own sub-folder: the only place it publishes `team:` refs from. */
+  self: string
+}
+
 export interface Team {
   id: string
   name: string

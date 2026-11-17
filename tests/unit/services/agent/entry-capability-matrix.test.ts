@@ -30,7 +30,7 @@ vi.mock('../../../../src/main/apps/team', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../../src/main/apps/team')>()
   const { createScopedParticipantService } = await import('../../apps/runtime/fixtures/participant-service')
   authority.current = createScopedParticipantService()
-  return { ...actual, getTeamService: () => ({ participants: authority.current!.service, getCollabForConversation: () => null }) }
+  return { ...actual, getTeamService: () => ({ participants: authority.current!.service, getCollabForConversation: () => null, getCollaborationScope: () => null }) }
 })
 
 // ============================================
@@ -50,6 +50,8 @@ const state = vi.hoisted(() => ({
   memoryEnabled: true,
   sent: [] as string[],
   disabledMcpTools: null as Record<string, string[]> | null,
+  onReported: undefined as (() => void) | undefined,
+  appDisabledTools: undefined as string[] | undefined,
 }))
 
 const { createHaloAppsMcpServer } = vi.hoisted(() => ({
@@ -89,6 +91,8 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOrigina
         type: 'assistant',
         message: { content: [{ type: 'tool_use', name: 'mcp__halo-report__report_to_user', input: {} }] },
       }
+      state.onReported?.()
+      yield { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'matrix-report', content: 'Report saved' }] } }
     }
     return { send: vi.fn((message: string) => state.sent.push(message)), close: vi.fn(), stream }
   }),
@@ -183,9 +187,9 @@ vi.mock('../../../../src/main/services/agent/stream-processor', () => ({ flushTo
 // ============================================
 
 vi.mock('../../../../src/main/services/agent/toolsets/registry', () => ({
-  getAvailableToolsets: vi.fn(() => [{ id: 'ai-browser' }]),
+  getAvailableToolsets: vi.fn(() => [{ id: 'ai-browser' }, { id: 'halo-team', contextManaged: true }]),
   getToolset: vi.fn((id: string) =>
-    id === 'ai-browser' ? { id, createServer: () => ({ _isMcpServer: true, name: id }) } : undefined
+    ['ai-browser', 'halo-team'].includes(id) ? { id, contextManaged: id === 'halo-team', createServer: () => ({ _isMcpServer: true, name: id }) } : undefined
   ),
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({
@@ -285,7 +289,10 @@ vi.mock('../../../../src/main/apps/runtime/notify-availability', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/file-export-gate', () => ({ FileExportGate: vi.fn().mockImplementation(() => ({})) }))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
-  createReportToolServer: () => ({ _isMcpServer: true, name: 'halo-report' }),
+  createReportToolServer: (_store: unknown, context: { onReported?: () => void }) => {
+    state.onReported = context.onReported
+    return { _isMcpServer: true, name: 'halo-report' }
+  },
 }))
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({ getImSessionRegistry: () => null }))
 vi.mock('../../../../src/main/apps/runtime/im-auto-sync', () => ({ autoSyncRunResult: vi.fn(async () => ({})) }))
@@ -359,7 +366,9 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
   }),
 }))
 vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({
-  createCoordinationMcpServer: () => ({ _isMcpServer: true, name: 'halo-team' }),
+  createCoordinationMcpServer: (_resolve: unknown, operations?: { spawn?: unknown }) => ({
+    _isMcpServer: true, name: 'halo-team', tools: operations?.spawn ? [{ name: 'spawn_agent' }] : [],
+  }),
   createTeamMcpServer: () => ({ _isMcpServer: true, name: 'halo-team' }),
 }))
 
@@ -435,6 +444,8 @@ import { sendMessage } from '../../../../src/main/services/agent/send-message'
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
 import { registerAppBridge } from '../../../../src/main/services/app-bridge'
+import { createExecutionWorkHost } from '../../../../src/main/apps/runtime/team/execution-work'
+import { getActiveTeamRuntime } from '../../../../src/main/apps/runtime/team'
 import { createConversationInteropMcpServer } from '../../../../src/main/services/conversation-interop'
 import { setConversationInteropFactory } from '../../../../src/main/services/agent/toolsets/broker'
 import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
@@ -542,7 +553,7 @@ const ROW_DRIVERS = {
     const memory = { getPromptInstructions: generatePromptInstructions, saveSessionSummary: vi.fn(async () => {}) } as any
     vi.mocked(createSession).mockClear()
     const result = await executeRun({
-      app: { ...app, userOverrides: {} } as any,
+      app: { ...app, userOverrides: { disabledTools: state.appDisabledTools } } as any,
       trigger: { type: 'manual', description: 'run' } as any,
       store,
       memory,
@@ -566,10 +577,10 @@ const ROWS = Object.keys(ROW_DRIVERS) as Row[]
  * default, digital humans enabled, no external MCP apps, no email channel.
  */
 const EXPECTED_SERVERS: Record<Row, readonly string[]> = {
-  'space chat': ['capabilities', 'halo-apps', 'halo-conversations', 'halo-docs', 'web-search'],
+  'space chat': ['capabilities', 'halo-apps', 'halo-conversations', 'halo-docs', 'halo-team', 'web-search'],
   // Operating Halo is no switch for a digital human: the owner's own turns and runs hold it.
   'digital human chat (owner)': [
-    'ai-browser', 'halo-api-ref', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-reminders', 'ocr', 'web-search',
+    'ai-browser', 'halo-api-ref', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-reminders', 'halo-team', 'ocr', 'web-search',
   ],
   // Only what the strict policy classes as safe survives the guest filter
   // (reminders included: a guest is offered no switch for them).
@@ -585,7 +596,7 @@ const EXPECTED_SERVERS: Record<Row, readonly string[]> = {
   // The same guest filter, plus the team channel the member is reached on.
   'team-fronted IM chat (guest)': ['halo-report', 'halo-team', 'web-search'],
   'automation run': [
-    'ai-browser', 'halo-api-ref', 'halo-docs', 'halo-notify', 'halo-report', 'ocr', 'web-search',
+    'ai-browser', 'halo-api-ref', 'halo-docs', 'halo-notify', 'halo-report', 'halo-team', 'ocr', 'web-search',
   ],
 }
 
@@ -612,6 +623,7 @@ beforeAll(() => {
     getAppManager: () => null,
     createHaloAppsMcpServer,
     onMcpAppsChange: () => () => {},
+    executionWork: createExecutionWorkHost({ runtime: getActiveTeamRuntime }),
   })
   // Bootstrap wires this seam in the running app; without it space chat never mounts halo-conversations.
   setConversationInteropFactory(createConversationInteropMcpServer)
@@ -633,6 +645,8 @@ beforeEach(() => {
   state.memoryEnabled = true
   state.sent.length = 0
   state.disabledMcpTools = null
+  state.onReported = undefined
+  state.appDisabledTools = undefined
 })
 
 // ============================================
@@ -645,6 +659,30 @@ describe('entry x capability: servers each entry starts with', () => {
       const observed = await ROW_DRIVERS[row]()
       expect(observed.servers).toEqual([...EXPECTED_SERVERS[row]].sort())
     })
+  }
+})
+
+describe('independent run delegation across engines', () => {
+  for (const engine of ['halo', 'anthropic', 'codex', 'dsh']) {
+    it(`${engine}: mounts hosted collaboration without enabling native delegation`, async () => {
+      state.engineId = engine
+      const observed = await ROW_DRIVERS['automation run']()
+      expect(observed.servers).toContain('halo-team')
+      expect(observed.disallowedTools).toEqual(expect.arrayContaining(['Agent', 'Task']))
+    })
+    for (const scope of ['global', 'app'] as const) {
+      it(`${engine}: ${scope} restriction preserves native delegation denies`, async () => {
+        state.engineId = engine
+        if (scope === 'global') state.config.agent = { disabledTools: ['Task', 'spawn_agent'] }
+        else state.appDisabledTools = ['Task', 'spawn_agent']
+        const observed = await ROW_DRIVERS['automation run']()
+        expect(observed.disallowedTools).toEqual(expect.arrayContaining(['Agent', 'Task']))
+        if (scope === 'global') expect(observed.disallowedTools).toContain('spawn_agent')
+        const mounted = vi.mocked(createSession).mock.calls.at(-1)![0] as Record<string, any>
+        const tools = mounted.mcpServers['halo-team'].tools as Array<{ name: string }>
+        expect(tools.some(tool => tool.name === 'spawn_agent')).toBe(false)
+      })
+    }
   }
 })
 

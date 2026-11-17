@@ -61,7 +61,8 @@ Bootstrap owns cross-module subscriptions and disposes them before their stores.
 
 - `tool-session.ts` — binds reusable endpoints to the active turn's authority.
   A stop changes the generation, so an old endpoint cannot adopt a new request.
-- `collaboration-lifecycle.ts` — subscribes to human input and stop boundaries;
+- `conversation-work.ts` — implements `ConversationWorkHost` for the agent service's conversation
+  lifecycle: human input and stop boundaries reach the participant service, so
   cancellation and session retirement do not require a model tool call.
 - `source-delivery.ts` — returns IM reports under the original source authority.
   It rechecks authorization after mailbox waiting and before replies or files;
@@ -543,6 +544,43 @@ replies or files. These bindings are never part of office replication.
 Native source deliveries carry `ownWork`, so conversation-interop admits the
 chat's own reports even when cross-conversation collaboration is disabled.
 Deleting a local session releases its collaboration through `onNativeChatDeleted`.
+
+An entry that delegates work gets its collaboration tools from an agent execution
+(`services/agent/execution`); the team runtime is the host that answers what
+delegated work means for each kind of entry (`execution-work.ts` dispatches on the
+execution's `source`: `run-work.ts`, and `chat-work.ts` for a digital human's
+conversation and a team member's turn; a person's space conversation mounts the
+broker's server instead). The contract (`ExecutionWorkHost` / `OwnedWork`) is
+declared by the agent layer and
+registered on `app-bridge` by the runtime; the team runtime never imports the
+agent execution's internals and the execution never imports the team runtime.
+
+Automation sources use the same participant execution and coordinator envelopes.
+Bootstrap first offers a run-addressed return to `run-work.ts`; it never falls
+through into a digital human's default chat. The host checks the source request,
+workspace, collaboration ownership and live execution, and only then hands the
+result to the agent execution as authorized input; a closed host refuses late
+results. The execution — not the team runtime — decides when the run may finish,
+carries the input into the engine session, stops the engine and settles the usage,
+so the team side answers only what it alone knows: which request a result belongs
+to, whether its sender may reach this run, what is still unfinished, and how to
+stop the descendants.
+
+`TeamRuntime.hasPendingWork` includes member preparation, concurrency queues,
+mailboxes, lifecycle notices and nested private collaboration scopes.
+`onWorkChanged` lets a headless source wait without polling. A change notification
+is a reason to re-read after the current stack, not an atomic completion claim.
+
+A chat turn waits for nothing: the conversation is its inbox, and a collaborator's
+report resumes it through `source-delivery.ts`. What the turn does need — the
+scoped tool endpoint, the request it serves, the sender authority an IM report
+returns under — is built by `chat-work.ts` from the context the entry described
+(`ExecutionRequester`, `ChannelOrigin`, `MemberTurn`), and retired when the turn's
+execution is closed. A conversation's collaborators belong to the conversation:
+closing a turn's execution leaves them running, and the conversation's own stop
+(bound by `services/agent/execution/conversation-lifecycle.ts` to this module's
+`conversation-work.ts`) is what stops them. Neither app-chat nor the space
+chat's toolset factory binds endpoints itself.
 
 ## A person is not a member (`fromAppId === null`)
 
@@ -1643,8 +1681,8 @@ current runtime team prompt supplies the live-delivery contract.
 
 ### Source collaboration lifecycle
 
-`collaboration-lifecycle.ts` binds genuine human-input and user-stop events to the
-participant service. Endpoint registration is memory-only; unused chats do not
+`conversation-work.ts` is the host the agent service's conversation lifecycle calls
+for genuine human-input and user-stop events; the agent layer owns the binding. Endpoint registration is memory-only; unused chats do not
 write request records. Source stop invalidates cached tool generations before
 awaiting member cancellation, discards queued mail, and prevents cancelled turn
 reports from waking the source. Only explicit controller continuation unlocks a

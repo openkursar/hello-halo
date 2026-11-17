@@ -11,6 +11,7 @@ export const TEAM_TOOLSET_GUIDE = COLLABORATION_GUIDANCE
 export interface SpaceTeamMcpScope extends ToolsetScope {
   origin?: TeamRequestOrigin
   canSpawn?: () => boolean
+  executionScoped?: boolean
   publicationRefusal?: (absolutePath: string) => string | null
 }
 

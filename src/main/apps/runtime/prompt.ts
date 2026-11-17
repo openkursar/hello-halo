@@ -177,6 +177,8 @@ export interface AppPromptOptions {
   usesAIBrowser?: boolean
   /** Whether the App may operate Halo itself (appends the Halo-API usage guide) */
   usesHaloApi?: boolean
+  /** What the run's collaboration tools offer; absent when delegation is not available. */
+  collaborationGuide?: string
   /** Working directory for the agent (passed to base system prompt) */
   workDir: string
   /** Display model name (passed to base system prompt) */
@@ -257,6 +259,7 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
   sections.push(AUTOMATION_CONTEXT)
 
   sections.push(REPORTING_RULES)
+  if (options.collaborationGuide) sections.push(`## Collaboration\n\n${options.collaborationGuide}`)
 
   // Do not advertise notification tools that were not mounted.
   if (options.notifyToolsAvailable) {

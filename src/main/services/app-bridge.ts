@@ -8,7 +8,9 @@
  * server, and notification when MCP apps change. Importing `apps/*` from
  * `services/*` would invert the layer direction.
  *
- * The diagnostic report likewise needs the IM channels' link state.
+ * The diagnostic report likewise needs the IM channels' link state, and an
+ * agent execution needs the application layer to run the work it delegates
+ * (`executionWork`, contract in `agent/execution/types.ts`).
  *
  * Instead, services depend on this bridge (same tier), and the Apps layer
  * registers its concrete implementations at startup via `registerAppBridge`
@@ -22,6 +24,7 @@
 import type { AppManagerService } from '../apps/manager'
 import type { SkillCatalogEntry } from '../../shared/types/skills'
 import type { ImChannelInstanceStatus } from '../../shared/types/im-channel'
+import type { ExecutionWorkHost } from './agent/execution'
 import { Emitter } from '../platform/event'
 
 /**
@@ -55,6 +58,8 @@ interface AppBridgeImpl {
   /** Status of every configured IM channel instance; absent where no channels run. */
   getImChannelStatuses?: () => ImChannelInstanceStatus[]
   getEffectiveSkillCatalog?: (spaceId: string, workDir?: string) => SkillCatalogEntry[]
+  /** Runs the work an agent execution delegates; absent where collaboration does not run. */
+  executionWork?: ExecutionWorkHost
 }
 
 let impl: AppBridgeImpl | null = null
@@ -111,6 +116,12 @@ export function onMcpAppsChange(handler: McpAppsChangeHandler): () => void {
 export function getImChannelStatuses(): ImChannelInstanceStatus[] {
   return impl?.getImChannelStatuses?.() ?? []
 }
+
+/** The host of delegated work, or null when the Apps layer has not been wired (an execution then delegates nothing). */
+export function getExecutionWorkHost(): ExecutionWorkHost | null {
+  return impl?.executionWork ?? null
+}
+
 
 /** Undefined means the Apps catalog provider has not been registered yet. */
 export function getEffectiveSkillCatalogForSession(spaceId: string, workDir?: string): SkillCatalogEntry[] | undefined {

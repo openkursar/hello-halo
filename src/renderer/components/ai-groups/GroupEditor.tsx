@@ -3,7 +3,7 @@
  * process enforces; a refusal that still comes back is worded here from its code.
  */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, GripVertical, Loader2, Plus, X } from 'lucide-react'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
@@ -38,6 +38,7 @@ interface GroupEditorProps {
   group?: AIGroup
   onSaved: (change: AIGroupChange) => void
   onCancel: () => void
+  onSavingChange?: (saving: boolean) => void
   /** For someone with no account yet: the way to add one. */
   onAddProvider: () => void
 }
@@ -75,16 +76,18 @@ function HowItWorks() {
   )
 }
 
-export function GroupEditor({ aiSources, group, onSaved, onCancel, onAddProvider }: GroupEditorProps) {
+export function GroupEditor({ aiSources, group, onSaved, onCancel, onAddProvider, onSavingChange }: GroupEditorProps) {
   const { t } = useTranslation()
   const sources = aiSources.sources
   const groups = aiSources.groups ?? []
 
   const [draft, setDraft] = useState<GroupDraft>(() => group ? draftOfGroup(group) : newGroupDraft(groups, t('Model group')))
   const [picking, setPicking] = useState(false)
+  const pickerTriggerRef = useRef<HTMLButtonElement>(null)
   const [fillNote, setFillNote] = useState<{ kind: 'skipped'; lines: string[] } | { kind: 'nothing-new' } | null>(null)
   const [problem, setProblem] = useState<EditorProblem | null>(null)
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
   const [dragFrom, setDragFrom] = useState<number | null>(null)
   const [dragOver, setDragOver] = useState<number | null>(null)
 
@@ -111,13 +114,15 @@ export function GroupEditor({ aiSources, group, onSaved, onCancel, onAddProvider
   }
 
   const save = async () => {
-    if (saving) return
+    if (savingRef.current) return
     const checked = validateGroupInput(draft, sources, groups, group)
     if (!checked.ok) {
       setProblem({ code: checked.issue.code, memberIndex: checked.issue.memberIndex })
       return
     }
+    savingRef.current = true
     setSaving(true)
+    onSavingChange?.(true)
     setProblem(null)
     try {
       const input = { name: checked.value.name, strategy: checked.value.strategy, members: checked.value.members }
@@ -126,12 +131,15 @@ export function GroupEditor({ aiSources, group, onSaved, onCancel, onAddProvider
         onSaved(response.data)
         return
       }
+      console.warn(`[GroupEditor] Group save refused code=${response.code ?? 'unknown'}`)
       setProblem({ code: response.code ?? 'unknown', memberIndex: response.memberIndex })
-    } catch (error) {
-      console.error('[GroupEditor] Could not save the group:', error instanceof Error ? error.message : error)
+    } catch {
+      console.warn('[GroupEditor] Group save failed; the draft remains open')
       setProblem({ code: 'unknown' })
     } finally {
+      savingRef.current = false
       setSaving(false)
+      onSavingChange?.(false)
     }
   }
 
@@ -146,6 +154,13 @@ export function GroupEditor({ aiSources, group, onSaved, onCancel, onAddProvider
   return (
     <form
       className="space-y-5"
+      onKeyDown={event => {
+        if (event.key !== 'Escape' || !picking) return
+        event.preventDefault()
+        event.stopPropagation()
+        setPicking(false)
+        pickerTriggerRef.current?.focus({ preventScroll: true })
+      }}
       onSubmit={event => {
         event.preventDefault()
         void save()
@@ -192,7 +207,7 @@ export function GroupEditor({ aiSources, group, onSaved, onCancel, onAddProvider
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-medium text-muted-foreground">{t('Models')}</span>
               <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => setPicking(open => !open)} disabled={room <= 0 && !picking} aria-expanded={picking} className={secondaryButton}>
+                <button ref={pickerTriggerRef} type="button" onClick={() => setPicking(open => !open)} disabled={room <= 0 && !picking} aria-expanded={picking} className={secondaryButton}>
                   <Plus size={14} />
                   {t('Add model')}
                 </button>
@@ -342,18 +357,19 @@ export function GroupEditor({ aiSources, group, onSaved, onCancel, onAddProvider
         </>
       )}
 
-      <div className="flex flex-col gap-3 pt-1 sm:flex-row">
+      <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:items-center sm:justify-end">
         <button
           type="button"
           onClick={onCancel}
-          className="flex-1 rounded-lg bg-secondary px-4 py-2 text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground"
+          disabled={saving}
+          className="min-h-11 sm:min-h-9 rounded-lg bg-secondary px-4 text-sm text-foreground hover:bg-surface-hover disabled:opacity-50"
         >
           {t('Cancel')}
         </button>
         <button
           type="submit"
           disabled={saving || (!hasUsableAccount && draft.members.length === 0)}
-          className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-50 sm:min-h-9"
         >
           {saving && <Loader2 size={16} className="animate-spin" />}
           {group ? t('Save') : t('Create')}

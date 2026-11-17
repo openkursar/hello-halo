@@ -58,7 +58,7 @@ for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) {
       const nativeGuidance = {
         halo: 'You are an exceptional autonomous agent',
         anthropic: 'You are Claude Code',
-        codex: 'You are Codex',
+        codex: 'You are a coding agent running in the Codex CLI',
         dsh: 'Use the read tool — not shell commands like cat — to inspect text files.',
       }[sdkEngine]
       for (const [actor, requests] of [['source', script.sourceRequests], ['member', script.memberRequests]] as const) {

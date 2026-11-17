@@ -39,6 +39,8 @@ import { RunProcessClearedError } from './errors'
 import { buildAppCapabilityInventory } from './capability-inventory'
 import { buildPeopleDirectory, directoryExcludedIds } from './people-directory'
 import { getTeamStore } from '../team'
+import { getActiveTeamRuntime } from './team'
+import { createExecutionWorkHost } from './team/execution-work'
 import type { SchedulerService } from '../../platform/scheduler'
 import type { MemoryService } from '../../platform/memory'
 import type { BackgroundService } from '../../platform/background'
@@ -151,6 +153,7 @@ export type { AppChatRequest, NativeSessionResult } from './app-chat'
 export { injectIntoAppChatWhenLive, getAppChatTurnIdentity } from './app-chat-live-turn'
 export { createDigitalHumanConversationSource } from './conversation-source'
 export { createRunConversationSource } from './run-conversation-source'
+export { deliverRunCollaborationSource } from './team/run-work'
 
 // Re-export inbound dispatch
 export { dispatchInboundMessage } from './dispatch-inbound'
@@ -277,6 +280,7 @@ export async function initAppRuntime(
     onMcpAppsChange,
     getEffectiveSkillCatalog: (spaceId, workDir) => getSkillLibrary().effectiveCatalog(spaceId, workDir),
     getImChannelStatuses: () => getActiveImChannelManager()?.getAllStatuses() ?? [],
+    executionWork: createExecutionWorkHost({ runtime: getActiveTeamRuntime }),
   })
   onMcpAppsChange(handleMcpAppsChange)
 

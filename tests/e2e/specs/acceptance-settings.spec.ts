@@ -178,7 +178,7 @@ test('with the proxy-only switch on, signing in to Claude is refused without a u
     await window.evaluate(proxyUrl => (window as unknown as { halo: HaloAPI }).halo.setConfig({ network: { proxy: proxyUrl, noProxy: undefined } }), proxy.url)
     await expect.poll(async () => (await configuration(window)).network?.proxy).toBe(proxy.url)
     await aiModel.scrollIntoViewIfNeeded()
-    await aiModel.getByRole('button', { name: /^Claude Claude Pro/ }).click()
+    await aiModel.locator('[data-ai-provider-row="claude"]').getByRole('button', { name: 'Try again', exact: true }).click()
     await expect(aiModel.getByRole('button', { name: 'Open Login Window', exact: true })).toBeVisible()
     await aiModel.getByRole('button', { name: 'Cancel', exact: true }).click()
   } finally {

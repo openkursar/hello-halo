@@ -186,6 +186,7 @@ export interface Orchestration {
   deliverRemote(params: { sessionKey: string; envelope: TeamEnvelope; trigger: TeamTriggerContext; coalescingKey?: string; onCompletion: (outcome: TurnCompletion) => void }): boolean | undefined
   /** Can this session take a turn — a streaming turn OR a held reservation. */
   isSessionOccupied(sessionKey: string): boolean
+  hasPendingWork(teamId: string, epochId: string): boolean
 
   /** Any executing, queued or decision-blocked run; used only to guard automatic triggers. */
   activeRunEpochId(teamId: string): string | null
@@ -299,6 +300,7 @@ export interface Orchestration {
 }
 
 export interface OrchestrationDeps {
+  onWorkChanged?: (teamId: string, epochId: string) => void
   hasPendingTurnReports?: (teamId: string, epochId: string) => boolean
   store: TeamStore
   bus: MessageBus
@@ -631,10 +633,16 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     if (notify) { emitTeamUpdated(teamId); notifyRunStateChanged(teamId) }
   }
 
+  function notifyWorkChanged(teamId: string, epochId: string): void {
+    try { deps.onWorkChanged?.(teamId, epochId) }
+    catch (error) { console.error(`${LOG_TAG} Work observer failed: team=${teamId} epoch=${epochId}`, error) }
+  }
+
   function settleEpochActivity(teamId: string, epochId: string): void {
     const epoch = store.getEpochById(epochId)
     if (!epoch || epoch.teamId !== teamId) return
     const occupied = epoch.endedAt === null && occupiedEpoch(teamId, epochId)
+    notifyWorkChanged(teamId, epochId)
     if (occupied) {
       observeEpoch(teamId, epochId)
       if (epoch.lifecycle === 'run') claimRun(teamId, epochId)
@@ -801,6 +809,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
     capturedEscalations.delete(trigger.correlationId)
     busTurns.add(sessionKey)
+    notifyWorkChanged(teamId, epochId)
 
     const inputs = deliveries.map((delivery) => renderEnvelope(delivery.envelope, delivery.trigger))
     let timedOut = false
@@ -1773,6 +1782,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   function noteMemberTurnStarted({ appId, teamId, epochId, correlationId }: { appId: string; teamId: string; epochId: string; correlationId?: string }): void {
     observeEpoch(teamId, epochId)
     observedTurns.set(buildTeamSessionKey(appId, teamId, epochId), correlationId)
+    notifyWorkChanged(teamId, epochId)
   }
 
   function getActiveEpochIds(teamId: string): ReadonlySet<string> {
@@ -2028,6 +2038,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         let pending = remoteTurns.get(sessionKey)
         if (!pending) remoteTurns.set(sessionKey, pending = new Set())
         pending.add(ticket)
+        notifyWorkChanged(envelope.teamId, envelope.epochId)
         observeEpoch(envelope.teamId, envelope.epochId)
         if (store.getEpochById(envelope.epochId)?.lifecycle === 'run') claimRun(envelope.teamId, envelope.epochId)
         refreshRunProjection(envelope.teamId)
@@ -2037,6 +2048,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     wakeForCheck,
     isBusy,
     isSessionOccupied,
+    hasPendingWork: occupiedEpoch,
     startEpoch,
     ensureConversationEpoch,
     renameConversationEpoch,

@@ -23,7 +23,7 @@ import { mkdirSync } from 'fs'
 import { readdir, rm, stat } from 'fs/promises'
 import { join } from 'path'
 import type { TeamStore } from '../../team'
-import { isRemoteMember } from '../../../../shared/apps/team-types'
+import { isRemoteMember, type TeamFolderPaths } from '../../../../shared/apps/team-types'
 
 const LOG_TAG = '[TeamFolder]'
 
@@ -37,12 +37,7 @@ const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i
 // than this is judged; writes inside a sub-folder do not count.
 const PRUNE_MIN_AGE_MS = 60 * 60 * 1000
 
-export interface TeamFolderPaths {
-  /** The folder of this piece of work, shared by the members on this machine. */
-  shared: string
-  /** The caller's own sub-folder: the only place it publishes `team:` refs from. */
-  self: string
-}
+export type { TeamFolderPaths }
 
 export function teamFolderId(teamId: string, epochId: string): string {
   return createHash('sha256').update(`${teamId}\u0000${epochId}`).digest('hex').slice(0, FOLDER_ID_LENGTH)

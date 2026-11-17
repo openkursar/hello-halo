@@ -7,6 +7,7 @@ vi.mock('react', async original => ({
   useState: (initial: any) => env.runner.state(initial),
   useRef: (initial: any) => env.runner.ref(initial),
   useEffect: (effect: () => void | (() => void), deps: unknown[]) => env.runner.effect(effect, deps),
+  useLayoutEffect: () => {},
 }))
 vi.mock('../../../src/renderer/api', () => ({ api: env.api }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }), getCurrentLanguage: () => 'en' }))
@@ -19,8 +20,11 @@ vi.mock('../../../src/renderer/components/icons/ProviderIconTile', () => ({ Prov
 vi.mock('../../../src/renderer/components/setup/LoginSelector', () => ({ LoginSelector: () => null }))
 vi.mock('../../../src/renderer/components/setup/SetupProviderConfig', () => ({ SetupProviderConfig: () => null }))
 vi.mock('../../../src/renderer/components/setup/PreferencesStep', () => ({ PreferencesStep: () => null }))
+vi.mock('../../../src/renderer/hooks/useConfirmDialog', () => ({ useConfirmDialog: () => ({ showConfirm: vi.fn(), DialogComponent: null }) }))
 
 import { AISourcesSection } from '../../../src/renderer/components/settings/AISourcesSection'
+import { AISourceCard } from '../../../src/renderer/components/settings/AISourceCard'
+import { AISourceInlinePanel } from '../../../src/renderer/components/settings/AISourceInlinePanel'
 import { OAuthAccountEditor } from '../../../src/renderer/components/settings/OAuthAccountEditor'
 import { ProviderSelector } from '../../../src/renderer/components/settings/ProviderSelector'
 import { ModelConfigPanel } from '../../../src/renderer/components/settings/ModelConfigPanel'
@@ -62,9 +66,10 @@ class ComponentRunner {
   unmount() { for (const effect of this.effects.values()) effect.cleanup?.() }
 }
 /** Hook-free child components render inline so their markup is part of the tree. */
-const INLINE_COMPONENTS = new Set<unknown>([OAuthRedirectLogin])
+const INLINE_COMPONENTS = new Set<unknown>([OAuthRedirectLogin, AISourceCard, AISourceInlinePanel])
 function children(tree: any): any[] {
-  return INLINE_COMPONENTS.has(tree.type) ? [tree.type(tree.props)] : [tree.props?.children].flat(Infinity)
+  if (INLINE_COMPONENTS.has(tree.type)) return [tree.type(tree.props)]
+  return [tree.props?.children, tree.props?.editor].flat(Infinity)
 }
 function nodes(tree: any): any[] {
   if (!tree || typeof tree !== 'object') return []
@@ -196,14 +201,18 @@ describe('AI sources OAuth UI', () => {
     const email = config().aiSources.sources[0].user.name
     const node = nodes(render()).find(entry => entry.props?.title === email)
     expect(node.props.className).toContain('truncate')
-    const header = nodes(render()).find(entry => entry.props?.className === 'flex-1 min-w-0' && text(entry).includes(email))
+    const header = nodes(render()).find(entry => {
+      const classes = entry.props?.className?.split(/\s+/) ?? []
+      return classes.includes('flex-1') && classes.includes('min-w-0') && text(entry).includes(email)
+    })
     expect(header).toBeDefined()
   })
 
   it('shows remote manual login and propagates provider and login ID on submission', async () => {
     env.remote = true
     const { render } = await settings()
-    await button(render(), 'external-pkce Add another account').props.onClick()
+    button(render(), 'external-pkce Add another account').props.onClick()
+    await flush()
     let tree = render()
     expect(text(tree)).toContain('Manual login')
     expect(button(tree, 'Open Login Window')).toBeUndefined()
@@ -245,6 +254,7 @@ describe('AI sources OAuth UI', () => {
     const updated = config()
     loadedConfig.resolve({ success: true, data: updated })
     await pending
+    await flush()
     expect(setConfig).toHaveBeenCalledTimes(1)
     expect(setConfig).toHaveBeenCalledWith(updated)
     expect(text(render())).not.toContain('Waiting for login...')
@@ -275,6 +285,7 @@ describe('AI sources OAuth UI', () => {
     runner.unmount()
     resolveStart(start('late-login'))
     await pending
+    await flush()
     expect(env.api.authCancelLogin).toHaveBeenCalledWith('external-pkce', 'late-login')
     expect(env.api.authCompleteLogin).not.toHaveBeenCalled()
   })
@@ -286,10 +297,10 @@ describe('AI sources OAuth UI', () => {
     if (failure === 'rejected') env.api.authCancelLogin.mockResolvedValue({ success: false, error: 'accessToken=secret' })
     else env.api.authCancelLogin.mockRejectedValue(new Error('accessToken=secret'))
     const { runner, render, setConfig } = await settings()
-    const pending = button(render(), 'external-pkce Add another account').props.onClick()
+    button(render(), 'external-pkce Add another account').props.onClick()
     runner.unmount()
     resolveStart(start('late-login'))
-    await pending
+    await flush()
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalledWith('[OAuthLogin] Could not cancel login for external-pkce')
     expect(env.api.authCancelLogin).toHaveBeenCalledWith('external-pkce', 'late-login')
@@ -300,11 +311,13 @@ describe('AI sources OAuth UI', () => {
   it('displays start and completion failures instead of only logging them', async () => {
     env.api.authStartLogin.mockResolvedValue({ success: false, error: 'Provider is busy' })
     const { render } = await settings()
-    await button(render(), 'external-pkce Add another account').props.onClick()
+    button(render(), 'external-pkce Add another account').props.onClick()
+    await flush()
     expect(text(nodes(render()).find(node => node.props?.role === 'alert'))).toContain('Provider is busy')
     env.api.authStartLogin.mockResolvedValue(start('new-login'))
     env.api.authOpenLoginWindow.mockResolvedValue({ success: false, error: 'Login timed out' })
-    await button(render(), 'external-pkce Add another account').props.onClick()
+    button(render(), 'Try again').props.onClick()
+    await flush()
     await button(render(), 'Open Login Window').props.onClick()
     expect(text(nodes(render()).find(node => node.props?.role === 'alert'))).toContain('Login timed out')
   })
@@ -355,11 +368,25 @@ describe('OAuth account editor', () => {
   it('keeps the draft open with the reason when saving fails', async () => {
     env.api.aiSourcesUpdateSource.mockResolvedValue({ success: false, error: 'Settings could not be saved' })
     const { render, onSaved } = editor()
+    nodes(render()).find(node => node.type === 'input').props.onChange({ target: { value: 'Retained account name' } })
     await button(render(), 'Save').props.onClick()
     const tree = render()
     expect(text(nodes(tree).find(node => node.props?.role === 'alert'))).toContain('Settings could not be saved')
+    expect(nodes(tree).find(node => node.type === 'input').props.value).toBe('Retained account name')
     expect(button(tree, 'Save').props.disabled).toBe(false)
     expect(onSaved).not.toHaveBeenCalled()
+  })
+
+  it('keeps credential details out of the failure log while preserving the visible reason', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const source = { ...account(), accessToken: 'fictional-credential' }
+    env.api.aiSourcesUpdateSource.mockResolvedValue({ success: false, error: 'Settings could not be saved: accessToken=fictional-credential' })
+    const { render } = editor(source)
+    await button(render(), 'Save').props.onClick()
+    expect(text(nodes(render()).find(node => node.props?.role === 'alert'))).toContain('Settings could not be saved')
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls.flat().join(' ')).toContain('Settings could not be saved')
+    expect(warn.mock.calls.flat().join(' ')).not.toContain(source.accessToken)
   })
 
   it('saves on Enter in the name field, but not on the Enter that confirms an IME candidate', async () => {

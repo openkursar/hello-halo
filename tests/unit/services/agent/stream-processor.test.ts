@@ -927,7 +927,7 @@ describe('processStream partial snapshot', () => {
     expect(result.finalContent).toBe(expected)
   })
 
-  it.each(['Bash', 'TodoWrite'])('preserves the %s continuity boundary when an open response is replaced by a completed fallback', async toolName => {
+  it.each(['Bash', 'TodoWrite', 'Goal'])('preserves the %s continuity boundary when an open response is replaced by a completed fallback', async toolName => {
     let readSnapshot!: () => StreamResult
     let beforeFallback!: StreamResult
     let snapshot!: StreamResult
@@ -1019,7 +1019,7 @@ describe('processStream partial snapshot', () => {
     expect(result.finalContent).toBe('Repeated reply\n\nRepeated reply')
   })
 
-  it.each(['Bash', 'TodoWrite'])('preserves the %s continuity rule when a streamed response also carries its aggregate', async toolName => {
+  it.each(['Bash', 'TodoWrite', 'Goal'])('preserves the %s continuity rule when a streamed response also carries its aggregate', async toolName => {
     const result = await processStream(baseParams({
       messageContent: undefined,
       v2Session: fakeSession([

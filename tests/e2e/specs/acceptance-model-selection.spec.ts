@@ -206,8 +206,9 @@ for (const state of ['removed', 'invalid'] as const) {
     if (!await card.getByRole('button', { name: 'Edit', exact: true }).isVisible()) await card.getByText(primary.name, { exact: true }).click()
     if (state === 'removed') {
       await card.getByRole('button', { name: 'Delete', exact: true }).click()
-      await expect(aiSection(window).getByRole('heading', { name: 'Confirm Delete', exact: true })).toBeVisible()
-      await aiSection(window).getByRole('button', { name: 'Delete', exact: true }).click()
+      const confirmation = window.getByRole('alertdialog', { name: 'Delete this account?', exact: true })
+      await expect(confirmation).toBeVisible()
+      await confirmation.getByRole('button', { name: 'Delete', exact: true }).click()
       await expect.poll(() => readProviderConfiguration(managementApp.profile).sources.some(source => source.id === primary.id)).toBe(false)
     } else {
       await card.getByRole('button', { name: 'Edit', exact: true }).click()

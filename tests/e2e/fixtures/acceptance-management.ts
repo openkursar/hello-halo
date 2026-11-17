@@ -36,6 +36,7 @@ interface ManagementApp {
 interface ManagementFixtures {
   diagnoseShutdown: boolean
   seedPersonChat: boolean
+  seedOAuthAccount: boolean
   managementApp: ManagementApp
   window: Page
 }
@@ -47,13 +48,18 @@ export function managementAcceptance(caseId: string, variant: Record<string, str
 export const test = base.extend<ManagementFixtures>({
   seedPersonChat: [false, { option: true }],
   diagnoseShutdown: [false, { option: true }],
-  managementApp: async ({ seedPersonChat, diagnoseShutdown }, use, testInfo) => {
+  seedOAuthAccount: [false, { option: true }],
+  managementApp: async ({ seedPersonChat, seedOAuthAccount, diagnoseShutdown }, use, testInfo) => {
     const entry = getAppEntryPath()
     const profile = createTestConfigDir(entry, [])
     const configuration = join(profile, '.halo/config.json')
     const config = JSON.parse(readFileSync(configuration, 'utf8'))
     config.api = { provider: 'openai', apiKey: '', apiUrl: 'http://127.0.0.1:9', model: 'not-configured' }
-    config.aiSources = { version: 2, currentId: null, sources: [] }
+    config.aiSources = { version: 2, currentId: null, sources: seedOAuthAccount ? [{
+      id: 'inline-oauth', name: 'Inline OAuth account', provider: 'chatgpt', authType: 'oauth',
+      model: 'gpt-4o', availableModels: [{ id: 'gpt-4o', name: 'gpt-4o' }],
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    }] : [] }
     config.agent = { ...config.agent, sdkEngine: 'halo', configDirMode: 'custom', customConfigDir: join(profile, 'sdk-state') }
     config.modelConfigSkipped = true
     config.imChannels = { instances: [] }
