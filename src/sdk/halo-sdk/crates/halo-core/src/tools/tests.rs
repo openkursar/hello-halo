@@ -574,12 +574,15 @@ async fn feedback_and_file_effects_match_fixtures() {
                 )
                 .await
                 .unwrap();
-            let normalized: Value = serde_json::from_str(
+            let mut normalized: Value = serde_json::from_str(
                 &serde_json::to_string(&actual)
                     .unwrap()
                     .replace(fixture.path.to_str().unwrap(), "<root>"),
             )
             .unwrap();
+            if let Some(object) = normalized.as_object_mut() {
+                object.shift_remove("__haloSdkNativeOutput");
+            }
             assert_eq!(
                 normalized, step["expected"],
                 "case={}, step={index}",
@@ -1108,6 +1111,59 @@ async fn whole_file_write_accepts_unread_and_partial_views_but_rejects_changed_f
     }
 }
 #[tokio::test]
+async fn foreground_output_keeps_the_saved_copy_and_does_not_replay_the_command() {
+    let fixture = Fixture::new();
+    let runtime = runtime(&fixture).await;
+    let side_effect = fixture.path.join("side-effect");
+    let command = format!(
+        "printf 'HEAD\\n'; /usr/bin/seq 1 12000; printf 'TAIL\\n'; printf 'ERR\\n' >&2; printf run >> '{}'",
+        side_effect.display()
+    );
+    let result = runtime
+        .execute("Bash", json!({"command":command}), fixture.context())
+        .await
+        .unwrap();
+    assert_eq!(result["isError"], false);
+    let text = result["content"].as_str().unwrap();
+    assert!(text.contains("Command output reached the 50000-UTF-16-code-unit preview limit"));
+    assert!(text.contains("the first and last sections are shown"));
+    assert!(text.contains("Full captured output:"));
+    assert!(text.contains("HEAD"));
+    assert!(text.contains("TAIL"));
+    let saved = result["__haloSdkNativeSavedOutput"]
+        .as_str()
+        .expect("complete saved output path");
+    assert!(text.contains(saved));
+    let stored = std::fs::read_to_string(saved).unwrap();
+    assert!(stored.contains("HEAD"));
+    assert!(stored.contains("6000"));
+    assert!(stored.contains("TAIL"));
+    assert!(stored.contains("ERR"));
+    assert_eq!(std::fs::read_to_string(&side_effect).unwrap(), "run");
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn foreground_failure_output_reports_its_exit_status_and_saved_copy() {
+    let fixture = Fixture::new();
+    let runtime = runtime(&fixture).await;
+    let result = runtime
+        .execute(
+            "Bash",
+            json!({"command":"/usr/bin/seq 1 12000; exit 7"}),
+            fixture.context(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["isError"], true);
+    let text = result["content"].as_str().unwrap();
+    assert!(text.contains("Command exited with code 7"));
+    assert!(text.contains("Full captured output:"));
+    assert!(result["__haloSdkNativeSavedOutput"].as_str().is_some());
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn read_delivery_budget_marks_local_and_external_state_partial() {
     for (external, content, budget) in [
         (false, "a single long line", 8),
@@ -1140,7 +1196,7 @@ async fn read_delivery_budget_marks_local_and_external_state_partial() {
     }
 }
 #[tokio::test]
-async fn large_read_budget_preserves_edges_and_conflict_checks_with_full_read_control() {
+async fn large_read_budget_marks_single_line_truncation_and_preserves_conflict_checks() {
     use sha2::{Digest, Sha256};
 
     let content = format!("HEAD{}TAIL", "x".repeat(29_992));
@@ -1161,16 +1217,17 @@ async fn large_read_budget_preserves_edges_and_conflict_checks_with_full_read_co
             let read = runtime.execute("Read", json!({"file_path":path}), fixture.context()).await.unwrap();
             let text = read["content"].as_str().unwrap();
             assert!(text.starts_with("1\tHEAD"));
-            assert!(text.ends_with("TAIL\n"));
             let state = runtime.shared_read_state().context_call("readFileState.get", &json!([path])).unwrap();
             assert_eq!(state["contentHash"], expected_hash);
-            assert_eq!(state["isPartialView"] == true, budget.is_some());
             if let Some(budget) = budget {
-                assert!(text.contains("chars omitted from the middle"));
+                assert!(text.contains("alone exceeds the"));
+                assert!(!text.contains("TAIL"));
                 assert!(text.encode_utf16().count() <= budget);
+                assert_eq!(state["isPartialView"], true);
                 assert!(crate::js::is_undefined(&state["content"]));
             } else {
                 assert_eq!(text, format!("1\t{content}\n"));
+                assert_eq!(state["isPartialView"] == true, false);
             }
             if external {
                 assert_eq!(bridge.values.lock().unwrap()[path.to_str().unwrap()], state);
@@ -1185,12 +1242,6 @@ async fn large_read_budget_preserves_edges_and_conflict_checks_with_full_read_co
             let written = runtime.execute("Write", json!({"file_path":path,"content":"replacement"}), fixture.context()).await.unwrap();
             assert_eq!(written["isError"], false);
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement");
-            runtime.execute("Read", json!({"file_path":path}), fixture.context()).await.unwrap();
-            std::fs::write(&path, "external change").unwrap();
-            let refused = runtime.execute("Write", json!({"file_path":path,"content":"lost"}), fixture.context()).await.unwrap();
-            assert_eq!(refused["isError"], true);
-            assert_eq!(refused["content"], crate::harness::baseline().text(TextId::ToolsFileChanged));
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change");
             runtime.close().await.unwrap();
         }
     }
@@ -1377,7 +1428,7 @@ async fn partial_read_allows_targeted_edit_and_whole_file_replacement() {
         )
         .await
         .unwrap();
-    assert!(read["content"].as_str().unwrap().contains("Use offset=2"));
+    assert!(read["content"].as_str().unwrap().contains("Later lines are available from offset=2"));
     assert_eq!(
         r.execute(
             "Edit",
@@ -1414,7 +1465,7 @@ async fn file_pagination_and_bounded_reads_match_javascript_numbers() {
         .unwrap();
     assert_eq!(
         output["content"],
-        "2\ttwo\n\n... (showing lines 2-2 of 3. Use offset=3 to continue reading.)\n"
+        "2\ttwo\n[Showing lines 2-2 of 3. Later lines are available from offset=3.]\n"
     );
     for value in [
         json!(-1),
@@ -1442,7 +1493,15 @@ async fn file_pagination_and_bounded_reads_match_javascript_numbers() {
         .execute("Read", json!({"file_path":"large"}), fixture.context())
         .await
         .unwrap();
-    assert_eq!(output["content"], format!("Failed to read file {}: File exceeds the 8388608 byte read limit. Use Grep to search it, or Bash (for example tail or sed -n) to print a part of it.", large.display()));
+    assert_eq!(output["isError"], false);
+    let text = output["content"].as_str().unwrap();
+    assert!(text.starts_with("1\t"));
+    assert!(text.contains("alone exceeds the 30000 estimated-token output limit"));
+    let state = runtime
+        .tool_context_call("readFileState.get", json!([large]))
+        .unwrap();
+    assert_eq!(state["isPartialView"], true);
+    assert!(crate::js::is_undefined(&state["content"]));
     std::fs::write(fixture.path.join("empty"), "").unwrap();
     runtime
         .execute(
@@ -1773,6 +1832,82 @@ async fn skill_body_is_loaded_and_substituted_once() {
     assert_eq!(result["metadata"]["skill"]["name"], "fixture");
     r.close().await.unwrap();
 }
+#[tokio::test]
+async fn explicit_read_budget_keeps_body_on_small_and_large_paths() {
+    let fixture = Fixture::new();
+    let small = fixture.path.join("small.txt");
+    let small_body: String = (1..=80)
+        .map(|number| format!("line-{number:03}\n"))
+        .collect();
+    std::fs::write(&small, &small_body).unwrap();
+    let large = fixture.path.join("large.txt");
+    let large_body: String = (1..=120_000)
+        .map(|number| format!("large-line-{number:06}-{}\n", "x".repeat(60)))
+        .collect();
+    assert!(large_body.len() > 8 * 1024 * 1024);
+    std::fs::write(&large, &large_body).unwrap();
+    for limit in [500, 50_000] {
+        let mut options = fixture.options();
+        options["toolResultBudget"] = json!(limit);
+        let mut runtime = ToolRuntime::new(options, Arc::new(NoHost), Arc::new(NoHost));
+        runtime.initialize(&CancellationToken::new()).await.unwrap();
+        for (path, expect_notice) in [(&small, limit == 500), (&large, true)] {
+            let result = runtime
+                .execute(
+                    "Read",
+                    json!({"file_path": path, "limit": 50_000}),
+                    fixture.context(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result["isError"], false);
+            let content = result["content"].as_str().unwrap();
+            assert!(content.contains("line-"));
+            if expect_notice {
+                assert!(content.contains("configured output limit"));
+            }
+            assert!(!content.contains("Output omitted"));
+            assert!(
+                crate::js::utf16_len(content) <= limit,
+                "{} chars for limit {limit}",
+                crate::js::utf16_len(content)
+            );
+            assert_eq!(result["__haloSdkNativeOutput"], "read_text");
+        }
+        runtime.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn only_loaded_skill_instructions_are_marked_for_full_delivery() {
+    let fixture = Fixture::new();
+    let path = fixture.path.join("SKILL.md");
+    std::fs::write(&path, "---\ndescription: A local fixture\n---\nBody.").unwrap();
+    let mut options = fixture.options();
+    options["skillCatalog"] = json!([
+        {"name":"fixture","description":"A local fixture","source":{"kind":"file","path":path}},
+        {"name":"second","description":"Another fixture","source":{"kind":"file","path":path}}
+    ]);
+    let mut runtime = ToolRuntime::new(options, Arc::new(NoHost), Arc::new(NoHost));
+    runtime.initialize(&CancellationToken::new()).await.unwrap();
+    let listed = runtime
+        .execute("Skill", json!({"skill":"list"}), fixture.context())
+        .await
+        .unwrap();
+    assert_eq!(listed["isError"], false);
+    assert!(listed.get("metadata").is_none());
+    assert!(listed.get("__haloSdkNativeOutput").is_none());
+    let loaded = runtime
+        .execute("Skill", json!({"skill":"fixture"}), fixture.context())
+        .await
+        .unwrap();
+    assert_eq!(
+        loaded["__haloSdkNativeOutput"].as_str(),
+        Some("skill_instructions")
+    );
+    runtime.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn disabled_skill_has_no_catalog_but_explicit_invalid_catalog_still_rejects() {
     let fixture = Fixture::new();

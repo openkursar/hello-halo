@@ -88,7 +88,7 @@
           "limit": 1
         },
         "expected": {
-          "content": "2\tsecond\n\n... (showing lines 2-2 of 4. Use offset=3 to continue reading.)\n",
+          "content": "2\tsecond\n[Showing lines 2-2 of 4. Later lines are available from offset=3.]\n",
           "isError": false
         }
       },

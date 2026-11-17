@@ -136,7 +136,7 @@ describe('ReadTool — text files', () => {
     );
     expect(result.isError).toBe(false);
     // Should contain truncation notice
-    expect(result.content).toMatch(/Use offset=\d+ to continue reading/i);
+    expect(result.content).toMatch(/Later lines are available from offset=\d+/i);
     // Should have lines 1-10 but not line 11
     expect(result.content).toContain('line 10');
     expect(result.content).not.toMatch(/^\s*11\t/m);
@@ -1147,29 +1147,27 @@ describe('Read-before-write — ReadTool populates readFileState', () => {
 describe('ReadTool — output line budget', () => {
   const tool = getTool('Read');
 
-  it('narrows output on whole lines when the 40k char budget is exceeded', async () => {
+  it('narrows output on whole lines at the estimated-token budget', async () => {
     const filePath = path.join(tmpDir, 'wide.txt');
-    // 100 lines × ~600 chars ≈ 60k chars — over budget, under the 2000-line cap.
+    // 200 lines x ~600 chars: over the 30,000 estimated-token default.
     const longLine = 'x'.repeat(600);
-    const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1} ${longLine}`).join('\n');
+    const lines = Array.from({ length: 200 }, (_, i) => `line ${i + 1} ${longLine}`).join('\n');
     await fs.writeFile(filePath, lines, 'utf-8');
 
     const result = await tool.execute({ file_path: filePath }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content.length).toBeLessThanOrEqual(40_000 + 200);
+    expect(result.content.length).toBeGreaterThan(50_000);
+    expect(result.content.length).toBeLessThan(90_000);
 
-    // No mid-line cut: every rendered line keeps the cat -n format, and the
-    // continuation note names the next offset.
     const rendered = result.content.split('\n').filter((l) => /^\s*\d+\t/.test(l));
     expect(rendered.length).toBeGreaterThan(0);
-    expect(rendered.length).toBeLessThan(100);
+    expect(rendered.length).toBeLessThan(200);
     const lastRendered = rendered[rendered.length - 1];
     const lastLineNum = Number(lastRendered.split('\t')[0]);
-    expect(result.content).toMatch(
-      new RegExp(`showing lines 1-${lastLineNum} of 100\\. Use offset=${lastLineNum + 1} to continue`),
-    );
+    expect(result.content).toContain('30000 estimated-token output limit');
+    expect(result.content).toContain(`showing lines 1-${lastLineNum} of 200`);
+    expect(result.content).toContain(`offset=${lastLineNum + 1}`);
 
-    // Pagination contract: offset continues exactly where the budget stopped.
     const page2 = await tool.execute(
       { file_path: filePath, offset: lastLineNum + 1 },
       makeCtx(tmpDir),
@@ -1177,16 +1175,15 @@ describe('ReadTool — output line budget', () => {
     expect(page2.isError).toBe(false);
     expect(page2.content).toMatch(new RegExp(`^\\s*${lastLineNum + 1}\\t`, 'm'));
   });
-
-  it('marks the read as a partial view when the char budget truncates', async () => {
+  it('marks the read as a partial view when the token budget truncates', async () => {
     const filePath = path.join(tmpDir, 'wide2.txt');
     const longLine = 'y'.repeat(700);
-    const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1} ${longLine}`).join('\n');
+    const lines = Array.from({ length: 200 }, (_, i) => `line ${i + 1} ${longLine}`).join('\n');
     await fs.writeFile(filePath, lines, 'utf-8');
 
     const ctx = makeStrictCtx(tmpDir);
     await tool.execute({ file_path: filePath }, ctx);
-    // No offset/limit were passed — the partial flag comes from the char cap.
+    // No offset/limit were passed — the partial flag comes from the token cap.
     const state = ctx.readFileState.get(filePath)!;
     expect(state.offset).toBeUndefined();
     expect(state.limit).toBeUndefined();
@@ -1412,8 +1409,9 @@ describe('File tools — bounded read state', () => {
     const ctx = makeStrictCtx(tmpDir);
     const result = await read.execute({ file_path: filePath }, ctx);
     expect(result.isError).toBe(false);
-    expect(result.content.length).toBeLessThan(40_200);
-    expect(result.content).toContain('line 1 was truncated');
+    expect(result.content.length).toBeLessThan(90_000);
+    expect(result.content).toContain('alone exceeds the 30000 estimated-token output limit');
+    expect(result.content).toContain('only its beginning is shown');
     expect(ctx.readFileState.get(filePath)?.isPartialView).toBe(true);
     expect(ctx.readFileState.get(filePath)?.content).toBeUndefined();
     expect((await write.execute({ file_path: filePath, content: 'overwrite' }, ctx)).isError).toBe(false);

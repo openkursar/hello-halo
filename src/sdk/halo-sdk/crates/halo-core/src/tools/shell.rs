@@ -113,6 +113,9 @@ pub struct ShellTools {
     base_environment: Value,
     temporary_directory: PathBuf,
     activity: Option<Arc<crate::resource_activity::ResourceActivity>>,
+    output: Option<Arc<super::output::OutputStore>>,
+    result_budget: usize,
+    configured_budget: bool,
 }
 pub(super) fn command_timeout(input: &Value) -> u64 {
     let number = crate::js::to_number_data(input.get("timeout"));
@@ -475,7 +478,7 @@ mod migration_tests {
         assert_eq!(shell.execute(&json!({"command":"printf \"$BACKGROUND_SAVED\""}),ctx.clone()).await["content"],"saved-value");
         let result=shell.execute(&json!({"command":"printf '%040000d' 0","run_in_background":true}),ctx.clone()).await;
         let task=wait(&shell,&result["metadata"]["task_id"],&ctx).await;
-        let output=shell.read_output(&task,&ctx.harness).await.unwrap();assert_eq!(output["truncated"],true);assert_eq!(output["output"].as_str().unwrap().len(),32768);assert_eq!(tokio::fs::metadata(task["outputFile"].as_str().unwrap()).await.unwrap().len(),40000);assert!(task.get("output").is_none());
+        let output=shell.read_output(&task,&ctx.harness,32768).await.unwrap();assert_eq!(output["truncated"],true);assert_eq!(output["output"].as_str().unwrap().len(),32768);assert_eq!(tokio::fs::metadata(task["outputFile"].as_str().unwrap()).await.unwrap().len(),40000);assert!(task.get("output").is_none());
         let result=shell.execute(&json!({"command":"sleep 30","run_in_background":true}),launch.clone()).await;
         assert!(result["content"].as_str().unwrap().contains("No execution deadline was set"));assert!(result["content"].as_str().unwrap().contains("session is closed or interrupted"));
         let id=result["metadata"]["task_id"].clone();launch.cancellation.cancel();assert_eq!(shell.context_call("backgroundTasks.get",&json!([id]),&ctx.harness).unwrap()["status"],"running");
@@ -516,7 +519,7 @@ mod migration_tests {
         let (root,shell,mut ctx)=fixture().await;
         let state=ShellState{cwd:ctx.cwd.clone(),env:HashMap::new()};
         let command="printf '%s|%s|%s|%s' \"$LANG\" \"$LC_ALL\" \"$AGENT_MODE\" \"$GIT_EDITOR\"";
-        let execute=|context:ToolContext,base:Value|{ let state=state.clone(); let processes=shell.processes.clone(); async move {run(command,state,&context,None,CancellationToken::new(),None,None,processes,base,std::env::temp_dir(),None).await} };
+        let execute=|context:ToolContext,base:Value|{ let state=state.clone(); let processes=shell.processes.clone(); async move {run(command,state,&context,None,CancellationToken::new(),None,None,processes,base,std::env::temp_dir(),None,None).await} };
         let base=json!({"PATH":"/usr/bin:/bin","AGENT_SHELL":"/bin/bash","LANG":"","LC_ALL":""});
         let result=execute(ctx.clone(),base.clone()).await.unwrap();assert_eq!(result.stdout,"C.UTF-8|C.UTF-8|1|true");
         ctx.env=json!({"AGENT_SHELL":"/bin/bash","LANG":"caller","GIT_EDITOR":"custom"});ctx.env["AGENT_MODE"]=crate::js::undefined();
@@ -558,11 +561,16 @@ mod migration_tests {
         let path = task["outputFile"].as_str().unwrap();
         assert!(tokio::fs::metadata(path).await.unwrap().len() <= 8 * 1024 * 1024);
         assert_eq!(task["outputTruncated"], true);
-        let output = shell.read_output(&task, &ctx.harness).await.unwrap();
+        let output = shell.read_output(&task, &ctx.harness, 32768).await.unwrap();
         assert_eq!(output["truncated"], true);
-        assert!(tokio::fs::read_to_string(path).await.unwrap().ends_with("your own file.]\n"));
+        assert!(tokio::fs::read_to_string(path).await.unwrap().ends_with("later output was not saved here.]"));
+        let task_output=shell.task("TaskOutput",&json!({"task_id":task["id"],"block":false}),&ctx).await;
+        let value:Value=serde_json::from_str(task_output["content"].as_str().unwrap()).unwrap();
+        let preview=value["task"]["result"].as_str().unwrap();
+        assert!(preview.contains("The saved file is also incomplete"));
+        assert!(preview.contains("8388608-byte file limit"));
         tokio::fs::remove_file(path).await.unwrap();
-        let output = shell.read_output(&task, &ctx.harness).await.unwrap();
+        let output = shell.read_output(&task, &ctx.harness, 32768).await.unwrap();
         assert_eq!(output["truncated"], true);
         assert!(output["output"].as_str().unwrap().contains("no longer available"));
         finish(root, shell).await;
@@ -628,9 +636,26 @@ mod migration_tests {
         assert_eq!(result["isError"],false);assert!(result["content"].as_str().unwrap().contains("Running in session directory"));
         let task=wait(&shell,&result["metadata"]["task_id"],&ctx).await;
         assert_eq!(task["status"],"completed");
-        let output=shell.read_output(&task,&ctx.harness).await.unwrap();
+        let output=shell.read_output(&task,&ctx.harness,32768).await.unwrap();
         assert!(output["output"].as_str().unwrap().contains("background"));
         assert!(output["output"].as_str().unwrap().contains(&ctx.cwd));
+        finish(root,shell).await;
+    }
+
+    #[tokio::test]
+    async fn task_output_names_the_delivered_preview_range() {
+        let (root,shell,ctx)=fixture().await;
+        let result=shell.execute(&json!({"command":"/usr/bin/seq 1 12000","run_in_background":true}),ctx.clone()).await;
+        assert_eq!(result["isError"],false);
+        let task=wait(&shell,&result["metadata"]["task_id"],&ctx).await;
+        assert_eq!(task["status"],"completed");
+        let output=shell.task("TaskOutput",&json!({"task_id":result["metadata"]["task_id"],"block":false}),&ctx).await;
+        assert_eq!(output["isError"],false);
+        let value:Value=serde_json::from_str(output["content"].as_str().unwrap()).unwrap();
+        let preview=value["task"]["result"].as_str().unwrap();
+        assert!(preview.contains("Showing the first 32768 bytes of saved output"));
+        assert!(preview.contains("Additional captured output is available at"));
+        assert!(preview.contains(task["outputFile"].as_str().unwrap()));
         finish(root,shell).await;
     }
 
@@ -768,12 +793,10 @@ mod restore_tests {
 struct Capture {
     head: Vec<u16>,
     tail: Vec<u16>,
-    total: usize,
 }
 impl Capture {
     fn push(&mut self, s: &str) {
         let units: Vec<u16> = s.encode_utf16().collect();
-        self.total += units.len();
         let head = (32768 - self.head.len()).min(units.len());
         self.head.extend_from_slice(&units[..head]);
         self.tail.extend_from_slice(&units[head..]);
@@ -781,25 +804,97 @@ impl Capture {
             self.tail.drain(..self.tail.len() - 32768);
         }
     }
-    fn text(&self, harness: &ResolvedHarness) -> String {
-        let mark = if self.total > 65536 {
-            harness.render(
-                TextId::ToolsShellCaptureTruncated,
-                &[("omitted", &(self.total - 65536).to_string())],
-            )
-        } else {
-            String::new()
-        };
+    fn text(&self) -> String {
         format!(
-            "{}{mark}{}",
+            "{}{}",
             String::from_utf16_lossy(&self.head),
             String::from_utf16_lossy(&self.tail)
         )
     }
 }
+
+struct CaptureSinkState {
+    pending: Vec<u8>,
+    total: usize,
+    writer: Option<super::output::OutputWriter>,
+    failed: Option<super::output::SaveReason>,
+}
+struct CaptureSink {
+    state: Mutex<CaptureSinkState>,
+    store: Arc<super::output::OutputStore>,
+    threshold: usize,
+    marker: Option<String>,
+}
+impl CaptureSink {
+    fn new(
+        store: Arc<super::output::OutputStore>,
+        threshold: usize,
+        marker: Option<String>,
+    ) -> Self {
+        Self {
+            state: Mutex::new(CaptureSinkState {
+                pending: Vec::new(),
+                total: 0,
+                writer: None,
+                failed: None,
+            }),
+            store,
+            threshold,
+            marker,
+        }
+    }
+    async fn push(&self, bytes: &[u8]) {
+        let mut state = self.state.lock().await;
+        if state.failed.is_some() {
+            return;
+        }
+        state.total = state.total.saturating_add(bytes.len());
+        if state.writer.is_some() {
+            state.writer.as_mut().unwrap().write_bytes(bytes).await;
+            return;
+        }
+        if state.total < self.threshold {
+            state.pending.extend_from_slice(bytes);
+            return;
+        }
+        match self.store.begin("bash", self.marker.clone()).await {
+            Ok(writer) => {
+                state.writer = Some(writer);
+                let pending = std::mem::take(&mut state.pending);
+                let mut writer = state.writer.take().unwrap();
+                writer.write_bytes(&pending).await;
+                writer.write_bytes(bytes).await;
+                state.writer = Some(writer);
+            }
+            Err(reason) => {
+                state.failed = Some(reason);
+                state.pending.clear();
+            }
+        }
+    }
+    async fn mark_incomplete(&self) {
+        let mut state = self.state.lock().await;
+        if let Some(writer) = &mut state.writer {
+            writer.mark_incomplete(super::output::SaveReason::UnsafeCopy);
+        } else if state.failed.is_none() {
+            state.failed = Some(super::output::SaveReason::UnsafeCopy);
+        }
+    }
+    async fn finish(&self) -> Option<super::output::SaveState> {
+        let mut state = self.state.lock().await;
+        if let Some(writer) = state.writer.take() {
+            Some(writer.finish().await)
+        } else {
+            state
+                .failed
+                .map(|reason| super::output::SaveState::Failed { reason })
+        }
+    }
+}
 async fn drain<R: AsyncRead + Unpin>(
     mut reader: R,
     output: Option<Arc<Mutex<PersistedOutput>>>,
+    sink: Option<Arc<CaptureSink>>,
     cancel: CancellationToken,
     harness: Arc<ResolvedHarness>,
     _activity: Option<crate::resource_activity::ResourceLease>,
@@ -813,12 +908,18 @@ async fn drain<R: AsyncRead + Unpin>(
             Ok(n) => n,
             Err(e) => {
                 tracing::warn!(error=%e,"command output read failed");
+                if let Some(sink) = &sink {
+                    sink.mark_incomplete().await;
+                }
                 break;
             }
         };
         if let Some(file) = &output {
             let mut state = file.lock().await;
-            let marker = harness.text(TextId::ToolsShellOutputTruncated).as_bytes();
+            let marker = harness
+                .render(TextId::ToolsShellOutputTruncated, &[("byte_limit", &(8 * 1024 * 1024).to_string())])
+                .as_bytes()
+                .to_vec();
             let remaining = (8 * 1024 * 1024usize).saturating_sub(marker.len() + state.written);
             let written = count.min(remaining);
             if written > 0 {
@@ -832,7 +933,7 @@ async fn drain<R: AsyncRead + Unpin>(
             }
             if written < count && !state.truncated {
                 state.truncated = true;
-                if let Err(error) = state.file.write_all(marker).await {
+                if let Err(error) = state.file.write_all(&marker).await {
                     state.failed = true;
                     cancel.cancel();
                     tracing::warn!(error=%error,"background command output write failed");
@@ -843,6 +944,9 @@ async fn drain<R: AsyncRead + Unpin>(
                     "background command output truncated"
                 );
             }
+        }
+        if let Some(sink) = &sink {
+            sink.push(&buffer[..count]).await;
         }
         pending.extend_from_slice(&buffer[..count]);
         loop {
@@ -871,7 +975,7 @@ async fn drain<R: AsyncRead + Unpin>(
     if !pending.is_empty() {
         capture.push(&String::from_utf8_lossy(&pending));
     }
-    capture.text(&harness)
+    capture.text()
 }
 struct RunResult {
     pid: u32,
@@ -880,6 +984,7 @@ struct RunResult {
     stderr: String,
     timed_out: bool,
     state: Option<ShellState>,
+    saved: Option<super::output::SaveState>,
 }
 async fn run(
     command: &str,
@@ -893,6 +998,7 @@ async fn run(
     base_environment: Value,
     temporary_directory: PathBuf,
     activity: Option<Arc<crate::resource_activity::ResourceActivity>>,
+    sink: Option<Arc<CaptureSink>>,
 ) -> Result<RunResult, Error> {
     let (state, warning) = resolve_directory(state, &ctx.cwd).await?;
     let warning = warning
@@ -973,6 +1079,7 @@ async fn run(
     let stdout = crate::runtime::spawn(drain(
         stdout_pipe,
         output.clone(),
+        sink.clone(),
         cancel.clone(),
         ctx.harness.clone(),
         stdout_activity,
@@ -980,6 +1087,7 @@ async fn run(
     let stderr = crate::runtime::spawn(drain(
         stderr_pipe,
         output,
+        sink.clone(),
         cancel.clone(),
         ctx.harness.clone(),
         stderr_activity,
@@ -1042,6 +1150,10 @@ async fn run(
     } else {
         None
     };
+    let saved = match sink {
+        Some(sink) => sink.finish().await,
+        None => None,
+    };
     Ok(RunResult {
         pid,
         code: if timed_out {
@@ -1055,6 +1167,7 @@ async fn run(
         stderr,
         timed_out,
         state: parsed,
+        saved,
     })
 }
 fn stored_message(value: &Value) -> Message {
@@ -1068,15 +1181,111 @@ fn render_error(value: &Value, harness: &ResolvedHarness) -> Value {
         json!(stored_message(value).render(harness))
     }
 }
+fn budget_label(harness: &ResolvedHarness, limit: usize, configured: bool) -> String {
+    let id = if configured {
+        TextId::ToolsOutputBudgetConfigured
+    } else {
+        TextId::ToolsOutputBudgetPreview
+    };
+    harness.render(id, &[("character_limit", &limit.to_string())])
+}
+
+fn saved_notice(
+    saved: Option<&super::output::SaveState>,
+    budget: &str,
+    harness: &ResolvedHarness,
+) -> String {
+    match saved {
+        Some(super::output::SaveState::Complete { path, .. }) => harness.render(
+            TextId::ToolsShellOutputReached,
+            &[("budget", budget), ("path", &path.to_string_lossy())],
+        ),
+        Some(super::output::SaveState::Partial {
+            path,
+            bytes,
+            reason,
+        }) => harness.render(
+            TextId::ToolsShellOutputReachedPartial,
+            &[
+                ("budget", budget),
+                ("path", &path.to_string_lossy()),
+                ("saved_bytes", &bytes.to_string()),
+                ("reason", &reason.render(harness)),
+            ],
+        ),
+        Some(super::output::SaveState::Failed { reason }) => harness.render(
+            TextId::ToolsShellOutputReachedNoSave,
+            &[("budget", budget), ("reason", &reason.render(harness))],
+        ),
+        None => harness.render(
+            TextId::ToolsShellOutputReachedNoSave,
+            &[
+                ("budget", budget),
+                ("reason", harness.text(TextId::ToolsOutputReasonUnavailable)),
+            ],
+        ),
+    }
+}
+
+fn fit_shell_text(
+    prefix: &str,
+    suffix: &str,
+    output: &str,
+    budget: usize,
+    label: &str,
+    notice: &str,
+    harness: &ResolvedHarness,
+) -> String {
+    let fixed = crate::js::utf16_len(prefix)
+        .saturating_add(crate::js::utf16_len(suffix))
+        .saturating_add(crate::js::utf16_len(output));
+    if notice.is_empty() && fixed <= budget {
+        return format!("{prefix}{output}{suffix}");
+    }
+    let reserve = crate::js::utf16_len(prefix)
+        .saturating_add(crate::js::utf16_len(suffix))
+        .saturating_add(crate::js::utf16_len(notice))
+        .saturating_add(2);
+    if reserve >= budget {
+        let short = harness.render(TextId::ToolsOutputShort, &[("budget", label)]);
+        if crate::js::utf16_len(&short) <= budget {
+            return short;
+        }
+        if budget == 0 {
+            return String::new();
+        }
+        return crate::js::utf16_prefix(
+            harness.text(TextId::ContextTruncationMarker),
+            budget,
+        );
+    }
+    let available = budget - reserve;
+    let head = crate::js::utf16_prefix(output, available / 2);
+    let tail = crate::js::utf16_suffix(output, available - available / 2);
+    format!("{prefix}{head}\n{notice}\n{tail}{suffix}")
+}
+
 impl ShellTools {
     pub(super) fn process_registry(&self) -> Arc<crate::processes::OwnedProcesses> {
         self.processes.clone()
     }
+    #[cfg(test)]
     pub fn new_with_activity(
         options: &Value,
         activity: Option<Arc<crate::resource_activity::ResourceActivity>>,
     ) -> Self {
+        Self::new_with_store(options, activity, None)
+    }
+    pub fn new_with_store(
+        options: &Value,
+        activity: Option<Arc<crate::resource_activity::ResourceActivity>>,
+        output: Option<Arc<super::output::OutputStore>>,
+    ) -> Self {
         let persistent = options["persistSession"] != false;
+        let configured = options["toolResultBudget"].as_u64();
+        let result_budget = configured
+            .map(|value| value.min(50_000) as usize)
+            .unwrap_or(50_000);
         let directory =
             persistent.then(|| PathBuf::from(super::config_dir(options)).join("bash-output"));
         Self {
@@ -1085,6 +1294,9 @@ impl ShellTools {
             base_environment: crate::core::conventions::process_environment(options),
             temporary_directory: crate::core::conventions::temp_dir(options),
             activity,
+            output,
+            result_budget,
+            configured_budget: configured.is_some_and(|value| value < 50_000),
             ..Self::default()
         }
     }
@@ -1238,6 +1450,7 @@ impl ShellTools {
         &self,
         value: &Value,
         harness: &ResolvedHarness,
+        cap: usize,
     ) -> std::result::Result<Value, String> {
         let path = value["outputFile"]
             .as_str()
@@ -1247,20 +1460,23 @@ impl ShellTools {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 tracing::warn!("command output is no longer retained");
-                return Ok(
-                    json!({"output":harness.text(TextId::ToolsShellOutputExpired),"truncated":true}),
-                );
+                return Ok(json!({"output":harness.text(TextId::ToolsShellOutputExpired),"truncated":true,"expired":true,"shownBytes":0,"fileComplete":false}));
             }
             Err(error) => return Err(error.to_string()),
         };
-        let mut bytes = vec![0; 32769];
+        let mut bytes = vec![0; cap + 1];
         let count = file
             .read(&mut bytes)
             .await
             .map_err(|error| error.to_string())?;
-        Ok(
-            json!({"output":String::from_utf8_lossy(&bytes[..count.min(32768)]),"truncated":value["outputTruncated"] == true || value["truncated"] == true || count > 32768}),
-        )
+        let shown = count.min(cap);
+        Ok(json!({
+            "output": String::from_utf8_lossy(&bytes[..shown]),
+            "truncated": value["outputTruncated"] == true || value["truncated"] == true || count > cap,
+            "expired": false,
+            "shownBytes": shown,
+            "fileComplete": value["outputTruncated"] != true && value["truncated"] != true
+        }))
     }
     pub async fn context_async_call(
         &self,
@@ -1273,7 +1489,7 @@ impl ShellTools {
         use crate::error::Error;
         match method {
             "backgroundTasks.readOutput" => self
-                .read_output(&args[0], &harness)
+                .read_output(&args[0], &harness, 32768)
                 .await
                 .map_err(|error| Error::new("BACKGROUND_OUTPUT", error)),
             "backgroundTasks.wait" => {
@@ -1455,6 +1671,16 @@ impl ShellTools {
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect(),
         );
+        let sink = self.output.as_ref().map(|store| {
+            Arc::new(CaptureSink::new(
+                store.clone(),
+                self.result_budget.min(32768),
+                Some(harness.render(
+                    TextId::ToolsShellOutputTruncated,
+                    &[("byte_limit", &super::output::FILE_LIMIT.to_string())],
+                )),
+            ))
+        });
         let running = run(
             command,
             start,
@@ -1467,6 +1693,7 @@ impl ShellTools {
             base_environment,
             temporary_directory,
             self.activity.clone(),
+            sink,
         );
         tokio::pin!(running);
         let result = tokio::select! {
@@ -1496,36 +1723,64 @@ impl ShellTools {
                 if output.is_empty() {
                     output = harness.text(TextId::ToolsShellNoOutput).into();
                 }
-                if r.timed_out {
-                    return failure(crate::core::truncate::truncate_content_with_harness(
-                        &harness.render(
-                            TextId::ToolsShellTimedOut,
-                            &[("timeout", &timeout.to_string()), ("output", &output)],
-                        ),
-                        50000,
-                        harness.text(TextId::ToolsShellRecovery),
-                        &harness,
-                    ));
-                }
-                let text = if r.code == 0 {
-                    output
+                let label = budget_label(&harness, self.result_budget, self.configured_budget);
+                let (prefix, suffix) = if r.timed_out {
+                    let rendered = harness.render(
+                        TextId::ToolsShellTimedOut,
+                        &[("timeout", &timeout.to_string()), ("output", "\u{0}")],
+                    );
+                    let (prefix, suffix) = rendered
+                        .split_once('\u{0}')
+                        .expect("timeout template carries one output slot");
+                    (prefix.to_owned(), suffix.to_owned())
+                } else if r.code == 0 {
+                    (String::new(), String::new())
                 } else {
-                    harness.render(
+                    let rendered = harness.render(
                         TextId::ToolsShellExited,
-                        &[("code", &r.code.to_string()), ("output", &output)],
-                    )
+                        &[("code", &r.code.to_string()), ("output", "\u{0}")],
+                    );
+                    let (prefix, suffix) = rendered
+                        .split_once('\u{0}')
+                        .expect("exit template carries one output slot");
+                    (prefix.to_owned(), suffix.to_owned())
                 };
-                let text = crate::core::truncate::truncate_content_with_harness(
-                    &text,
-                    50000,
-                    harness.text(TextId::ToolsShellRecovery),
+                let fixed = crate::js::utf16_len(&prefix)
+                    .saturating_add(crate::js::utf16_len(&output))
+                    .saturating_add(crate::js::utf16_len(&suffix));
+                let notice = if fixed > self.result_budget {
+                    saved_notice(r.saved.as_ref(), &label, &harness)
+                } else {
+                    String::new()
+                };
+                let text = fit_shell_text(
+                    &prefix,
+                    &suffix,
+                    &output,
+                    self.result_budget,
+                    &label,
+                    &notice,
                     &harness,
                 );
-                if r.code == 0 {
+                let notice_used = !notice.is_empty() && text.contains(&notice);
+                let saved_path = r.saved.as_ref().and_then(super::output::SaveState::path);
+                if !notice_used {
+                    if let Some(path) = saved_path {
+                        super::output::remove_saved(path).await;
+                    }
+                }
+                let mut result = if r.code == 0 && !r.timed_out {
                     success(text, None)
                 } else {
                     failure(text)
+                };
+                result["__haloSdkNativeOutput"] = json!("bash_preview");
+                if notice_used {
+                    if let Some(path) = saved_path {
+                        result["__haloSdkNativeSavedOutput"] = json!(path);
+                    }
                 }
+                result
             }
             Err(e) => failure(harness.render(
                 TextId::ToolsShellLaunchFailed,
@@ -1662,6 +1917,7 @@ impl ShellTools {
                 base_environment,
                 temporary_directory,
                 activity.clone(),
+                None,
             )
             .await;
             let finalization_activity = activity.as_ref().map(|activity| activity.lease());
@@ -1902,9 +2158,40 @@ impl ShellTools {
             .unwrap_or_else(|error| error.into_inner())
             .clone();
         value["error"] = render_error(&value["error"], harness);
-        match self.read_output(&value, harness).await {
+        let cap = if self.configured_budget {
+            self.result_budget.saturating_sub(2048).min(32768)
+        } else {
+            32768
+        };
+        match self.read_output(&value, harness, cap).await {
             Ok(output) => {
-                value["result"] = output["output"].clone();
+                let mut preview = output["output"].as_str().unwrap_or("").to_owned();
+                if output["expired"] != true && output["truncated"] == true {
+                    let path = value["output_file"].as_str().unwrap_or("");
+                    let notice = if output["fileComplete"] == true {
+                        harness.render(
+                            TextId::ToolsShellTaskOutputMore,
+                            &[
+                                ("shown_bytes", &output["shownBytes"].as_u64().unwrap_or(0).to_string()),
+                                ("path", path),
+                            ],
+                        )
+                    } else {
+                        harness.render(
+                            TextId::ToolsShellTaskOutputIncomplete,
+                            &[
+                                ("shown_bytes", &output["shownBytes"].as_u64().unwrap_or(0).to_string()),
+                                ("path", path),
+                                ("byte_limit", &(8 * 1024 * 1024).to_string()),
+                            ],
+                        )
+                    };
+                    if !preview.is_empty() {
+                        preview.push('\n');
+                    }
+                    preview.push_str(&notice);
+                }
+                value["result"] = json!(preview);
                 value["truncated"] = output["truncated"].clone();
             }
             Err(error) => {

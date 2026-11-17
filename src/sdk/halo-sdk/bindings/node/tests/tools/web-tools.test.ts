@@ -48,6 +48,7 @@ beforeAll(async () => {
       return;
     }
     const body = path === '/json' ? '{"key":"value","num":42}' : path === '/long' ? 'A'.repeat(200_000)
+      : path === '/huge' ? 'B'.repeat(10 * 1024 * 1024 + 1)
       : path === '/html' ? '<h1>Welcome</h1><p>Hello world</p>' : 'Plain text content';
     response.writeHead(path === '/missing' ? 404 : 200, { 'Content-Type': path === '/json' ? 'application/json' : path === '/html' ? 'text/html' : 'text/plain' });
     response.end(body);
@@ -68,6 +69,10 @@ describe('public native WebFetch', () => {
     expect(WebFetchTool.name).toBe('WebFetch');
     expect(WebFetchTool.permissionLevel).toBe('readonly');
     expect(WebFetchTool.inputSchema).toBeDefined();
+    expect(WebFetchTool.inputSchema.required).toEqual(['url']);
+    expect(Object.keys(WebFetchTool.inputSchema.properties as Record<string, unknown>)).toEqual(['url']);
+    expect(WebFetchTool.description).toContain('Provide an absolute URL.');
+    expect(WebFetchTool.description).not.toContain('prompt');
   });
   it('rejects missing and invalid URLs', async () => {
     const missing = await WebFetchTool.execute({ prompt: 'Summary' }, context());
@@ -99,11 +104,35 @@ describe('public native WebFetch', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain('404');
   });
-  it('bounds returned content', async () => {
+  it('bounds returned content and keeps the full extracted text readable', async () => {
     const result = await execute('/long');
     expect(result.isError).toBe(false);
-    expect((result.content as string).length).toBeLessThan(200_000);
-    expect(result.content).toContain('truncated');
+    expect((result.content as string).length).toBeLessThan(100_000);
+    expect(result.content).toContain('100000-UTF-16-code-unit preview limit');
+    const path = /Full extracted text from this fetch: (.+?\.out)/.exec(result.content)?.[1];
+    expect(path).toBeTruthy();
+    const saved = await readFile(path!, 'utf8');
+    expect(saved.length).toBeGreaterThanOrEqual(200_000);
+    expect(saved.endsWith('AAAA')).toBe(true);
+  });
+
+  it('marks an over-limit response body as incomplete', async () => {
+    const result = await execute('/huge');
+    expect(result.isError).toBe(false);
+    expect(result.content).toContain('stopped reading at the 10485760-byte response limit');
+    expect(result.content).toContain('The extracted text is incomplete.');
+    expect(result.content).toContain('Retained extracted text:');
+  });
+
+  it('does not reuse a saved path after its file is gone', async () => {
+    const first = await execute('/long');
+    const path = /Full extracted text from this fetch: (.+?\.out)/.exec(first.content as string)?.[1];
+    expect(path).toBeTruthy();
+    await rm(path!, { force: true });
+    const second = await execute('/long');
+    expect(second.isError).toBe(false);
+    expect(second.content).toContain('saved copy is no longer available');
+    expect(second.content).not.toContain('Full extracted text from this fetch');
   });
   it('notifies about cross-host redirects without delivering the destination body', async () => {
     const result = await execute('/redirect');

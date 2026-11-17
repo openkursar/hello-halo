@@ -135,13 +135,14 @@
     ]
   },
   "tools.file.line_truncated": {
-    "text": "\n... (line {line} was truncated because it exceeds the character budget.)\n",
+    "text": "[Line {line} alone exceeds the {budget}; only its beginning is shown. offset and limit select lines, not positions within a line. An available file-processing tool may read smaller chunks of this line.]",
     "slots": [
-      "line"
+      "line",
+      "budget"
     ]
   },
   "tools.file.more_lines": {
-    "text": "\n... (showing lines {start}-{end} of {total}. Use offset={offset} to continue reading.)\n",
+    "text": "[Showing lines {start}-{end} of {total}. Later lines are available from offset={offset}.]",
     "slots": [
       "start",
       "end",
@@ -277,5 +278,48 @@
     "slots": [
       "method"
     ]
+  },
+  "tools.file.more_lines_unknown_total": {
+    "text": "[Showing lines {start}-{end}. More content remains; the total line count was not scanned. Later lines are available from offset={offset}.]",
+    "slots": [
+      "start",
+      "end",
+      "offset"
+    ]
+  },
+  "tools.file.end_of_file_not_start": {
+    "text": "[Showing lines {start}-{end}; end of file. Earlier lines are outside this view.]",
+    "slots": [
+      "start",
+      "end"
+    ]
+  },
+  "tools.file.read_budget": {
+    "text": "[Read reached the {budget}; showing lines {start}-{end}{total_suffix}. This is a partial view. Later lines are available from offset={offset}; Grep can locate specific sections.]",
+    "slots": [
+      "budget",
+      "start",
+      "end",
+      "total_suffix",
+      "offset"
+    ]
+  },
+  "tools.file.line_truncated_later": {
+    "text": "[Later lines start at offset={offset}; this does not include the omitted part of line {line}.]",
+    "slots": [
+      "offset",
+      "line"
+    ]
+  },
+  "tools.file.changed_during_read": {
+    "text": "[The file changed during this read. Lines {start}-{end} were captured, but they do not establish a stable view of the file.]",
+    "slots": [
+      "start",
+      "end"
+    ]
+  },
+  "tools.file.read_cancelled": {
+    "text": "[Read was cancelled before a text range was delivered.]",
+    "slots": []
   }
 }

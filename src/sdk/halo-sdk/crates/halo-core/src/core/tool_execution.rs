@@ -51,6 +51,10 @@ fn check(cancel: &CancellationToken) -> Result<()> {
 fn denied(call: &Value, message: String) -> Value {
     json!({"toolUseId":call["id"],"content":message,"isError":true})
 }
+fn budgeted(result: &Value) -> bool {
+    result.get("__haloSdkNativeOutput").is_some()
+}
+
 fn assign(target: &mut Value, update: &Value) {
     if let Some(target) = target.as_object_mut() {
         if let Some(update) = update.as_object() {
@@ -328,7 +332,9 @@ impl Execution {
         let result = self.run_inner(&prepared).await;
         let result = match result {
             Ok(mut result) => {
-                result["content"] = json!(self.truncate(result["content"].as_str().unwrap_or("")));
+                if !budgeted(&result) {
+                    result["content"] = json!(self.truncate(result["content"].as_str().unwrap_or("")));
+                }
                 if prepared.call["name"] == "ToolSearch" {
                     if let Some(state) = &self.discovery {
                         let envelope = result
@@ -380,7 +386,9 @@ impl Execution {
                         &[("content", result["content"].as_str().unwrap_or(""))]
                     ));
                 }
-                result["content"] = json!(self.truncate(result["content"].as_str().unwrap_or("")));
+                if !budgeted(&result) {
+                    result["content"] = json!(self.truncate(result["content"].as_str().unwrap_or("")));
+                }
                 Ok(result)
             }
         };
@@ -446,6 +454,16 @@ impl Execution {
                         clean[key] = value.clone();
                     }
                 }
+                if let Some(kind) = prepared
+                    .definition
+                    .as_ref()
+                    .and_then(|tool| self.tools.trusted_output_kind(tool, &result))
+                {
+                    clean["__haloSdkNativeOutput"] = json!(kind);
+                    if let Some(path) = result.get("__haloSdkNativeSavedOutput") {
+                        clean["__haloSdkNativeSavedOutput"] = path.clone();
+                    }
+                }
                 clean
             }
             Err(error) if self.cancellation.is_cancelled() || error.is_abort() => {
@@ -457,7 +475,9 @@ impl Execution {
             }
         };
         result["toolUseId"] = call["id"].clone();
-        result["content"] = json!(self.truncate(result["content"].as_str().unwrap_or("")));
+        if !budgeted(&result) {
+            result["content"] = json!(self.truncate(result["content"].as_str().unwrap_or("")));
+        }
         self.completed
             .lock()
             .unwrap()
@@ -476,6 +496,24 @@ impl Execution {
         )
         .await;
         if let Some(output) = post.output {
+            if result["__haloSdkNativeOutput"].as_str() != Some("skill_instructions") {
+                result
+                    .as_object_mut()
+                    .unwrap()
+                    .shift_remove("__haloSdkNativeOutput");
+            }
+            if let Some(path) = result
+                .as_object_mut()
+                .unwrap()
+                .shift_remove("__haloSdkNativeSavedOutput")
+                .and_then(|value| value.as_str().map(str::to_owned))
+            {
+                if let Err(error) = tokio::fs::remove_file(&path).await {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(tool=%name,session_id=%self.session_id,error=%error,"Replaced tool output could not remove its saved copy");
+                    }
+                }
+            }
             result["content"] = json!(output
                 .as_str()
                 .map(str::to_owned)

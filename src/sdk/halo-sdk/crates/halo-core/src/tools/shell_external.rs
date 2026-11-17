@@ -158,13 +158,37 @@ pub(super) async fn task(
         let output = call(bridge,"readOutput",json!([reference]),ctx).await?;
         let entry = &output["entry"];
         let preview = &output["preview"];
+        let mut result = preview["output"].as_str().unwrap_or("").to_owned();
+        if preview["truncated"] == true {
+            let shown = result.len();
+            let path = entry["outputFile"].as_str().unwrap_or("");
+            let notice = if entry["outputTruncated"] == true {
+                harness.render(
+                    TextId::ToolsShellTaskOutputIncomplete,
+                    &[
+                        ("shown_bytes", &shown.to_string()),
+                        ("path", path),
+                        ("byte_limit", &(8 * 1024 * 1024).to_string()),
+                    ],
+                )
+            } else {
+                harness.render(
+                    TextId::ToolsShellTaskOutputMore,
+                    &[("shown_bytes", &shown.to_string()), ("path", path)],
+                )
+            };
+            if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(&notice);
+        }
         let ended = if crate::js::truthy(&entry["completedAt"]) { json!(instant(&entry["completedAt"],ctx)?) } else { Value::Null };
         let absent = crate::js::undefined();
         let property = |name| entry.get(name).cloned().unwrap_or_else(|| absent.clone());
         let nullable = |name| entry.get(name).filter(|value| !value.is_null() && !crate::js::is_undefined(value)).cloned().unwrap_or(Value::Null);
         Ok(success(crate::js::stringify_pretty(&json!({
             "retrieval_status":if entry.get("completedAt") == Some(&Value::Null) {"not_ready"} else {"success"},
-            "task":{"task_id":property("id"),"type":"bash","description":property("command"),"status":property("status"),"result":preview.get("output").unwrap_or(&absent),"error":nullable("error"),"output_file":nullable("outputFile"),"truncated":preview.get("truncated").unwrap_or(&absent),"exit_code":property("exitCode"),"started_at":instant(&entry["startedAt"],ctx)?,"ended_at":ended}
+            "task":{"task_id":property("id"),"type":"bash","description":property("command"),"status":property("status"),"result":result,"error":nullable("error"),"output_file":nullable("outputFile"),"truncated":preview.get("truncated").unwrap_or(&absent),"exit_code":property("exitCode"),"started_at":instant(&entry["startedAt"],ctx)?,"ended_at":ended}
         })),None))
     }.await;
     Ok(match outcome {

@@ -105,7 +105,7 @@ pub fn resolve(options: &Value) -> Result<Value> {
         "ultraEffort":options["ultraEffort"].as_bool()==Some(true),
         "thinking":thinking,"thinkingExplicit":(["thinking","maxThinkingTokens"].iter().any(|key|options.get(*key).is_some_and(|value|!is_undefined(value)))),
         "adaptiveThinking":nullish(options,"adaptiveThinking",json!(false)),"effort":nullish(options,"effort",json!("high")),
-        "toolResultBudget":nullish(options,"toolResultBudget",json!(50_000)),"includePartialMessages":nullish(options,"includePartialMessages",json!(false)),
+        "toolResultBudget":nullish(options,"toolResultBudget",json!(50_000)),"toolResultBudgetExplicit":options.get("toolResultBudgetExplicit").and_then(Value::as_bool).unwrap_or_else(||options.get("toolResultBudget").is_some_and(|value|!value.is_null()&&!is_undefined(value))),"includePartialMessages":nullish(options,"includePartialMessages",json!(false)),
         "permissionMode":nullish(options,"permissionMode",json!("default")),"allowedTools":optional(options,"allowedTools"),"disallowedTools":optional(options,"disallowedTools"),
         "readDenyRoots":read_deny,"mcpServers":optional(options,"mcpServers"),"toolDiscovery":discovery,"hooks":optional(options,"hooks"),"canUseTool":optional(options,"canUseTool"),"abortSignal":undefined(),
         "fallbackModel":optional(options,"fallbackModel"),"betas":optional(options,"betas"),"taskBudget":optional(options,"taskBudget"),"additionalDirectories":optional(options,"additionalDirectories"),

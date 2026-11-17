@@ -62,8 +62,18 @@ impl SuppliedTools {
                         .find(|value| value["name"] == *name)
                 })
             });
-            let description_default =
-                baseline.is_some_and(|value| descriptor["description"] == value["description"]);
+            let description_default = baseline.is_some_and(|value| {
+                if descriptor["description"] == value["description"] {
+                    return true;
+                }
+                implementation.as_deref() == Some("Read")
+                    && value["description"].as_str().is_some_and(|default| {
+                        [20_000usize, 30_000].iter().any(|limit| {
+                            descriptor["description"]
+                                == json!(default.replace("{token_limit}", &limit.to_string()))
+                        })
+                    })
+            });
             let schema_default = baseline.is_some_and(|value| {
                 crate::js::data::stringify(
                     descriptor
@@ -89,7 +99,7 @@ impl SuppliedTools {
     pub fn contains(&self, name: &str) -> bool {
         self.names.contains_key(name)
     }
-    pub fn definitions(&self, harness: &ResolvedHarness) -> Vec<Value> {
+    pub fn definitions(&self, harness: &ResolvedHarness, read_token_limit: usize) -> Vec<Value> {
         let has_native = self
             .ordered
             .iter()
@@ -132,6 +142,9 @@ impl SuppliedTools {
                     });
                 let mut definition =
                     json!({"name":tool.name,"description":description,"input_schema":schema});
+                if tool.implementation.as_deref() == Some("Read") {
+                    super::apply_read_token_limit(&mut definition, read_token_limit);
+                }
                 if let Some(metadata) = source.get("mcpSource") {
                     definition["mcpSource"] = metadata.clone();
                 }

@@ -72,9 +72,15 @@ choice, not write authorization. Existing read records still detect changed file
 permission checks, canonical-path coordination and pre-write snapshot checks remain
 in effect. A queued Write also rejects changes made by another SDK write while it
 waited, even without a read record; a later independently admitted Write remains
-allowed. Edit retains its read-before-edit requirement. Read applies its effective
-tool-result budget before recording delivery completeness, including external read
-maps; a budget-truncated view never records a complete delivery.
+allowed. Edit retains its read-before-edit requirement. Read assembles a token-bounded
+line range before recording delivery completeness, including external read maps;
+a truncated or partial view never records a complete delivery. Large text files
+are scanned only up to the delivered range. Read text, loaded skill instructions,
+and foreground Bash or WebFetch results that already apply their own output
+budget carry a private delivery kind, so the ordinary tool-result budget does not
+truncate them a second time. Oversized foreground Bash and WebFetch text is saved
+under the session sidecar with an explicit completeness state; the feedback never
+claims a larger result than was delivered.
 
 ## End-of-turn reminders
 

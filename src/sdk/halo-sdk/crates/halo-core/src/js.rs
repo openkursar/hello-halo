@@ -132,6 +132,37 @@ pub fn utf16_prefix(text: &str, limit: usize) -> String {
     String::from_utf16_lossy(&text.encode_utf16().take(limit).collect::<Vec<_>>())
 }
 
+pub fn utf16_prefix_without_split(text: &str, limit: usize) -> String {
+    let mut units = 0;
+    let mut end = 0;
+    for (offset, character) in text.char_indices() {
+        let width = character.len_utf16();
+        if units + width > limit {
+            break;
+        }
+        units += width;
+        end = offset + character.len_utf8();
+    }
+    text[..end].to_owned()
+}
+
+pub fn utf16_suffix(text: &str, limit: usize) -> String {
+    if limit == 0 {
+        return String::new();
+    }
+    let mut units = 0;
+    let mut start = text.len();
+    for (offset, character) in text.char_indices().rev() {
+        let width = character.len_utf16();
+        if units + width > limit {
+            break;
+        }
+        units += width;
+        start = offset;
+    }
+    text[start..].to_owned()
+}
+
 pub fn safe_integer(value: &Value) -> Option<i64> {
     value.as_f64().filter(|number| number.is_finite() && number.fract() == 0.0 && number.abs() <= 9_007_199_254_740_991.0).map(|number| number as i64)
 }

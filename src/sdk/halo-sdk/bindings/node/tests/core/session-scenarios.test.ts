@@ -116,8 +116,10 @@ function makeScriptedProvider(
 async function makeSession(
   provider: LlmProvider,
   cwd: string,
+  extra: Record<string, unknown> = {},
 ): Promise<SDKSession> {
   return createSession({
+    ...extra,
     provider,
     cwd,
     env: { HOME: cwd, USERPROFILE: cwd, CLAUDE_CONFIG_DIR: join(cwd, 'state') },
@@ -419,7 +421,77 @@ describe('session scenarios — Read truncation contract', () => {
       expect(readResult, 'Read tool_result must be present').toBeDefined();
       const text = resultText(readResult);
       expect(text).not.toContain('[Content truncated:');
-      expect(text).toMatch(/showing lines 1-\d+ of \d+\. Use offset=\d+ to continue reading/);
+      expect(text).toContain('30000 estimated-token output limit');
+      expect(text).toContain('This is a partial view.');
+      expect(text).toContain('offset=');
+      expect(text.length).toBeGreaterThan(50_000);
+    } finally {
+      session.close();
+      await session.flush();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it('6. explicit budget keeps the Read body and still delivers the stagnation reminder', async () => {
+    const dir = tempDir();
+    const filePath = join(dir, 'explicit-budget.txt');
+    const lines = Array.from({ length: 80 }, (_, index) =>
+      `line-${String(index).padStart(3, '0')}-${'x'.repeat(40)}`,
+    );
+    writeFileSync(filePath, `${lines.join('\n')}\n`);
+    const read = { events: toolUseStream('Read', { file_path: filePath }), stop: 'tool_use' as const };
+    const { provider } = makeScriptedProvider([
+      read,
+      read,
+      read,
+      { events: textStream('read three times') },
+    ]);
+    const session = await makeSession(provider, dir, { toolResultBudget: 500 });
+    try {
+      await session.send('read the file three times');
+      const turn = await driveTurn(session);
+      expect(turn.toolResults).toHaveLength(3);
+      for (const result of turn.toolResults.slice(0, 2)) {
+        const text = resultText(result);
+        expect(text).toContain('line-000');
+        expect(text).toContain('configured output limit');
+        expect(text).not.toContain('Output omitted');
+        expect(text.length).toBeLessThanOrEqual(500);
+      }
+      const repeated = resultText(turn.toolResults[2]);
+      expect(repeated).toContain('line-000');
+      expect(repeated).toContain('configured output limit');
+      expect(repeated).toContain('<system-reminder>');
+      expect(repeated).toContain('The Read tool was called 3 times with identical input');
+      expect(repeated).not.toContain('[Content truncated:');
+      expect(repeated.length).toBeGreaterThan(500);
+    } finally {
+      session.close();
+      await session.flush();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it('5. a smaller effective window selects the 20,000-token Read budget', async () => {
+    const dir = tempDir();
+    const filePath = join(dir, 'big-small-window.txt');
+    const lines = Array.from({ length: 1500 }, (_, i) =>
+      `line-${String(i).padStart(4, '0')}-${'x'.repeat(90)}`,
+    );
+    writeFileSync(filePath, `${lines.join('\n')}\n`);
+    const { provider, requests } = makeScriptedProvider([
+      { events: toolUseStream('Read', { file_path: filePath }), stop: 'tool_use' },
+      { events: textStream('read') },
+    ]);
+    const session = await makeSession(provider, dir, { contextWindow: 99_999 });
+    try {
+      await session.send('read the whole file');
+      const turn = await driveTurn(session);
+      const text = resultText(turn.toolResults[0]);
+      expect(text).toContain('20000 estimated-token output limit');
+      expect(text).not.toContain('30000 estimated-token output limit');
+      expect(text.length).toBeGreaterThan(40_000);
+      const description = (requests[0].tools ?? [])
+        .find((tool: Record<string, unknown>) => tool.name === 'Read')?.description;
+      expect(description).toContain('20000 estimated-token output limit');
     } finally {
       session.close();
       await session.flush();

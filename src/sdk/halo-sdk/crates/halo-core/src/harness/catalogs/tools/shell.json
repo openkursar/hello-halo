@@ -27,8 +27,10 @@
     ]
   },
   "tools.shell.output_truncated": {
-    "text": "\n[Output truncated at 8 MiB. Re-run with filters or redirect to your own file.]\n",
-    "slots": []
+    "text": "[Saved output reached the {byte_limit}-byte file limit. This file contains only the beginning of the output; later output was not saved here.]",
+    "slots": [
+      "byte_limit"
+    ]
   },
   "tools.shell.cancelled_launch": {
     "text": "Command cancelled before launch",
@@ -245,5 +247,43 @@
   "tools.shell.invalid_time": {
     "text": "Invalid time value",
     "slots": []
+  },
+  "tools.shell.output_reached": {
+    "text": "[Command output reached the {budget}; the first and last sections are shown, with the middle omitted. Full captured output: {path}. If you need omitted details, the file is available through Read or Grep.]",
+    "slots": [
+      "budget",
+      "path"
+    ]
+  },
+  "tools.shell.output_reached_partial": {
+    "text": "[Command output reached the {budget}; the first and last sections are shown, with the middle omitted. Only the beginning of the output was saved to {path} ({saved_bytes} output bytes). Saving stopped: {reason}.]",
+    "slots": [
+      "budget",
+      "path",
+      "saved_bytes",
+      "reason"
+    ]
+  },
+  "tools.shell.output_reached_no_save": {
+    "text": "[Command output reached the {budget}; the first and last sections are shown, with the middle omitted. Omitted output was not saved: {reason}.]",
+    "slots": [
+      "budget",
+      "reason"
+    ]
+  },
+  "tools.shell.task_output_more": {
+    "text": "[Showing the first {shown_bytes} bytes of saved output. Additional captured output is available at {path}.]",
+    "slots": [
+      "shown_bytes",
+      "path"
+    ]
+  },
+  "tools.shell.task_output_incomplete": {
+    "text": "[Showing the first {shown_bytes} bytes of saved output. The saved file is also incomplete: {path}. Capture stopped at the {byte_limit}-byte file limit.]",
+    "slots": [
+      "shown_bytes",
+      "path",
+      "byte_limit"
+    ]
   }
 }

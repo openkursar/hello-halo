@@ -37,16 +37,18 @@ describe('resource boundaries with real files and processes', () => {
     expect(await fs.readFile(file, 'utf8')).toBe('unseen contents');
   });
 
-  it('rejects a 1 GiB sparse file without authorizing edits or changing it', async () => {
+  it('reads a 1 GiB sparse file as a bounded range without authorizing edits or changing it', async () => {
     const file = join(directory, 'large.txt');
     const handle = await fs.open(file, 'w');
     await handle.truncate(1024 ** 3);
     await handle.close();
     const ctx = { ...context(), readFileState: new Map() };
     const result = await tool('Read').execute({ file_path: file, limit: 1 }, ctx);
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain('limit');
-    expect(ctx.readFileState.size).toBe(0);
+    expect(result.isError).toBe(false);
+    expect(result.content.startsWith('1\t')).toBe(true);
+    expect(result.content).toContain('alone exceeds the 30000 estimated-token output limit');
+    expect(ctx.readFileState.size).toBe(1);
+    expect(ctx.readFileState.get(file)?.isPartialView).toBe(true);
     expect((await tool('Edit').execute({ file_path: file, old_string: 'a', new_string: 'b' }, ctx)).isError).toBe(true);
     expect((await fs.stat(file)).size).toBe(1024 ** 3);
   });
@@ -69,7 +71,7 @@ describe('resource boundaries with real files and processes', () => {
     const result = await tool('Bash').execute({ command: flood, timeout: 30_000 }, context());
     expect(result.isError).toBe(false);
     expect((result.content as string).length).toBeLessThan(66_000);
-    expect(result.content).toContain('Content truncated:');
+    expect(result.content).toContain('Command output reached the 50000-UTF-16-code-unit preview limit');
     expect(result.content).toContain('FINAL_MARKER');
   });
 

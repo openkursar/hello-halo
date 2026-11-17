@@ -1,4 +1,4 @@
-use super::{failure, success, ToolContext};
+use super::{failure, file_range, success, ToolContext};
 use crate::{
     error::{Error, Result},
     harness::{ResolvedHarness, TextId},
@@ -550,7 +550,8 @@ impl FileReadStateStore {
 pub struct FileTools {
     reads: Arc<FileReadStateStore>,
     track_reads: bool,
-    result_budget: usize,
+    read_token_limit: usize,
+    explicit_result_budget: Option<usize>,
     pub deny: Vec<PathBuf>,
     record_change: Option<(Arc<dyn crate::bridge::HostBridge>, String)>,
     external_reads: Option<Arc<dyn crate::bridge::HostBridge>>,
@@ -572,7 +573,7 @@ pub(super) fn modified(m: &std::fs::Metadata) -> f64 {
         .map(|d| d.as_secs() as f64 * 1000.0 + d.subsec_nanos() as f64 / 1_000_000.0)
         .unwrap_or(0.)
 }
-fn same(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+pub(super) fn same(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -700,7 +701,19 @@ impl FileTools {
         Self {
             reads: Arc::new(FileReadStateStore::default()),
             track_reads: options["nativeOwner"]["readFileStatePresent"] != false,
-            result_budget: options["toolResultBudget"].as_u64().unwrap_or(50_000) as usize,
+            read_token_limit: file_range::read_token_limit_for(options),
+            explicit_result_budget: if options
+                .get("toolResultBudgetExplicit")
+                .is_some_and(|value| !crate::js::is_undefined(value))
+            {
+                (options["toolResultBudgetExplicit"] == true)
+                    .then(|| options["toolResultBudget"].as_u64().map(|value| value as usize))
+                    .flatten()
+            } else {
+                options["toolResultBudget"]
+                    .as_u64()
+                    .map(|value| value as usize)
+            },
             deny: deny_roots(options),
             record_change: options["nativeOwner"]["recordFileChange"]["__haloSdkNativeCallback"]
                 .as_str()
@@ -776,7 +789,7 @@ impl FileTools {
             invalidated: false,
         };
         let result = match name {
-            "Read" => Ok(self.read(&path, input, harness, &mut exported).await),
+            "Read" => Ok(self.read(&path, input, harness, &mut exported, &ctx.cancellation).await),
             "Write" => self.write(&path, input, ctx, captured, &mut exported, &mut guard).await,
             "Edit" => self.edit(&path, input, ctx, captured, &mut exported, &mut guard).await,
             _ => unreachable!(),
@@ -923,6 +936,7 @@ impl FileTools {
         input: &Value,
         harness: &ResolvedHarness,
         exported: &mut ReadExport,
+        cancellation: &tokio_util::sync::CancellationToken,
     ) -> Value {
         for key in ["offset", "limit"] {
             if let Some(v) = input
@@ -978,6 +992,14 @@ impl FileTools {
         if ext == "pdf" {
             return pdf(path, stat.len(), input.get("pages"), harness);
         }
+        let offset = crate::js::safe_integer(&input["offset"]).unwrap_or(0) as usize;
+        let limit = crate::js::safe_integer(&input["limit"]).unwrap_or(2000) as usize;
+        let start = offset.saturating_sub(1);
+        if stat.len() > MAX_BYTES as u64 && ext != "ipynb" {
+            return self
+                .read_range(path, input, harness, offset, limit, start, cancellation)
+                .await;
+        }
         let snap = match snapshot(path).await {
             Ok(s) => s,
             Err(e) => {
@@ -1012,9 +1034,6 @@ impl FileTools {
         }
         let lines: Vec<&str> = content.split('\n').collect();
         let total = lines.len();
-        let offset = crate::js::safe_integer(&input["offset"]).unwrap_or(0) as usize;
-        let limit = crate::js::safe_integer(&input["limit"]).unwrap_or(2000) as usize;
-        let start = offset.saturating_sub(1);
         let end = start.saturating_add(limit).min(total);
         if start >= total {
             return success(
@@ -1031,31 +1050,85 @@ impl FileTools {
         let width = end.to_string().len();
         let mut output = String::new();
         let mut fitted = start;
-        let mut truncated = false;
-        let mut chars = 0;
-        for (i, line) in lines.iter().enumerate().take(end).skip(start) {
-            let next = format!("{:>width$}\t{line}\n", i + 1);
-            let n = next.encode_utf16().count();
-            if chars + n > 40000 {
+        let mut estimated = 0.0;
+        let mut characters = 0usize;
+        let mut truncated_line = None;
+        let mut budget = None;
+        for (index, line) in lines.iter().enumerate().take(end).skip(start) {
+            let number = index + 1;
+            if let Some(kind) = file_range::line_overflow(
+                self.read_token_limit,
+                self.explicit_result_budget,
+                estimated,
+                characters,
+                line,
+                number,
+            ) {
+                budget = Some(kind);
                 if fitted == start {
-                    output = super::utf16_prefix(&next, 40000);
-                    output.push('\n');
-                    fitted = i + 1;
-                    truncated = true;
+                    let prefix = file_range::prefix_for_budget(
+                        self.read_token_limit,
+                        self.explicit_result_budget,
+                        kind,
+                        estimated,
+                        characters,
+                        line,
+                    );
+                    output.push_str(&format!("{:>width$}\t{}\n", number, prefix));
+                    fitted = number;
+                    truncated_line = Some(number);
                 }
                 break;
             }
+            let next = format!("{:>width$}\t{line}\n", number);
+            estimated += crate::core::tokens::estimate_tokens(line) + 2.0;
+            characters += next.encode_utf16().count();
             output.push_str(&next);
-            chars += n;
-            fitted = i + 1;
+            fitted = number;
         }
-        if truncated {
+        let more = fitted < total;
+        if let Some(number) = truncated_line {
+            let text = budget
+                .map(|kind| {
+                    file_range::budget_text(
+                        kind,
+                        self.read_token_limit,
+                        self.explicit_result_budget,
+                        harness,
+                    )
+                })
+                .unwrap_or_default();
             output.push_str(&harness.render(
                 TextId::ToolsFileLineTruncated,
-                &[("line", &(start + 1).to_string())],
+                &[("line", &number.to_string()), ("budget", &text)],
             ));
-        }
-        if fitted < total {
+            if more {
+                output.push_str(&harness.render(
+                    TextId::ToolsFileLineTruncatedLater,
+                    &[("offset", &(fitted + 1).to_string()), ("line", &number.to_string())],
+                ));
+            }
+            output.push('\n');
+        } else if let Some(kind) = budget.filter(|_| more) {
+            let text = file_range::budget_text(
+                kind,
+                self.read_token_limit,
+                self.explicit_result_budget,
+                harness,
+            );
+            let suffix = format!(" of {total}");
+            output.push_str(&harness.render(
+                TextId::ToolsFileReadBudget,
+                &[
+                    ("budget", &text),
+                    ("start", &(start + 1).to_string()),
+                    ("end", &fitted.to_string()),
+                    ("total_suffix", &suffix),
+                    ("offset", &(fitted + 1).to_string()),
+                ],
+            ));
+            output.push('\n');
+        } else if more {
             output.push_str(&harness.render(
                 TextId::ToolsFileMoreLines,
                 &[
@@ -1065,20 +1138,37 @@ impl FileTools {
                     ("offset", &(fitted + 1).to_string()),
                 ],
             ));
+            output.push('\n');
+        } else if start > 0 {
+            output.push_str(&harness.render(
+                TextId::ToolsFileEndOfFileNotStart,
+                &[
+                    ("start", &(start + 1).to_string()),
+                    ("end", &fitted.to_string()),
+                ],
+            ));
+            output.push('\n');
         }
-        let delivered_characters = output.encode_utf16().count();
-        let budget_truncated = delivered_characters > self.result_budget;
-        if budget_truncated {
-            tracing::warn!(characters=delivered_characters,budget=self.result_budget,"Read output truncated to the tool-result budget; recording a partial view");
-            output = crate::core::truncate::truncate_content_with_harness(
-                &output,
-                self.result_budget,
-                crate::core::truncate::recovery_hint(harness),
-                harness,
-            );
+        let mut clamped = false;
+        if let Some(limit) = self.explicit_result_budget {
+            if crate::js::utf16_len(&output) > limit {
+                let (fitted_output, delivered_end, truncated) = fit_explicit_read(
+                    &output,
+                    limit,
+                    Some(total),
+                    more,
+                    false,
+                    truncated_line.is_some(),
+                    harness,
+                );
+                output = fitted_output;
+                fitted = delivered_end;
+                clamped = truncated;
+            }
         }
-        let partial = truncated || budget_truncated || fitted < total || start > 0;
-        let retained = if truncated || budget_truncated {
+        let partial =
+            truncated_line.is_some() || budget.is_some() || more || start > 0 || clamped;
+        let retained = if truncated_line.is_some() || budget.is_some() || clamped {
             crate::js::undefined()
         } else if partial {
             json!(lines[start..fitted].join("\n"))
@@ -1086,8 +1176,91 @@ impl FileTools {
             json!(content)
         };
         self.record_public(path, json!({"content":retained,"contentHash":hash(&snap.bytes),"timestamp":modified(&snap.metadata),"offset":input.get("offset").cloned().unwrap_or_else(crate::js::undefined),"limit":input.get("limit").cloned().unwrap_or_else(crate::js::undefined),"isPartialView":if partial {json!(true)}else{crate::js::undefined()}}));
-        success(output, None)
+        let mut result = success(output, None);
+        result["__haloSdkNativeOutput"] = json!("read_text");
+        result
     }
+
+    async fn read_range(
+        &self,
+        path: &Path,
+        input: &Value,
+        harness: &ResolvedHarness,
+        offset: usize,
+        limit: usize,
+        start: usize,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Value {
+        let request = file_range::RangeRequest {
+            path,
+            start: start + 1,
+            limit,
+            token_limit: self.read_token_limit,
+            character_limit: self.explicit_result_budget,
+            cancellation,
+            harness,
+        };
+        match file_range::read(&request).await {
+            Ok(outcome) if outcome.beyond_end => {
+                let total = outcome.total.unwrap_or(0);
+                return failure(harness.render(
+                    TextId::ToolsFileBeyondEnd,
+                    &[
+                        ("offset", &offset.to_string()),
+                        ("total", &total.to_string()),
+                    ],
+                ));
+            }
+            Ok(outcome) if outcome.cancelled && outcome.text.is_empty() => {
+                return failure(harness.text(TextId::ToolsFileReadCancelled));
+            }
+            Ok(outcome) => {
+                let metadata = fs::metadata(path).await.ok();
+                let timestamp = metadata
+                    .as_ref()
+                    .map(modified)
+                    .unwrap_or(f64::NAN);
+                let mut text = outcome.text;
+                let mut delivered_end = outcome.end;
+                if let Some(limit) = self.explicit_result_budget {
+                    if crate::js::utf16_len(&text) > limit {
+                        let fitted = fit_explicit_read(
+                            &text,
+                            limit,
+                            outcome.total,
+                            outcome.more,
+                            outcome.changed,
+                            outcome.line_truncated,
+                            harness,
+                        );
+                        text = fitted.0;
+                        delivered_end = fitted.1;
+                    }
+                }
+                let delivered_start = if delivered_end == 0 { 0 } else { outcome.start };
+                let mut state = json!({"content":crate::js::undefined(),"timestamp":timestamp,"isPartialView":true,"offset":input.get("offset").cloned().unwrap_or_else(crate::js::undefined),"limit":input.get("limit").cloned().unwrap_or_else(crate::js::undefined),"deliveredStart":delivered_start,"deliveredEnd":delivered_end});
+                if let Some(total) = outcome.total {
+                    state["totalLines"] = json!(total);
+                }
+                self.record_public(path, state);
+                let mut result = success(text, None);
+                result["__haloSdkNativeOutput"] = json!("read_text");
+                result
+            }
+            Err(error) if error.is_abort() => failure(harness.text(TextId::ToolsFileReadCancelled)),
+            Err(error) => {
+                tracing::warn!(file_path = %path.display(), error = %error, "large text range read failed");
+                failure(harness.render(
+                    TextId::ToolsFileReadFailed,
+                    &[
+                        ("path", &path.to_string_lossy()),
+                        ("error", &error.render_for(harness)),
+                    ],
+                ))
+            }
+        }
+    }
+
     async fn write(
         &self,
         path: &Path,
@@ -1296,6 +1469,153 @@ impl FileTools {
         ))
     }
 }
+fn numbered_read_line(line: &str) -> Option<(usize, &str)> {
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let (number, content) = line.split_once('\t')?;
+    Some((number.trim().parse().ok()?, content))
+}
+
+/// Fits an explicit character cap around the numbered read body. The original
+/// feedback is replaced with a truthful continuation notice when lines must be
+/// dropped; a short marker is used only when no body content plus feedback fits.
+fn fit_explicit_read(
+    output: &str,
+    limit: usize,
+    total: Option<usize>,
+    more: bool,
+    changed: bool,
+    line_truncated: bool,
+    harness: &ResolvedHarness,
+) -> (String, usize, bool) {
+    if limit == 0 {
+        return (String::new(), 0, true);
+    }
+    if crate::js::utf16_len(output) <= limit {
+        let end = output
+            .split_inclusive('\n')
+            .filter_map(numbered_read_line)
+            .last()
+            .map(|(number, _)| number)
+            .unwrap_or(0);
+        return (output.to_owned(), end, false);
+    }
+    let body: Vec<&str> = output
+        .split_inclusive('\n')
+        .take_while(|line| numbered_read_line(line).is_some())
+        .collect();
+    let Some((start, first_content)) = body.first().and_then(|line| numbered_read_line(line)) else {
+        return (short_read_output(limit, harness), 0, true);
+    };
+    let width = body
+        .first()
+        .and_then(|line| line.split_once('\t').map(|(number, _)| number.len()))
+        .unwrap_or(1);
+    let budget = file_range::budget_text(
+        file_range::BudgetKind::Characters,
+        0,
+        Some(limit),
+        harness,
+    );
+    for count in (1..=body.len()).rev() {
+        let end = body[count - 1]
+            .split_inclusive('\n')
+            .next()
+            .and_then(numbered_read_line)
+            .map(|(number, _)| number)
+            .unwrap_or(start);
+        let delivered_more = more || count < body.len();
+        let mut notice = String::new();
+        if changed {
+            notice.push_str(&harness.render(
+                TextId::ToolsFileChangedDuringRead,
+                &[("start", &start.to_string()), ("end", &end.to_string())],
+            ));
+            notice.push('\n');
+        }
+        if line_truncated && count == body.len() {
+            notice.push_str(&harness.render(
+                TextId::ToolsFileLineTruncated,
+                &[("line", &end.to_string()), ("budget", &budget)],
+            ));
+            if delivered_more {
+                notice.push_str(&harness.render(
+                    TextId::ToolsFileLineTruncatedLater,
+                    &[
+                        ("offset", &(end + 1).to_string()),
+                        ("line", &end.to_string()),
+                    ],
+                ));
+            }
+            notice.push('\n');
+        } else if delivered_more {
+            let suffix = total.map(|total| format!(" of {total}")).unwrap_or_default();
+            notice.push_str(&harness.render(
+                TextId::ToolsFileReadBudget,
+                &[
+                    ("budget", &budget),
+                    ("start", &start.to_string()),
+                    ("end", &end.to_string()),
+                    ("total_suffix", &suffix),
+                    ("offset", &(end + 1).to_string()),
+                ],
+            ));
+            notice.push('\n');
+        }
+        let candidate = format!("{}{notice}", body[..count].concat());
+        if crate::js::utf16_len(&candidate) <= limit {
+            return (candidate, end, count < body.len());
+        }
+    }
+    let line_notice = harness.render(
+        TextId::ToolsFileLineTruncated,
+        &[("line", &start.to_string()), ("budget", &budget)],
+    );
+    let line_notice = if more {
+        format!(
+            "{line_notice}{}\n",
+            harness.render(
+                TextId::ToolsFileLineTruncatedLater,
+                &[
+                    ("offset", &(start + 1).to_string()),
+                    ("line", &start.to_string()),
+                ],
+            )
+        )
+    } else {
+        format!("{line_notice}\n")
+    };
+    let prefix = format!("{:>width$}\t", start);
+    let available = limit.saturating_sub(
+        crate::js::utf16_len(&line_notice) + crate::js::utf16_len(&prefix) + 1,
+    );
+    let content = crate::js::utf16_prefix_without_split(first_content, available);
+    if !content.is_empty() {
+        let candidate = format!("{prefix}{content}\n{line_notice}");
+        if crate::js::utf16_len(&candidate) <= limit {
+            return (candidate, start, true);
+        }
+    }
+    (short_read_output(limit, harness), 0, true)
+}
+
+fn short_read_output(limit: usize, harness: &ResolvedHarness) -> String {
+    let label = file_range::budget_text(
+        file_range::BudgetKind::Characters,
+        0,
+        Some(limit),
+        harness,
+    );
+    let short = harness.render(TextId::ToolsOutputShort, &[("budget", &label)]);
+    if crate::js::utf16_len(&short) <= limit {
+        return short;
+    }
+    let marker = harness.text(TextId::ContextTruncationMarker);
+    if crate::js::utf16_len(marker) <= limit {
+        return marker.to_owned();
+    }
+    crate::js::utf16_prefix_without_split(harness.text(TextId::ContextTruncationEllipsis), limit)
+}
+
 async fn image(
     path: &Path,
     stat: &std::fs::Metadata,
@@ -1508,6 +1828,43 @@ mod admission_tests {
         assert!(!states.values.contains_key(&PathBuf::from("/file-0")));
         assert!(states.values.contains_key(&PathBuf::from("/file-1")));
         assert!(states.values.contains_key(&PathBuf::from("/new")));
+    }
+
+    #[test]
+    fn explicit_budget_keeps_body_before_replacing_feedback() {
+        let harness = crate::harness::baseline();
+        let body: String = (1..=20)
+            .map(|number| format!("{number:>2}\tline-{number:02}\n"))
+            .collect();
+        let output = format!("{body}[More content remains.]\n");
+        let (fitted, end, truncated) =
+            fit_explicit_read(&output, 230, Some(100), true, false, false, &harness);
+        assert!(truncated);
+        assert!(end > 0 && end < 20);
+        assert!(fitted.starts_with(" 1\tline-01\n"));
+        assert!(fitted.contains("Read reached the 230"));
+        assert!(fitted.contains("Later lines are available from offset="));
+        assert!(!fitted.contains("Output omitted"));
+        assert!(crate::js::utf16_len(&fitted) <= 230);
+
+        let (body_only, end, truncated) =
+            fit_explicit_read(&body, 350, Some(20), false, false, false, &harness);
+        assert!(!truncated);
+        assert_eq!(end, 20);
+        assert_eq!(body_only, body);
+
+        let (partial, end, truncated) =
+            fit_explicit_read(&format!("1\t{}\n", "x".repeat(500)), 400, None, true, false, true, &harness);
+        assert!(truncated);
+        assert_eq!(end, 1);
+        assert!(partial.starts_with("1\t"));
+        assert!(crate::js::utf16_len(&partial) <= 400);
+
+        let (short, end, truncated) =
+            fit_explicit_read(&body, 40, Some(20), true, false, false, &harness);
+        assert!(truncated);
+        assert_eq!(end, 0);
+        assert!(crate::js::utf16_len(&short) <= 40);
     }
 
     #[test]

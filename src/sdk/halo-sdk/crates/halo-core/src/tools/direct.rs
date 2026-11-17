@@ -1,4 +1,4 @@
-use super::{file, search, shell, shell_external, skill, web, ToolContext, WorkingState};
+use super::{file, output, search, shell, shell_external, skill, web, ToolContext, WorkingState};
 use crate::{
     bridge::{EventSink, HostBridge},
     error::{Error, Result},
@@ -22,6 +22,7 @@ pub struct DirectToolOwner {
     session_id: String,
     shell: OnceLock<Arc<shell::ShellTools>>,
     working: OnceLock<Arc<WorkingState>>,
+    output: OnceLock<Arc<output::OutputStore>>,
     web: web::WebTool,
     processes: Arc<crate::processes::OwnedProcesses>,
     lifetime: CancellationToken,
@@ -34,11 +35,22 @@ impl DirectToolOwner {
             session_id,
             shell: OnceLock::new(),
             working: OnceLock::new(),
+            output: OnceLock::new(),
             web: web::WebTool::default(),
             processes: Arc::new(crate::processes::OwnedProcesses::default()),
             lifetime: CancellationToken::new(),
             calls: Mutex::new(Vec::new()),
         }
+    }
+    fn output(&self, context: &Value) -> Arc<output::OutputStore> {
+        self.output
+            .get_or_init(|| {
+                let mut options = context.clone();
+                options["persistSession"] = json!(false);
+                options["sessionId"] = json!(self.session_id);
+                output::OutputStore::new(&options)
+            })
+            .clone()
     }
     fn shell(
         &self,
@@ -49,7 +61,11 @@ impl DirectToolOwner {
             .get_or_init(|| {
                 let mut options = context.clone();
                 options["persistSession"] = json!(false);
-                Arc::new(shell::ShellTools::new_with_activity(&options, activity))
+                Arc::new(shell::ShellTools::new_with_store(
+                    &options,
+                    activity,
+                    Some(self.output(context)),
+                ))
             })
             .clone()
     }
@@ -125,7 +141,7 @@ impl DirectToolOwner {
         };
         let background =
             (context["nativeOwner"]["externalBackgroundTasks"] == true).then_some(&bridge);
-        Ok(match implementation.as_str() {
+        let result = match implementation.as_str() {
             "Read" | "Write" | "Edit" => {
                 file::FileTools::new(&context, bridge)
                     .execute_admitted(&implementation, &input, &ctx, admitted)
@@ -150,7 +166,11 @@ impl DirectToolOwner {
                 )
                 .await
             }
-            "WebFetch" => self.web.execute(&input, &ctx, Some(bridge.as_ref())).await,
+            "WebFetch" => {
+                let store = self.output(&context);
+                self.web.set_store(store.clone());
+                self.web.execute(&input, &ctx, Some(bridge.as_ref())).await
+            }
             "Skill" => {
                 let catalog = match context
                     .get("skillCatalog")
@@ -174,11 +194,20 @@ impl DirectToolOwner {
                 crate::harness::TextId::ToolsUnknown,
                 &[("name", &implementation)],
             )),
-        })
+        };
+        let mut result = result;
+        if let Some(object) = result.as_object_mut() {
+            object.shift_remove("__haloSdkNativeOutput");
+            object.shift_remove("__haloSdkNativeSavedOutput");
+        }
+        Ok(result)
     }
     pub fn abort_now(&self) {
         self.lifetime.cancel();
         self.web.close();
+        if let Some(output) = self.output.get() {
+            output.close_blocking();
+        }
         for call in self
             .calls
             .lock()
@@ -196,6 +225,9 @@ impl DirectToolOwner {
         self.abort_now();
         if let Some(shell) = self.shell.get() {
             shell.close().await;
+        }
+        if let Some(output) = self.output.get() {
+            output.close().await;
         }
     }
 }

@@ -1,8 +1,10 @@
 mod direct;
 mod file;
+mod file_range;
 mod glob_matcher;
 pub mod mcp;
 mod mcp_sse;
+mod output;
 mod process_retirement;
 mod search;
 mod shell;
@@ -65,11 +67,22 @@ pub fn drop_host_owned_input(name: &str, input: &mut Value) {
         fields.shift_remove("annotations");
     }
 }
+pub(crate) fn apply_read_token_limit(definition: &mut Value, token_limit: usize) {
+    if definition["name"] != "Read" {
+        return;
+    }
+    if let Some(description) = definition["description"].as_str() {
+        if description.contains("{token_limit}") {
+            definition["description"] = json!(description.replace("{token_limit}", &token_limit.to_string()));
+        }
+    }
+}
 pub fn builtin_descriptors() -> Vec<Value> {
     let definitions = crate::harness::baseline().resource(ResourceId::ToolDefinitions);
     BUILTIN_NAMES.iter().map(|name| {
         let definition = definitions.as_array().unwrap().iter().find(|definition| definition["name"] == *name).unwrap();
         let mut descriptor = json!({"name":name,"description":definition["description"],"inputSchema":definition["input_schema"],"permissionLevel":builtin_permission(name),"concurrencySafe":builtin_concurrency_safe(name),"freshInstance":(["Read","Write","Edit","Glob","Grep"].contains(name))});
+        apply_read_token_limit(&mut descriptor, file_range::read_token_limit(200_000.0));
         if *name == "AskUserQuestion" { descriptor["requiresUserInteraction"] = json!(true); }
         descriptor
     }).collect()
@@ -117,6 +130,7 @@ pub struct ToolRuntime {
     shell: Arc<shell::ShellTools>,
     owns_shell: AtomicBool,
     web: web::WebTool,
+    output: Arc<output::OutputStore>,
     mcp: mcp::McpTools,
     owns_mcp: bool,
     borrowed_denied: Vec<String>,
@@ -165,10 +179,22 @@ impl ToolRuntime {
         _events: Arc<dyn EventSink>,
         working: Option<Arc<WorkingState>>,
     ) -> Self {
-        let shell = Arc::new(shell::ShellTools::new_with_activity(
+        let output = output::OutputStore::new(&options);
+        let shell = Arc::new(shell::ShellTools::new_with_store(
             &options,
             bridge.resource_activity(),
+            Some(output.clone()),
         ));
+        let configured = options["toolResultBudgetExplicit"] == true;
+        let preview_limit = options["toolResultBudget"]
+            .as_u64()
+            .map(|value| value.min(50_000) as usize)
+            .unwrap_or(50_000);
+        let web = web::WebTool::new(
+            Some(output.clone()),
+            preview_limit,
+            configured && preview_limit < 50_000,
+        );
         let external_code_search = options["nativeCodeSearchBridge"] == true
             && crate::js::truthy(&options["codeSearch"])
             && options["tools"]
@@ -193,7 +219,8 @@ impl ToolRuntime {
             definitions: Vec::new(),
             shell,
             owns_shell: AtomicBool::new(true),
-            web: Default::default(),
+            web,
+            output,
             catalog: json!([]),
             code_search: None,
             owns_code_search: true,
@@ -415,11 +442,15 @@ impl ToolRuntime {
             .resource(ResourceId::ToolDefinitions);
         let all = all.as_array().expect("builtin tool resource is an array");
         let selection = self.options["tools"].as_array();
+        let limit = file_range::read_token_limit_for(&self.options);
         self.definitions = BUILTIN_NAMES
             .iter()
             .filter(|name| selection.is_none_or(|s| s.iter().any(|n| n.as_str() == Some(name))))
             .filter_map(|name| all.iter().find(|v| v["name"] == *name).cloned())
             .collect();
+        for definition in &mut self.definitions {
+            apply_read_token_limit(definition, limit);
+        }
         if (self.code_search.is_some()
             || self.external_code_search && crate::js::truthy(&self.options["codeSearch"]))
             && selection.is_none_or(|tools| tools.iter().any(|tool| tool == "CodeSearch"))
@@ -454,7 +485,7 @@ impl ToolRuntime {
     fn catalog_selection(&self) -> Vec<SelectedTool> {
         if let Some(supplied) = self.supplied.read().unwrap().as_ref().cloned() {
             return supplied
-                .definitions(&self.resolved_harness())
+                .definitions(&self.resolved_harness(), file_range::read_token_limit_for(&self.options))
                 .into_iter()
                 .map(SelectedTool::unbound)
                 .collect();
@@ -487,6 +518,7 @@ impl ToolRuntime {
                     .find(|current| current["name"] == name)
                 {
                     *definition = current.clone();
+                    apply_read_token_limit(definition, file_range::read_token_limit_for(&self.options));
                 }
             }
         }
@@ -850,6 +882,27 @@ impl ToolRuntime {
             .iter()
             .find(|t| t["name"] == name)
     }
+    pub(crate) fn trusted_output_kind(&self, tool: &SelectedTool, result: &Value) -> Option<String> {
+        if tool.mcp.is_some() {
+            return None;
+        }
+        let name = tool.definition["name"].as_str().unwrap_or("");
+        let marker = result
+            .get("__haloSdkNativeOutput")
+            .and_then(Value::as_str)?
+            .to_owned();
+        if self.supplied.read().unwrap().is_some() {
+            if self
+                .supplied_tool(name)
+                .is_none_or(|tool| tool.implementation.is_none())
+            {
+                return None;
+            }
+        } else if self.custom(name).is_some() {
+            return None;
+        }
+        Some(marker)
+    }
     fn supplied_tool(&self, name: &str) -> Option<Arc<supplied::SuppliedTool>> {
         self.supplied
             .read()
@@ -1038,12 +1091,21 @@ impl ToolRuntime {
                 }
             }
             "Skill" => {
-                skill::execute(
+                let mut result = skill::execute(
                     &self.skill_catalog_with_harness(&ctx.harness),
                     &input,
                     &ctx.harness,
                 )
-                .await
+                .await;
+                if result["isError"] != true
+                    && result
+                        .get("metadata")
+                        .and_then(|metadata| metadata.get("skill"))
+                        .is_some()
+                {
+                    result["__haloSdkNativeOutput"] = json!("skill_instructions");
+                }
+                result
             }
             "Goal" => self.working.goal_with_harness(&input, &ctx.harness),
             "TodoWrite" => self.working.set_todos_with_harness(&input, &ctx.harness),
@@ -1109,10 +1171,12 @@ impl ToolRuntime {
                 search.dispose().await;
             }
         }
+        self.output.close().await;
         Ok(())
     }
     pub fn abort_now(&self) {
         self.web.close();
+        self.output.close_blocking();
         self.processes.abort_now();
         if self.owns_shell.load(Ordering::Acquire) {
             self.shell.abort_now();

@@ -44,10 +44,48 @@
     ]
   },
   "tools.web.truncated": {
-    "text": "{body}\n\n... (truncated, {length} total characters)",
+    "text": "[WebFetch reached the {budget}; only part of the extracted text is shown. Full extracted text from this fetch: {path}. Read or Grep can inspect omitted details if needed.]",
     "slots": [
-      "body",
-      "length"
+      "budget",
+      "path"
     ]
+  },
+  "tools.web.truncated_partial": {
+    "text": "[WebFetch reached the {budget}; only part of the extracted text is shown. Partial saved text: {path}. Saving stopped: {reason}. The file does not contain all text extracted from this fetch.]",
+    "slots": [
+      "budget",
+      "path",
+      "reason"
+    ]
+  },
+  "tools.web.truncated_no_save": {
+    "text": "[WebFetch reached the {budget}; some extracted text is omitted and was not saved: {reason}. This tool has no range parameter for the omitted text.]",
+    "slots": [
+      "budget",
+      "reason"
+    ]
+  },
+  "tools.web.response_limit": {
+    "text": "[WebFetch stopped reading at the {byte_limit}-byte response limit. The extracted text is incomplete. {storage_notice}]",
+    "slots": [
+      "byte_limit",
+      "storage_notice"
+    ]
+  },
+  "tools.web.retained": {
+    "text": "Retained extracted text: {path}; readable with Read or Grep.",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.web.not_saved": {
+    "text": "No extracted text was saved: {reason}.",
+    "slots": [
+      "reason"
+    ]
+  },
+  "tools.web.cache_unavailable": {
+    "text": "[This cached preview omits some extracted text. Its saved copy is no longer available.]",
+    "slots": []
   }
 }

@@ -1,4 +1,4 @@
-use super::{failure, success, utf16_prefix, ToolContext};
+use super::{failure, success, ToolContext};
 use crate::harness::{ResolvedHarness, TextId};
 use crate::{bridge::HostBridge, error::Error, http::HostTrust};
 use serde_json::{json, Value};
@@ -91,22 +91,123 @@ struct ClientState {
     closed: bool,
     current: Option<CachedClient>,
 }
+#[derive(Clone)]
+struct CacheEntry {
+    body: String,
+    saved: Option<super::output::SaveState>,
+    complete_text: bool,
+    response_limited: bool,
+    stamp: Instant,
+}
 #[derive(Default)]
 pub struct WebTool {
-    cache: Mutex<HashMap<String, (String, usize, Instant)>>,
+    cache: Mutex<HashMap<String, CacheEntry>>,
     client: StdMutex<ClientState>,
+    store: std::sync::OnceLock<Arc<super::output::OutputStore>>,
+    preview_limit: Option<usize>,
+    configured_limit: bool,
 }
-fn render_body(body: &str, length: usize, harness: &ResolvedHarness) -> String {
-    if length > 100000 {
-        harness.render(
-            TextId::ToolsWebTruncated,
-            &[("body", body), ("length", &length.to_string())],
-        )
+const RESPONSE_LIMIT: usize = 10 * 1024 * 1024;
+
+fn budget_label(harness: &ResolvedHarness, limit: usize, configured: bool) -> String {
+    let id = if configured {
+        crate::harness::TextId::ToolsOutputBudgetConfigured
     } else {
-        body.to_owned()
-    }
+        crate::harness::TextId::ToolsOutputBudgetPreview
+    };
+    harness.render(id, &[("character_limit", &limit.to_string())])
 }
+
+fn storage_notice(
+    saved: Option<&super::output::SaveState>,
+    path_available: bool,
+    harness: &ResolvedHarness,
+) -> String {
+    use crate::harness::TextId;
+    if path_available {
+        if let Some(path) = saved.and_then(super::output::SaveState::path) {
+            return harness.render(
+                TextId::ToolsWebRetained,
+                &[("path", &path.to_string_lossy())],
+            );
+        }
+    }
+    let reason = match saved {
+        Some(super::output::SaveState::Partial { reason, .. })
+        | Some(super::output::SaveState::Failed { reason }) => reason.render(harness),
+        Some(super::output::SaveState::Complete { .. }) => {
+            harness.text(TextId::ToolsOutputReasonUnsafeCopy).into()
+        }
+        None => harness.text(TextId::ToolsOutputReasonUnavailable).into(),
+    };
+    harness.render(TextId::ToolsWebNotSaved, &[("reason", &reason)])
+}
+
+fn fit_web_text(
+    body: &str,
+    notices: &[String],
+    limit: usize,
+    label: &str,
+    harness: &ResolvedHarness,
+) -> String {
+    if notices.is_empty() {
+        return crate::js::utf16_prefix_without_split(body, limit);
+    }
+    let notice_len: usize = notices
+        .iter()
+        .map(|notice| crate::js::utf16_len(notice))
+        .sum::<usize>()
+        .saturating_add(2 * notices.len());
+    if notice_len.saturating_add(2) >= limit {
+        let short = harness.render(
+            crate::harness::TextId::ToolsOutputShort,
+            &[("budget", label)],
+        );
+        return if crate::js::utf16_len(&short) <= limit {
+            short
+        } else if limit == 0 {
+            String::new()
+        } else {
+            crate::js::utf16_prefix(
+                harness.text(crate::harness::TextId::ContextTruncationMarker),
+                limit,
+            )
+        };
+    }
+    let available = limit - notice_len - 2;
+    let preview = crate::js::utf16_prefix_without_split(body, available);
+    format!("{preview}\n\n{}", notices.join("\n"))
+}
+
 impl WebTool {
+    pub fn new(
+        store: Option<Arc<super::output::OutputStore>>,
+        preview_limit: usize,
+        configured_limit: bool,
+    ) -> Self {
+        let tool = Self {
+            preview_limit: Some(preview_limit),
+            configured_limit,
+            ..Self::default()
+        };
+        if let Some(store) = store {
+            let _ = tool.store.set(store);
+        }
+        tool
+    }
+
+    pub fn set_store(&self, store: Arc<super::output::OutputStore>) {
+        let _ = self.store.set(store);
+    }
+
+    fn limit(&self) -> usize {
+        self.preview_limit.unwrap_or(100_000)
+    }
+
+    fn store(&self) -> Option<&Arc<super::output::OutputStore>> {
+        self.store.get()
+    }
+
     pub fn close(&self) {
         let mut client = self
             .client
@@ -169,6 +270,81 @@ impl WebTool {
         Ok(client)
     }
 
+    async fn render_cached(
+        &self,
+        entry: &CacheEntry,
+        harness: &ResolvedHarness,
+    ) -> String {
+        use crate::harness::TextId;
+        let limit = self.limit();
+        let label = budget_label(harness, limit, self.configured_limit);
+        let path_available = match entry
+            .saved
+            .as_ref()
+            .and_then(super::output::SaveState::path)
+        {
+            Some(path) => tokio::fs::metadata(path).await.is_ok(),
+            None => false,
+        };
+        let mut notices = Vec::new();
+        if !entry.complete_text && !entry.response_limited {
+            match (path_available, entry.saved.as_ref()) {
+                (true, Some(super::output::SaveState::Complete { path, .. })) => {
+                    notices.push(harness.render(
+                        TextId::ToolsWebTruncated,
+                        &[("budget", &label), ("path", &path.to_string_lossy())],
+                    ));
+                }
+                (true, Some(super::output::SaveState::Partial { path, reason, .. })) => {
+                    notices.push(harness.render(
+                        TextId::ToolsWebTruncatedPartial,
+                        &[
+                            ("budget", &label),
+                            ("path", &path.to_string_lossy()),
+                            ("reason", &reason.render(harness)),
+                        ],
+                    ));
+                }
+                (_, Some(super::output::SaveState::Failed { reason })) => {
+                    notices.push(harness.render(
+                        TextId::ToolsWebTruncatedNoSave,
+                        &[("budget", &label), ("reason", &reason.render(harness))],
+                    ));
+                }
+                (_, Some(_)) => {
+                    notices.push(harness.text(TextId::ToolsWebCacheUnavailable).into());
+                }
+                _ => {
+                    notices.push(harness.render(
+                        TextId::ToolsWebTruncatedNoSave,
+                        &[
+                            ("budget", &label),
+                            (
+                                "reason",
+                                harness
+                                    .text(TextId::ToolsOutputReasonUnavailable)
+                             .into(),
+                            ),
+                        ],
+                    ));
+                }
+            }
+        }
+        if entry.response_limited {
+            notices.push(harness.render(
+                TextId::ToolsWebResponseLimit,
+                &[
+                    ("byte_limit", &RESPONSE_LIMIT.to_string()),
+                    (
+                        "storage_notice",
+                        &storage_notice(entry.saved.as_ref(), path_available, harness),
+                    ),
+                ],
+            ));
+        }
+        fit_web_text(&entry.body, &notices, limit, &label, harness)
+    }
+
     pub async fn execute(
         &self,
         input: &Value,
@@ -177,7 +353,7 @@ impl WebTool {
     ) -> Value {
         let harness = &ctx.harness;
         let Some(raw) = input["url"].as_str().filter(|s| !s.is_empty()) else {
-            return failure(harness.text(TextId::ToolsWebMissingUrl));
+            return failure(harness.text(crate::harness::TextId::ToolsWebMissingUrl));
         };
         let url = if let Some(rest) = raw.strip_prefix("http://") {
             format!("https://{rest}")
@@ -186,17 +362,25 @@ impl WebTool {
         };
         let parsed = match reqwest::Url::parse(&url) {
             Ok(u) => u,
-            Err(_) => return failure(harness.render(TextId::ToolsWebInvalidUrl, &[("url", raw)])),
-        };
-        {
-            let mut cache = self.cache.lock().await;
-            cache.retain(|_, (_, _, stamp)| stamp.elapsed() < Duration::from_secs(900));
-            if let Some((body, length, _)) = cache.get(&url) {
-                return success(render_body(body, *length, harness), None);
+            Err(_) => {
+                return failure(harness.render(
+                    crate::harness::TextId::ToolsWebInvalidUrl,
+                    &[("url", raw)],
+                ))
             }
+        };
+        let cached = {
+            let mut cache = self.cache.lock().await;
+            cache.retain(|_, entry| entry.stamp.elapsed() < Duration::from_secs(900));
+            cache.get(&url).cloned()
+        };
+        if let Some(entry) = cached {
+            let mut result = success(self.render_cached(&entry, harness).await, None);
+            result["__haloSdkNativeOutput"] = json!("web_preview");
+            return result;
         }
         if ctx.cancellation.is_cancelled() {
-            return failure(harness.text(TextId::ToolsWebAborted));
+            return failure(harness.text(crate::harness::TextId::ToolsWebAborted));
         }
         let deadline = tokio::time::Instant::now() + FETCH_TIMEOUT;
         let client = match request_step(
@@ -210,7 +394,7 @@ impl WebTool {
             Ok(client) => client,
             Err(error) => return error.result(harness, &url, false),
         };
-        let response = match request_step(
+        let mut response = match request_step(
             client
                 .get(&url)
                 .header("User-Agent", "agent-sdk")
@@ -231,7 +415,7 @@ impl WebTool {
         if response.url().host_str() != parsed.host_str() {
             return success(
                 harness.render(
-                    TextId::ToolsWebRedirect,
+                    crate::harness::TextId::ToolsWebRedirect,
                     &[("url", response.url().as_str())],
                 ),
                 None,
@@ -239,7 +423,7 @@ impl WebTool {
         }
         if !response.status().is_success() {
             return failure(harness.render(
-                TextId::ToolsWebHttpError,
+                crate::harness::TextId::ToolsWebHttpError,
                 &[
                     ("status", &response.status().as_u16().to_string()),
                     ("url", &url),
@@ -252,10 +436,11 @@ impl WebTool {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_owned();
-        let body = match request_step(response.text(), deadline, ctx, "body").await {
-            Ok(body) => body,
-            Err(error) => return error.result(harness, &url, true),
-        };
+        let (body, response_limited) =
+            match read_body(&mut response, deadline, ctx).await {
+                Ok(body) => body,
+                Err(error) => return error.result(harness, &url, true),
+            };
         let mut text = if kind.contains("html") {
             html_to_markdown(&body)
         } else if kind.contains("json") {
@@ -265,17 +450,117 @@ impl WebTool {
         } else {
             body
         };
-        let length = text.encode_utf16().count();
-        if length > 100000 {
-            text = utf16_prefix(&text, 100000);
+        let length = crate::js::utf16_len(&text);
+        let limit = self.limit();
+        let complete_text = length <= limit;
+        let saved = if !complete_text || response_limited {
+            match self.store() {
+                Some(store) => Some(store.save_text("web", &text).await),
+                None => Some(super::output::SaveState::Failed {
+                    reason: super::output::SaveReason::StorageUnavailable,
+                }),
+            }
+        } else {
+            None
+        };
+        let label = budget_label(harness, limit, self.configured_limit);
+        let path_available = match saved
+            .as_ref()
+            .and_then(super::output::SaveState::path)
+        {
+            Some(path) => tokio::fs::metadata(path).await.is_ok(),
+            None => false,
+        };
+        let mut notices = Vec::new();
+        if !complete_text && !response_limited {
+            match saved.as_ref() {
+                Some(super::output::SaveState::Complete { path, .. }) => notices.push(
+                    harness.render(
+                        crate::harness::TextId::ToolsWebTruncated,
+                        &[("budget", &label), ("path", &path.to_string_lossy())],
+                    ),
+                ),
+                Some(super::output::SaveState::Partial { path, reason, .. }) => {
+                    notices.push(harness.render(
+                        crate::harness::TextId::ToolsWebTruncatedPartial,
+                        &[
+                            ("budget", &label),
+                            ("path", &path.to_string_lossy()),
+                            ("reason", &reason.render(harness)),
+                        ],
+                    ))
+                }
+                Some(super::output::SaveState::Failed { reason }) => notices.push(
+                    harness.render(
+                        crate::harness::TextId::ToolsWebTruncatedNoSave,
+                        &[("budget", &label), ("reason", &reason.render(harness))],
+                    ),
+                ),
+                None => notices.push(harness.render(
+                    crate::harness::TextId::ToolsWebTruncatedNoSave,
+                    &[
+                        ("budget", &label),
+                        (
+                            "reason",
+                            harness.text(crate::harness::TextId::ToolsOutputReasonUnavailable),
+                        ),
+                    ],
+                )),
+            }
         }
-        self.cache
-            .lock()
-            .await
-            .insert(url, (text.clone(), length, Instant::now()));
-        success(render_body(&text, length, harness), None)
+        if response_limited {
+            notices.push(harness.render(
+                crate::harness::TextId::ToolsWebResponseLimit,
+                &[
+                    ("byte_limit", &RESPONSE_LIMIT.to_string()),
+                    (
+                        "storage_notice",
+                        &storage_notice(saved.as_ref(), path_available, harness),
+                    ),
+                ],
+            ));
+        }
+        let shown = fit_web_text(&text, &notices, limit, &label, harness);
+        let preview = crate::js::utf16_prefix_without_split(&text, limit);
+        self.cache.lock().await.insert(
+            url,
+            CacheEntry {
+                body: preview,
+                saved: saved.clone(),
+                complete_text,
+                response_limited,
+                stamp: Instant::now(),
+            },
+        );
+        let mut result = success(shown, None);
+        result["__haloSdkNativeOutput"] = json!("web_preview");
+        if let Some(path) = saved.as_ref().and_then(super::output::SaveState::path) {
+            result["__haloSdkNativeSavedOutput"] = json!(path);
+        }
+        result
     }
 }
+async fn read_body(
+    response: &mut reqwest::Response,
+    deadline: tokio::time::Instant,
+    ctx: &ToolContext,
+) -> Result<(String, bool), RequestFailure> {
+    let mut bytes = Vec::new();
+    let mut limited = false;
+    loop {
+        let chunk = request_step(response.chunk(), deadline, ctx, "body").await?;
+        let Some(chunk) = chunk else { break };
+        let remaining = RESPONSE_LIMIT.saturating_sub(bytes.len());
+        if chunk.len() > remaining {
+            bytes.extend_from_slice(&chunk[..remaining]);
+            limited = true;
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), limited))
+}
+
 pub fn html_to_markdown(html: &str) -> String {
     fn replace(s: String, p: &str, r: &str) -> String {
         regex::Regex::new(p)
@@ -588,11 +873,19 @@ mod tests {
         let tool = WebTool::default();
         tool.cache.lock().await.insert(
             "https://fixture.invalid/".into(),
-            ("opaque {length}".into(), 100001, Instant::now()),
+            CacheEntry {
+                body: "opaque {length}".into(),
+                saved: Some(super::super::output::SaveState::Failed {
+                    reason: super::super::output::SaveReason::StorageUnavailable,
+                }),
+                complete_text: false,
+                response_limited: false,
+                stamp: Instant::now(),
+            },
         );
         let harness = crate::harness::Harness::from_config(&json!({"models":{
-            "a":{"tools.web.truncated":"A {body} {length}"},
-            "b":{"tools.web.truncated":"B {body} {length}"}
+            "a":{"tools.web.truncated_no_save":"A {budget} | {reason}"},
+            "b":{"tools.web.truncated_no_save":"B {budget} | {reason}"}
         }}))
         .unwrap();
         let mut context = ToolContext {
@@ -605,14 +898,17 @@ mod tests {
             harness: harness.for_model("a"),
         };
         let input = json!({"url":"https://fixture.invalid/"});
-        assert_eq!(
-            tool.execute(&input, &context, None).await["content"],
-            "A opaque {length} 100001"
-        );
+        let first = tool.execute(&input, &context, None).await["content"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(first.starts_with("opaque {length}\n\nA 100000-UTF-16-code-unit preview limit | "));
+        assert!(first.contains("output storage is unavailable"));
         context.harness = harness.for_model("b");
-        assert_eq!(
-            tool.execute(&input, &context, None).await["content"],
-            "B opaque {length} 100001"
-        );
+        let second = tool.execute(&input, &context, None).await["content"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(second.starts_with("opaque {length}\n\nB 100000-UTF-16-code-unit preview limit | "));
     }
 }

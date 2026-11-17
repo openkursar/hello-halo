@@ -435,7 +435,11 @@ pub(crate) async fn turn(
                 }
             }
             if let(Some(notice),Some(last))=(notice,results.last_mut()){
-                if !discovery.as_ref().is_some_and(|state|state.lock().unwrap().has_search_result(last["toolUseId"].as_str().unwrap_or(""))){last["content"]=json!(super::truncate::truncate_content_with_harness(&context.harness.render(TextId::ContextExecutionStagnationEnvelope,&[("content",last["content"].as_str().unwrap_or("")),("notice",&notice)]),options["toolResultBudget"].as_u64().unwrap_or(50_000)as usize,super::truncate::recovery_hint(&context.harness),&context.harness));}
+                if !discovery.as_ref().is_some_and(|state|state.lock().unwrap().has_search_result(last["toolUseId"].as_str().unwrap_or(""))){
+                    let budget=options["toolResultBudget"].as_u64().unwrap_or(50_000)as usize;
+                    let preserve_body=last.get("__haloSdkNativeOutput").is_some();
+                    last["content"]=json!(stagnation_notice(last["content"].as_str().unwrap_or(""),&notice,budget,preserve_body,&context.harness));
+                }
             }
         }
         let text = content
@@ -1154,6 +1158,29 @@ pub(crate) async fn terminal_hooks(
     }
 }
 
+fn stagnation_notice(
+    content: &str,
+    notice: &str,
+    budget: usize,
+    preserve_body: bool,
+    harness: &crate::harness::ResolvedHarness,
+) -> String {
+    let enveloped = harness.render(
+        TextId::ContextExecutionStagnationEnvelope,
+        &[("content", content), ("notice", notice)],
+    );
+    if preserve_body {
+        enveloped
+    } else {
+        super::truncate::truncate_content_with_harness(
+            &enveloped,
+            budget,
+            super::truncate::recovery_hint(harness),
+            harness,
+        )
+    }
+}
+
 #[cfg(test)]
 mod image_result_tests {
     use super::*;
@@ -1168,6 +1195,20 @@ mod image_result_tests {
 
     fn image() -> Value {
         json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGk="}})
+    }
+
+    #[test]
+    fn stagnation_notice_keeps_budgeted_content_and_truncates_ordinary_content() {
+        let harness = crate::harness::baseline();
+        let content = "R".repeat(4_000);
+        let notice = "Repeated read.";
+        let preserved = stagnation_notice(&content, notice, 200, true, &harness);
+        assert!(preserved.contains(&content));
+        assert!(preserved.contains("<system-reminder>Repeated read.</system-reminder>"));
+        assert!(preserved.encode_utf16().count() > 200);
+        let ordinary = stagnation_notice(&content, notice, 200, false, &harness);
+        assert!(ordinary.encode_utf16().count() <= 200);
+        assert!(ordinary.contains("omitted"));
     }
 
     #[test]

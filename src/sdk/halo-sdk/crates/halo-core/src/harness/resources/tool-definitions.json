@@ -523,17 +523,10 @@
             "$harness": "tools.web_fetch.input_schema.fields.url.description"
           },
           "format": "uri"
-        },
-        "prompt": {
-          "type": "string",
-          "description": {
-            "$harness": "tools.web_fetch.input_schema.fields.prompt.description"
-          }
         }
       },
       "required": [
-        "url",
-        "prompt"
+        "url"
       ]
     }
   },

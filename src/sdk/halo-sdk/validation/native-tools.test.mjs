@@ -231,8 +231,9 @@ test('public sessions preserve budgeted Read state, Write permissions and stale 
       const read = results(1).find(block => block.tool_use_id === 'budgeted-0');
       const readText = typeof read.content === 'string' ? read.content : JSON.stringify(read.content);
       assert.ok(readText.includes('HEAD'));
-      assert.ok(readText.includes('TAIL'));
-      assert.match(readText, /chars omitted from the middle/);
+      assert.ok(!readText.includes('TAIL'));
+      assert.match(readText, /alone exceeds the 10000-UTF-16-code-unit configured output limit/);
+      assert.match(readText, /only its beginning is shown/);
       const written = results(3).find(block => block.tool_use_id === 'budgeted-2');
       assert.equal(Boolean(written.is_error), denyWrite);
       const secondRead = results(4).find(block => block.tool_use_id === 'budgeted-3');

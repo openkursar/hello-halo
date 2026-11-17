@@ -69,7 +69,7 @@
   },
   {
     "name": "Bash",
-    "description": "Run a shell command and receive its exit status and captured output.\n\nCommands share the session's working directory and exported environment variables. Shell functions, aliases and background jobs are not carried between calls. Quote paths and arguments for the shell you are using, and distinguish data from executable syntax.\n\nUse the file tools to read, search and edit files. A change made through Bash is not shown to the user as a diff, and Edit needs a fresh Read of the file afterwards. Use Bash for programs, builds, tests and operations those tools do not cover, or when the user specifically requests a shell command. A permission refusal is a boundary, not an invitation to try the same action through another tool.\n\nThe default foreground timeout is 120000 milliseconds. An explicit timeout sets the execution deadline in either mode, capped at 600000 milliseconds. Run commands that take minutes, or whose result is not needed yet, with run_in_background; do not use & or nohup. Wait for the result with TaskOutput, not with sleep. Without an explicit timeout, background work runs until it exits or the session closes or is interrupted. The response supplies a task ID, output path and deadline. TaskOutput waits for completion and TaskStop cancels the task; Read can inspect its output file. A TaskOutput wait timeout does not stop the command or change its execution deadline. If the final answer depends on that work, collect its completed result before finishing. Completion notices appear at the next active turn.\n\nBackground tasks are owned by this session, not persistent service deployments. Session close or interruption stops them, and nonpersistent sessions remove their output files on close. When the user requires a service to outlive this session, use an appropriate service manager or independent process lifecycle and verify that requirement separately.\n\nIndependent observations may run together. A command that depends on another command's effects must wait for it and check the outcome. Diagnose a failure before repeating it. Avoid repeatedly checking background tasks that already send completion notices; if the next step needs a result, wait through TaskOutput. Use an external service's own wait or status operation for work it owns.\n\nRepository changes still follow the user's scope and local workflow. Do not turn a request to edit code into permission to commit, publish, discard work or rewrite history. Preserve hooks, signing and repository configuration unless changing them is explicitly part of the authorized task. Use an available matching skill for a specialized commit or review-request workflow.",
+    "description": "Run a shell command and receive its exit status and captured output.\n\nCommands share the session's working directory and exported environment variables. Shell functions, aliases and background jobs are not carried between calls. Quote paths and arguments for the shell you are using, and distinguish data from executable syntax.\n\nUse the file tools to read, search and edit files. A change made through Bash is not shown to the user as a diff, and Edit needs a fresh Read of the file afterwards. Use Bash for programs, builds, tests and operations those tools do not cover, or when the user specifically requests a shell command. A permission refusal is a boundary, not an invitation to try the same action through another tool.\n\nThe default foreground timeout is 120000 milliseconds. An explicit timeout sets the execution deadline in either mode, capped at 600000 milliseconds. Run commands that take minutes, or whose result is not needed yet, with run_in_background; do not use & or nohup. Wait for the result with TaskOutput, not with sleep. Without an explicit timeout, background work runs until it exits or the session closes or is interrupted. The response supplies a task ID, output path and deadline. TaskOutput waits for completion and TaskStop cancels the task; Read can inspect its output file. A TaskOutput wait timeout does not stop the command or change its execution deadline. If the final answer depends on that work, collect its completed result before finishing. Completion notices appear at the next active turn.\n\nBackground tasks are owned by this session, not persistent service deployments. Session close or interruption stops them, and nonpersistent sessions remove their output files on close. When the user requires a service to outlive this session, use an appropriate service manager or independent process lifecycle and verify that requirement separately.\n\nIndependent observations may run together. A command that depends on another command's effects must wait for it and check the outcome. Diagnose a failure before repeating it. Avoid repeatedly checking background tasks that already send completion notices; if the next step needs a result, wait through TaskOutput. Use an external service's own wait or status operation for work it owns.\n\nRepository changes still follow the user's scope and local workflow. Do not turn a request to edit code into permission to commit, publish, discard work or rewrite history. Preserve hooks, signing and repository configuration unless changing them is explicitly part of the authorized task. Use an available matching skill for a specialized commit or review-request workflow.\n\nCommand output may be shortened for display. The notice identifies the omitted portion and whether a saved copy is available. If you need omitted details, Read or Grep can inspect a returned output file.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -257,7 +257,7 @@
   },
   {
     "name": "Read",
-    "description": "Inspect a local file within the session's permitted paths. Supply file_path; use Glob when you first need to locate a file.\n\nFor text, the initial window is at most 2,000 lines. Set offset to a one-based starting line and limit to the desired window; omitted offset or 0 starts at the beginning. Results prefix each source line with its number and a tab. These prefixes are display annotations, not file contents. Follow any continuation or truncation notice before treating the view as complete.\n\nText input is capped at 8 MiB. Larger files need a bounded streaming operation. Directory paths are rejected; missing files and denied paths produce errors. An empty file produces an explicit notice.\n\nSupported images can be attached for visual inspection, including screenshots. Notebook input is rendered as cell source and available text outputs; binary cell outputs are not rendered. PDF handling currently reports the file and validates an optional page range of at most 20 pages; it does not extract PDF text. Use another available PDF-capable tool when the contents are required.",
+    "description": "Inspect a local file within the session's permitted paths. Supply file_path; use Glob when you first need to locate a file.\n\nText reads default to 2,000 lines, within a {token_limit} estimated-token output limit per call. offset is a one-based starting line; omitted offset or 0 starts at the beginning. limit selects the maximum number of source lines. The returned range identifies what was delivered. Line numbers and tabs before the source text are display annotations, not file contents. If more context is useful, offset and limit can select another range, and Grep can locate specific sections.\n\nLarge text files can be read by selecting a line range. The result reports which lines were returned and whether more content remains; the total line count may be unknown. Directory paths are rejected; missing files and denied paths produce errors. An empty file produces an explicit notice.\n\nSupported images can be attached for visual inspection, including screenshots. Notebook input is rendered as cell source and available text outputs; binary cell outputs are not rendered. PDF handling currently reports the file and validates an optional page range of at most 20 pages; it does not extract PDF text. Use another available PDF-capable tool when the contents are required.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -273,7 +273,7 @@
         "limit": {
           "type": "integer",
           "minimum": 1,
-          "description": "Maximum lines in this text window; defaults to 2000."
+          "description": "Maximum source lines to return; defaults to 2000. The output budget may return fewer lines; the result reports the delivered range."
         },
         "pages": {
           "type": "string",
@@ -323,7 +323,7 @@
   },
   {
     "name": "TaskOutput",
-    "description": "Read the status and bounded output of a background Bash command in this session by task_id. By default waits for it to finish (up to the timeout); pass block=false to check without waiting. Use Read on output_file for additional output.",
+    "description": "Read the status and an output preview of a background Bash command in this session by task_id. By default, wait up to timeout; block=false checks without waiting. The preview contains the beginning of the saved output. Read or Grep can inspect more of output_file if needed. A wait timeout does not stop the command. retrieval_status describes retrieval; task.status and exit_code describe the command.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -391,7 +391,7 @@
   },
   {
     "name": "WebFetch",
-    "description": "Retrieve the text of a web page for inspection. Provide an absolute URL and describe the information you need in prompt; use the returned page text to answer that request.\n\nThis fetch has no browser login or service credentials. Use an authenticated integration for private content when one is available. HTML is converted to Markdown and JSON is formatted for reading. No separate summarization model is invoked, and JavaScript-dependent page content may be absent.\n\nHTTP addresses are upgraded to HTTPS. A redirect to another host returns the destination address instead of page content; inspect it before requesting that address. Results may be reused for 15 minutes and are truncated beyond 100,000 characters. Check these limits when freshness or complete coverage matters. Fetching does not save a local file.",
+    "description": "Retrieve the text of a web page for inspection. Provide an absolute URL.\n\nThis fetch has no browser login or service credentials. Use an authenticated integration for private content when one is available. HTML is converted to Markdown and JSON is formatted for reading. No separate summarization model is invoked, and JavaScript-dependent page content may be absent.\n\nHTTP addresses are upgraded to HTTPS. A redirect to another host returns the destination address instead of page content; inspect it before requesting that address. Results may be reused for 15 minutes. Long results may show only part of the extracted page text; the notice identifies any saved copy and whether it is complete. Read or Grep can inspect a returned file if more detail is useful. The same URL may return the same cached page.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -399,15 +399,10 @@
           "type": "string",
           "description": "Absolute address of the page to retrieve.",
           "format": "uri"
-        },
-        "prompt": {
-          "type": "string",
-          "description": "The question or extraction task to answer from the returned page text."
         }
       },
       "required": [
-        "url",
-        "prompt"
+        "url"
       ]
     }
   },

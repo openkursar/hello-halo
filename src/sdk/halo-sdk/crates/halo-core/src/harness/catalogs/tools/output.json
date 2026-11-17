@@ -1,0 +1,56 @@
+{
+  "tools.output.budget_tokens": {
+    "text": "{token_limit} estimated-token output limit",
+    "slots": [
+      "token_limit"
+    ]
+  },
+  "tools.output.budget_preview": {
+    "text": "{character_limit}-UTF-16-code-unit preview limit",
+    "slots": [
+      "character_limit"
+    ]
+  },
+  "tools.output.budget_configured": {
+    "text": "{character_limit}-UTF-16-code-unit configured output limit",
+    "slots": [
+      "character_limit"
+    ]
+  },
+  "tools.output.reason_unavailable": {
+    "text": "output storage is unavailable",
+    "slots": []
+  },
+  "tools.output.reason_write_failed": {
+    "text": "writing the output file failed",
+    "slots": []
+  },
+  "tools.output.reason_finalize_failed": {
+    "text": "the output file could not be finalized",
+    "slots": []
+  },
+  "tools.output.reason_file_limit": {
+    "text": "the {byte_limit}-byte saved-file limit was reached",
+    "slots": [
+      "byte_limit"
+    ]
+  },
+  "tools.output.reason_quota": {
+    "text": "the output storage quota was reached",
+    "slots": []
+  },
+  "tools.output.reason_no_location": {
+    "text": "no saved-output location is permitted",
+    "slots": []
+  },
+  "tools.output.reason_unsafe_copy": {
+    "text": "a safely processed saved copy is unavailable",
+    "slots": []
+  },
+  "tools.output.short": {
+    "text": "[Output omitted; limit: {budget}.]",
+    "slots": [
+      "budget"
+    ]
+  }
+}
