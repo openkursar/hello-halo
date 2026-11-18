@@ -240,11 +240,11 @@
       "properties": {
         "endpoint": {
           "type": "string",
-          "description": "Base URL of the telemetry backend. Client sends POST {endpoint}/v1/events. Empty or omitted disables the provider."
+          "description": "Base URL of the telemetry backend. Client sends POST {endpoint}/v1/events. Empty or omitted disables the provider. In server mode (HALO_SERVER_MODE) HALO_TELEMETRY_ENDPOINT takes precedence, so one container image can receive its backend at deploy time."
         },
         "apiKey": {
           "type": "string",
-          "description": "Bearer token sent with each batch. Spam filtering only — extractable from the shipped package, so real protection must be server-side (rate limiting, rotation)."
+          "description": "Bearer token sent with each batch. Spam filtering only — extractable from the shipped package, so real protection must be server-side (rate limiting, rotation). In server mode HALO_TELEMETRY_API_KEY takes precedence."
         },
         "allowedSensitiveFields": {
           "type": "array",

@@ -13,7 +13,8 @@
 import type { App } from 'electron'
 import { initializeEssentialServices, initializeExtendedServices } from './index'
 import { enableRemoteAccess } from '../services/remote'
-import { getServerPort } from '../foundation/runtime-mode'
+import { initAnalytics } from '../services/analytics'
+import { getInstanceId, getServerPort } from '../foundation/runtime-mode'
 import { applyEnvConfig } from '../foundation/env-config'
 import { registerBrowserHostHandlers } from '../ipc/browser-host'
 
@@ -69,6 +70,12 @@ export async function bootServerMode(): Promise<void> {
 
     await initializeExtendedServices()
     console.log('[ServerMode] extended services dispatched')
+
+    // The GUI path starts analytics once its window is ready; there is no
+    // window here, so it never started. Not awaited: a telemetry backend
+    // outage must not keep the server from becoming reachable.
+    console.log(`[ServerMode] instance id: ${getInstanceId() ?? 'unavailable'}`)
+    initAnalytics().catch(err => console.warn('[Analytics] Init failed:', err))
 
     const status = await enableRemoteAccess(port)
     console.log(`[ServerMode] remote access listening on port ${status.server.port}`)

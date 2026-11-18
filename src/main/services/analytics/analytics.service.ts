@@ -26,6 +26,7 @@ import { createTelemetryProvider } from './providers/telemetry'
 import { getConfig, saveConfig } from '../../foundation/config.service'
 import { getAnalyticsConfig, getIdentitySource, getTelemetryConfig } from '../../foundation/product-config'
 import { getHostIdentity, type HostIdentity } from '../../foundation/host-identity'
+import { getInstanceId, isServerMode } from '../../foundation/runtime-mode'
 import { getCurrentSource } from '../../../shared/types'
 import { deriveErrorCode } from './error-code'
 
@@ -36,7 +37,16 @@ import { deriveErrorCode } from './error-code'
  * per-variant configuration committed in the variant repo, not secrets.
  * Missing/empty values disable the corresponding provider (open-source
  * builds omit both blocks entirely).
+ *
+ * In server mode the telemetry endpoint and key also accept an environment
+ * override, so one container image can be deployed against different backends
+ * — the same reason HALO_REMOTE_PASSWORD is not a product.json field. The
+ * desktop never reads them.
  */
+function fromServerEnv(name: 'HALO_TELEMETRY_ENDPOINT' | 'HALO_TELEMETRY_API_KEY'): string {
+  return isServerMode() ? (process.env[name] ?? '') : ''
+}
+
 function loadProviderConfig() {
   const analytics = getAnalyticsConfig()
   const telemetry = getTelemetryConfig()
@@ -49,8 +59,8 @@ function loadProviderConfig() {
       apiSecret: analytics?.ga?.apiSecret ?? ''
     },
     telemetry: {
-      endpoint: telemetry?.endpoint ?? '',
-      apiKey: telemetry?.apiKey ?? ''
+      endpoint: fromServerEnv('HALO_TELEMETRY_ENDPOINT') || telemetry?.endpoint || '',
+      apiKey: fromServerEnv('HALO_TELEMETRY_API_KEY') || telemetry?.apiKey || ''
     }
   }
 }
@@ -324,6 +334,16 @@ class AnalyticsService {
     const config = getConfig()
     const currentVersion = app.getVersion()
 
+    // Server mode takes its identity from the platform rather than from disk:
+    // a reset container filesystem would make every cold start look like a
+    // new install, and a random UUID cannot be traced back to a deployment.
+    // The snapshot watermarks still come from disk (losing them re-sends
+    // already-forwarded runs), and the identity is never written back.
+    const instanceId = getInstanceId()
+    if (instanceId) {
+      return { ...config.analytics, userId: instanceId, lastVersion: currentVersion }
+    }
+
     // Create new config if not exists
     if (!config.analytics) {
       const newAnalyticsConfig: AnalyticsConfig = {
@@ -347,6 +367,7 @@ class AnalyticsService {
   private buildUserContext(): UserContext {
     return {
       userId: this.config!.userId,
+      ...(isServerMode() ? { runtimeMode: 'server' as const } : {}),
       appVersion: app.getVersion(),
       platform: process.platform,
       arch: process.arch,

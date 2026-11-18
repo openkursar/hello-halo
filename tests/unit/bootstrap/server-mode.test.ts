@@ -15,14 +15,24 @@ vi.mock('../../../src/main/bootstrap/index', () => ({
 }))
 
 vi.mock('../../../src/main/services/remote', () => ({
-  enableRemoteAccess: vi.fn(),
+  enableRemoteAccess: vi.fn(async () => ({ server: { port: 8080, token: '' } })),
+}))
+
+vi.mock('../../../src/main/ipc/browser-host', () => ({
+  registerBrowserHostHandlers: vi.fn(),
+}))
+
+vi.mock('../../../src/main/services/analytics', () => ({
+  initAnalytics: vi.fn(async () => {}),
 }))
 
 vi.mock('../../../src/main/foundation/env-config', () => ({
   applyEnvConfig: vi.fn(),
 }))
 
-import { installServerSignalHandlers } from '../../../src/main/bootstrap/server-mode'
+import { bootServerMode, installServerSignalHandlers } from '../../../src/main/bootstrap/server-mode'
+import { initAnalytics } from '../../../src/main/services/analytics'
+import { enableRemoteAccess } from '../../../src/main/services/remote'
 
 function makeApp(): { app: App; quit: ReturnType<typeof vi.fn> } {
   const quit = vi.fn()
@@ -67,5 +77,15 @@ describe('server-mode', () => {
     expect(quit).toHaveBeenCalledTimes(1)
 
     onceSpy.mockRestore()
+  })
+
+  it('starts analytics on the headless boot without waiting for it', async () => {
+    // A backend that never answers must not keep the server from listening.
+    vi.mocked(initAnalytics).mockReturnValueOnce(new Promise(() => {}))
+
+    await bootServerMode()
+
+    expect(initAnalytics).toHaveBeenCalledTimes(1)
+    expect(enableRemoteAccess).toHaveBeenCalledWith(8080)
   })
 })

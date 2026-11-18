@@ -56,6 +56,29 @@ externally-meaningful UID from the active AI source via a dot-path
 cached by `(sourceId, path)` so switching the active source or editing the
 product config invalidates the cache on the next `track()`.
 
+### UserContext in server mode
+
+In server mode (`HALO_SERVER_MODE`) `loadOrCreateConfig()` replaces `userId`
+with `foundation/runtime-mode.ts#getInstanceId()`, the container hostname. A
+container filesystem is not a dependable anchor: when it resets, the
+"persisted" UUID is regenerated and every cold start is ingested as a new
+install. A random UUID also cannot be traced back to a deployment, while the
+hostname on serverless/Knative-style platforms is the service or function name
+operators already know. Only the identity comes from the platform; the
+`lastSnapshot*` watermarks are still read from disk (they track how far
+automation_runs forwarding got), and the instance id is never written back.
+
+Two consequences: scaling out gives one `userId` per replica, and in server mode
+`userId` identifies a deployment, not a person — one process serves every
+remote client.
+
+`UserContext.runtimeMode` is `'server'` there and absent on the desktop, so
+desktop events are unchanged. It is the only signal separating a server
+deployment from a Linux desktop (`platform` is `linux` for both).
+
+The desktop never calls `getInstanceId()` (it returns `undefined` there): its
+hostname is the person's machine name.
+
 ### UserContext + host identity (enterprise-internal only)
 
 When `product.json.telemetry.collectHostIdentity` is `true`, `track()` also
@@ -305,6 +328,9 @@ Startup (`main/index.ts` + `bootstrap/extended.ts`):
 
 1. `app.whenReady()` → create window.
 2. `ready-to-show` → `setImmediate(() => { initializeExtendedServices(); initAnalytics(); })`.
+   Server mode has no window, so `bootstrap/server-mode.ts` calls
+   `initAnalytics()` itself after extended services, without awaiting it — a
+   telemetry backend outage must not delay the server becoming reachable.
 3. `initializeExtendedServices()` registers IPC (`registerAnalyticsHandlers`)
    synchronously, then kicks off `initPlatformAndApps()` async.
 4. `initPlatformAndApps()` inits AppManager and Runtime, calls
@@ -344,6 +370,10 @@ committed in the variant repo, never build-time env injection):
 | `analytics.baidu.siteId`     | Baidu   |
 | `telemetry.endpoint`         | Telemetry |
 | `telemetry.apiKey`           | Telemetry |
+
+In server mode only, `HALO_TELEMETRY_ENDPOINT` / `HALO_TELEMETRY_API_KEY` take
+precedence over the two telemetry fields: a container image is built once and
+deployed against different backends. The desktop never reads them.
 | `telemetry.collectHostIdentity` | Telemetry (gates `UserContext.hostIdentity`, see above — not a provider identifier) |
 
 A missing/empty value disables the corresponding provider cleanly — its
