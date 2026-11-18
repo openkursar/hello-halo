@@ -3,10 +3,11 @@
 # build-server-halo.sh — build the Halo Server deploy bundle.
 #
 # Halo Server is a standalone, brand-neutral, on-demand build — decoupled from
-# the desktop client release cadence. It ALWAYS uses server.product.json (the
-# server profile: API-key auth only, no interactive OAuth that can't work
-# headless), regardless of which client brand happens to be configured. So this
-# one command produces a single universal server image for everyone.
+# the desktop client release cadence. It always uses a server profile (API-key
+# auth only, no interactive OAuth that can't work headless), never the client
+# product.json. The neutral server.product.json is the default; a deployment that
+# needs its own store registries or endpoints keeps a git-ignored profile at
+# halo-local/server.product.json (or passes SERVER_PRODUCT).
 #
 # Run on demand (not part of any client build):
 #   npm run build:server
@@ -21,6 +22,8 @@
 #   ELECTRON_MIRROR                  electron download mirror (recommended in CN)
 #   ELECTRON_BUILDER_BINARIES_MIRROR electron-builder tools mirror
 #   SKIP_NPM_BUILD=1                 reuse an existing out/ (skip electron-vite build)
+#   SERVER_PRODUCT=<path>            server profile to package (absolute or relative
+#                                    to the repo root); overrides the default above
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -33,13 +36,38 @@ cd "$PROJECT_ROOT"
 log() { printf '\033[34m[build-server]\033[0m %s\n' "$*"; }
 die() { printf '\033[31m[build-server][ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 
-[ -f server.product.json ] || die "server.product.json not found at repo root"
+if [ -n "${SERVER_PRODUCT:-}" ]; then
+  case "$SERVER_PRODUCT" in /*) ;; *) SERVER_PRODUCT="$PROJECT_ROOT/$SERVER_PRODUCT" ;; esac
+elif [ -f halo-local/server.product.json ]; then
+  SERVER_PRODUCT="$PROJECT_ROOT/halo-local/server.product.json"
+else
+  SERVER_PRODUCT="$PROJECT_ROOT/server.product.json"
+fi
+[ -f "$SERVER_PRODUCT" ] || die "server profile not found: $SERVER_PRODUCT"
+node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$SERVER_PRODUCT" \
+  || die "malformed server profile: $SERVER_PRODUCT"
 [ -d "$OUT_REPO" ] || die "output directory not found: $OUT_REPO"
 [ -f "$OUT_REPO/Dockerfile" ] || die "$OUT_REPO has no Dockerfile (expected deploy/server or a copy of it)"
 
+describe_store() {
+  node -e '
+    const o = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).registryOverrides || {}
+    const hidden = Object.keys(o).filter(k => o[k] && o[k].hidden)
+    console.log(`  store official: ${(o.official && o.official.url) || "(built-in public default)"}`)
+    console.log(`  store hidden:   ${hidden.length ? hidden.join(", ") : "(none)"}`)
+  ' "$1"
+}
+
 # Swap in the server profile, and ALWAYS restore the original product.json on exit
 # (success, failure, or interrupt) so the working tree is never left modified.
-log "activating server.product.json (brand-neutral, API-key only)..."
+log "activating server profile: ${SERVER_PRODUCT#"$PROJECT_ROOT"/}"
+describe_store "$SERVER_PRODUCT"
+if [ "$SERVER_PRODUCT" = "$PROJECT_ROOT/server.product.json" ]; then
+  log "  (neutral profile; a deployment profile goes in halo-local/server.product.json or SERVER_PRODUCT)"
+fi
+# The prebuild step re-syncs product.json from HALO_PRODUCT_SOURCE or the
+# .product-source pointer; pin it so a client variant cannot replace the profile.
+export HALO_PRODUCT_SOURCE="$SERVER_PRODUCT"
 RESTORE_PRODUCT=0
 if [ -f product.json ]; then
   cp product.json .product.json.bak
@@ -53,7 +81,7 @@ restore_product() {
   fi
 }
 trap restore_product EXIT
-cp server.product.json product.json
+cp "$SERVER_PRODUCT" product.json
 
 # 1) Ensure linux native binaries are present (better-sqlite3 N-API prebuild,
 #    @parcel/watcher-linux, codex-linux, cloudflared-linux).
@@ -77,10 +105,23 @@ rm -rf dist/linux-unpacked
 node_modules/.bin/electron-builder --linux dir --x64
 [ -x dist/linux-unpacked/halo ] || die "electron-builder produced no dist/linux-unpacked/halo"
 
+log "verifying packaged product.json against the server profile..."
+node -e '
+  const fs = require("fs")
+  const { extractFile } = require("@electron/asar")
+  const packed = JSON.parse(extractFile(process.argv[1], "product.json").toString("utf8"))
+  const expected = JSON.parse(fs.readFileSync(process.argv[2], "utf8"))
+  if (JSON.stringify(packed) !== JSON.stringify(expected)) process.exit(1)
+' dist/linux-unpacked/resources/app.asar "$SERVER_PRODUCT" \
+  || die "packaged product.json differs from ${SERVER_PRODUCT#"$PROJECT_ROOT"/}"
+
 # 4) Compress + split into the repo's bundle/.
 log "compressing + splitting bundle into $OUT_REPO/bundle/ ..."
 TMP_TGZ="$(mktemp -t halo-bundle.XXXXXX).tgz"
-tar czf "$TMP_TGZ" -C dist linux-unpacked
+# COPYFILE_DISABLE: on macOS, bsdtar writes an AppleDouble "._name" sidecar for
+# every file carrying extended attributes, which lands thousands of junk files in
+# the Linux image. No-op on Linux.
+COPYFILE_DISABLE=1 tar czf "$TMP_TGZ" -C dist linux-unpacked
 
 rm -f "$OUT_REPO"/bundle/halo-bundle.tgz.part-*
 mkdir -p "$OUT_REPO/bundle"
