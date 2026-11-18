@@ -13,8 +13,8 @@ const sdkEntry = 'node_modules/@hello-halo/agent-sdk/dist/worker/entry.js'
 const setup = 'out/main/worker/halo-setup.cjs'
 const check = script.match(/log "verifying packaged Halo worker launch files\.\.\."\nnode -e '([\s\S]*?)' dist\/linux-unpacked\/resources\/app\.asar/)[1]
 
-// The shared config is what unpacks the Halo worker (asarUnpack); the
-// package.json "build" block does not, so the server build must name it.
+// Without --config, electron-builder takes package.json#build and skips the
+// shared config (product identity, runtime and worker unpack globs).
 test('server packaging uses the shared config and never publishes', () => {
   assert.match(script, /electron-builder --linux dir --x64 --config electron-builder\.cjs --publish never/)
 })
