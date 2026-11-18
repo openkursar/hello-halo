@@ -1091,8 +1091,8 @@ Remote mode: renderer -> HTTP/WS -> main.
 A third consumer of the same routes: the agent itself, over a loopback-only
 listener (`src/main/http/self-api/`) reached with curl.
 
-- **Capability**: the `halo-api-ref` toolset ("Operate Halo"), a switch in
-  ordinary conversations (the **+** menu). One decision drives all three halves — the `halo_api_ref` manual tool, the `HALO_API_*`
+- **Capability**: the `halo-api-ref` toolset ("Operate Halo"), a core capability
+  of ordinary conversations, listed without a switch in the **+** menu. One decision drives all three halves — the `halo_api_ref` manual tool, the `HALO_API_*`
   credentials (`selfApiAccess` in `sdk-config.ts`), and the usage guide appended
   to the prompt. Never wire one without the others: a session told to use a tool
   it lacks is the failure this design exists to prevent.

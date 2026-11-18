@@ -1,26 +1,24 @@
 import { initialUserInput, type ModelRequest, type ModelReply } from './acceptance-model'
-import { decodeSecurityResult, securityTool } from './acceptance-subagent-security'
+import { securityTool } from './acceptance-subagent-security'
 
 export function scopedDirectoryScript() {
-  let cursor: string | undefined
   const ownerResults: string[] = []
   const guestResults: string[] = []
   const guestRequests: ModelRequest[] = []
   const reply = (request: ModelRequest): ModelReply => {
     if (initialUserInput(request).includes('OWNER_DIRECTORY_SCOPE:')) {
-      const result = request.toolResults.find(result => result.id === 'owner-scope-page')
-      if (!result) return securityTool(request, 'list_model_profiles', { limit: 1 }, 'owner-scope-page')
+      const result = request.toolResults.find(result => result.id === 'owner-scope-directory')
+      if (!result) return securityTool(request, 'list_model_profiles', {}, 'owner-scope-directory')
       ownerResults.push(result.text)
-      cursor = decodeSecurityResult(result.text).nextCursor
-      return { text: 'OWNER_SCOPE_CURSOR_READY' }
+      return { text: 'OWNER_SCOPE_DIRECTORY_READY' }
     }
     guestRequests.push(request)
-    const result = request.toolResults.find(result => result.id === 'guest-scope-page')
+    const result = request.toolResults.find(result => result.id === 'guest-scope-directory')
     if (result) {
       guestResults.push(result.text)
       return { text: 'GUEST_SCOPE_CHECK_COMPLETE' }
     }
-    return { tools: [{ id: 'guest-scope-page', name: 'mcp__halo-team__list_model_profiles', input: { limit: 1, cursor } }] }
+    return { tools: [{ id: 'guest-scope-directory', name: 'mcp__halo-team__list_model_profiles', input: {} }] }
   }
-  return { reply, ownerResults, guestResults, guestRequests, get cursor() { return cursor } }
+  return { reply, ownerResults, guestResults, guestRequests }
 }

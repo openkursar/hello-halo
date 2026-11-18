@@ -168,7 +168,7 @@ POST   /api/subagent-models/clear-builtin                          Clear a fixed
 POST   /api/subagent-models/create                                 Create a custom model assignment when the owner requests it
      curl -sX POST "$HALO_API_URL/api/subagent-models/create" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {"success":boolean,"data"?:{"version":1,"revision":number,"policyRevision":number,"selectionMode":"inherit"|"task","profiles":array},"error"?:string,"code"?:string}
-     # note: Body: name, description, target ({kind:model,sourceId,modelId} or {kind:group,groupId}), optional reasoningEffort. Does not enable automatic selection.
+     # note: Body: name, description, target ({kind:model,sourceId,modelId} or {kind:group,groupId}). Does not enable automatic selection.
 
 POST   /api/subagent-models/delete                                 Delete a custom model assignment
      curl -sX POST "$HALO_API_URL/api/subagent-models/delete" -H "Authorization: Bearer $HALO_API_TOKEN"
@@ -183,7 +183,7 @@ POST   /api/subagent-models/set-selection-mode                     Change defaul
 POST   /api/subagent-models/update                                 Update a model assignment when the owner requests it
      curl -sX POST "$HALO_API_URL/api/subagent-models/update" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {"success":boolean,"data"?:{"version":1,"revision":number,"policyRevision":number,"selectionMode":"inherit"|"task","profiles":array},"error"?:string,"code"?:string}
-     # note: Body: id, expectedRevision (profile revision), description, target, optional reasoningEffort; name required for custom profiles and forbidden for builtins. Conflicts preserve stored settings.
+     # note: Body: id, expectedRevision (profile revision), description, target; name required for custom profiles and forbidden for builtins. Conflicts preserve stored settings.
 
 GET    /api/system/version                                         Read the running Halo version
      curl -s "$HALO_API_URL/api/system/version" -H "Authorization: Bearer $HALO_API_TOKEN"

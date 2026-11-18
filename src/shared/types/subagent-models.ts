@@ -7,7 +7,6 @@ interface SubagentModelProfileBase {
   id: string
   revision: number
   description: string
-  reasoningEffort?: string
 }
 
 export type SubagentModelProfile = SubagentModelProfileBase & (
@@ -27,7 +26,6 @@ export interface SubagentModelInput {
   name: string
   description: string
   target: SubagentModelTarget
-  reasoningEffort?: string
 }
 
 export interface SubagentModelUpdate {
@@ -36,7 +34,6 @@ export interface SubagentModelUpdate {
   name?: string
   description: string
   target: SubagentModelTarget
-  reasoningEffort?: string
 }
 
 export interface SubagentModelRevisionInput {

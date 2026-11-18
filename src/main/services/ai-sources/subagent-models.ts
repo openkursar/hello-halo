@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getConfig, isConfigUnreadable, onAiSourcesConfigChange, saveConfig } from '../../foundation/config.service'
-import { builtinSubagentModelId, emptySubagentModelSettings, getSubagentModelTargetEfforts, isSubagentModelTarget, MODEL_SELECTION_LIMITS, normalizeSubagentModelName, projectSubagentModelSettings, SUBAGENT_MODEL_SLOTS, subagentModelName, validSubagentModelText } from '../../../shared/subagent-models'
+import { builtinSubagentModelId, emptySubagentModelSettings, findSubagentSourceModel, hasUsableSubagentGroup, isSubagentModelTarget, MODEL_SELECTION_LIMITS, normalizeSubagentModelName, projectSubagentModelSettings, SUBAGENT_MODEL_SLOTS, subagentModelName, validSubagentModelText } from '../../../shared/subagent-models'
 import type { AISourcesConfig } from '../../../shared/types/ai-sources'
 import type { SubagentModelInput, SubagentModelModeInput, SubagentModelProfile, SubagentModelRevisionInput, SubagentModelSettings, SubagentModelUpdate } from '../../../shared/types/subagent-models'
 
@@ -24,8 +24,17 @@ export interface SubagentModelConfigurationSnapshot {
 }
 let snapshot: SubagentModelConfigurationSnapshot | undefined
 let snapshotRevision = 0
+function hasBoundTarget(profiles: readonly SubagentModelProfile[]): boolean {
+  return profiles.some(profile => profile.target)
+}
 function replaceSnapshot(config: AISourcesConfig | undefined): void {
-  snapshot = config ? { settings: config.subagentModels, sources: config.sources, groups: config.groups ?? [], revision: ++snapshotRevision } : undefined
+  const settings = config?.subagentModels
+  snapshot = config ? {
+    settings: settings && hasBoundTarget(settings.profiles) ? settings : undefined,
+    sources: config.sources,
+    groups: config.groups ?? [],
+    revision: ++snapshotRevision,
+  } : undefined
 }
 onAiSourcesConfigChange(replaceSnapshot)
 export function seedSubagentModelSettings(config: AISourcesConfig | undefined): void {
@@ -39,15 +48,17 @@ export function listSubagentModels(): SubagentModelSettings { return projectSuba
 function persist(config: AISourcesConfig, settings: SubagentModelSettings): SubagentModelSettings {
   if (Buffer.byteLength(JSON.stringify(settings), 'utf8') > MODEL_SELECTION_LIMITS.catalogBytes) reject('resource-limit')
   if (isConfigUnreadable()) reject('config-unreadable')
-  saveConfig({ aiSources: { ...config, subagentModels: settings } })
+  const next = { ...config, subagentModels: settings }
+  const previousSnapshot = snapshot
+  saveConfig({ aiSources: next })
   if (isConfigUnreadable()) reject('config-unreadable')
-  if (snapshot?.settings !== settings) replaceSnapshot({ ...config, subagentModels: settings })
+  if (snapshot === previousSnapshot) replaceSnapshot(next)
   return projectSubagentModelSettings(settings)
 }
 function checkedInput(input: unknown, config: AISourcesConfig, settings: SubagentModelSettings, existing?: SubagentModelProfile): SubagentModelInput {
   if (!input || typeof input !== 'object' || Array.isArray(input)) reject('invalid-input')
   const item = input as Record<string, unknown>
-  const keys = existing ? ['id', 'expectedRevision', 'name', 'description', 'target', 'reasoningEffort'] : ['name', 'description', 'target', 'reasoningEffort']
+  const keys = existing ? ['id', 'expectedRevision', 'name', 'description', 'target'] : ['name', 'description', 'target']
   if (Object.keys(item).some(key => !keys.includes(key))) reject('invalid-input')
   const builtin = existing?.kind === 'builtin'
   if (builtin && item.name !== undefined) reject('builtin-immutable')
@@ -62,15 +73,16 @@ function checkedInput(input: unknown, config: AISourcesConfig, settings: Subagen
   if (target.kind === 'model') {
     const source = config.sources.find(source => source.id === target.sourceId)
     if (!source) reject('unknown-source')
-    if (source.model !== target.modelId && !source.availableModels?.some(model => model.id === target.modelId)) reject('unknown-model')
-  } else if (!config.groups?.some(group => group.id === target.groupId && group.members.length)) reject('unknown-group')
-  if (item.reasoningEffort !== undefined && (typeof item.reasoningEffort !== 'string' || !getSubagentModelTargetEfforts(target, config).includes(item.reasoningEffort))) reject('unsupported-effort')
-  return { name: name.trim(), description: item.description, target, ...(item.reasoningEffort !== undefined ? { reasoningEffort: item.reasoningEffort as string } : {}) }
+    if (!findSubagentSourceModel(source, target.modelId)) reject('unknown-model')
+  } else if (!config.groups?.some(group => group.id === target.groupId && hasUsableSubagentGroup(group, config.sources))) reject('unknown-group')
+  return { name: name.trim(), description: item.description, target }
 }
 function changed(settings: SubagentModelSettings, profiles: SubagentModelProfile[]): SubagentModelSettings {
-  const selectionMode = profiles.some(profile => profile.target) ? settings.selectionMode : 'inherit'
+  const active = hasBoundTarget(profiles)
+  const selectionMode = active ? settings.selectionMode : 'inherit'
+  const policyChanged = active !== hasBoundTarget(settings.profiles) || selectionMode !== settings.selectionMode
   return { version: 1, profiles, revision: settings.revision + 1, selectionMode,
-    policyRevision: settings.policyRevision + (settings.revision === 0 || selectionMode !== settings.selectionMode ? 1 : 0) }
+    policyRevision: settings.policyRevision + (policyChanged ? 1 : 0) }
 }
 function find(settings: SubagentModelSettings, input: SubagentModelRevisionInput): SubagentModelProfile {
   if (!input || typeof input.id !== 'string' || !Number.isSafeInteger(input.expectedRevision)) reject('invalid-input')
@@ -90,11 +102,13 @@ export function updateSubagentModel(input: SubagentModelUpdate): SubagentModelSe
   const existing = find(settings, input)
   const value = checkedInput(input, config, settings, existing)
   const profile: SubagentModelProfile = existing.kind === 'builtin'
-    ? { id: builtinSubagentModelId(existing.slot), kind: 'builtin', slot: existing.slot, revision: existing.revision + 1, description: value.description, target: value.target, ...(value.reasoningEffort ? { reasoningEffort: value.reasoningEffort } : {}) }
+    ? { id: builtinSubagentModelId(existing.slot), kind: 'builtin', slot: existing.slot, revision: existing.revision + 1, description: value.description, target: value.target }
     : { ...value, kind: 'custom', id: existing.id, revision: existing.revision + 1 }
-  if (existing.description === profile.description && existing.reasoningEffort === profile.reasoningEffort
-    && subagentModelName(existing) === subagentModelName(profile) && JSON.stringify(existing.target) === JSON.stringify(profile.target)) return projectSubagentModelSettings(settings)
-  return persist(config, changed(settings, [...settings.profiles.filter(item => item.id !== existing.id), profile]))
+  if (existing.description === profile.description && subagentModelName(existing) === subagentModelName(profile)
+    && JSON.stringify(existing.target) === JSON.stringify(profile.target)) return projectSubagentModelSettings(settings)
+  const profiles = existing.revision === 0 ? [...settings.profiles, profile]
+    : settings.profiles.map(item => item.id === existing.id ? profile : item)
+  return persist(config, changed(settings, profiles))
 }
 export function clearBuiltinSubagentModel(input: SubagentModelRevisionInput): SubagentModelSettings {
   const config = sources(); const settings = config.subagentModels ?? emptySubagentModelSettings()
@@ -102,7 +116,7 @@ export function clearBuiltinSubagentModel(input: SubagentModelRevisionInput): Su
   const existing = find(settings, input)
   if (existing.kind !== 'builtin' || !SUBAGENT_MODEL_SLOTS.includes(existing.slot)) reject('builtin-required')
   if (!existing.target) return projectSubagentModelSettings(settings)
-  const { target: _target, reasoningEffort: _effort, ...rest } = existing
+  const { target: _target, ...rest } = existing
   const profile = { ...rest, revision: existing.revision + 1 }
   return persist(config, changed(settings, settings.profiles.map(item => item.id === existing.id ? profile : item)))
 }

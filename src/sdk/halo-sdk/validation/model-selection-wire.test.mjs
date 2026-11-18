@@ -12,7 +12,10 @@ const cases = [
   { name: 'anthropic budget', type: 'anthropic', reasoning: { version: 1, mode: 'budget', budgetTokens: 2048 }, expected: { type: 'enabled', budget_tokens: 2048 } },
   { name: 'anthropic adaptive', type: 'anthropic', reasoning: { version: 1, mode: 'adaptive', effort: 'high' }, expected: { type: 'adaptive' }, effort: 'high' },
   ...['xhigh', 'max'].map(effort => ({ name: `openai explicit ${effort}`, type: 'openai-compat', reasoning: { version: 1, mode: 'effort', effort }, effort })),
-  { name: 'openai legacy root max child high', type: 'openai-compat', legacy: true, effort: 'high' },
+  { name: 'openai legacy root max child high', type: 'openai-compat', legacy: true, parentEffort: 'max', effort: 'high' },
+  { name: 'openai plain inheritance trusts the captured effort', type: 'openai-compat', inherit: true, parentEffort: 'low', effort: 'low' },
+  { name: 'anthropic legacy adaptive max', type: 'anthropic', legacy: true, parentEffort: 'max', expected: { type: 'adaptive' }, effort: 'max' },
+  { name: 'anthropic legacy disabled low sampling', type: 'anthropic', legacy: true, parentEffort: 'low', expected: { type: 'disabled' }, effort: 'low', temperature: 0 },
 ];
 
 for (const backend of ['native', 'worker']) for (const scenario of cases) {
@@ -37,7 +40,7 @@ for (const backend of ['native', 'worker']) for (const scenario of cases) {
         if (child) completed();
         else if (!spawned) {
           spawned = true;
-          tool = { name: 'mcp__halo-team__spawn_agent', input: { name: 'wire-child', prompt: 'Report the independent wire observation.', ...(scenario.legacy ? {} : { model_profile: reference, ...(scenario.type === 'openai-compat' ? { reasoning_effort: scenario.effort } : {}) }) } };
+          tool = { name: 'mcp__halo-team__spawn_agent', input: { name: 'wire-child', prompt: 'Report the independent wire observation.', ...(scenario.legacy || scenario.inherit ? {} : { model_profile: reference, ...(scenario.type === 'openai-compat' ? { reasoning_effort: scenario.effort } : {}) }) } };
         } else {
           assert.doesNotMatch(JSON.stringify(body.messages), /MODEL_SELECTION_|COLLABORATION_ARGUMENTS|isError\\\":true/, 'Spawn must not be rejected.');
           await childFinished;
@@ -75,7 +78,27 @@ for (const backend of ['native', 'worker']) for (const scenario of cases) {
       reference = queryModelProfiles({ catalog, parent, policyRevision: '1', input: {} }).profiles[0].selectionRef;
       const sdk = await entry(backend);
       runtime = backend === 'worker' ? sdk.createWorkerRuntime() : sdk.createNativeRuntime();
-      session = await runtime.createSession({ model: 'wire-model', providerConfig, cwd: directory, env: { HOME: directory, CLAUDE_CONFIG_DIR: join(directory, 'config') }, persistSession: false, systemPrompt: 'Delegate the wire observation.', permissionMode: 'bypassPermissions', tools: ['spawn_agent'], thinking: scenario.legacy ? { type: 'adaptive' } : { type: 'disabled' }, ...(scenario.legacy ? { effort: 'max' } : {}), collaboration: { mode: 'local', maxMembers: 2, ...(scenario.legacy ? {} : { modelSelection: { parentBinding: { bindingId: 'root', restoreRef: 'root' }, policy: 'inherit', policyRevision: '1', getCatalog: () => ({ kind: 'snapshot', catalog }), async prepare() { return { bindingId: 'child', restoreRef: 'child', model: 'wire-model', targetKind: 'single', contextWindow: 32000, maxOutputTokens: 8192, modalities: ['text'], reasoning: { default: scenario.reasoning, supported: ['high', 'xhigh', 'max'], modes: ['provider-default', 'off', 'budget', 'adaptive', 'effort'], maxBudgetTokens: 4096 }, providerConfig }; } } }) } });
+      const legacyAnthropic = scenario.legacy && scenario.type === 'anthropic';
+      const connection = legacyAnthropic ? { apiKey: providerConfig.apiKey, anthropicBaseUrl: providerConfig.baseUrl } : { providerConfig };
+      const target = scenario.inherit ? 'root' : 'child';
+      const reasoning = scenario.inherit
+        ? { default: { version: 1, mode: 'effort', effort: 'high' } }
+        : { default: scenario.reasoning, supported: ['high', 'xhigh', 'max'], modes: ['provider-default', 'off', 'budget', 'adaptive', 'effort'], maxBudgetTokens: 4096 };
+      session = await runtime.createSession({
+        model: 'wire-model', ...connection, cwd: directory, env: { HOME: directory, CLAUDE_CONFIG_DIR: join(directory, 'config') },
+        persistSession: false, systemPrompt: 'Delegate the wire observation.', permissionMode: 'bypassPermissions', tools: ['spawn_agent'],
+        thinking: { type: scenario.parentEffort && scenario.temperature === undefined ? 'adaptive' : 'disabled' },
+        ...(scenario.parentEffort ? { effort: scenario.parentEffort } : {}),
+        collaboration: { mode: 'local', maxMembers: 2, ...(scenario.legacy ? {} : { modelSelection: {
+          parentBinding: { bindingId: 'root', restoreRef: 'root' }, policy: 'inherit', policyRevision: '1',
+          getCatalog: () => ({ kind: 'snapshot', catalog }),
+          async prepare() {
+            const { quirks, ...preparedProviderConfig } = providerConfig;
+            return { bindingId: target, restoreRef: target, model: 'wire-model', targetKind: 'single', contextWindow: 32000,
+              maxOutputTokens: 8192, modalities: ['text'], reasoning, providerConfig: preparedProviderConfig };
+          },
+        } }) },
+      });
       await session.send('Delegate an independent observation.');
       let terminal = false;
       for await (const event of session.stream()) if (event.type === 'result') { assert.equal(event.subtype, 'success', JSON.stringify(event)); terminal = true; }
@@ -83,16 +106,17 @@ for (const backend of ['native', 'worker']) for (const scenario of cases) {
       assert.deepEqual(errors, [], 'The local protocol peer must not fail.');
       const children = requests.filter(request => request.child);
       assert.ok(children.length > 0, 'Actual child HTTP request required.');
-      for (const { body } of children) {
+      for (const { body } of scenario.legacy || scenario.inherit ? requests : children) {
         assert.equal(body.model, 'wire-model');
         if (scenario.type === 'anthropic') {
           if (scenario.expected) assert.deepEqual(body.thinking, scenario.expected);
           else assert.equal(Object.hasOwn(body, 'thinking'), false, 'Provider-default must omit thinking.');
           if (scenario.effort) assert.equal(body.output_config?.effort, scenario.effort);
           else assert.equal(Object.hasOwn(body.output_config ?? {}, 'effort'), false, 'No stale effort.');
+          if (scenario.temperature !== undefined) assert.equal(body.temperature, scenario.temperature);
         } else assert.equal(body.reasoning_effort, scenario.effort);
       }
-      if (scenario.legacy) assert.ok(requests.filter(request => !request.child).every(({ body }) => body.reasoning_effort === 'high'), 'Legacy max maps to actual high before inheritance.');
+      assert.ok(requests.some(request => !request.child), 'Actual parent HTTP request required.');
     } finally {
       completed();
       try { await session?.[Symbol.asyncDispose](); } finally {

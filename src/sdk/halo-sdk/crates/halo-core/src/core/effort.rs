@@ -28,8 +28,8 @@ pub fn resolve(options: &Value) -> Effort {
         };
         return Effort {
             thinking,
-            temperature: None,
-            reasoning: semantic["effort"].as_str().map(str::to_owned),
+            temperature: options["nativeInheritedTemperature"].as_f64(),
+            reasoning: options.get("nativeInheritedOpenAiEffort").unwrap_or(&semantic["effort"]).as_str().map(str::to_owned),
         };
     }
     let thinking = options

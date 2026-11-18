@@ -161,8 +161,12 @@ changes; unsupported native modes are refused rather than approximated.
 `subagent-models.ts` consumes the SDK collaboration catalog, plan and finalize
 contract. Its optional endpoint captures the policy revision and lazily retains
 one bounded native catalog view per local configuration revision and engine.
-Profile metadata is projected by `subagent-model-catalog.ts`; no credential or
-configuration object is returned to a model. Unconfigured settings register no
+Profile metadata is projected by `subagent-model-catalog.ts`. The Halo endpoint
+takes no listing arguments and returns every configured profile in one text result.
+Available entries have view-scoped short IDs that resolve back to the SDK’s
+versioned references; unavailable entries give a reason and no ID. Results that
+exceed the text limit are refused, not truncated. It does not return credentials,
+configuration revisions or reasoning controls. Unconfigured settings register no
 new tools or guidance. Policy changes enter the existing session-input
 fingerprint and therefore take effect at the existing safe rebuild boundary.
 
@@ -175,14 +179,17 @@ The ordinary conversation resolver retains its deleted-account fallback.
 
 Assignments do not choose engines or expand grants. `subagent-model-metadata.ts`
 checks the inherited engine against the target protocol and prepares current
-capacity, modalities and supported reasoning mappings. Codex requires a single
+capacity and modalities. Selecting a profile changes the target, not the parent’s
+reasoning preference. The host adapts that preference to the new target through
+the ordinary reasoning mapper and stores the resolved form for exact execution
+and restoration. A same-target delegation keeps the captured execution settings. Codex requires a single
 OpenAI-compatible account; groups are unavailable to it, and delegated CLI
 accounts require Claude Code. Group restoration rechecks the current common
 capabilities, not a frozen member list. A removed profile does not revoke an
 existing binding, but removing its account/group or revoking execution authority
 can make that binding unusable. Owner-authorized local work may query the
 assignment catalog; guest and external-colleague work retain permitted inheritance
-without profile or effort overrides. Safe catalog projection excludes local
+without profile selection. Safe catalog projection excludes local
 account identifiers and connection details from model results and public records.
 
 ## 2) Single Source of Truth Contract

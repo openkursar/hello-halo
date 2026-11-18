@@ -88,11 +88,7 @@ export interface ModelSelectionSnapshot {
   reasoning: EffectiveReasoning;
 }
 
-export interface ListModelProfilesInput {
-  query?: string;
-  cursor?: string;
-  limit?: number;
-}
+export type ListModelProfilesInput = Record<string, never>;
 
 export interface ModelProfileQueryResult {
   revision: string;
@@ -100,8 +96,6 @@ export interface ModelProfileQueryResult {
   policyRevision: string;
   parent: Pick<ParentModelBinding, 'model' | 'reasoning'>;
   profiles: readonly ModelProfileDescriptor[];
-  hasMore: boolean;
-  nextCursor?: string;
 }
 
 export interface PlanModelSelectionInput {
@@ -126,6 +120,8 @@ export interface QueryModelProfilesInput {
 export interface ModelSelectionCapability {
   policy: ModelProfileCatalog['policy'];
   policyRevision?: string;
+  /** Omit the reasoning override from spawn; the host adapts the direct parent's reasoning to the selected target. */
+  reasoningPolicy?: 'inherit';
 }
 
 export interface CollaborationServerOptions {

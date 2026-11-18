@@ -315,11 +315,7 @@ impl NativeSession {
             None
         };
         let (commands, command_receiver) = mpsc::channel(128);
-        let cost = Arc::new(Mutex::new(crate::core::cost::CostTracker::new(
-            options["model"].as_str().unwrap_or(""),
-            options["contextWindow"].as_f64().unwrap_or(200_000.0),
-            options["modelPricing"].clone(),
-        )));
+        let cost = Arc::new(Mutex::new(crate::core::cost::CostTracker::for_session(&options)));
         let tool_context = Arc::new(crate::core::tool_context_bridge::ToolContextBridge::new(
             cost.clone(),
         ));
@@ -570,11 +566,7 @@ impl NativeSession {
         &self,
         options: &Value,
     ) -> Arc<Mutex<crate::core::cost::CostTracker>> {
-        let mut tracker = crate::core::cost::CostTracker::new(
-            options["model"].as_str().unwrap_or(""),
-            options["contextWindow"].as_f64().unwrap_or(200_000.0),
-            options["modelPricing"].clone(),
-        );
+        let mut tracker = crate::core::cost::CostTracker::for_session(options);
         if let Some(budget) = self.get_execution_budget() {
             tracker.set_on_usage(Some(Arc::new(move |usage, _model| budget.observe(usage))));
         }

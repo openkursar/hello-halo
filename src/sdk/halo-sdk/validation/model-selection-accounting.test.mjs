@@ -18,15 +18,16 @@ async function endpoint(identity, reply) {
       assert.equal(body.model, 'same-accounting-model');
       assert.doesNotMatch(raw, /[AB]-canary/);
       const result = await reply(body);
+      const reportedModel = identity === 'B' ? 'child-canonical-model' : body.model;
       const usage = { prompt_tokens: body.stream ? 0 : 101 + ledger.length, completion_tokens: 7 + ledger.length };
       ledger.push({ body, usage, kind: result.partial ? 'partial' : body.stream ? 'ordinary' : 'summary' });
       if (!body.stream) {
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ id: 'summary', object: 'chat.completion', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: result.text }, finish_reason: 'stop' }], usage }));
+        response.end(JSON.stringify({ id: 'summary', object: 'chat.completion', model: reportedModel, choices: [{ index: 0, message: { role: 'assistant', content: result.text }, finish_reason: 'stop' }], usage }));
         return;
       }
       response.writeHead(200, { 'content-type': 'text/event-stream' });
-      const chunk = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ id: `response-${ledger.length}`, object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+      const chunk = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ id: `response-${ledger.length}`, object: 'chat.completion.chunk', model: reportedModel, choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
       chunk(result.tool ? { role: 'assistant', tool_calls: [{ index: 0, id: result.id, type: 'function', function: { name: result.tool, arguments: JSON.stringify(result.input) } }] } : { role: 'assistant', content: result.text });
       if (!result.partial) chunk({}, result.tool ? 'tool_calls' : 'stop');
       response.write(`data: ${JSON.stringify({ choices: [], usage })}\n\n`);
@@ -38,7 +39,7 @@ async function endpoint(identity, reply) {
 }
 
 for (const backend of ['native', 'worker']) {
-  test(`${backend}: selected binding accounts partial retry and real summary at its own same-model price`, { timeout: 45_000 }, async t => {
+  test(`${backend}: selected binding prices ordinary, partial and summary usage at its own rate despite response alias`, { timeout: 45_000 }, async t => {
     const directory = await mkdtemp(join(tmpdir(), 'halo-accounting-'));
     const evidence = join(directory, 'once.txt');
     const source = join(directory, 'source.txt');

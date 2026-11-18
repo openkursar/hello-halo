@@ -5,8 +5,8 @@ title:
   en: Use capabilities without managing model context
   zh: 使用能力而无需管理模型上下文
 story:
-  en: I can ask Halo to use its available capabilities directly, without managing capability switches.
-  zh: 我能直接要求 Halo 使用可用能力，无需管理能力开关。
+  en: I can see what Halo can do in the composer "+" menu and ask it to use those capabilities directly, without managing capability switches.
+  zh: 我能在输入框「+」菜单看到 Halo 会什么，并直接要求它使用这些能力，无需管理能力开关。
 basis: documented
 references:
   - src/main/services/agent/toolsets/DESIGN.md
@@ -16,6 +16,9 @@ promises:
   automatic:
     en: A new native Halo conversation can use context-managed capabilities in the requested turn without asking me to enable a loading switch or send another message.
     zh: 新的原生 Halo 对话能在当前请求中使用由系统管理上下文的能力，无需我打开加载开关或再发一条消息。
+  visible:
+    en: The Capabilities group of the composer "+" menu lists each core capability this conversation can use, with its name and one-line use and a note that they are used automatically when needed. The entries have no switch, and choosing one changes nothing and leaves the menu open.
+    zh: 输入框「+」菜单的「能力」分组列出本会话可用的每项核心能力，显示名称、一句用途说明，并注明需要时自动调用。这些条目没有开关，点选它们不改变任何设置，菜单保持打开。
   core-api:
     en: Operate Halo is a core capability. Its API guide and scoped runtime credentials are available from the first turn without a human enablement step.
     zh: 操作 Halo 是核心能力；API 指南与限定作用域的运行凭据从第一轮即可使用，无需人工启用。
@@ -91,7 +94,7 @@ scenarios:
     title:
       en: Create a collaborator without a capability enablement request
       zh: 无需能力开关，直接创建协作者
-    verifies: [automatic]
+    verifies: [automatic, visible]
     platforms: [darwin, win32, linux]
     profiles: [regression]
     evidence: app-e2e
@@ -101,9 +104,10 @@ scenarios:
     preconditions:
       - A fresh conversation uses an isolated workspace and a local scripted model.
     steps:
-      - Inspect the composer capability menu, then ask for one bounded collaborator task.
+      - Open the composer "+" menu, choose the Web Control entry, close the menu, then ask for one bounded collaborator task.
     expected:
-      - Browser, terminal, OCR, collaboration and Halo API enablement controls are absent.
+      - Web Control, Team Collaboration, Text Recognition, Operate Halo and, on macOS and Windows, AI Terminal are listed under Capabilities with the note that they are used automatically when needed.
+      - None of them has an enablement switch; choosing Web Control leaves the menu open.
       - The real collaboration tool returns an accepted collaborator handle and its execution starts without requesting a capability switch or follow-up message.
     notes: This journey executes collaborator creation and checks the menu. It does not establish execution of browser, terminal or OCR operations; those retain their own stories.
   - id: chat.capabilities.halo-api-core

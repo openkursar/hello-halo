@@ -62,14 +62,14 @@ export async function addSecuritySource(page: Page, url: string, name: string, m
   return source!.id
 }
 
-export async function securityConversation(page: Page, message: string, conversationId?: string) {
+export async function securityConversation(page: Page, message: string, conversationId?: string, reasoningEffort?: 'high' | 'max') {
   if (!conversationId) {
     const created = await page.evaluate(() => (globalThis as unknown as { halo: HaloAPI }).halo.createConversation('halo-temp', 'Assignment security'))
     expect(created.success, created.error).toBe(true)
     conversationId = (created.data as { id: string }).id
   }
   const sent = await page.evaluate(input => (globalThis as unknown as { halo: HaloAPI }).halo.sendMessage(input), {
-    spaceId: 'halo-temp', conversationId, message,
+    spaceId: 'halo-temp', conversationId, message, reasoningEffort,
   })
   expect(sent.success, sent.error).toBe(true)
   return conversationId

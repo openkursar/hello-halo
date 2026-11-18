@@ -35,7 +35,7 @@ describe('subagent model catalog projection', () => {
     expect(result.revision).toBe('scope:7:source:3')
     expect(result.policyRevision).toBe('2')
     expect(result.profiles[0]).toMatchObject({
-      profileId: 'builtin:small', profileRevision: '3', name: 'Small (小杯)',
+      profileId: 'builtin:small', profileRevision: '3', name: 'Small',
       description: 'Extract fields', available: true,
       target: { kind: 'single', models: ['gpt-6-sol'], label: 'GPT Sol', accountLabel: 'Work account' },
     })
@@ -73,11 +73,11 @@ describe('subagent model catalog projection', () => {
     const target = builtin({ target: { kind: 'group', groupId: 'removed-group' } })
     expect(catalog([target]).profiles[0]).toMatchObject({ available: false, target: { kind: 'pool', models: [] } })
   })
-  it('preserves explicit profile defaults and reports unsupported choices unavailable', () => {
-    const result = catalog([builtin({ reasoningEffort: 'high' })], [source({ modelOverrides: { 'gpt-6-sol': { reasoningEffort: 'medium' } } })])
-    expect(result.profiles[0].reasoning).toMatchObject({ profileDefault: 'high', modelDefault: 'medium' })
+  it('never advertises reasoning controls or rejects a legacy profile preset', () => {
+    const legacyProfile = { ...builtin(), reasoningEffort: 'retired-value' }
+    const result = catalog([legacyProfile], [source({ modelOverrides: { 'gpt-6-sol': { reasoningEffort: 'medium' } } })])
+    expect(result.profiles[0].reasoning).toEqual({})
     expect(result.profiles[0].available).toBe(true)
-    expect(catalog([builtin({ reasoningEffort: 'invented-level' })]).profiles[0].available).toBe(false)
   })
   it('does not mutate the captured configuration', () => {
     const profiles = [builtin()]

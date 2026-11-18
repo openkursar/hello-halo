@@ -352,22 +352,31 @@ fn model_metadata(binding: &Value) -> Value {
     }
     metadata
 }
+fn normalized_options(options: &Value) -> std::borrow::Cow<'_, Value> {
+    if options["nativeResolvedConfig"] == true {
+        std::borrow::Cow::Borrowed(options)
+    } else {
+        super::config::resolve(options)
+            .map(std::borrow::Cow::Owned)
+            .unwrap_or(std::borrow::Cow::Borrowed(options))
+    }
+}
 fn effective_reasoning(options: &Value) -> Value {
     if options["nativeEffectiveReasoning"].is_object() {
         return options["nativeEffectiveReasoning"].clone();
     }
-    let normalized = if options["nativeResolvedConfig"] == true {
-        options.clone()
-    } else {
-        super::config::resolve(options).unwrap_or_else(|_| options.clone())
-    };
+    let normalized = normalized_options(options);
     let mut resolved = super::effort::resolve(&normalized);
     let maximum = options["maxOutputTokens"]
         .as_f64()
         .or_else(|| normalized["maxTokens"].as_f64())
         .unwrap_or(16384.0);
     resolved.thinking = super::token_budget::effective_thinking(&resolved.thinking, maximum);
-    let effort = if options["provider"]["__haloSdkNativeBuiltinProvider"]["kind"] == "anthropic" {
+    let builtin = &options["provider"]["__haloSdkNativeBuiltinProvider"];
+    let anthropic = builtin["kind"] == "anthropic"
+        || options["providerConfig"]["type"] == "anthropic"
+        || (options["provider"].is_null() && options["providerConfig"].is_null());
+    let effort = if anthropic {
         normalized["effort"].as_str().filter(|effort| !effort.is_empty())
     } else {
         resolved.reasoning.as_deref()
@@ -403,6 +412,17 @@ fn apply_reasoning(options: &mut Value, reasoning: &Value) -> Result<()> {
         Some("effort") | Some("provider-default") => { options["thinkingExplicit"] = false.into(); json!({"type":"disabled"}) },
         _ => return Err(Error::new("MODEL_SELECTION", "The saved reasoning mode is not supported.")),
     };
+    Ok(())
+}
+fn apply_member_reasoning(options: &mut Value, member: &Value) -> Result<()> {
+    if member["inheritedReasoning"].is_object() {
+        apply_reasoning(options, &member["inheritedReasoning"])?;
+        if member["inheritedLegacyEffort"].is_string() {
+            options["effort"] = member["inheritedLegacyEffort"].clone();
+            options["nativeInheritedTemperature"] = member["inheritedLegacyTemperature"].clone();
+            options["nativeInheritedOpenAiEffort"] = member["inheritedLegacyOpenAiEffort"].clone();
+        }
+    }
     Ok(())
 }
 fn lock_for(locks: &Mutex<HashMap<String, Arc<AsyncMutex<()>>>>, id: &str) -> Arc<AsyncMutex<()>> {
@@ -544,7 +564,7 @@ impl SdkCollaboration {
         if let Some(runtime) = self.runtime_view.lock().unwrap().upgrade() {
             if let Some(member) = runtime.store.get("member", caller) {
                 if member["model"].is_string() { options["model"] = member["model"].clone(); }
-                if member["inheritedReasoning"].is_object() { apply_reasoning(&mut options, &member["inheritedReasoning"])?; }
+                apply_member_reasoning(&mut options, &member)?;
             }
         }
         Ok(options)
@@ -558,7 +578,12 @@ impl SdkCollaboration {
         let parent = json!({"bindingId":identity["bindingId"],"restoreRef":identity["restoreRef"],"model":options["model"],"reasoning":effective_reasoning(&options)});
         let revision = self.model_policy_revision.lock().unwrap().clone().unwrap();
         let result = catalog.query(&json!({"parent":parent,"policyRevision":revision,"input":input}))?;
-        Ok(collaboration::tool_contract::text(serde_json::to_string(&result)?,false))
+        let text = serde_json::to_string(&result)?;
+        let limit = collaboration::model_selection::limits()["resultBytes"].as_u64().unwrap() as usize;
+        if text.len() > limit {
+            return Err(Error::new("MODEL_SELECTION", "The complete model directory is too large to return. No profiles were listed."));
+        }
+        Ok(collaboration::tool_contract::text(text, false))
     }
     async fn prepare_spawn_model(
         &self,
@@ -572,6 +597,11 @@ impl SdkCollaboration {
         member["inheritedReasoning"] = reasoning.clone();
         member["model"] = parent_options["model"].clone();
         if !self.model_selection_enabled() {
+            let normalized = normalized_options(&parent_options);
+            member["inheritedLegacyEffort"] = json!(normalized["effort"].as_str().unwrap_or("high"));
+            let effort = super::effort::resolve(&normalized);
+            member["inheritedLegacyTemperature"] = json!(effort.temperature);
+            member["inheritedLegacyOpenAiEffort"] = json!(effort.reasoning);
             return Ok(member);
         }
         let runtime = self.runtime_view.lock().unwrap().upgrade()
@@ -864,7 +894,7 @@ impl SdkCollaboration {
         let lock = lock_for(&self.session_locks, id);
         let _guard = lock.lock().await;
         let base = self.options()?;
-        let fingerprint = format!("{}:{}:{}", policy(&base), member["modelSelection"], member["inheritedReasoning"]);
+        let fingerprint = format!("{}:{}:{}:{}:{}:{}", policy(&base), member["modelSelection"], member["inheritedReasoning"], member["inheritedLegacyEffort"], member["inheritedLegacyTemperature"], member["inheritedLegacyOpenAiEffort"]);
         let existing = self.sessions.lock().unwrap().get(id).cloned();
         if let Some(existing) = existing {
             if existing.fingerprint == fingerprint && !existing.session.lifetime.is_cancelled() {
@@ -901,16 +931,16 @@ impl SdkCollaboration {
         }
         let pending_binding = self.prepared_models.lock().unwrap().remove(id);
         let prepared = if member["modelSelection"].is_object() {
-            let binding = if let Some(binding) = pending_binding {
-                binding
+            if let Some(binding) = pending_binding {
+                Some(binding)
             } else {
-                self.model_callback("modelSelection.prepare", json!({"request":{"kind":"restore","snapshot":member["modelSelection"]},"childSessionId":id}),cancel).await?
-            };
-            if let Err(message) = collaboration::model_selection::validate_model_selection_restore(&json!({"snapshot":member["modelSelection"],"binding":model_metadata(&binding)})) {
-                self.release_model(&binding).await?;
-                return Err(message);
+                let binding = self.model_callback("modelSelection.prepare", json!({"request":{"kind":"restore","snapshot":member["modelSelection"]},"childSessionId":id}),cancel).await?;
+                if let Err(message) = collaboration::model_selection::validate_model_selection_restore(&json!({"snapshot":member["modelSelection"],"binding":model_metadata(&binding)})) {
+                    self.release_model(&binding).await?;
+                    return Err(message);
+                }
+                Some(binding)
             }
-            Some(binding)
         } else { None };
         let mut prepared_lease = PreparedLease { owner: self.this.clone(), binding: prepared.clone() };
         let placement = match self.workspace(member, cancel).await {
@@ -927,14 +957,7 @@ impl SdkCollaboration {
             config.as_object_mut().unwrap().remove(key);
         }
         config["model"] = model.into();
-        if member["inheritedReasoning"].is_object() {
-            apply_reasoning(&mut config, &member["inheritedReasoning"])?;
-            if !member["modelSelection"].is_object()
-                && base["provider"]["__haloSdkNativeProvider"] == true
-            {
-                config["effort"] = base["effort"].clone();
-            }
-        }
+        apply_member_reasoning(&mut config, member)?;
         if let Some(binding) = &prepared {
             if !binding["provider"].is_object() {
                 return Err(Error::new("MODEL_SELECTION", "The prepared model has no explicit provider connection."));
@@ -943,8 +966,17 @@ impl SdkCollaboration {
             config["contextWindow"] = binding["contextWindow"].clone();
             config["maxOutputTokens"] = binding["maxOutputTokens"].clone();
             config["nativeModelModalities"] = binding["modalities"].clone();
-            config["modelPricing"] = binding.get("modelPricing").map(|price|json!({binding["model"].as_str().unwrap():price})).unwrap_or_else(||json!({}));
-            for key in ["apiKey", "anthropicBaseUrl", "providerConfig", "betas"] { config.as_object_mut().unwrap().remove(key); }
+            config["nativeBindingPricing"] = binding["modelPricing"].clone();
+            config["modelPricing"] = json!({});
+            let builtin = &mut config["provider"]["__haloSdkNativeBuiltinProvider"];
+            if builtin["kind"] == "openai-compat"
+                && member["modelSelection"]["reasoning"]["effort"].is_string()
+            {
+                builtin["config"]["quirks"]["reasoningEffort"] = true.into();
+            }
+            for key in ["apiKey", "anthropicBaseUrl", "providerConfig", "betas", "fallbackModel"] {
+                config.as_object_mut().unwrap().remove(key);
+            }
         }
         config["sessionId"] = id.into();
         config["continue"] = false.into();

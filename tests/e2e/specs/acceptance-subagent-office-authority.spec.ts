@@ -4,10 +4,11 @@ import { acceptance, expect, waitForAcceptanceIdle } from '../fixtures/acceptanc
 import { test, officeWorkspaceDirectories, type OfficeNode } from '../fixtures/acceptance-subagent-office'
 import { installTeammate, createAwareTeam } from '../fixtures/acceptance-team-awareness'
 import { createModelGate, initialUserInput, type ModelRequest } from '../fixtures/acceptance-model'
-import { securityTool, decodeSecurityResult, refusedSecurityResult } from '../fixtures/acceptance-subagent-security'
+import { securityTool, refusedSecurityResult } from '../fixtures/acceptance-subagent-security'
+import { parseModelDirectory } from '../fixtures/acceptance-subagent-wire'
 import { collaboratorReceipt } from '../fixtures/acceptance-collaboration'
 
-for (const requestKind of ['inherit', 'profile', 'effort-only', 'directory'] as const) {
+for (const requestKind of ['inherit', 'profile', 'removed-effort', 'directory'] as const) {
   test(`remote office ${requestKind} retains the member owner's model authority`, acceptance('models.subagent-profiles.origin', { origin: 'remote-office', request: requestKind }), async ({ officeNodes, model }, info) => {
     test.setTimeout(300000)
     const { authority, owner, observer, ownerModel } = officeNodes
@@ -24,7 +25,7 @@ for (const requestKind of ['inherit', 'profile', 'effort-only', 'directory'] as 
       if (initialUserInput(request).includes(`OWNER_CAPTURE_${marker}`)) {
         const result = request.toolResults.find(result => result.id === 'owner-directory')
         if (!result) return securityTool(request, 'list_model_profiles', {}, 'owner-directory')
-        reference = decodeSecurityResult(result.text).profiles?.find((profile: { name: string }) => profile.name === 'Private remote assignment')?.selectionRef
+        reference = parseModelDirectory(result.text).profiles?.find((profile: { name: string }) => profile.name === 'Private remote assignment')?.selectionRef
         return { text: `OWNER_CAPTURED_${marker}` }
       }
       if (initialUserInput(request).includes(`REMOTE_CHILD_${marker}`)) { children.push(request); return { text: `REMOTE_CHILD_CONFIRMED_${marker}` } }
@@ -41,7 +42,7 @@ for (const requestKind of ['inherit', 'profile', 'effort-only', 'directory'] as 
         attempted = true
         return { tools: [{ id: 'remote-attempt', name: 'mcp__halo-team__list_model_profiles', input: {} }] }
       }
-      const input = requestKind === 'profile' ? { model_profile: reference } : requestKind === 'effort-only' ? { reasoning_effort: 'high' } : {}
+      const input = requestKind === 'profile' ? { model_profile: reference } : requestKind === 'removed-effort' ? { reasoning_effort: 'high' } : {}
       const reply = securityTool(request, 'spawn_agent', { name: 'Remote inherited worker', prompt: `REMOTE_CHILD_${marker}: Answer within the original authority.`, ...input }, 'remote-attempt')
       attempted = reply.tools?.[0]?.id === 'remote-attempt'
       return reply

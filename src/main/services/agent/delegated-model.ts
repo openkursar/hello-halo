@@ -1,14 +1,16 @@
 import type { EffectiveReasoning, ModelSelectionSnapshot } from '@hello-halo/agent-sdk/collaboration'
 import type { AgentModelSelection } from '../../../shared/types/ai-sources'
 import type { EngineId } from '../../../shared/types/engine'
-import { captureEffectiveReasoning } from './reasoning-effort'
+import { captureEffectiveReasoning, delegatedReasoningLevel, pickReasoningEffort, UnrepresentableReasoningError } from './reasoning-effort'
+import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import type { ResolvedModelCapabilities } from './types'
 
 /** The resolved execution behind a delegation, never a pending UI selection. */
 export interface DelegatedModelContext {
   selection: AgentModelSelection
   engineId: EngineId
-  reasoning: EffectiveReasoning
+  reasoning?: EffectiveReasoning
+  reasoningLevel?: ReasoningEffortLevel
   modelBinding?: ModelSelectionSnapshot
 }
 
@@ -28,8 +30,17 @@ export function captureDelegatedModelContext(
   options: Record<string, unknown>,
   modelBinding?: ModelSelectionSnapshot,
   capabilities?: ResolvedModelCapabilities,
+  inheritedLevel?: ReasoningEffortLevel,
 ): DelegatedModelContext {
-  const reasoning = captureEffectiveReasoning(options, engineId, capabilities)
-  return { selection: { ...selection }, engineId, reasoning,
+  const reasoningLevel = inheritedLevel ?? pickReasoningEffort(options.pickedReasoningEffort, options.reasoningEffort)
+  let reasoning: EffectiveReasoning
+  try {
+    reasoning = captureEffectiveReasoning(options, engineId, capabilities)
+  } catch (error) {
+    if (!(error instanceof UnrepresentableReasoningError) || modelBinding) throw error
+    console.warn(`[Agent] Delegation reasoning snapshot unavailable for engine=${engineId}; ordinary delegation uses engine defaults: ${error.message}`)
+    return { selection: { ...selection }, engineId, reasoningLevel }
+  }
+  return { selection: { ...selection }, engineId, reasoning, reasoningLevel: reasoningLevel ?? delegatedReasoningLevel(reasoning),
     ...(modelBinding ? { modelBinding: { ...modelBinding, reasoning } } : {}) }
 }

@@ -4,7 +4,8 @@ import { test, expect, acceptance, waitForAcceptanceIdle } from '../fixtures/acc
 import { startAcceptanceModel, initialUserInput, type ModelRequest } from '../fixtures/acceptance-model'
 import { collaboratorReceipt } from '../fixtures/acceptance-collaboration'
 import { assignmentCall, assignmentSettings } from '../fixtures/acceptance-subagent-models'
-import { addSecuritySource, decodeSecurityResult, securityConversation, securityTool, securityCredentialRelay } from '../fixtures/acceptance-subagent-security'
+import { addSecuritySource, securityConversation, securityTool, securityCredentialRelay } from '../fixtures/acceptance-subagent-security'
+import { parseModelDirectory } from '../fixtures/acceptance-subagent-wire'
 
 type IdleClock = { advance(): number; reset(): void; observations(): Array<{ conversationId: string }>; sessions(): Array<{ sequence: number; model: string; closed: boolean }> }
 test.use({ startupObserver: fileURLToPath(new URL('../fixtures/subagent-idle-clock-observer.cjs', import.meta.url)) })
@@ -33,7 +34,8 @@ for (const change of ['profile-edit', 'profile-delete-recreate', 'builtin-clear-
       if (created) { handle = collaboratorReceipt(created).handle; return { text: 'IDLE_PARENT_READY' } }
       const catalog = request.toolResults.find(result => result.id === 'idle-directory')
       if (!catalog) return securityTool(request, 'list_model_profiles', {}, 'idle-directory')
-      const reference = decodeSecurityResult(catalog.text).profiles?.find((profile: { name: string }) => profile.name === 'Idle verifier' || change === 'builtin-clear-rebind' && profile.name === 'Small (小杯)')?.selectionRef
+      const name = change === 'builtin-clear-rebind' ? 'Small' : 'Idle verifier'
+      const reference = parseModelDirectory(catalog.text).profiles.find(profile => profile.name === name)?.selectionRef
       if (!reference) return { text: 'IDLE_PROFILE_MISSING' }
       return securityTool(request, 'spawn_agent', { name: 'Idle bound worker', prompt: 'IDLE_CHILD: Retain this original assignment.', model_profile: reference }, 'idle-spawn')
     })
@@ -55,11 +57,16 @@ for (const change of ['profile-edit', 'profile-delete-recreate', 'builtin-clear-
       const builtin = settings.profiles.find(profile => profile.id === 'builtin:small')!
       const saved = await assignmentCall(window, change === 'builtin-clear-rebind' ? 'updateSubagentModel' : 'createSubagentModel', {
         ...(change === 'builtin-clear-rebind' ? { id: builtin.id, expectedRevision: builtin.revision } : { name: 'Idle verifier' }), description: 'Retain original idle binding',
-        target: groupId ? { kind: 'group', groupId } : { kind: 'model', sourceId, modelId: targetModel }, reasoningEffort: effort,
+        target: groupId ? { kind: 'group', groupId } : { kind: 'model', sourceId, modelId: targetModel },
       })
       expect(saved.success, saved.error).toBe(true)
       const profile = saved.data!.profiles.find(profile => change === 'builtin-clear-rebind' ? profile.id === builtin.id : profile.kind === 'custom' && profile.name === 'Idle verifier')!
-      const conversationId = await securityConversation(window, 'IDLE_PARENT: Create the verifier once.')
+      const parentModel = change === 'group-capability-shrink' ? 'gpt-6.1-sol' : 'o3'
+      const parentSource = await window.evaluate(model => (globalThis as unknown as { halo: HaloAPI }).halo.aiSourcesUpdateSource('acceptance-local', {
+        model, availableModels: [{ id: model, name: model }],
+      }), parentModel)
+      expect(parentSource.success, parentSource.error).toBe(true)
+      const conversationId = await securityConversation(window, 'IDLE_PARENT: Create the verifier once.', undefined, effort)
       await expect.poll(() => Boolean(handle) && requests.length > 0, { timeout: 90000 }).toBe(true)
       await waitForAcceptanceIdle(window, conversationId)
       expect(requests.every(request => request.body.model === targetModel)).toBe(true)

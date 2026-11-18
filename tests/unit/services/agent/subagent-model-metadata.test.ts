@@ -6,7 +6,8 @@ import { prepareSubagentModelMetadata } from '../../../../src/main/services/agen
 
 describe('subagent model metadata', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
+    mocks.source.mockReturnValue({ authType: 'api-key', apiKey: 'synthetic', provider: 'openai', apiType: 'chat_completions' })
     mocks.credentials.mockResolvedValue({ sourceId: 'account', model: 'unknown-model', provider: 'openai', apiType: 'responses', supportsVision: true,
       capabilities: { contextWindow: 32000, maxOutputTokens: 8192 } })
   })
@@ -24,6 +25,23 @@ describe('subagent model metadata', () => {
     expect(result.metadata.reasoning.effortMapping?.off).toEqual({ version: 1, mode: 'off' })
     expect(result.metadata.reasoning.supported).toContain('off')
   })
+  it('advertises only levels the account will send without clamping', async () => {
+    const reasoningLevels = ['low', 'medium']
+    mocks.source.mockReturnValue({ modelCatalogCache: { entries: [{ slug: 'gpt-5-4', supported_reasoning_levels: reasoningLevels }] } })
+    mocks.credentials.mockResolvedValue({ model: 'gpt-5-4', provider: 'oauth', apiType: 'responses', adapterId: 'openai-codex',
+      codexModelCapabilities: { reasoningLevels }, capabilities: { contextWindow: 32000, maxOutputTokens: 32768 } })
+    const result = await prepareSubagentModelMetadata({ modelSourceId: 'account', modelId: 'gpt-5-4' }, 'halo')
+    expect(result.metadata.reasoning.supported).toEqual(reasoningLevels)
+    expect(result.metadata.reasoning.default).toEqual({ version: 1, mode: 'effort', effort: 'medium' })
+  })
+  it.each([['gpt-5-4', 'high', 'high'], ['o3', 'off', 'low'], ['auto', 'high', 'high']] as const)(
+    'maps a parent request on %s from %s to %s without consulting selectable metadata', async (model, inherited, expected) => {
+      mocks.credentials.mockResolvedValue({ model, provider: 'openai', apiType: 'chat_completions',
+        capabilities: { contextWindow: 32000, maxOutputTokens: 32768, reasoningEffort: 'low' } })
+      const result = await prepareSubagentModelMetadata({ modelSourceId: 'account', modelId: model }, 'halo', inherited)
+      expect(result.metadata.reasoning.default).toEqual({ version: 1, mode: 'effort', effort: expected })
+    },
+  )
   it('declares a bounded budget mode for a known budget model', async () => {
     mocks.credentials.mockResolvedValue({ model: 'claude-sonnet-4-5', provider: 'anthropic',
       capabilities: { contextWindow: 32000, maxOutputTokens: 8192 } })

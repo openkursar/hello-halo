@@ -14,7 +14,7 @@ export function participantSourceOf(request: ExecutionWorkRequest): ParticipantS
   return {
     ...request.grants(),
     modelSelection: model?.selection ?? request.modelSelection,
-    ...(model ? { inheritedReasoning: model.reasoning, modelBinding: model.modelBinding } : {}),
+    ...(model ? { inheritedReasoning: model.reasoning, reasoningLevel: model.reasoningLevel, modelBinding: model.modelBinding } : {}),
     sourceAppId: principal.appId,
     environment: principal.environment,
     permissions: principal.permissions,

@@ -309,9 +309,9 @@ fn validate_plan(plan: &Value) -> Result<()> {
     Ok(())
 }
 
-fn supports(reasoning: &Value, capability: &Value) -> Result<()> {
+fn supports(reasoning: &Value, capability: &Value, captured_parent: bool) -> Result<()> {
     validate_effective_reasoning(reasoning)?;
-    if let Some(effort) = reasoning.get("effort") {
+    if let Some(effort) = reasoning.get("effort").filter(|_| !captured_parent) {
         if !capability["supported"].as_array().is_some_and(|a| a.contains(effort))
             && !capability["effortMapping"].as_object().is_some_and(|m| m.values().any(|v| v == reasoning))
             && capability["default"] != *reasoning
@@ -319,7 +319,7 @@ fn supports(reasoning: &Value, capability: &Value) -> Result<()> {
             return Err(invalid("The target cannot validate the requested reasoning effort."));
         }
     }
-    if reasoning["mode"] == "budget" || reasoning["mode"] == "adaptive" || reasoning["mode"] == "off" {
+    if !captured_parent && matches!(reasoning["mode"].as_str(), Some("budget" | "adaptive" | "off")) {
         if capability["default"] != *reasoning
             && !capability["effortMapping"].as_object().is_some_and(|m| m.values().any(|v| v == reasoning))
             && !capability["modes"].as_array().is_some_and(|modes| modes.contains(&reasoning["mode"]))
@@ -338,6 +338,10 @@ fn supports(reasoning: &Value, capability: &Value) -> Result<()> {
 }
 
 pub fn finalize_model_selection(args: &Value) -> Result<Value> {
+    finalize_model_selection_with(args, false)
+}
+
+fn finalize_model_selection_with(args: &Value, restoring: bool) -> Result<Value> {
     object(args, &["plan", "binding"])?;
     let plan = &args["plan"];
     validate_plan(plan)?;
@@ -426,7 +430,7 @@ pub fn finalize_model_selection(args: &Value) -> Result<Value> {
     } else {
         capability["default"].clone()
     };
-    supports(&reasoning, capability)?;
+    supports(&reasoning, capability, !restoring && inherited && effort.is_none())?;
     if reasoning["mode"] == "budget"
         && reasoning["budgetTokens"].as_u64().unwrap() >= binding["maxOutputTokens"].as_u64().unwrap()
     {
@@ -443,110 +447,36 @@ pub fn finalize_model_selection(args: &Value) -> Result<Value> {
     }))
 }
 
-pub fn query_model_profiles(args: &Value) -> Result<Value> {
-    validate_catalog(&args["catalog"])?;
-    query_with_catalog(args, &args["catalog"], None)
+fn profile_descriptor(profile: &Value) -> Value {
+    let mut descriptor = profile.clone();
+    let fields = descriptor.as_object_mut().unwrap();
+    fields.remove("profileId");
+    fields.remove("profileRevision");
+    fields.insert("selectionRef".into(), selection_ref(profile).into());
+    descriptor
 }
 
-fn query_with_catalog(args: &Value, catalog: &Value, cached_stamp: Option<&str>) -> Result<Value> {
+pub fn query_model_profiles(args: &Value) -> Result<Value> {
+    validate_catalog(&args["catalog"])?;
+    query_with_catalog(args, &args["catalog"])
+}
+
+fn query_with_catalog(args: &Value, catalog: &Value) -> Result<Value> {
     object(args, &["catalog", "parent", "policyRevision", "input"])?;
     parent(&args["parent"])?;
     text(args, "policyRevision")?;
     if args["policyRevision"] != catalog["policyRevision"] {
         return Err(invalid("Model selection settings changed. Query again after the session refreshes."));
     }
-    let input = &args["input"];
-    object(input, &["query", "cursor", "limit"])?;
-    let bounds = limits();
-    let query = match input.get("query") {
-        Some(v) => v.as_str().ok_or_else(|| invalid("Directory query must be text."))?,
-        None => "",
-    };
-    if query.chars().count() > bounds["queryCodePoints"].as_u64().unwrap() as usize {
-        return Err(invalid("Model directory query is too long."));
-    }
-    let limit = match input.get("limit") {
-        Some(v) => v
-            .as_u64()
-            .filter(|n| *n > 0 && *n <= bounds["pageMaximum"].as_u64().unwrap())
-            .ok_or_else(|| invalid("Invalid directory page limit."))?,
-        None => bounds["pageDefault"].as_u64().unwrap(),
-    } as usize;
-    let normalized = query.trim().to_lowercase();
-    let stamp = cached_stamp.map(str::to_owned).unwrap_or_else(|| catalog_stamp(catalog));
-    let offset = if let Some(cursor) = input.get("cursor") {
-        let cursor: Value = serde_json::from_str(
-            cursor.as_str().ok_or_else(|| invalid("Invalid directory cursor."))?,
-        )
-        .map_err(|_| invalid("Invalid directory cursor."))?;
-        object(&cursor, &["version", "revision", "policyRevision", "query", "stamp", "offset"])?;
-        if cursor["version"] != 1
-            || cursor["revision"] != catalog["revision"]
-            || cursor["policyRevision"] != args["policyRevision"]
-            || cursor["query"] != normalized
-            || cursor["stamp"] != stamp
-        {
-            return Err(invalid("Model directory cursor expired. Start a new query."));
-        }
-        cursor["offset"].as_u64().ok_or_else(|| invalid("Invalid directory cursor offset."))? as usize
-    } else {
-        0
-    };
-    let matches: Vec<&Value> = catalog["profiles"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|profile| {
-            if normalized.is_empty() {
-                return profile["available"] == true;
-            }
-            let matches = ["name", "description"].iter().any(|key| {
-                profile[key].as_str().unwrap().to_lowercase().contains(&normalized)
-            }) || profile["target"]["models"].as_array().unwrap().iter().any(|v| {
-                v.as_str().unwrap().to_lowercase().contains(&normalized)
-            });
-            matches
-                && (profile["available"] == true
-                    || profile["name"].as_str().unwrap().to_lowercase() == normalized
-                    || profile["target"]["models"].as_array().unwrap().iter().any(|v| {
-                        v.as_str().unwrap().to_lowercase() == normalized
-                    }))
-        })
-        .collect();
-    if offset > matches.len() {
-        return Err(invalid("Invalid directory cursor offset."));
-    }
-    let mut result = json!({
+    object(&args["input"], &[])?;
+    let profiles: Vec<_> = catalog["profiles"].as_array().unwrap().iter().map(profile_descriptor).collect();
+    Ok(json!({
         "revision":catalog["revision"],
         "policy":catalog["policy"],
         "policyRevision":catalog["policyRevision"],
         "parent":{"model":args["parent"]["model"],"reasoning":args["parent"]["reasoning"]},
-        "profiles":[],
-        "hasMore":false
-    });
-    let mut end = offset;
-    while end < matches.len() && end - offset < limit {
-        let profile = matches[end];
-        let mut descriptor = profile.clone();
-        descriptor.as_object_mut().unwrap().remove("profileId");
-        descriptor.as_object_mut().unwrap().remove("profileRevision");
-        descriptor["selectionRef"] = selection_ref(profile).into();
-        result["profiles"].as_array_mut().unwrap().push(descriptor);
-        end += 1;
-        set_cursor(&mut result, catalog, &args["policyRevision"], &normalized, &stamp, end, matches.len());
-        if serde_json::to_vec(&result).unwrap().len() > bounds["resultBytes"].as_u64().unwrap() as usize {
-            result["profiles"].as_array_mut().unwrap().pop();
-            end -= 1;
-            break;
-        }
-    }
-    set_cursor(&mut result, catalog, &args["policyRevision"], &normalized, &stamp, end, matches.len());
-    if end == offset && end < matches.len()
-        || serde_json::to_vec(&result).unwrap().len() > bounds["resultBytes"].as_u64().unwrap() as usize
-    {
-        return Err(invalid("A complete directory entry cannot fit in its response."));
-    }
-    Ok(result)
+        "profiles":profiles
+    }))
 }
 
 pub fn validate_model_selection_snapshot(snapshot: &Value) -> Result<Value> {
@@ -600,22 +530,12 @@ pub fn validate_model_selection_restore(args: &Value) -> Result<Value> {
         },
         "policyRevision":"restore"
     });
-    finalize_model_selection(&json!({"plan":plan,"binding":args["binding"]}))?;
+    finalize_model_selection_with(&json!({"plan":plan,"binding":args["binding"]}), true)?;
     Ok(snapshot.clone())
-}
-
-fn catalog_stamp(catalog: &Value) -> String {
-    let mut hash = 14695981039346656037u64;
-    for byte in serde_json::to_string(catalog).unwrap().bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(1099511628211);
-    }
-    format!("{hash:016x}")
 }
 
 pub struct ValidatedModelCatalog {
     catalog: Value,
-    stamp: String,
     profile_index: std::collections::HashMap<String, usize>,
 }
 
@@ -629,8 +549,7 @@ impl ValidatedModelCatalog {
             .enumerate()
             .map(|(position, profile)| (selection_ref(profile), position))
             .collect();
-        let stamp = catalog_stamp(&catalog);
-        Ok(Self { catalog, stamp, profile_index })
+        Ok(Self { catalog, profile_index })
     }
 
     pub fn revision(&self) -> &str {
@@ -650,7 +569,7 @@ impl ValidatedModelCatalog {
     }
 
     pub fn query(&self, input: &Value) -> Result<Value> {
-        query_with_catalog(input, &self.catalog, Some(&self.stamp))
+        query_with_catalog(input, &self.catalog)
     }
 }
 
@@ -785,6 +704,26 @@ mod tests {
     }
 
     #[test]
+    fn only_plain_creation_trusts_the_same_target_parents_captured_effort() {
+        let mut parent = parent_binding();
+        parent["reasoning"] = json!({"version":1,"mode":"effort","effort":"low"});
+        let mut plan = json!({"selection":{"kind":"inherit"},"parent":parent,"policyRevision":"policy-1"});
+        let mut binding = metadata();
+        for key in ["bindingId", "restoreRef", "model"] {
+            binding[key] = parent[key].clone();
+        }
+        binding["reasoning"] = json!({"default":{"version":1,"mode":"effort","effort":"high"}});
+        let snapshot = finalize_model_selection(&json!({"plan":plan,"binding":binding})).unwrap();
+        assert_eq!(snapshot["reasoning"], parent["reasoning"]);
+        assert!(validate_model_selection_restore(&json!({"snapshot":snapshot,"binding":binding})).is_err());
+        plan["requestedEffort"] = "low".into();
+        assert!(finalize_model_selection(&json!({"plan":plan,"binding":binding})).is_err());
+        plan.as_object_mut().unwrap().remove("requestedEffort");
+        binding["restoreRef"] = "different".into();
+        assert!(finalize_model_selection(&json!({"plan":plan,"binding":binding})).is_err());
+    }
+
+    #[test]
     fn budget_above_or_equal_to_output_limit_is_rejected_on_creation_and_restore() {
         let catalog = catalog(1);
         let mut plan = plan_model_selection(&json!({
@@ -830,7 +769,7 @@ mod tests {
         catalog["profiles"][0]["available"] = false.into();
         catalog["profiles"][0]["unavailableReason"] = "The configured pool is empty.".into();
         let page = query_model_profiles(&json!({
-            "catalog":catalog,"parent":parent_binding(),"policyRevision":"policy-1","input":{"query":"Profile 0"}
+            "catalog":catalog,"parent":parent_binding(),"policyRevision":"policy-1","input":{}
         })).unwrap();
         assert_eq!(page["profiles"][0]["target"]["models"], json!([]));
         assert!(page["parent"].get("bindingId").is_none());
@@ -844,33 +783,18 @@ mod tests {
     }
 
     #[test]
-    fn pages_are_complete_reachable_and_bound_to_snapshot() {
+    fn directory_is_complete_and_selection_still_checks_the_profile_revision() {
         let mut catalog = catalog(101);
-        let mut input = json!({});
-        let mut seen = Vec::new();
-        loop {
-            let page = query_model_profiles(&json!({
-                "input":input,"parent":parent_binding(),"catalog":catalog,"policyRevision":"policy-1"
-            })).unwrap();
-            assert!(serde_json::to_vec(&page).unwrap().len() <= 16384);
-            for profile in page["profiles"].as_array().unwrap() {
-                seen.push(profile["selectionRef"].clone());
-            }
-            if page["hasMore"] != true {
-                break;
-            }
-            input = json!({"cursor":page["nextCursor"]});
-        }
-        assert_eq!(seen.len(), 101);
-        let first = query_model_profiles(&json!({
+        let result = query_model_profiles(&json!({
             "input":{},"parent":parent_binding(),"catalog":catalog,"policyRevision":"policy-1"
         })).unwrap();
+        assert_eq!(result["profiles"].as_array().unwrap().len(), 101);
+        assert!(result.get("hasMore").is_none());
+        assert!(result.get("nextCursor").is_none());
         catalog["profiles"][0]["profileRevision"] = "2".into();
-        assert!(query_model_profiles(&json!({
-            "input":{"cursor":first["nextCursor"]},"parent":parent_binding(),"catalog":catalog,"policyRevision":"policy-1"
-        })).is_err());
         assert!(plan_model_selection(&json!({
-            "input":{"model_profile":seen[0]},"parent":parent_binding(),"catalog":catalog,"policyRevision":"policy-1"
+            "input":{"model_profile":result["profiles"][0]["selectionRef"]},
+            "parent":parent_binding(),"catalog":catalog,"policyRevision":"policy-1"
         })).is_err());
     }
 
@@ -892,25 +816,5 @@ mod tests {
             validate_model_selection_restore(&json!({"snapshot":snapshot,"binding":metadata()})).unwrap(),
             snapshot
         );
-    }
-}
-
-fn set_cursor(
-    result: &mut Value,
-    catalog: &Value,
-    policy: &Value,
-    query: &str,
-    stamp: &str,
-    end: usize,
-    total: usize,
-) {
-    result["hasMore"] = (end < total).into();
-    if end < total {
-        result["nextCursor"] = serde_json::to_string(&json!({
-            "version":1,"revision":catalog["revision"],"policyRevision":policy,
-            "query":query,"stamp":stamp,"offset":end
-        })).unwrap().into();
-    } else {
-        result.as_object_mut().unwrap().remove("nextCursor");
     }
 }

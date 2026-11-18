@@ -6,8 +6,9 @@
  * lets every row explain itself in a line (name, then a quiet description),
  * which is why the panel needs no tooltips.
  *
- * Rows are actions (run, then close) or switches (flip, stay open). Hover and
- * keyboard share one highlight, as in a native menu. Rendered inside the
+ * Rows are actions (run, then close), switches (flip, stay open) or entries
+ * that only show what is there. Hover and keyboard share one highlight, as in
+ * a native menu, and pass over rows that do nothing. Rendered inside the
  * composer card (positioned relative), never portaled, so it moves with it.
  */
 
@@ -24,7 +25,7 @@ export interface ComposerMenuItem {
   meta?: string
   /** Action row: runs and closes the panel. */
   onSelect?: () => void
-  /** Switch row: flips and keeps the panel open. */
+  /** Switch row: flips and keeps the panel open. Without this or onSelect, the row is shown only. */
   toggle?: { checked: boolean; onChange: () => void }
   /** Draws the eye once, e.g. the switch the AI asked the user to turn on. */
   attention?: boolean
@@ -33,7 +34,13 @@ export interface ComposerMenuItem {
 export interface ComposerMenuSection {
   id: string
   title: string
+  /** A quiet line beside the title about the whole group. */
+  hint?: string
   items: ComposerMenuItem[]
+}
+
+function isActionable(item: ComposerMenuItem): boolean {
+  return !item.disabledReason && (!!item.toggle || !!item.onSelect)
 }
 
 interface ComposerMenuProps {
@@ -77,7 +84,7 @@ export function ComposerMenu({ sections, anchorRef, triggerRef, onClose, radiusC
 
   const items = useMemo(() => sections.flatMap((s) => s.items), [sections])
   const enabledIndexes = useMemo(
-    () => items.map((item, index) => (item.disabledReason ? -1 : index)).filter((index) => index >= 0),
+    () => items.map((item, index) => (isActionable(item) ? index : -1)).filter((index) => index >= 0),
     [items]
   )
   const [activeIndex, setActiveIndex] = useState(() => (takeFocus ? items.findIndex((item) => item.attention) : -1))
@@ -118,7 +125,7 @@ export function ComposerMenu({ sections, anchorRef, triggerRef, onClose, radiusC
   }, [activeIndex])
 
   const activate = useCallback((item: ComposerMenuItem) => {
-    if (item.disabledReason) return
+    if (!isActionable(item)) return
     if (item.toggle) {
       item.toggle.onChange()
       return
@@ -193,8 +200,9 @@ export function ComposerMenu({ sections, anchorRef, triggerRef, onClose, radiusC
       <div ref={listRef} className="overflow-y-auto overscroll-contain p-1.5 scrollbar-thin">
         {sections.map((section) => (
           <div key={section.id} role="group" aria-label={section.title} className="[&+&]:mt-1.5">
-            <div className="px-2.5 pt-1.5 pb-0.5 text-xs leading-5 text-subtle-foreground select-none">
-              {section.title}
+            <div className="flex items-baseline gap-2 px-2.5 pt-1.5 pb-0.5 text-xs leading-5 text-subtle-foreground select-none">
+              <span className="shrink-0">{section.title}</span>
+              {section.hint && <span className="min-w-0 truncate text-faint-foreground">{section.hint}</span>}
             </div>
             {section.items.map((item) => {
               const index = runningIndex++
@@ -204,7 +212,7 @@ export function ComposerMenu({ sections, anchorRef, triggerRef, onClose, radiusC
                   item={item}
                   index={index}
                   active={index === activeIndex}
-                  onHover={() => setActiveIndex(item.disabledReason ? -1 : index)}
+                  onHover={() => setActiveIndex(isActionable(item) ? index : -1)}
                   onActivate={() => activate(item)}
                 />
               )
@@ -224,26 +232,12 @@ interface MenuRowProps {
   onActivate: () => void
 }
 
+const ROW_CLASS = 'w-full flex items-center gap-2.5 px-2.5 py-2 sm:py-0 min-h-[44px] sm:min-h-8 rounded-[10px] text-left'
+
 function MenuRow({ item, index, active, onHover, onActivate }: MenuRowProps) {
   const disabled = !!item.disabledReason
-  return (
-    <button
-      type="button"
-      role={item.toggle ? 'menuitemcheckbox' : 'menuitem'}
-      aria-checked={item.toggle ? item.toggle.checked : undefined}
-      aria-disabled={disabled || undefined}
-      tabIndex={-1}
-      data-menu-index={index}
-      onMouseMove={onHover}
-      // mousedown keeps focus in the panel, so keyboard use can continue after a click
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={onActivate}
-      className={`w-full flex items-center gap-2.5 px-2.5 py-2 sm:py-0 min-h-[44px] sm:min-h-8 rounded-[10px]
-        text-left transition-colors duration-100
-        ${disabled ? 'cursor-default' : 'cursor-pointer'}
-        ${active ? 'bg-secondary' : ''}
-        ${item.attention ? 'animate-composer-attention' : ''}`}
-    >
+  const content = (
+    <>
       <span className={`w-5 shrink-0 flex items-center justify-center ${disabled ? 'text-muted-foreground/40' : 'text-muted-foreground'}`}>
         {item.icon}
       </span>
@@ -259,6 +253,42 @@ function MenuRow({ item, index, active, onHover, onActivate }: MenuRowProps) {
         <span className="shrink-0 text-xs tabular-nums text-subtle-foreground">{item.meta}</span>
       )}
       {item.toggle && <SwitchMark checked={item.toggle.checked} />}
+    </>
+  )
+
+  if (!disabled && !isActionable(item)) {
+    return (
+      <div
+        role="menuitem"
+        aria-disabled
+        data-menu-index={index}
+        onMouseMove={onHover}
+        onMouseDown={(e) => e.preventDefault()}
+        className={`${ROW_CLASS} cursor-default`}
+      >
+        {content}
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      role={item.toggle ? 'menuitemcheckbox' : 'menuitem'}
+      aria-checked={item.toggle ? item.toggle.checked : undefined}
+      aria-disabled={disabled || undefined}
+      tabIndex={-1}
+      data-menu-index={index}
+      onMouseMove={onHover}
+      // mousedown keeps focus in the panel, so keyboard use can continue after a click
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onActivate}
+      className={`${ROW_CLASS} transition-colors duration-100
+        ${disabled ? 'cursor-default' : 'cursor-pointer'}
+        ${active ? 'bg-secondary' : ''}
+        ${item.attention ? 'animate-composer-attention' : ''}`}
+    >
+      {content}
     </button>
   )
 }

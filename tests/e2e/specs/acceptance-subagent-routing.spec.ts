@@ -4,11 +4,7 @@ import { startAcceptanceModel, initialUserInput, modelTool, type ModelRequest, t
 import { collaboratorReceipt } from '../fixtures/acceptance-collaboration'
 import { assignmentCall, assignmentSettings } from '../fixtures/acceptance-subagent-models'
 import { navigateToChat } from '../fixtures/helpers'
-
-function decodedResult(text: string): any {
-  const parsed = JSON.parse(text.replace(/^Wall time: \d+(?:\.\d+)? seconds\r?\nOutput:\r?\n/, ''))
-  return Array.isArray(parsed) && parsed[0]?.type === 'text' ? JSON.parse(parsed[0].text) : parsed
-}
+import { parseModelDirectory } from '../fixtures/acceptance-subagent-wire'
 
 for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) {
   test.describe(`Assignment routing on ${sdkEngine}`, () => {
@@ -34,10 +30,9 @@ for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) {
         sourceRequests.push(request)
         if (!initialUserInput(request).includes(sourceMarker)) { errors.push('A child request reached the parent endpoint'); return { text: 'Unexpected actor.' } }
         const catalog = request.toolResults.find(result => result.id === 'assignment-catalog')
-        if (!catalog) return call(request, 'list_model_profiles', { query: 'Verifier' }, 'assignment-catalog')
+        if (!catalog) return call(request, 'list_model_profiles', {}, 'assignment-catalog')
         try {
-          const value = decodedResult(catalog.text)
-          reference = value.profiles?.find((profile: { name: string }) => profile.name === 'Verifier')?.selectionRef
+          reference = parseModelDirectory(catalog.text).profiles.find(profile => profile.name === 'Verifier')?.selectionRef
           if (!reference) errors.push(`Directory did not expose a selectable verifier: ${catalog.text}`)
         } catch (error) { errors.push(String(error)) }
         if (!reference) return { text: 'No verifier was available.' }

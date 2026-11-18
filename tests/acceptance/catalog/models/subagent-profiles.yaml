@@ -5,8 +5,8 @@ title:
   en: Model assignments for delegated work
   zh: 子 Agent 模型分工
 story:
-  en: My delegated work inherits the model and reasoning I chose unless I deliberately configure and request another permitted model assignment.
-  zh: 委派工作继承我选择的模型和推理设置；只有我主动配置并授权时才使用其他允许的模型分工。
+  en: My delegated work inherits its parent's reasoning. It uses the parent's model unless I deliberately configure and request another permitted model assignment.
+  zh: 委派工作继承直接上级的推理设置，并默认使用上级模型；只有我主动配置并请求时，才使用其他允许的模型分工。
 basis: proposed
 references:
   - src/main/services/agent/DESIGN.md
@@ -15,16 +15,16 @@ references:
   - src/renderer/components/subagent-models/
 promises:
   quiet: Advanced assignments appear only after opening the existing add menu; viewing or cancelling empty slots never persists or activates them, changes the main selection, or adds model tools, prompts, polling or routing requests.
-  slots: Small, Medium and Large remain in fixed order, cannot be renamed or deleted, may remain unconfigured, and only bound targets enter the runtime catalog. Clearing preserves description and identity, increments revision and removes target reasoning.
+  slots: Small, Medium and Large remain in fixed order, cannot be renamed or deleted, may remain unconfigured, and only bound targets enter the runtime catalog. Clearing preserves description and identity, increments revision and removes the target.
   editor: Assignments use inline labelled keyboard-accessible editors, one at a time. Failure and conflicts preserve the draft, Escape does not silently discard it, cancellation restores focus, and dark and light desktop and narrow layouts have no horizontal overflow.
-  persistence: Targeted owner IPC and HTTP operations persist atomically, validate names, targets and effort, reject stale revisions and protect managed assignments from stale whole-config saves. Accounts and the main selection remain unchanged.
+  persistence: Targeted owner IPC and HTTP operations persist atomically, validate names and targets, reject stale revisions and protect managed assignments from stale whole-config saves. Accounts and the main selection remain unchanged.
   activation: The first saved bound assignment activates the optional capability with inherit as default. Task selection requires a bound target; removing the last one resets to inherit without stopping existing work.
   inheritance: Every newly created collaborator inherits its direct parent's effective provider-default, off, effort, budget or adaptive reasoning captured from the actual execution, even without advanced assignments. Later parent changes never rewrite existing collaborators; older records without snapshots retain their compatibility behavior.
-  selection: An enabled owner execution can query bounded nonsecret assignments and select only a registered exact target. Explicit effort overrides assignment default then target default; an unqualified inherit uses direct parent reasoning. Selection never changes engine, tools, permissions, system prompt or workspace authority.
+  selection: An enabled owner execution can list configured nonsecret assignments in one call without arguments and select only a registered exact target. The directory lists plain-text descriptions and model or group labels, with a short selection ID only for available assignments. If the complete directory exceeds the output limit, the call returns an explicit error instead of a partial listing. Delegation has no separate reasoning setting; a selected target applies the direct parent's reasoning intent through its own backend. Selection never changes engine, tools, permissions, system prompt or workspace authority.
   identity: Siblings and nested collaborators use their own exact account and model, including identically named models on distinct accounts. Parent requests remain on the parent account, and ordinary error and usage reporting is retained without a second retry or silent upgrade.
   restoration: Existing advanced bindings retain their logical account, model and reasoning through assignment edits, deletion, idle retirement and restart. Removed accounts or groups fail strictly rather than falling back globally; rotated credentials and explicit same-account connection edits use current credentials and capabilities.
-  policy: An endpoint with an obsolete selection-policy revision rejects every override including effort-only, even after querying again; unmodified inheritance and existing children continue until the next safe rebuild.
-  authority: Guest IM and external colleague work has no assignment catalog and cannot override profile or effort. Its existing permitted inheritance remains valid, with trusted parent reasoning; owner remote web is not treated as a guest. Local execution snapshots never enter public or replicated team records.
+  policy: An endpoint with an obsolete selection-policy revision rejects model overrides even after querying again; unmodified inheritance and existing children continue until the next safe rebuild.
+  authority: Guest IM and external colleague work has no assignment catalog and cannot choose another model. Its existing permitted inheritance remains valid, with trusted parent reasoning; owner remote web is not treated as a guest. Local execution snapshots never enter public or replicated team records.
   cancellation: A stopped or revoked execution cannot commit or start a child after delayed model preparation. Stopping one collaborator never stops unrelated siblings or sessions, and failures before commit leave no workspace or member side effects.
   compatibility: Unsupported engine, group, delegated-account or reasoning combinations fail before requests and workspace creation, without fallback to another engine or account.
 scenarios:
@@ -38,8 +38,8 @@ scenarios:
     automation: automated
     requirements: [halo-sdk]
     expected:
-      - Only the more-add menu exposes the entry; opening it shows three empty fixed slots without a persisted subagentModels record or model requests.
-      - Cancelling an editor and collapsing the panel leaves the main account and model unchanged.
+      - Only the more-add menu exposes the entry; opening it replaces the add row with three empty fixed slots without a persisted subagentModels record or model requests.
+      - Cancelling an editor and closing the panel returns focus to the more-add menu and leaves the main account and model unchanged.
   - id: models.subagent-profiles.configuration
     title: Persist targeted assignment changes without changing the main model
     verifies: [slots, persistence, activation]
@@ -53,7 +53,7 @@ scenarios:
       transport: [ipc, http]
     expected:
       - Bind one builtin and create, rename and delete a custom assignment through the actual transport; restart retains the exact committed state.
-      - Builtins cannot be deleted or renamed; clearing retains slot identity and description, increases revision and clears target and effort.
+      - Builtins cannot be deleted or renamed; clearing retains slot identity and description, increases revision and clears the target.
       - The last bound target's removal resets task to inherit and leaves all three empty slots visible without changing accounts or main selection.
   - id: models.subagent-profiles.conflict
     title: Reject invalid or concurrent writes without partial state
@@ -65,7 +65,7 @@ scenarios:
     automation: automated
     requirements: [halo-sdk]
     variants:
-      rejection: [stale-revision, duplicate-name, missing-account, missing-group, invalid-effort, builtin-delete, builtin-rename, task-empty]
+      rejection: [stale-revision, duplicate-name, missing-account, missing-group, removed-effort, builtin-delete, builtin-rename, task-empty]
     expected:
       - The failed operation returns an explicit error and leaves the complete persisted settings and account selection unchanged.
   - id: models.subagent-profiles.stale-config
@@ -93,7 +93,8 @@ scenarios:
       width: ['1280', '390']
     expected:
       - Three fixed headings precede the secondary custom entry; labelled editors remain in place with no modal or horizontal overflow.
-      - Save and conflict errors preserve input, Escape preserves the draft, cancellation restores focus, and a real saved target survives restart.
+      - Choosing a model for a fixed slot applies it without a separate Save. Choosing nothing leaves the old state intact and cancellation restores focus.
+      - Saving details is a separate action. Conflict errors and Escape preserve that draft, and a successfully chosen target survives restart.
       - Screenshots record the actual themed application at the requested width.
   - id: models.subagent-profiles.baseline-reasoning
     title: Every delegation entry inherits actual parent reasoning without configuration
@@ -110,6 +111,19 @@ scenarios:
     expected:
       - Observe parent and child requests at valid local model endpoints and assert the engine's exact supported wire mapping, with no model-selection tool or prompt additions.
       - Unsupported combinations remain explicitly blocked or are refused before side effects; an engine fallback cannot establish the requested variant.
+  - id: models.subagent-profiles.plain-inheritance
+    title: Ordinary collaborators keep the parent’s reasoning with or without assignments
+    verifies: [inheritance, selection]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      case: [configured-low, supplier-specific, group-default, native-budget]
+    expected:
+      - A plain collaborator completes without a model override and sends the same effective reasoning as its parent to the same local endpoint.
   - id: models.subagent-profiles.owner-routing
     title: Owner delegation routes exact configured models on every entry
     verifies: [selection, identity, compatibility]
@@ -121,22 +135,25 @@ scenarios:
     variants:
       engine: [halo, anthropic, codex, dsh]
       entry: [space, digital-human, owner-im, manual-run, schedule-run, webhook-run, team-member, nested, owner-web]
-      choice: [inherit, profile, effort-only, provider-failure]
+      choice: [inherit, profile, removed-effort, provider-failure]
     expected:
       - The real creation tool's selected profile reaches its own local endpoint and wire model; unqualified inheritance stays on the direct parent.
       - Actual requested and active engine identities agree; accepted creation is distinct from provider success and errors follow the original result path.
-  - id: models.subagent-profiles.reasoning-precedence
-    title: Apply effort precedence without retaining another target's thinking fields
+      - A legacy effort-only command is refused without starting a collaborator.
+  - id: models.subagent-profiles.selected-reasoning
+    title: A model assignment changes the model, not the parent's reasoning intent
     verifies: [selection, inheritance]
     platforms: [darwin, win32, linux]
     profiles: [regression]
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements: [halo-sdk]
     variants:
-      selection: [inherit, effort-only, profile-default, target-default, explicit-effort, same-model-profile]
+      selection: [inherit, different-model, same-model, group]
     expected:
-      - Requests carry the exact finalized reasoning and target limits, with no leftover off, budget or adaptive fields and no silent clamping.
+      - Use the real tool directory's plain-text ID and a creation schema without an effort field.
+      - The parent and collaborator both send high reasoning to their respective local provider endpoints when they support it, even when the configured model default is low.
   - id: models.subagent-profiles.concurrent
     title: Concurrent parents, siblings and descendants never cross account or reasoning state
     verifies: [identity, inheritance]
@@ -175,7 +192,7 @@ scenarios:
       change: [task-to-inherit, inherit-to-task, profile-revision, account-removal, permission-revocation]
     expected:
       - A delayed preparation cannot create a child under obsolete policy, target revision, account identity or authority.
-      - Stale endpoints cannot requery to regain profile or effort-only overrides; pure inheritance and existing children are unaffected.
+      - Stale endpoints cannot requery to regain model selection; pure inheritance and existing children are unaffected.
   - id: models.subagent-profiles.origin
     title: Restricted callers keep inheritance but cannot borrow owner model choices
     verifies: [authority, inheritance]
@@ -186,7 +203,7 @@ scenarios:
     automation: planned
     variants:
       origin: [guest-im, external-colleague, remote-office]
-      request: [inherit, profile, effort-only, directory]
+      request: [inherit, profile, removed-effort, directory]
     expected:
       - The host refuses forbidden overrides before resolution and side effects, omits the directory, and permits only existing authorized inheritance with trusted reasoning.
       - No local account identifiers, restore snapshots or credentials appear in public or replicated records.
@@ -212,7 +229,7 @@ scenarios:
     mode: scripted
     automation: planned
     variants:
-      target: [codex-group, non-cc-delegated, unsupported-effort, stale-reference, raw-model, raw-url, raw-account, unconfigured-slot]
+      target: [codex-group, non-cc-delegated, removed-effort, stale-reference, raw-model, raw-url, raw-account, unconfigured-slot]
     expected:
       - Refusal produces no workspace, member or provider request and never falls back to a different engine, global account or another assignment.
   - id: models.subagent-profiles.directory
@@ -224,10 +241,11 @@ scenarios:
     mode: scripted
     automation: planned
     variants:
-      condition: [large-catalog, stale-cursor, scope-change, unicode-injection, secret-canary]
+      condition: [large-catalog, oversized-catalog, stale-reference, scope-change, unicode-injection, secret-canary]
     expected:
-      - Every authorized bound entry is reachable through bounded complete pages; stale snapshots fail explicitly, and secrets or unconfigured slots never enter the model result.
-      - Queries use local known data and introduce no provider discovery, independent routing model or full catalog tool enum.
+      - A single call without arguments returns every authorized bound entry in plain text, including unavailable entries with an explanation and no selection ID. An oversized directory returns an explicit error without partial results.
+      - Stale short IDs are refused after a directory change. A fresh listing provides new choices; secrets and unconfigured slots never enter the model result, and guests cannot list the owner's assignments.
+      - Listings use local known data and introduce no provider discovery, independent routing model or full catalog tool enum.
   - id: models.subagent-profiles.intent
     title: Real models follow task scope rather than automatically choosing a cheaper model
     verifies: [selection, identity]

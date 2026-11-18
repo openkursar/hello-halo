@@ -24,11 +24,14 @@ import {
   REASONING_EFFORT_THINKING_BUDGET,
   clampReasoningEffort,
   isReasoningEffortLevel,
+  inferReasoningEffortFromBudget,
+  resolveCodexWireEffort,
   type ReasoningEffortLevel,
   type ReasoningEffortSetting,
 } from '../../../shared/constants/reasoning-effort'
 import { validateEffectiveReasoning, type EffectiveReasoning } from '@hello-halo/agent-sdk/collaboration'
 import type { EngineId } from '../../../shared/types/engine'
+import { CODEX_ADAPTER_ID } from '../../../shared/constants/codex-models'
 import { forcedThinkingLevel, profileEffort, reasoningEffortProfileById } from '../../../shared/constants/reasoning-effort-profiles'
 import type { ResolvedModelCapabilities } from './types'
 import { resolveOpenAIReasoning, resolveAnthropicReasoning } from '../../openai-compat-router'
@@ -180,6 +183,15 @@ export function applyReasoningEffort(
   return budget
 }
 
+export function delegatedReasoningLevel(reasoning: EffectiveReasoning): ReasoningEffortLevel | undefined {
+  if (reasoning.mode === 'off') return 'off'
+  if ('effort' in reasoning && isReasoningEffortLevel(reasoning.effort)) return reasoning.effort
+  if (reasoning.mode === 'budget') return inferReasoningEffortFromBudget(reasoning.budgetTokens)
+  return reasoning.mode === 'provider-default' ? undefined : DEFAULT_REASONING_EFFORT
+}
+
+export class UnrepresentableReasoningError extends Error {}
+
 /** Capture resolved execution options, never a stored slider or current global setting. */
 export function captureEffectiveReasoning(
   options: Record<string, any>,
@@ -189,9 +201,18 @@ export function captureEffectiveReasoning(
   if (engineId === 'dsh' && options.inheritedReasoning) return validateEffectiveReasoning(options.inheritedReasoning)
   const credentials = options.apiCredentials
   if (credentials?.isGroup || options.isGroup) {
-    const effort = options.pickedReasoningEffort ?? capabilities?.reasoningEffort
-    return effort === 'off' ? { version: 1, mode: 'off' }
-      : effort ? { version: 1, mode: 'effort', effort } : { version: 1, mode: 'provider-default' }
+    const picked = options.pickedReasoningEffort
+    if (picked === 'off') return { version: 1, mode: 'off' }
+    if (picked) return { version: 1, mode: 'effort', effort: picked }
+    if (engineId === 'dsh') return { version: 1, mode: 'provider-default' }
+    if (options.thinking?.type === 'adaptive' || (options.adaptiveThinking && options.maxThinkingTokens > 0)) {
+      return { version: 1, mode: 'adaptive' }
+    }
+    const budget = options.thinking?.budgetTokens ?? options.maxThinkingTokens
+    if (options.thinking?.type !== 'disabled' && typeof budget === 'number' && budget > 0) {
+      return { version: 1, mode: 'budget', budgetTokens: budget }
+    }
+    return { version: 1, mode: 'off' }
   }
   const routedOpenAI = credentials && credentials.provider !== 'anthropic' && credentials.apiType !== 'anthropic_passthrough'
     && credentials.oauthProvider !== 'claude' && !credentials.delegatedAuth
@@ -203,7 +224,7 @@ export function captureEffectiveReasoning(
     if (!request.thinking || ['disabled', 'between_tools'].includes(request.thinking.type)) return { version: 1, mode: 'off' }
     const effort = request.output_config?.effort
     if (request.thinking.type === 'adaptive') return { version: 1, mode: 'adaptive', ...(effort ? { effort } : {}) }
-    throw new Error('This engine cannot preserve a target requiring a reasoning token budget')
+    throw new UnrepresentableReasoningError('This engine cannot preserve a target requiring a reasoning token budget')
   }
   if (engineId === 'codex' || engineId === 'dsh' || routedOpenAI) {
     const budget = options.thinking?.budgetTokens ?? options.maxThinkingTokens
@@ -218,8 +239,11 @@ export function captureEffectiveReasoning(
       options.model,
       engineId === 'dsh' ? undefined : options.pickedReasoningEffort,
     )
-    if (resolved.disableThinking || resolved.effort === 'none' || resolved.effort === 'off') return { version: 1, mode: 'off' }
-    return resolved.effort ? { version: 1, mode: 'effort', effort: resolved.effort } : { version: 1, mode: 'provider-default' }
+    const effort = resolved.effort && credentials?.adapterId === CODEX_ADAPTER_ID
+      ? resolveCodexWireEffort(resolved.effort, credentials.codexModelCapabilities?.reasoningLevels)
+      : resolved.effort
+    if (resolved.disableThinking || effort === 'none' || effort === 'off') return { version: 1, mode: 'off' }
+    return effort ? { version: 1, mode: 'effort', effort } : { version: 1, mode: 'provider-default' }
   }
   const profile = reasoningEffortProfileById(options.model)
   const picked = options.pickedReasoningEffort
@@ -262,7 +286,10 @@ export function applyEffectiveReasoning(
   const reasoning = validateEffectiveReasoning(candidate)
   const effort = 'effort' in reasoning ? reasoning.effort : undefined
   const profile = reasoningEffortProfileById(options.model)
-  if (engineId !== 'codex' && effort && profile.levels && !profile.levels.includes(effort as ReasoningEffortLevel)) {
+  const credentials = options.apiCredentials
+  const routed = credentials && credentials.provider !== 'anthropic' && credentials.apiType !== 'anthropic_passthrough'
+    && credentials.oauthProvider !== 'claude' && !credentials.delegatedAuth
+  if (engineId !== 'codex' && !routed && effort && profile.levels && !profile.levels.includes(effort as ReasoningEffortLevel)) {
     throw new Error('The target model cannot preserve the frozen reasoning effort')
   }
   if (reasoning.mode === 'off' && forcedThinkingLevel(profile)) {
@@ -309,7 +336,8 @@ export function applyEffectiveReasoning(
   }
   if (effort) {
     options.reasoningEffort = effort
-    options.pickedReasoningEffort = effort
+    if (isReasoningEffortLevel(effort)) options.pickedReasoningEffort = effort
+    else if (routed && reasoning.mode === 'effort') options.thinking = { type: 'adaptive' }
     // The router owns provider effort; never feed an unsupported CLI launch value.
     if (ANTHROPIC_EFFORT_LEVELS.includes(effort as ReasoningEffortLevel)) options.effort = effort
   }

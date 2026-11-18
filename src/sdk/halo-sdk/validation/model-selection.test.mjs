@@ -268,3 +268,50 @@ test('standalone selected binding survives idle retirement and profile deletion 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('an exact child binding cannot use a parent fallback model', { timeout: 10_000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'halo-selection-fallback-'));
+  const { createSdkCollaboration } = await entry('collaboration/sdk');
+  const requests = [];
+  const catalog = { revision: '1', policy: 'inherit', policyRevision: '1', profiles: [] };
+  const binding = createSdkCollaboration({
+    sessionId: 'fallback-source',
+    getOptions: () => ({ model: 'bound-child', fallbackModel: 'root-fallback', cwd: directory, persistSession: false,
+      env: { HOME: directory, CLAUDE_CONFIG_DIR: join(directory, 'config') }, thinking: { type: 'disabled' } }),
+    settings: { modelSelection: {
+      policy: 'inherit', policyRevision: '1', parentBinding: { bindingId: 'parent', restoreRef: 'parent' },
+      getCatalog: () => ({ kind: 'snapshot', catalog }),
+      async prepare() {
+        return { bindingId: 'parent', restoreRef: 'parent', model: 'bound-child', targetKind: 'single',
+          contextWindow: 32000, maxOutputTokens: 1024, modalities: ['text'], reasoning: { default: { version: 1, mode: 'off' } },
+          provider: {
+            id: 'fallback-fixture', name: 'Fallback fixture',
+            capabilities: () => ({ streaming: true, toolCalling: true, thinking: false, caching: false }),
+            async *createMessageStream(request) {
+              requests.push({ model: request.model, fallback: request.providerOptions.fallbackModelAvailable });
+              const error = new Error('The bound provider requested a fallback.');
+              error.name = 'ModelFallbackError';
+              error.retryable = true;
+              error.retriesExhausted = true;
+              throw error;
+            },
+          },
+        };
+      },
+    } },
+    async deliverToSource() { return 'buffered'; },
+  });
+  t.signal.addEventListener('abort', () => { void binding.close(); }, { once: true });
+  try {
+    const spawned = await binding.server.instance.callTool('spawn_agent', { name: 'bound', prompt: 'Verify the configured model.' });
+    assert.notEqual(spawned.isError, true, JSON.stringify(spawned));
+    while (binding.activeCount > 0) {
+      const revision = binding.revision;
+      if (binding.activeCount > 0) await binding.waitForChange(revision, t.signal);
+    }
+    assert.deepEqual(requests, [{ model: 'bound-child', fallback: false }]);
+  } finally {
+    await binding.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

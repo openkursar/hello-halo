@@ -3,6 +3,7 @@ import type { HaloAPI } from '../../../src/preload'
 import { expect } from './acceptance-app'
 import { assignmentCall } from './acceptance-subagent-models'
 import { collaboratorReceipt } from './acceptance-collaboration'
+import { parseModelDirectory } from './acceptance-subagent-wire'
 import { initialUserInput, modelTool, type AcceptanceModel, type ModelRequest, type ModelReply } from './acceptance-model'
 
 export async function configureRoutingTarget(page: Page, endpoint: AcceptanceModel) {
@@ -41,12 +42,10 @@ export function assignmentRoutingScript(options: { sourceMarker?: string; run?: 
     parentRequests.push(request)
     if (options.sourceMarker && !initialUserInput(request).includes(options.sourceMarker)) errors.push('Unexpected source actor')
     const catalog = request.toolResults.find(result => result.id === 'assigned-catalog')
-    if (!catalog) return call(request, 'list_model_profiles', { query: 'Verifier' }, 'assigned-catalog')
+    if (!catalog) return call(request, 'list_model_profiles', {}, 'assigned-catalog')
     let reference: string | undefined
     try {
-      let value = JSON.parse(catalog.text.replace(/^Wall time: \d+(?:\.\d+)? seconds\r?\nOutput:\r?\n/, ''))
-      if (Array.isArray(value) && value[0]?.type === 'text') value = JSON.parse(value[0].text)
-      reference = value.profiles?.find((profile: { name: string }) => profile.name === 'Verifier')?.selectionRef
+      reference = parseModelDirectory(catalog.text).profiles.find(profile => profile.name === 'Verifier')?.selectionRef
     } catch (error) { errors.push(String(error)) }
     if (!reference) { errors.push('No selectable Verifier in directory'); return { text: 'No assignment was available.' } }
     const spawned = request.toolResults.find(result => result.id === 'assigned-spawn')

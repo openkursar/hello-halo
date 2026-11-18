@@ -791,7 +791,7 @@ async function runAppChatTurn(
   // Its own account and model, or the global selection when it has none or
   // its account was removed.
   const restoredModel = participant?.execution.modelBinding
-    ? await prepareSubagentModelMetadata(participant.execution.modelSelection, engineId) : undefined
+    ? await prepareSubagentModelMetadata(participant.execution.modelSelection, engineId, participant.execution.reasoningLevel) : undefined
   if (restoredModel && participant?.execution.modelBinding) validateModelSelectionRestore({
     snapshot: participant.execution.modelBinding, binding: restoredModel.metadata,
   })
@@ -803,7 +803,11 @@ async function runAppChatTurn(
     ? pickReasoningEffort(inheritedReasoning.mode === 'off' ? 'off'
       : 'effort' in inheritedReasoning ? inheritedReasoning.effort : undefined)
     : pickReasoningEffort(app.userOverrides?.chatReasoningEffort, reasoningEffort)
-  const resolvedCreds = await resolveCredentialsForSdk(credentials, pickedEffort, engineId)
+  const inheritedEffort = inheritedReasoning && 'effort' in inheritedReasoning ? inheritedReasoning.effort : undefined
+  const credentialsForSdk = inheritedEffort && !pickedEffort && credentials.capabilities
+    ? { ...credentials, capabilities: { ...credentials.capabilities, reasoningEffort: inheritedEffort } }
+    : credentials
+  const resolvedCreds = await resolveCredentialsForSdk(credentialsForSdk, pickedEffort, engineId)
   const electronPath = getHeadlessElectronPath()
   const workDir = environment.workDir
 
@@ -1033,7 +1037,8 @@ async function runAppChatTurn(
       modelSelection: credentials.sourceId ? { modelSourceId: credentials.sourceId, modelId: credentials.model } : undefined,
       grants: () => captureToolsetExecutionOptions(sdkOptions, engineId, sdkOptions.mcpServers ?? mcpServers),
       modelContext: () => captureDelegatedModelContext(
-        { modelSourceId: credentials.sourceId!, modelId: credentials.model }, engineId, sdkOptions, participant?.execution.modelBinding, credentials.capabilities),
+        { modelSourceId: credentials.sourceId!, modelId: credentials.model }, engineId, sdkOptions,
+        participant?.execution.modelBinding, credentials.capabilities, participant?.execution.reasoningLevel),
       requester: {
         origin: servedOrigin, delegation: delegation ?? undefined,
         files: () => strictFiles ? turnFileAccess : undefined,

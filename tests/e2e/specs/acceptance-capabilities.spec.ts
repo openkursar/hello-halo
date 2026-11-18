@@ -89,10 +89,18 @@ function assertStableDiscovery(requests: ModelRequest[], service: string) {
 
 async function assertAutomaticCapabilities(window: import('@playwright/test').Page) {
   await window.getByRole('button', { name: menuButton, exact: true }).click()
-  for (const name of [/Operate Halo/, /Team Collaboration/, /Web Control/, /^AI Terminal\b/, /Text Extraction/]) {
-    await expect(window.getByRole('menuitemcheckbox', { name })).toHaveCount(0)
+  const capabilities = window.getByRole('group', { name: 'Capabilities', exact: true })
+  await expect(capabilities).toContainText('Used automatically when needed')
+  const names = [/^Web Control/, /^Team Collaboration/, ...(process.platform === 'linux' ? [] : [/^AI Terminal/]), /^Text Recognition/, /^Operate Halo/]
+  for (const name of names) {
+    await expect(capabilities.getByRole('menuitem', { name })).toHaveCount(1)
   }
+  await expect(capabilities.getByRole('menuitemcheckbox')).toHaveCount(0)
+  // The entry is aria-disabled, which Playwright's actionability check refuses; a person can still click it.
+  await capabilities.getByRole('menuitem', { name: /^Web Control/ }).click({ force: true })
+  await expect(capabilities).toBeVisible()
   await window.keyboard.press('Escape')
+  await expect(capabilities).toHaveCount(0)
 }
 
 test('ordinary conversation omits browser and terminal definitions and long guides', acceptance('chat.capabilities.ordinary-context'), async ({ model, window }, info) => {

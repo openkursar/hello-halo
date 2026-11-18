@@ -62,6 +62,16 @@ Only registered endpoints expose the optional `spawn_agent.model_profile` and
 `reasoning_effort` fields and the supplied `list_model_profiles` operation. Existing
 one-argument calls retain their tool declarations, parser and guidance.
 `modelSelectionGuidance` returns the explicit capability's Harness guidance.
+Hosts that carry over the direct parent's reasoning even when the model changes
+can set `modelSelection.reasoningPolicy: 'inherit'`. The spawn schema omits
+`reasoning_effort`, the parser refuses it, and the guidance explains inheritance.
+The host adapts the parent's reasoning to the selected target; planning,
+finalization, and restore keep their existing contracts. This option is specific
+to the engine-independent collaboration server; standalone model selection is unchanged.
+The directory tool takes no arguments. It lists all configured entries, including
+unavailable ones. The internal projection is bounded by the validated catalog size.
+The runtime or host enforces the tool result limit after formatting and refuses
+oversized results instead of returning a partial list.
 
 `contracts/collaboration/model-selection.ts` declares the non-secret catalog,
 parent binding, choice plan, prepared capability metadata and versioned selection
@@ -73,7 +83,7 @@ The `/collaboration` functions `queryModelProfiles`, `planModelSelection`,
 `finalizeModelSelection`, `validateModelSelectionRestore` and
 `validateEffectiveReasoning` delegate to Rust's
 `model_selection.rs` through the existing native value bridge. Querying performs
-bounded local matching and pagination over a host-authorized catalog. Planning
+a complete projection over a host-authorized catalog with empty input. Planning
 checks opaque profile references and the endpoint's policy revision. Finalizing
 validates the prepared target and determines effective reasoning: explicit effort,
 profile default, then target default; unmodified inheritance retains the direct
@@ -81,9 +91,11 @@ parent's effective reasoning. No function creates a provider or starts execution
 The host must still authorize and prepare the exact binding before execution.
 Prepared reasoning capabilities may declare supported `modes` and a positive
 `maxBudgetTokens` bound. Budget reasoning must fit that bound when supplied and
-remain strictly below the target output limit. Finalization and restoration reject
-unsupported settings instead of clamping or adopting a new default; exact declared
-defaults and effort mappings remain supported without the optional mode list.
+remain strictly below the target output limit. Plain creation trusts the direct
+parent's captured reasoning after matching binding identity, without requiring it
+to appear in the target's selectable options. Explicit selections and restoration
+reject unsupported settings instead of clamping or adopting a new default; exact
+declared defaults and effort mappings do not require the optional mode list.
 
 For repeated operations, `ModelProfileCatalogView` validates and retains one
 bounded catalog in a native owner. Its `plan` and `query` methods accept only the
@@ -146,14 +158,16 @@ With local `modelSelection` registered, `/collaboration/sdk` accepts a narrow
 or alter inherited tools, permissions, hooks, workspace, system prompt or budget.
 The adapter routes child provider callbacks through that child's binding rather
 than mutating the parent's provider; nested inheritance uses the direct parent.
+A bound child may retry its exact connection, but cannot use the parent's model
+fallback.
 Restoration prepares the saved logical binding and validates its reasoning
 against current capabilities, without reselecting by a profile's current name.
 Worker host callbacks transport standard provider configurations; custom provider
 objects must be constructed in Worker setup, not cloned across the boundary.
 
 Usage continues through shared execution accounting, once per contribution.
-Target pricing belongs to the prepared binding; a parent's unit price cannot
-price a different model's tokens. Missing usage or prices remain unknown for
+Target pricing belongs to the prepared binding, even when the provider reports
+an alias. A parent's unit price cannot price a different model's tokens. Missing usage or prices remain unknown for
 billing purposes, and model-string aggregation is not an account ledger. These
 contracts do not establish real-model task quality or billed savings.
 

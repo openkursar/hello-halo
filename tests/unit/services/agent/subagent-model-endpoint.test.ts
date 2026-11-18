@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ModelProfileCatalogView, type ModelProfileQueryResult, type PreparedModelMetadata, type SpawnInput } from '@hello-halo/agent-sdk/collaboration'
+import { ModelProfileCatalogView, type ListModelProfilesInput, type PreparedModelMetadata, type SpawnInput } from '@hello-halo/agent-sdk/collaboration'
 import type { AISource } from '../../../../src/shared/types/ai-sources'
 import type { SubagentModelSettings } from '../../../../src/shared/types/subagent-models'
 import type { DelegatedModelContext } from '../../../../src/main/services/agent/delegated-model'
@@ -20,7 +20,7 @@ let settings: SubagentModelSettings
 let sources: AISource[]
 let revision: number
 let allowed: boolean
-let parent: DelegatedModelContext
+let parent: DelegatedModelContext & Required<Pick<DelegatedModelContext, 'reasoning'>>
 let endpoints: DelegatedModelEndpoint[]
 
 function metadata(sourceId = accountId): PreparedModelMetadata {
@@ -35,9 +35,14 @@ function endpoint() {
   endpoints.push(result)
   return result
 }
-async function query(target: DelegatedModelEndpoint): Promise<ModelProfileQueryResult> {
-  const result = await target.list({}, {})
-  return JSON.parse((result.content[0] as { text: string }).text)
+async function query(target: DelegatedModelEndpoint, input: ListModelProfilesInput = {}) {
+  const result = await target.list(input, {})
+  return (result.content[0] as { text: string }).text
+}
+async function profileId(target: DelegatedModelEndpoint) {
+  const id = (await query(target)).match(/^  model_profile: (p[a-z0-9]+)$/m)?.[1]
+  expect(id).toBeDefined()
+  return id!
 }
 function spawn(input: Partial<SpawnInput> = {}): SpawnInput { return { prompt: 'Extract fields', ...input } }
 function deferred<T>() {
@@ -82,9 +87,10 @@ describe('delegated model endpoint', () => {
 
   it('returns safe model descriptors without account or restore identities', async () => {
     const result = await query(endpoint())
-    expect(result.profiles[0].target.models).toEqual([model])
-    const encoded = JSON.stringify(result)
-    for (const secret of [accountId, 'restoreRef', 'bindingId', 'synthetic-key-canary', 'identity-1']) expect(encoded).not.toContain(secret)
+    expect(result).toMatch(/^- Small — Extract fields\n  Model: GPT Sol \(ID: gpt-6-sol\) · Account: Work account\n  model_profile: p[a-z0-9]+$/)
+    for (const secret of [accountId, 'builtin:small', 'restoreRef', 'bindingId', 'synthetic-key-canary', 'identity-1', 'reasoning', 'revision', 'cursor']) {
+      expect(result).not.toContain(secret)
+    }
     expect(mocks.metadata).not.toHaveBeenCalled()
   })
 
@@ -104,7 +110,7 @@ describe('delegated model endpoint', () => {
 
   it('rechecks the selected profile against live storage before preparing metadata', async () => {
     const target = endpoint()
-    const ref = (await query(target)).profiles[0].selectionRef
+    const ref = await profileId(target)
     mocks.profile.mockReturnValue({ ...settings.profiles[0], revision: 2 })
     await expect(target.prepare(spawn({ model_profile: ref }), parent, vi.fn())).rejects.toThrow()
     expect(mocks.metadata).not.toHaveBeenCalled()
@@ -112,7 +118,7 @@ describe('delegated model endpoint', () => {
 
   it('rejects an obsolete profile reference before metadata preparation', async () => {
     const target = endpoint()
-    const ref = (await query(target)).profiles[0].selectionRef
+    const ref = await profileId(target)
     settings.profiles[0] = { ...settings.profiles[0], revision: 2 }
     revision++
     await expect(target.prepare(spawn({ model_profile: ref }), parent, vi.fn())).rejects.toThrow()
@@ -121,7 +127,7 @@ describe('delegated model endpoint', () => {
 
   it('rejects query, profile and effort-only overrides under a stale endpoint policy but permits pure inheritance', async () => {
     const target = endpoint()
-    const ref = (await query(target)).profiles[0].selectionRef
+    const ref = await profileId(target)
     settings = { ...settings, selectionMode: 'inherit', policyRevision: 2 }
     revision++
     await expect(query(target)).rejects.toThrow()
@@ -132,6 +138,40 @@ describe('delegated model endpoint', () => {
     expect(inherited.inheritedReasoning).toEqual(parent.reasoning)
   })
 
+  it('uses the same short ID within a view and never accepts it in another endpoint', async () => {
+    const target = endpoint()
+    const other = endpoint()
+    const id = await profileId(target)
+    expect(await profileId(target)).toBe(id)
+    expect(await profileId(other)).not.toBe(id)
+    await expect(other.prepare(spawn({ model_profile: id }), parent, vi.fn())).rejects.toThrow('no longer valid')
+    expect(mocks.metadata).not.toHaveBeenCalled()
+  })
+
+  it('lists all configured profiles in one call and includes unavailable entries without IDs', async () => {
+    const first = settings.profiles[0]
+    for (let index = 0; index < 21; index++) {
+      settings.profiles.push({ id: `custom:${index}`, kind: 'custom', name: `Profile ${index}`, description: 'Extract fields', revision: 1, target: first.target! })
+    }
+    settings.profiles.push({ id: 'custom:missing', kind: 'custom', name: 'Missing account', description: '', revision: 1,
+      target: { kind: 'model', sourceId: 'missing', modelId: model } })
+    const target = endpoint()
+    const text = await query(target)
+    expect(text.match(/^  model_profile:/gm)).toHaveLength(22)
+    expect(text).toMatch(/\n- Missing account\n  Model: .+\n  Unavailable: .+removed\.$/)
+    expect(text).not.toContain('Next page')
+    // @ts-expect-error Legacy arguments must also be refused at runtime.
+    await expect(query(target, { query: '小杯' })).rejects.toThrow('without arguments')
+  })
+
+  it('refuses an oversized complete directory rather than returning a partial list', async () => {
+    const first = settings.profiles[0]
+    for (let index = 0; index < 20; index++) {
+      settings.profiles.push({ id: `custom:${index}`, kind: 'custom', name: `Profile ${index}`, description: 'x'.repeat(900), revision: 1, target: first.target! })
+    }
+    await expect(query(endpoint())).rejects.toThrow('No profiles were listed')
+  })
+
   it('reuses the native catalog until snapshot revision changes and closes replaced and final views', async () => {
     const querySpy = vi.spyOn(ModelProfileCatalogView.prototype, 'query')
     const closeSpy = vi.spyOn(ModelProfileCatalogView.prototype, 'close')
@@ -139,18 +179,18 @@ describe('delegated model endpoint', () => {
     await query(target)
     await query(target)
     const first = querySpy.mock.instances[0]
-    expect(querySpy.mock.instances[1]).toBe(first)
+    expect(querySpy).toHaveBeenCalledTimes(1)
     revision++
     await query(target)
-    expect(querySpy.mock.instances[2]).not.toBe(first)
+    expect(querySpy.mock.instances[1]).not.toBe(first)
     expect(closeSpy.mock.instances).toEqual([first])
     target.close()
-    expect(closeSpy.mock.instances).toEqual([first, querySpy.mock.instances[2]])
+    expect(closeSpy.mock.instances).toEqual([first, querySpy.mock.instances[1]])
   })
 
   it.each(['stop', 'abort', 'permission', 'policy', 'profile', 'identity'] as const)('rejects a post-await %s race', async race => {
     const target = endpoint()
-    const ref = (await query(target)).profiles[0].selectionRef
+    const ref = await profileId(target)
     const pending = deferred<{ metadata: PreparedModelMetadata }>()
     mocks.metadata.mockReturnValue(pending.promise)
     const controller = new AbortController()
@@ -185,18 +225,20 @@ describe('delegated model endpoint', () => {
     expect(check).toHaveBeenCalledOnce()
   })
 
-  it('uses an explicit same-model profile target rather than inheriting the parent account or reasoning', async () => {
+  it('switches accounts while adapting the direct parent reasoning level', async () => {
     const targetId = 'second-account-id-canary'
     sources.push({ ...sources[0], id: targetId, name: 'Second account' })
     settings.profiles[0] = { ...settings.profiles[0], target: { kind: 'model', sourceId: targetId, modelId: model } }
-    mocks.metadata.mockResolvedValue({ metadata: metadata(targetId) })
+    const binding = metadata(targetId)
+    mocks.metadata.mockResolvedValue({ metadata: { ...binding, reasoning: { ...binding.reasoning, default: parent.reasoning } } })
     const target = endpoint()
-    const ref = (await query(target)).profiles[0].selectionRef
+    const ref = await profileId(target)
     const result = await target.prepare(spawn({ model_profile: ref }), parent, vi.fn())
-    expect(mocks.metadata).toHaveBeenCalledWith({ modelSourceId: targetId, modelId: model }, 'halo')
+    expect(mocks.metadata).toHaveBeenCalledWith({ modelSourceId: targetId, modelId: model }, 'halo', 'off')
     expect(result.modelSelection.modelSourceId).toBe(targetId)
     expect(result.modelBinding.bindingId).toBe(metadata(targetId).bindingId)
-    expect(result.inheritedReasoning).toEqual({ version: 1, mode: 'effort', effort: 'medium' })
+    expect(result.inheritedReasoning).toEqual(parent.reasoning)
+    expect(result.reasoningLevel).toBe('off')
   })
 
   it.each([undefined, 'inherit'])('normalizes %s to the exact parent binding and effective reasoning', async model_profile => {

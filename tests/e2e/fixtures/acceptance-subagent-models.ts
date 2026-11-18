@@ -48,7 +48,9 @@ export async function bindSmall(page: Page, sourceId = 'acceptance-local') {
 export async function openAssignmentPanel(page: Page) {
   await page.getByRole('button', { name: 'More ways to add', exact: true }).click()
   await page.getByRole('button', { name: 'Configure model assignments', exact: true }).click()
-  const panel = page.locator('[data-subagent-models-manager]')
+  const row = page.locator('[data-ai-add-row]')
+  const panel = row.locator('[data-subagent-models-manager]')
   await expect(panel).toBeVisible()
+  await expect(row.getByRole('button', { name: 'Add AI Provider', exact: true })).toHaveCount(0)
   return panel
 }

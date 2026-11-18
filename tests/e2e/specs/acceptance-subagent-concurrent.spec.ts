@@ -2,7 +2,7 @@ import type { HaloAPI } from '../../../src/preload'
 import { test, expect, acceptance, waitForAcceptanceIdle } from '../fixtures/acceptance-app'
 import { startAcceptanceModel, createModelGate, initialUserInput, type ModelRequest } from '../fixtures/acceptance-model'
 import { assignmentCall } from '../fixtures/acceptance-subagent-models'
-import { assignmentTool, assignmentResult } from '../fixtures/acceptance-subagent-wire'
+import { assignmentTool, parseModelDirectory } from '../fixtures/acceptance-subagent-wire'
 
  test('same-name models on concurrent siblings retain separate exact account endpoints', acceptance('models.subagent-profiles.concurrent', { topology: 'siblings-same-model-distinct-accounts' }), async ({ model, window }, info) => {
   test.setTimeout(180000)
@@ -21,8 +21,8 @@ import { assignmentTool, assignmentResult } from '../fixtures/acceptance-subagen
     if (markers.some(marker => initialUserInput(request).includes(marker))) { errors.push('Sibling fell back to parent account'); return { text: 'Wrong endpoint.' } }
     const listed = request.toolResults.find(result => result.id === 'concurrent-list')
     if (!listed) return assignmentTool(request, 'list_model_profiles', {}, 'concurrent-list')
-    let profiles: Array<{ name: string; selectionRef: string }> = []
-    try { profiles = assignmentResult(listed.text).profiles } catch (error) { errors.push(String(error)) }
+    let profiles: ReturnType<typeof parseModelDirectory>['profiles'] = []
+    try { profiles = parseModelDirectory(listed.text).profiles } catch (error) { errors.push(String(error)) }
     for (let index = 0; index < 2; index++) {
       if (!request.toolResults.some(result => result.id === `concurrent-spawn-${index}`)) {
         const ref = profiles.find(profile => profile.name === names[index])?.selectionRef

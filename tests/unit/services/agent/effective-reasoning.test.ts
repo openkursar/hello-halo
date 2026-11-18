@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyEffectiveReasoning, captureEffectiveReasoning } from '../../../../src/main/services/agent/reasoning-effort'
+import { resolveOpenAIReasoning } from '../../../../src/main/openai-compat-router'
+import { applyEffectiveReasoning, applyReasoningEffort, captureEffectiveReasoning } from '../../../../src/main/services/agent/reasoning-effort'
 
 describe('effective reasoning snapshots', () => {
   it('captures an actual budget independently of later settings', () => {
@@ -20,6 +21,31 @@ describe('effective reasoning snapshots', () => {
       apiCredentials: { provider: 'openai', apiType: 'chat_completions' } })).toEqual({ version: 1, mode: 'effort', effort: 'high' })
     expect(captureEffectiveReasoning({ model: 'gpt-4o', reasoningEffort: 'off',
       apiCredentials: { provider: 'openai', apiType: 'chat_completions' } })).toEqual({ version: 1, mode: 'provider-default' })
+  })
+
+  it('preserves the members’ inferred wire effort for a group with default thinking', () => {
+    const apiCredentials = { provider: 'openai', isGroup: true }
+    const parent: Record<string, unknown> = { model: 'halo-auto', apiCredentials }
+    applyReasoningEffort(parent, true, { contextWindow: 32000, maxOutputTokens: 32768 })
+    const captured = captureEffectiveReasoning(parent)
+    const child: Record<string, any> = { model: 'halo-auto', apiCredentials }
+    applyEffectiveReasoning(child, captured)
+    expect(captured.mode).toBe('budget')
+    const wire = resolveOpenAIReasoning({ ...child.thinking, budget_tokens: child.thinking.budgetTokens }, undefined, 'gpt-5-4')
+    expect(wire.effort).toBe('high')
+    expect(captureEffectiveReasoning(child)).toEqual(captured)
+  })
+
+  it('preserves routed supplier-specific effort even on an otherwise known model', () => {
+    const apiCredentials = { provider: 'openai', apiType: 'chat_completions' }
+    const capabilities = { contextWindow: 32000, maxOutputTokens: 32768, reasoningEffort: 'vendor-deep' }
+    const parent = { model: 'gpt-5-4', apiCredentials, thinking: { type: 'adaptive' } }
+    const captured = captureEffectiveReasoning(parent, 'halo', capabilities)
+    const child: Record<string, any> = { model: parent.model, apiCredentials }
+    applyEffectiveReasoning(child, captured, capabilities)
+    expect(child.pickedReasoningEffort).toBeUndefined()
+    expect(resolveOpenAIReasoning(child.thinking, capabilities.reasoningEffort, parent.model).effort).toBe('vendor-deep')
+    expect(captureEffectiveReasoning(child, 'halo', capabilities)).toEqual(captured)
   })
 
   it('preserves provider-default without inventing a strength', () => {

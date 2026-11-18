@@ -3,6 +3,7 @@ import type { EffectiveReasoning, ModelSelectionSnapshot } from '@hello-halo/age
 import type { InstalledApp, ExecutionEnvironment } from '../../../shared/apps/app-types'
 import type { AgentModelSelection } from '../../../shared/types/ai-sources'
 import type { EngineId } from '../../../shared/types/engine'
+import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import type { TeamParticipant, TeamDelegatedPolicy, TeamRequestOrigin } from '../../../shared/apps/team-types'
 import { SELF_NODE_ID } from '../../../shared/apps/team-types'
 import type { TurnFileAccess } from '../../../shared/apps/capability-policy'
@@ -13,6 +14,7 @@ export interface ParticipantExecution {
   sourceAppId?: string
   modelSelection: AgentModelSelection
   inheritedReasoning?: EffectiveReasoning
+  reasoningLevel?: ReasoningEffortLevel
   modelBinding?: ModelSelectionSnapshot
   engineId: EngineId
   environment: ExecutionEnvironment

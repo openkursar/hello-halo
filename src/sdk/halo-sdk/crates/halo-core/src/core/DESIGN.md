@@ -393,7 +393,8 @@ identity and normalized reasoning; provider objects and credentials remain in an
 execution-owned callback lease. Work requests and summaries encode that same
 normalized setting without provider-specific effort clamping. Target input
 modalities and context/output ceilings replace the parent's model capabilities,
-and target pricing is installed under its wire-model identity.
+and target pricing is owned by the binding rather than looked up by a model
+string returned in the response.
 
 Resident collaborators retain their prepared binding until the existing retirement
 or source-policy rebuild boundary. Reuse compares policy, exact saved binding and

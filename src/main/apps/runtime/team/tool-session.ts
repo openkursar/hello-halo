@@ -26,7 +26,8 @@ export function bindTeamToolSession(conversationId: string, context: TeamMcpCont
     parent: () => {
       const source = resolve().spawnSource?.()
       if (!source?.inheritedReasoning) throw new CollaborationRefusal('source_unavailable', 'The parent model execution is unavailable.')
-      return { selection: source.modelSelection, engineId: source.engineId, reasoning: source.inheritedReasoning, modelBinding: source.modelBinding }
+      return { selection: source.modelSelection, engineId: source.engineId, reasoning: source.inheritedReasoning,
+        reasoningLevel: source.reasoningLevel, modelBinding: source.modelBinding }
     },
     allowed: () => {
       const current = active.get(conversationId)?.context ?? context
@@ -63,13 +64,14 @@ export function bindTeamToolSession(conversationId: string, context: TeamMcpCont
       }
       const check = current.participants.capture(current, call.signal)
       let source = current.spawnSource()
-      if (context.models && source.inheritedReasoning && !current.origin && !current.servesGuest) {
+      if ((input.model_profile !== undefined && input.model_profile !== 'inherit') || input.reasoning_effort !== undefined) {
+        if (!context.models || !source.inheritedReasoning || current.origin || current.servesGuest) {
+          throw new CollaborationRefusal('model_selection_forbidden', 'Model overrides are unavailable for this request.')
+        }
         source = { ...source, ...await context.models.prepare(input, {
           selection: source.modelSelection, engineId: source.engineId, reasoning: source.inheritedReasoning,
-          modelBinding: source.modelBinding,
+          reasoningLevel: source.reasoningLevel, modelBinding: source.modelBinding,
         }, () => { check(); if (resolve().canSpawn?.() === false) throw new CollaborationRefusal('spawn_forbidden', 'Delegation permissions changed.') }, call.signal) }
-      } else if ((input.model_profile && input.model_profile !== 'inherit') || input.reasoning_effort !== undefined) {
-        throw new CollaborationRefusal('model_selection_forbidden', 'Model overrides are unavailable for this request.')
       }
       const service = getTeamService()
       if (!service) throw new CollaborationRefusal('runtime_unavailable', 'Collaboration services are unavailable.')

@@ -5,10 +5,10 @@ import { expect, readAcceptanceErrors, waitForAcceptanceIdle } from './acceptanc
 import { initialUserInput, type ModelRequest } from './acceptance-model'
 import { collaboratorReceipt } from './acceptance-collaboration'
 import { assignmentCall } from './acceptance-subagent-models'
-import { assignmentTool, assignmentResult } from './acceptance-subagent-wire'
+import { assignmentTool, parseModelDirectory } from './acceptance-subagent-wire'
 import { ownerFailureCanary, ownerFailureEndpoint } from './acceptance-subagent-owner-failure'
 
-export type OwnerChoice = 'inherit' | 'effort-only' | 'provider-failure'
+export type OwnerChoice = 'inherit' | 'removed-effort' | 'provider-failure'
 
 export async function configureOwnerChoices(page: Page, failureUrl?: string) {
   if (failureUrl) {
@@ -23,7 +23,7 @@ export async function configureOwnerChoices(page: Page, failureUrl?: string) {
   }
   const saved = await assignmentCall(page, 'createSubagentModel', {
     name: 'Available owner choice', description: 'An available profile selected only for the explicit failure route',
-    target: { kind: 'model', sourceId: failureUrl ? 'owner-failure-target' : 'acceptance-local', modelId: 'o3' }, reasoningEffort: 'high',
+    target: { kind: 'model', sourceId: failureUrl ? 'owner-failure-target' : 'acceptance-local', modelId: 'o3' },
   })
   expect(saved.success, saved.error).toBe(true)
 }
@@ -42,6 +42,7 @@ export function ownerChoiceScript(choice: OwnerChoice, options: { run?: boolean;
   const errors: string[] = []
   let handle: string | undefined
   let reviewedFailure = false
+  let reviewedRefusal = false
   let actualSpawns = 0
   const acceptedHandles = new Set<string>()
   const reply = (request: ModelRequest) => {
@@ -55,37 +56,48 @@ export function ownerChoiceScript(choice: OwnerChoice, options: { run?: boolean;
     let reference: string | undefined
     if (choice === 'provider-failure') {
       const listed = request.toolResults.find(result => result.id === 'owner-choice-directory')
-      if (!listed) return assignmentTool(request, 'list_model_profiles', { query: 'Available owner choice' }, 'owner-choice-directory')
-      try { reference = assignmentResult(listed.text).profiles?.find((profile: { name: string }) => profile.name === 'Available owner choice')?.selectionRef } catch (error) { errors.push(String(error)) }
+      if (!listed) return assignmentTool(request, 'list_model_profiles', {}, 'owner-choice-directory')
+      try { reference = parseModelDirectory(listed.text).profiles?.find((profile: { name: string }) => profile.name === 'Available owner choice')?.selectionRef } catch (error) { errors.push(String(error)) }
       if (!reference) { errors.push('Failure profile missing from real directory'); return { text: 'Failure target unavailable.' } }
     }
     const spawned = request.toolResults.find(result => result.id === 'owner-choice-spawn')
     if (!spawned) {
       const response = assignmentTool(request, 'spawn_agent', {
         name: 'Owner choice worker', prompt: childMarker,
-        ...(choice === 'effort-only' ? { reasoning_effort: 'low' } : {}),
+        ...(choice === 'removed-effort' ? { reasoning_effort: 'low' } : {}),
         ...(reference ? { model_profile: reference } : {}),
       }, 'owner-choice-spawn')
       if (response.tools?.some(tool => tool.id === 'owner-choice-spawn')) actualSpawns++
       return response
     }
-    if (spawned.error) errors.push(`Owner creation was refused: ${spawned.text}`)
-    try { handle = collaboratorReceipt(spawned).handle; acceptedHandles.add(handle) } catch (error) { errors.push(String(error)) }
+    if (choice === 'removed-effort') {
+      reviewedRefusal ||= /reasoning_effort|unexpected argument|unknown field|additional propert/i.test(spawned.text)
+    } else {
+      if (spawned.error) errors.push(`Owner creation was refused: ${spawned.text}`)
+      try { handle = collaboratorReceipt(spawned).handle; acceptedHandles.add(handle) } catch (error) { errors.push(String(error)) }
+    }
     reviewedFailure ||= choice === 'provider-failure' && request.text.includes(ownerFailureCanary)
-    const done = choice === 'provider-failure' ? reviewedFailure : request.text.includes('owner-choice-child-complete')
+    const done = reviewedRefusal || reviewedFailure || request.text.includes('owner-choice-child-complete')
     if (done && options.run && !request.toolResults.some(result => result.id === 'owner-choice-report')) return assignmentTool(request, 'report_to_user', { type: 'run_complete', message: 'owner-choice-parent-complete' }, 'owner-choice-report')
     return { text: done ? 'owner-choice-parent-complete' : 'Waiting for the owner choice worker.' }
   }
-  return { marker, childMarker, reply, parents, children, errors, acceptedHandles, get actualSpawns() { return actualSpawns }, get handle() { return handle }, get reviewedFailure() { return reviewedFailure } }
+  return { marker, childMarker, reply, parents, children, errors, acceptedHandles, get actualSpawns() { return actualSpawns }, get handle() { return handle }, get reviewedFailure() { return reviewedFailure }, get reviewedRefusal() { return reviewedRefusal } }
 }
 
 export function assertOwnerChoiceWire(script: ReturnType<typeof ownerChoiceScript>, choice: OwnerChoice) {
   expect(script.errors).toEqual([])
-  expect(script.handle).toBeTruthy()
   expect(script.actualSpawns).toBe(1)
-  expect([...script.acceptedHandles]).toEqual([script.handle])
   expect(script.parents.length).toBeGreaterThan(0)
   for (const request of script.parents) expect(request.body.model).toBe('o3')
+  if (choice === 'removed-effort') {
+    expect(script.reviewedRefusal).toBe(true)
+    expect(script.handle).toBeUndefined()
+    expect(script.acceptedHandles.size).toBe(0)
+    expect(script.children).toHaveLength(0)
+    return
+  }
+  expect(script.handle).toBeTruthy()
+  expect([...script.acceptedHandles]).toEqual([script.handle])
   if (choice === 'provider-failure') {
     expect(script.reviewedFailure).toBe(true)
     expect(script.children).toHaveLength(0)
@@ -95,11 +107,7 @@ export function assertOwnerChoiceWire(script: ReturnType<typeof ownerChoiceScrip
   const wire = (request: ModelRequest) => ({ model: request.body.model, reasoning_effort: request.body.reasoning_effort, reasoning: request.body.reasoning, thinking: request.body.thinking, output_config: request.body.output_config })
   const parent = wire(script.parents[0])
   expect(parent.model).toBe('o3')
-  for (const request of script.children) {
-    expect(request.body.model).toBe('o3')
-    if (choice === 'inherit') expect(wire(request)).toEqual(parent)
-    else expect(request.body.reasoning_effort ?? request.body.reasoning?.effort ?? request.body.output_config?.effort).toBe('low')
-  }
+  for (const request of script.children) expect(wire(request)).toEqual(parent)
 }
 
 export async function waitForOwnerChoiceIdle(page: Page, conversationId: string, script: ReturnType<typeof ownerChoiceScript>, choice: OwnerChoice) {

@@ -3,7 +3,7 @@ import type { HaloAPI } from '../../../src/preload'
 import { test, expect, OWNER_ID, GROUP_ID, waitForImIdle } from '../fixtures/acceptance-guest'
 import { acceptance } from '../fixtures/acceptance-app'
 import { assignmentCall } from '../fixtures/acceptance-subagent-models'
-import { assignmentTool, assignmentResult } from '../fixtures/acceptance-subagent-wire'
+import { assignmentTool, parseModelDirectory } from '../fixtures/acceptance-subagent-wire'
 import { initialUserInput } from '../fixtures/acceptance-model'
 import { subagentEffects } from '../fixtures/acceptance-subagent-effects'
 
@@ -27,8 +27,8 @@ test('revoking an owner IM source permission during credential preparation preve
       return { text: 'The revoked request did not create a collaborator.' }
     }
     const catalog = request.toolResults.find(result => result.id === 'authority-directory')
-    if (!catalog) return assignmentTool(request, 'list_model_profiles', { query: 'Verifier' }, 'authority-directory')
-    const reference = assignmentResult(catalog.text).profiles?.find((profile: { name: string }) => profile.name === 'Verifier')?.selectionRef
+    if (!catalog) return assignmentTool(request, 'list_model_profiles', {}, 'authority-directory')
+    const reference = parseModelDirectory(catalog.text).profiles?.find((profile: { name: string }) => profile.name === 'Verifier')?.selectionRef
     if (!reference) { errors.push('Owner IM directory did not expose Verifier'); return { text: 'Verifier unavailable.' } }
     const reply = assignmentTool(request, 'spawn_agent', { name: 'Revoked verifier', prompt: 'IM_PERMISSION_CHILD: Verify this task.', model_profile: reference }, 'authority-spawn')
     if (reply.tools?.some(tool => tool.id === 'authority-spawn')) spawns++

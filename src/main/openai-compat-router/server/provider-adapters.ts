@@ -17,11 +17,7 @@ import { inlineToolSchemaRefs } from '../utils/json-schema'
 import { CODEX_ADAPTER_ID } from '../../../shared/constants/codex-models'
 import type { CodexModelCapability } from '../../../shared/types/ai-sources'
 import { isThinkingEffort } from '../converters/reasoning-effort'
-import {
-  CODEX_REASONING_EFFORT_LEVELS,
-  clampReasoningEffort,
-  isReasoningEffortLevel,
-} from '../../../shared/constants/reasoning-effort'
+import { resolveCodexWireEffort } from '../../../shared/constants/reasoning-effort'
 
 // ============================================================================
 // Types
@@ -367,17 +363,7 @@ function applyReasoningLevels(body: Record<string, unknown>, supported: readonly
   const reasoning = body.reasoning as { effort?: string } | undefined
   const effort = reasoning?.effort
   if (!reasoning || !effort) return
-  const listed = supported?.filter(isReasoningEffortLevel) ?? []
-
-  if (!isReasoningEffortLevel(effort) || effort === 'off') {
-    if (listed.length > 0 && !supported!.includes(effort)) {
-      reasoning.effort = clampReasoningEffort('minimal', listed) ?? effort
-    }
-    return
-  }
-
-  const clamped = clampReasoningEffort(effort, listed.length > 0 ? listed : CODEX_REASONING_EFFORT_LEVELS)
-  if (clamped) reasoning.effort = clamped
+  reasoning.effort = resolveCodexWireEffort(effort, supported)
 }
 
 /**

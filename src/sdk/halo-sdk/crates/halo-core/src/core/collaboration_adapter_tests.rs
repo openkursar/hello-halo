@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn reasoning_snapshot_preserves_effective_budget_and_off() {
-    let options = json!({"model":"parent","thinking":{"type":"enabled","budgetTokens":12345},"effort":"max"});
+    let options = json!({"model":"parent","providerConfig":{"type":"openai-compat"},"thinking":{"type":"enabled","budgetTokens":12345},"effort":"max"});
     let captured = effective_reasoning(&options);
     assert_eq!(captured,json!({"version":1,"mode":"budget","budgetTokens":12345,"effort":"high"}));
     let mut child = json!({"model":"child","adaptiveThinking":true,"maxThinkingTokens":99999,"effort":"low"});
@@ -19,8 +19,8 @@ fn reasoning_snapshot_preserves_effective_budget_and_off() {
 
 #[test]
 fn legacy_reasoning_capture_records_the_sent_output_budget() {
-    let options = json!({"model":"parent","nativeResolvedConfig":true,"thinkingExplicit":true,"thinking":{"type":"enabled","budgetTokens":20000},"maxOutputTokens":1024,"effort":"max"});
-    assert_eq!(effective_reasoning(&options),json!({"version":1,"mode":"budget","budgetTokens":1023,"effort":"high"}));
+    let options = json!({"model":"parent","apiKey":"fixture","nativeResolvedConfig":true,"thinkingExplicit":true,"thinking":{"type":"enabled","budgetTokens":20000},"maxOutputTokens":1024,"effort":"max"});
+    assert_eq!(effective_reasoning(&options),json!({"version":1,"mode":"budget","budgetTokens":1023,"effort":"max"}));
 }
 
 #[test]

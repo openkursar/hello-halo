@@ -12,7 +12,7 @@ for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) test.des
   test.use({ sdkEngine, aiSource: async ({ model }, use) => {
     await use({ provider: 'openai', apiType: 'chat_completions', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'o3' })
   } })
-  for (const choice of ['inherit', 'profile', 'effort-only', 'provider-failure'] as const) {
+  for (const choice of ['inherit', 'profile', 'removed-effort', 'provider-failure'] as const) {
     test(`Remote owner applies ${choice}`, acceptance('models.subagent-profiles.owner-routing', { engine: sdkEngine, entry: 'owner-web', choice }), async ({ window, model, remoteDesktop }, info) => {
       test.setTimeout(180000)
       const page = remoteDesktop.page
@@ -48,9 +48,9 @@ for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) test.des
           for (const request of routing.childRequests) expect(request.body.model).toBe('gpt-4o')
           expect(assigned.errors).toEqual([])
         } else {
-          assertOwnerChoiceWire(ordinary!, choice as 'inherit' | 'effort-only' | 'provider-failure')
+          assertOwnerChoiceWire(ordinary!, choice as 'inherit' | 'removed-effort' | 'provider-failure')
           assertOwnerFailure(failed, ordinary!)
-          expect(ordinary!.parents.some(request => request.toolResults.some(result => result.id === 'owner-choice-spawn') && (choice === 'provider-failure' ? ordinary!.reviewedFailure : request.text.includes('owner-choice-child-complete')))).toBe(true)
+          expect(ordinary!.parents.some(request => request.toolResults.some(result => result.id === 'owner-choice-spawn') && (choice === 'provider-failure' ? ordinary!.reviewedFailure : choice === 'removed-effort' ? ordinary!.reviewedRefusal : request.text.includes('owner-choice-child-complete')))).toBe(true)
         }
         expect(http.some(request => request.method === 'POST' && /\/agent\/.*send|\/agent\/message/.test(request.path) && request.status < 400)).toBe(true)
         expect(receivedFrames).toBeGreaterThan(0)

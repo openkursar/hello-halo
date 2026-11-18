@@ -12,23 +12,48 @@ pub fn definitions_with_harness(harness: &ResolvedHarness) -> Vec<Value> {
     }
 }
 
-pub fn model_selection_guidance(capability: &Value) -> Result<String> {
-    let id = match capability["policy"].as_str() {
-        Some("inherit") => TextId::CollaborationModelSelectionInherit,
-        Some("task") => TextId::CollaborationModelSelectionTask,
+fn model_selection_policy(capability: &Value) -> Result<(TextId, bool)> {
+    let inherit_reasoning = match capability.get("reasoningPolicy") {
+        None => false,
+        Some(policy) if policy == "inherit" => true,
+        _ => return Err(Error::new("MODEL_SELECTION", "Unknown reasoning policy.")),
+    };
+    let guidance = match (capability["policy"].as_str(), inherit_reasoning) {
+        (Some("inherit"), false) => TextId::CollaborationModelSelectionInherit,
+        (Some("task"), false) => TextId::CollaborationModelSelectionTask,
+        (Some("inherit"), true) => TextId::CollaborationModelSelectionInheritWithParentReasoning,
+        (Some("task"), true) => TextId::CollaborationModelSelectionTaskWithParentReasoning,
         _ => return Err(Error::new("MODEL_SELECTION", "Unknown model selection policy.")),
     };
-    Ok(baseline().text(id).to_owned())
+    Ok((guidance, inherit_reasoning))
 }
 
-pub fn definitions_with_model_selection(harness: &ResolvedHarness, capability: &Value) -> Result<Vec<Value>> {
-    model_selection_guidance(capability)?;
+pub fn model_selection_guidance(capability: &Value) -> Result<String> {
+    let (guidance, _) = model_selection_policy(capability)?;
+    Ok(baseline().text(guidance).to_owned())
+}
+
+pub fn definitions_with_model_selection(
+    harness: &ResolvedHarness,
+    capability: &Value,
+) -> Result<Vec<Value>> {
+    let (guidance, inherit_reasoning) = model_selection_policy(capability)?;
+    let baseline = baseline();
+    let guidance = baseline.text(guidance);
     let mut tools = definitions_with_harness(harness);
     let spawn = tools.iter_mut().find(|tool| tool["name"] == "spawn_agent").unwrap();
-    spawn["inputSchema"]["properties"]["model_profile"] = serde_json::json!({"type":"string","description":harness.text(TextId::CollaborationModelSelectionProfileField)});
-    spawn["inputSchema"]["properties"]["reasoning_effort"] = serde_json::json!({"type":"string","description":harness.text(TextId::CollaborationModelSelectionEffortField)});
-    let description = format!("{} {}", harness.text(TextId::CollaborationModelSelectionListDescription), model_selection_guidance(capability)?);
-    tools.push(serde_json::json!({"name":"list_model_profiles","description":description,"inputSchema":{"type":"object","properties":{"query":{"type":"string"},"cursor":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":crate::collaboration::model_selection::limits()["pageMaximum"]}},"required":[],"additionalProperties":false}}));
+    let profile_field = if inherit_reasoning {
+        TextId::CollaborationModelSelectionProfileReferenceField
+    } else {
+        TextId::CollaborationModelSelectionProfileField
+    };
+    let properties = &mut spawn["inputSchema"]["properties"];
+    properties["model_profile"] = serde_json::json!({"type":"string","description":harness.text(profile_field)});
+    if !inherit_reasoning {
+        properties["reasoning_effort"] = serde_json::json!({"type":"string","description":harness.text(TextId::CollaborationModelSelectionEffortField)});
+    }
+    let description = format!("{} {guidance}", harness.text(TextId::CollaborationModelSelectionListDescription));
+    tools.push(serde_json::json!({"name":"list_model_profiles","description":description,"inputSchema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}));
     Ok(tools)
 }
 
@@ -163,6 +188,35 @@ mod tests {
         assert_eq!(error.message, "prompt must be a non-empty string.");
         assert_eq!(error.render_for(&alternate), "Missing prompt.");
     }
+    #[test]
+    fn reasoning_inheritance_removes_only_the_spawn_effort_argument() {
+        let default = serde_json::json!({"policy":"inherit"});
+        let inherits = serde_json::json!({"policy":"inherit","reasoningPolicy":"inherit"});
+        let invalid = serde_json::json!({"policy":"inherit","reasoningPolicy":"unknown"});
+        let input =
+            serde_json::json!({"prompt":"work","model_profile":"p1","reasoning_effort":"high"});
+
+        assert_eq!(
+            parse_input_with_model_selection("spawn_agent", &input, Some(&default)).unwrap(),
+            input
+        );
+        let error =
+            parse_input_with_model_selection("spawn_agent", &input, Some(&inherits)).unwrap_err();
+        assert_eq!(error.code, "COLLABORATION_ARGUMENTS");
+        assert!(error.message.contains("reasoning_effort"));
+        assert!(model_selection_guidance(&invalid).is_err());
+    }
+
+    #[test]
+    fn directory_takes_no_arguments() {
+        let capability = serde_json::json!({"policy":"inherit"});
+        let valid = serde_json::json!({});
+        for input in [serde_json::json!({"query":"Small"}), serde_json::json!({"limit":1}), serde_json::json!({"cursor":"old"})] {
+            assert!(parse_input_with_model_selection("list_model_profiles", &input, Some(&capability)).is_err());
+        }
+        assert_eq!(parse_input_with_model_selection("list_model_profiles", &valid, Some(&capability)).unwrap(), valid);
+    }
+
     #[test]
     fn rejects_extra_authority_and_explicit_null() {
         assert!(parse_input(

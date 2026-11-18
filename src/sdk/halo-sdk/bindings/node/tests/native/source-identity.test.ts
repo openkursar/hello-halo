@@ -13,6 +13,7 @@ const source = {
   'crates/halo-core/src/search/adapter.mjs': 'export {};',
   'crates/halo-core/src/harness/resources/text.json': '{"text":"Runtime text"}',
   'bindings/node/crate/src/lib.rs': 'pub fn bind() {}',
+  'bindings/node/collaboration/model-selection-limits.json': '{"catalogBytes":1048576}',
   'scripts/source-identity.cjs': 'module.exports = {};',
 };
 

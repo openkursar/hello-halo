@@ -9,7 +9,7 @@ for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) test.des
   test.use({ sdkEngine, aiSource: async ({ model }, use) => {
     await use({ provider: 'openai', apiType: 'chat_completions', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'o3' })
   } })
-  for (const choice of ['inherit', 'effort-only', 'provider-failure'] as const) test(`a standing member reviews ${choice}`, acceptance('models.subagent-profiles.owner-routing', { engine: sdkEngine, entry: 'team-member', choice }), async ({ window, model }, info) => {
+  for (const choice of ['inherit', 'removed-effort', 'provider-failure'] as const) test(`a standing member reviews ${choice}`, acceptance('models.subagent-profiles.owner-routing', { engine: sdkEngine, entry: 'team-member', choice }), async ({ window, model }, info) => {
     test.setTimeout(180000)
     const endpoint = await prepareOwnerChoice(window, choice)
     const script = ownerChoiceScript(choice)

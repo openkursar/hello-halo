@@ -1,5 +1,6 @@
 import type { PreparedModelMetadata, EffectiveReasoning } from '@hello-halo/agent-sdk/collaboration'
 import { isSourceGroupEligible } from '../../../shared/ai-groups'
+import { getSubagentSourceModelEfforts } from '../../../shared/subagent-models'
 import { assertEngineSourceCompatible } from '../../../shared/engine-source'
 import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import { forcedThinkingLevel, reasoningEffortProfileById } from '../../../shared/constants/reasoning-effort-profiles'
@@ -19,7 +20,8 @@ export function describeGroupReasoningCompatibility(models: readonly string[]): 
 /** Prepare only model identity and capabilities; never return executable session options. */
 export async function prepareSubagentModelMetadata(
   selection: AgentModelSelection,
-  engineId: EngineId
+  engineId: EngineId,
+  inheritedLevel?: ReasoningEffortLevel,
 ): Promise<{ credentials: ApiCredentials; metadata: PreparedModelMetadata }> {
   const credentials = await getApiCredentialsForStrictSelection(selection)
   assertEngineSourceCompatible(engineId, credentials)
@@ -28,24 +30,34 @@ export async function prepareSubagentModelMetadata(
   const group = credentials.isGroup ? getGroup(selection.modelSourceId) : undefined
   if (credentials.isGroup && !group) throw new Error('The target group changed during model preparation')
   const manager = getAISourceManager()
-  const models = group ? group.members.filter(member => {
+  const targets = group ? group.members.flatMap(member => {
     const source = manager.getSourceConfig(member.sourceId)
-    return source && isSourceGroupEligible(source)
-  }).map(member => member.modelId) : [credentials.model]
-  const profiles = models.map(model => reasoningEffortProfileById(model))
-  const dshNative = engineId === 'dsh' && (credentials.provider === 'anthropic' || credentials.apiType === 'anthropic_passthrough' || credentials.oauthProvider === 'claude')
-  if (group && models.length === 0) throw new Error('The target group has no usable models')
-  const declared = profiles.map(profile => profile.levels)
-  const supported = declared.every(levels => levels !== undefined)
-    ? declared[0]?.filter(level => level !== 'off' && declared.every(levels => levels!.includes(level))) : undefined
+    return source && isSourceGroupEligible(source) ? [{ source, modelId: member.modelId }] : []
+  }) : [{ source: manager.getSourceConfig(selection.modelSourceId), modelId: credentials.model }]
+  const profiles = targets.map(({ modelId }) => reasoningEffortProfileById(modelId))
+  const nativeProtocol = credentials.provider === 'anthropic' || credentials.apiType === 'anthropic_passthrough' || credentials.oauthProvider === 'claude'
+  const dshNative = engineId === 'dsh' && nativeProtocol
+  if (targets.length === 0) throw new Error('The target group has no usable models')
+  const declared = targets.map(({ source, modelId }) => source ? getSubagentSourceModelEfforts(source, modelId) : [])
+  const supported = declared[0].filter(level => declared.every(levels => levels.includes(level)))
   const options: Record<string, unknown> = { model: credentials.model, apiCredentials: credentials }
   if (capabilities.adaptiveThinking) options.adaptiveThinking = true
-  applyReasoningEffort(options, true, capabilities)
+  applyReasoningEffort(options, true, capabilities, inheritedLevel)
+  const groupLevel = inheritedLevel ?? capabilities.reasoningEffort
+  const effectiveCapabilities = engineId === 'dsh' && inheritedLevel !== undefined
+    ? { ...capabilities, reasoningEffort: inheritedLevel } : capabilities
+  const targetProfile = profiles[0]
+  const forcedLevel = inheritedLevel === 'off' && !group ? forcedThinkingLevel(targetProfile) : undefined
+  if (forcedLevel && targetProfile.anthropic && nativeProtocol && !dshNative) {
+    applyReasoningEffort(options, true, capabilities, forcedLevel)
+  }
   const defaultReasoning: EffectiveReasoning = group
-    ? capabilities.reasoningEffort ? { version: 1, mode: 'effort', effort: capabilities.reasoningEffort } : { version: 1, mode: 'provider-default' }
-    : captureEffectiveReasoning(options, engineId, capabilities)
+    ? groupLevel === 'off' ? { version: 1, mode: 'off' }
+      : groupLevel ? { version: 1, mode: 'effort', effort: groupLevel } : { version: 1, mode: 'provider-default' }
+    : captureEffectiveReasoning(options, engineId, effectiveCapabilities)
   const effortMapping: Record<string, EffectiveReasoning> = {}
-  for (const effort of supported ?? []) {
+  for (const effort of supported) {
+    if (effort === 'off') continue
     const mapped: Record<string, unknown> = { model: credentials.model, apiCredentials: credentials }
     if (capabilities.adaptiveThinking) mapped.adaptiveThinking = true
     applyReasoningEffort(mapped, true, capabilities, effort as ReasoningEffortLevel)
@@ -54,8 +66,7 @@ export async function prepareSubagentModelMetadata(
       : group || engineId === 'dsh' ? { version: 1, mode: 'effort', effort } : captureEffectiveReasoning(mapped, engineId, capabilities)
     if ('effort' in effective && effective.effort === effort) effortMapping[effort] = effective
   }
-  const supportsOff = profiles.every(profile =>
-    !forcedThinkingLevel(profile) && Boolean(profile.anthropic || profile.thinkingToggle || profile.disableValue))
+  const supportsOff = supported.includes('off')
   if (supportsOff) effortMapping.off = { version: 1, mode: 'off' }
   const modes: EffectiveReasoning['mode'][] = ['provider-default']
   if (supportsOff) modes.push('off')
@@ -81,7 +92,7 @@ export async function prepareSubagentModelMetadata(
         default: defaultReasoning,
         modes,
         ...(supportsBudget ? { maxBudgetTokens: capabilities.maxOutputTokens - 1 } : {}),
-        ...(supported || supportsOff ? { supported: Object.keys(effortMapping), effortMapping } : {}),
+        ...(supported.length ? { supported: Object.keys(effortMapping), effortMapping } : {}),
       },
     },
   }

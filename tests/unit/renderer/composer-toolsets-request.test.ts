@@ -32,19 +32,21 @@ function storeWith(requestSignal: Map<string, number>) {
 }
 
 describe('toolset requests in the composer', () => {
-  it('keeps automatic capabilities out of the controls without removing them from the availability catalog', () => {
+  it('lists the automatic capabilities this conversation can use, which no switch can turn off', () => {
     env.state = storeWith(new Map())
     const terminal = { id: 'ai-terminal', displayName: 'Terminal', summary: '', open: true, configurable: false }
-    const grant = { id: 'halo-api-ref', displayName: 'Operate Halo', summary: '', open: false }
-    env.state.byConversation.set('conv-1', [terminal, grant])
+    const excluded = { id: 'halo-team', displayName: 'Team Collaboration', summary: '', open: false, configurable: false }
+    const optional = { id: 'extra', displayName: 'Extra', summary: '', open: false }
+    env.state.byConversation.set('conv-1', [terminal, excluded, optional])
     const controls = useComposerToolsets({ enabled: true, panelOpen: false, onRequested: vi.fn() })
-    expect(controls.list).toEqual([grant])
-    expect(env.state.byConversation.get('conv-1')).toContain(terminal)
+    expect(controls.list).toEqual([terminal, optional])
     controls.toggle(terminal)
     expect(env.state.close).not.toHaveBeenCalled()
-    controls.toggle(grant)
-    expect(env.state.open).toHaveBeenCalledWith('space-1', 'conv-1', 'halo-api-ref')
+    expect(env.state.open).not.toHaveBeenCalled()
+    controls.toggle(optional)
+    expect(env.state.open).toHaveBeenCalledWith('space-1', 'conv-1', 'extra')
   })
+
 
   it('open the panel at once and are consumed', () => {
     env.state = storeWith(new Map([['conv-1', 1]]))

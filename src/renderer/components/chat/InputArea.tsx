@@ -1254,7 +1254,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   const attachedCount = images.length + references.filter(ref => ref.source.kind === 'path').length
 
   // Add → things this message carries; Context → where the work points;
-  // Capabilities → what the AI may use. Unavailable rows stay visible and say why.
+  // Capabilities → what the AI can use. Unavailable rows stay visible and say why.
   const menuSections: ComposerMenuSection[] = [
     {
       id: 'add',
@@ -1303,17 +1303,20 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     ...(toolsets.list.length > 0 ? [{
       id: 'capabilities',
       title: t('Capabilities'),
+      hint: toolsets.list.some(ts => ts.configurable === false) ? t('Used automatically when needed') : undefined,
       items: sortToolsets(toolsets.list).map(ts => ({
         id: `toolset:${ts.id}`,
         icon: toolsetIcon(ts.id),
         label: toolsetLabel(t, ts),
         description: toolsetDescription(t, ts),
-        toggle: { checked: ts.open, onChange: () => toolsets.toggle(ts) },
-        attention: toolsets.requested.has(ts.id) && !ts.open,
+        ...(ts.configurable === false ? {} : {
+          toggle: { checked: ts.open, onChange: () => toolsets.toggle(ts) },
+          attention: toolsets.requested.has(ts.id) && !ts.open,
+        }),
       })),
     }] : []),
   ]
-  // While a turn runs nothing can be attached; capabilities can change, from the next message on.
+  // While a turn runs nothing can be attached; capabilities stay in view, and a switch takes effect from the next message.
   const panelSections = isGenerating ? menuSections.filter(section => section.id === 'capabilities') : menuSections
 
   return (

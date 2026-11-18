@@ -33,7 +33,7 @@ function sourceOf(scope: SpaceTeamMcpScope): ParticipantSource {
     .filter(resource => allowed.has(resource.specId)).map(resource => [resource.specId, resource.id]))
   return {
     ...settings, modelSelection: scope.modelSelection, sourceAppId,
-    ...(model ? { inheritedReasoning: model.reasoning, modelBinding: model.modelBinding } : {}),
+    ...(model ? { inheritedReasoning: model.reasoning, reasoningLevel: model.reasoningLevel, modelBinding: model.modelBinding } : {}),
     permissions: app?.permissions ?? { granted: [], denied: [] },
     environment: { spaceId: scope.spaceId, spacePath: space.path, workDir: scope.workDir,
       memoryDir: space.path, mcpBindings: bindings },
@@ -92,10 +92,11 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope, source?: () =
       if (!service.participants.requestAllowed(capturedRequest)) throw new CollaborationRefusal('request_stopped', 'This collaboration request was stopped.')
     }
     check()
-    if (models && scope.modelContext && !capturedSource.origin) {
+    if ((input.model_profile !== undefined && input.model_profile !== 'inherit') || input.reasoning_effort !== undefined) {
+      if (!models || !scope.modelContext || capturedSource.origin) {
+        throw new CollaborationRefusal('model_selection_forbidden', 'Model overrides are unavailable for this request.')
+      }
       capturedSource = { ...capturedSource, ...await models.prepare(input, scope.modelContext(), check, context.signal) }
-    } else if ((input.model_profile && input.model_profile !== 'inherit') || input.reasoning_effort !== undefined) {
-      throw new CollaborationRefusal('model_selection_forbidden', 'Model overrides are unavailable for this request.')
     }
     const work = await service.ensureCollaboration({ owningSpaceId: scope.spaceId, conversationId: scope.conversationId, title: input.prompt })
     context.signal?.throwIfAborted()

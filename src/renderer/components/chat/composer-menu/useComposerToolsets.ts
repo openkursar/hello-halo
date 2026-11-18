@@ -1,5 +1,7 @@
 /**
- * The current conversation's toolsets, as the composer's "+" panel shows them.
+ * The current conversation's toolsets, as the composer's "+" panel shows them:
+ * those with a switch, and the automatic ones this conversation can use. An
+ * automatic toolset has no switch; one excluded from the conversation is left out.
  *
  * Mounted with the composer rather than the panel, so an AI request to enable
  * a toolset (request_toolset) opens the panel at once, even while it is closed
@@ -63,7 +65,7 @@ export function useComposerToolsets({ enabled, panelOpen, onRequested }: Options
   }, [active, panelOpen, aiRequested, conversationId, consumeRequestHighlight])
 
   const list = useMemo(() => active && statuses
-    ? statuses.filter(status => status.configurable !== false)
+    ? statuses.filter(status => status.configurable !== false || status.open)
     : EMPTY, [active, statuses])
 
   return {

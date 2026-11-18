@@ -5,11 +5,11 @@ import type { HaloAPI } from '../../../src/preload'
 import { test, expect, acceptance, waitForAcceptanceIdle } from '../fixtures/acceptance-app'
 import { startAcceptanceModel, createModelGate, initialUserInput } from '../fixtures/acceptance-model'
 import { assignmentCall, assignmentSettings } from '../fixtures/acceptance-subagent-models'
-import { assignmentTool, assignmentResult } from '../fixtures/acceptance-subagent-wire'
+import { assignmentTool, parseModelDirectory } from '../fixtures/acceptance-subagent-wire'
 import { securityConversation } from '../fixtures/acceptance-subagent-security'
 import { subagentEffects } from '../fixtures/acceptance-subagent-effects'
 
-for (const target of ['non-cc-delegated', 'unsupported-effort', 'stale-reference', 'raw-model', 'raw-url', 'raw-account', 'unconfigured-slot'] as const) {
+for (const target of ['non-cc-delegated', 'removed-effort', 'stale-reference', 'raw-model', 'raw-url', 'raw-account', 'unconfigured-slot'] as const) {
   test(`rejects ${target} before allocating collaborator effects`, acceptance('models.subagent-profiles.incompatible', { target }), async ({ window, model, acceptanceApp }, info) => {
     test.setTimeout(180000)
     let page = window
@@ -20,6 +20,7 @@ for (const target of ['non-cc-delegated', 'unsupported-effort', 'stale-reference
     const children: number[] = []
     let held = false
     let reference: string | undefined
+    let unavailableReason: string | undefined
     model.respond(async request => {
       if (initialUserInput(request).includes('INVALID_TARGET_CHILD:')) {
         children.push(request.sequence)
@@ -28,15 +29,17 @@ for (const target of ['non-cc-delegated', 'unsupported-effort', 'stale-reference
       const result = request.toolResults.find(result => result.id === 'invalid-target-spawn')
       if (result) { results.push(result.text); return { text: 'The invalid target was refused.' } }
       const listed = request.toolResults.find(result => result.id === 'invalid-target-directory')
-      if (!listed) return assignmentTool(request, 'list_model_profiles', { query: 'Boundary target' }, 'invalid-target-directory')
-      reference ??= assignmentResult(listed.text).profiles?.find((profile: { name: string }) => profile.name === 'Boundary target')?.selectionRef
-      if (!reference) return { text: 'The test target is missing.' }
+      if (!listed) return assignmentTool(request, 'list_model_profiles', {}, 'invalid-target-directory')
+      const entry = parseModelDirectory(listed.text).profiles.find(profile => profile.name === 'Boundary target')
+      reference ??= entry?.selectionRef
+      unavailableReason ??= entry?.unavailableReason
+      if (!entry) return { text: 'The test target is missing.' }
       if (!held) { held = true; await gate.promise }
       const input = target === 'raw-model' ? { model: 'arbitrary-wire-model' }
         : target === 'raw-url' ? { api_url: unused.url }
           : target === 'raw-account' ? { sourceId: 'arbitrary-account' }
             : target === 'unconfigured-slot' ? { model_profile: 'builtin:small' }
-              : { model_profile: reference, ...(target === 'unsupported-effort' ? { reasoning_effort: 'not-a-supported-level' } : {}) }
+              : { model_profile: target === 'non-cc-delegated' ? 'Boundary target' : reference, ...(target === 'removed-effort' ? { reasoning_effort: 'high' } : {}) }
       return assignmentTool(request, 'spawn_agent', { name: 'Invalid target worker', prompt: 'INVALID_TARGET_CHILD: This must never run.', ...input }, 'invalid-target-spawn')
     })
     try {
@@ -63,6 +66,10 @@ for (const target of ['non-cc-delegated', 'unsupported-effort', 'stale-reference
       expect(saved.success, saved.error).toBe(true)
       const conversationId = await securityConversation(page, 'INVALID_TARGET_PARENT: Attempt the provided invalid target once.')
       await expect.poll(() => held, { timeout: 60000 }).toBe(true)
+      if (target === 'non-cc-delegated') {
+        expect(unavailableReason).toMatch(/Claude Code/i)
+        expect(reference).toBeUndefined()
+      } else expect(reference).toBeTruthy()
       if (target === 'stale-reference') {
         const profile = (await assignmentSettings(page)).profiles.find(profile => profile.kind === 'custom')!
         const changed = await assignmentCall(page, 'updateSubagentModel', { id: profile.id, expectedRevision: profile.revision, name: 'Boundary target', description: 'Changed after the old reference was issued', target: profile.target })
@@ -72,7 +79,7 @@ for (const target of ['non-cc-delegated', 'unsupported-effort', 'stale-reference
       gate.release()
       await expect.poll(() => results.length, { timeout: 60000 }).toBeGreaterThan(0)
       await waitForAcceptanceIdle(page, conversationId)
-      expect(results.every(text => /unexpected|invalid|missing|changed|unsupported|not support|unavailable|refus|reject/i.test(text))).toBe(true)
+      expect(results.every(text => /unexpected|invalid|no longer valid|missing|changed|unsupported|not support|unavailable|refus|reject/i.test(text))).toBe(true)
       expect(subagentEffects(acceptanceApp.profile)).toEqual(before)
       expect(children).toEqual([])
       expect(unused.exchanges).toEqual([])

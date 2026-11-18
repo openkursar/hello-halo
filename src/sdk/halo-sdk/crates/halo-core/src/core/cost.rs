@@ -21,6 +21,7 @@ pub struct CostTracker {
     total_cost: f64,
     pricing: Value,
     pricing_table: Value,
+    binding_pricing: Option<Value>,
     context_window: f64,
     model_usage: Map<String, Value>,
     on_usage: Option<UsageObserver>,
@@ -33,10 +34,21 @@ impl CostTracker {
             total_cost: 0.0,
             pricing: pricing_table[model].clone(),
             pricing_table,
+            binding_pricing: None,
             context_window,
             model_usage: Map::new(),
             on_usage: None,
         }
+    }
+
+    pub(crate) fn for_session(options: &Value) -> Self {
+        let mut tracker = Self::new(
+            options["model"].as_str().unwrap_or(""),
+            options["contextWindow"].as_f64().unwrap_or(200_000.0),
+            options["modelPricing"].clone(),
+        );
+        tracker.binding_pricing = options.get("nativeBindingPricing").cloned();
+        tracker
     }
 
     pub fn set_on_usage(&mut self, observer: Option<UsageObserver>) {
@@ -57,10 +69,11 @@ impl CostTracker {
                 .filter(|n| n.is_finite() && *n >= 0.0)
                 .unwrap_or(0.0)
         });
+        let pricing = self.binding_pricing.as_ref().unwrap_or(&self.pricing);
         let cost: f64 = amounts
             .iter()
             .zip(PRICES)
-            .map(|(amount, price)| amount * self.pricing[price].as_f64().unwrap_or(0.0))
+            .map(|(amount, price)| amount * pricing[price].as_f64().unwrap_or(0.0))
             .sum::<f64>()
             / 1_000_000.0;
         let mut report = Map::new();

@@ -4,7 +4,8 @@ import { startAcceptanceModel, createModelGate, initialUserInput, type ModelRequ
 import { collaboratorReceipt } from '../fixtures/acceptance-collaboration'
 import { test as guestTest, GUEST_ID, changeGuestPolicy, waitForGuestChannel, waitForImIdle, imTranscript } from '../fixtures/acceptance-guest'
 import { assignmentCall, assignmentSettings } from '../fixtures/acceptance-subagent-models'
-import { addSecuritySource, decodeSecurityResult, refusedSecurityResult, securityConversation, securityTool, securityCredentialRelay } from '../fixtures/acceptance-subagent-security'
+import { addSecuritySource, refusedSecurityResult, securityConversation, securityTool, securityCredentialRelay } from '../fixtures/acceptance-subagent-security'
+import { parseModelDirectory } from '../fixtures/acceptance-subagent-wire'
 
 for (const change of ['profile-edit', 'profile-delete-recreate', 'builtin-clear-rebind', 'credential-rotation', 'same-account-endpoint-edit', 'account-delete', 'group-delete'] as const) {
   test(`existing binding remains exact after ${change} and restart`, acceptance('models.subagent-profiles.restore', { change, boundary: 'restart' }), async ({ window, model, acceptanceApp }, info) => {
@@ -41,8 +42,9 @@ for (const change of ['profile-edit', 'profile-delete-recreate', 'builtin-clear-
         return { text: 'BOUND_PARENT_READY' }
       }
       const catalog = request.toolResults.find(result => result.id === 'binding-directory')
-      if (!catalog) return securityTool(request, 'list_model_profiles', { query: 'Bound verifier' }, 'binding-directory')
-      try { reference = decodeSecurityResult(catalog.text).profiles?.find((profile: { name: string }) => (profile.name === 'Bound verifier' || change === 'builtin-clear-rebind' && profile.name === 'Small (小杯)'))?.selectionRef }
+      if (!catalog) return securityTool(request, 'list_model_profiles', {}, 'binding-directory')
+      const name = change === 'builtin-clear-rebind' ? 'Small' : 'Bound verifier'
+      try { reference = parseModelDirectory(catalog.text).profiles.find(profile => profile.name === name)?.selectionRef }
       catch (error) { errors.push(String(error)) }
       if (!reference) { errors.push('No exact profile reference'); return { text: 'No bound verifier.' } }
       return securityTool(request, 'spawn_agent', { name: 'Bound verifier worker', prompt: 'BOUND_MEMBER: Retain the original binding.', model_profile: reference }, 'binding-spawn')
@@ -131,7 +133,7 @@ for (const change of ['profile-edit', 'profile-delete-recreate', 'builtin-clear-
   })
 }
 
-for (const requestKind of ['directory', 'profile', 'effort-only', 'inherit'] as const) {
+for (const requestKind of ['directory', 'profile', 'removed-effort', 'inherit'] as const) {
   guestTest(`guest ${requestKind} retains the restricted model authority`, acceptance('models.subagent-profiles.origin', { origin: 'guest-im', request: requestKind }), async ({ window, model, guestApp, wecom }, info) => {
     guestTest.setTimeout(180000)
     const results: string[] = []
@@ -143,7 +145,7 @@ for (const requestKind of ['directory', 'profile', 'effort-only', 'inherit'] as 
       if (initialUserInput(request).includes('OWNER_REFERENCE_CAPTURE:')) {
         const catalog = request.toolResults.find(result => result.id === 'owner-reference-directory')
         if (!catalog) return securityTool(request, 'list_model_profiles', {}, 'owner-reference-directory')
-        ownerReference = decodeSecurityResult(catalog.text).profiles?.find((profile: { name: string }) => profile.name === 'Private owner assignment')?.selectionRef
+        ownerReference = parseModelDirectory(catalog.text).profiles?.find((profile: { name: string }) => profile.name === 'Private owner assignment')?.selectionRef
         return { text: 'OWNER_REFERENCE_CAPTURED' }
       }
       if (initialUserInput(request).includes('GUEST_BOUND_CHILD:')) { children.push(request); return { text: 'GUEST_INHERIT_CONFIRMED' } }
@@ -155,7 +157,7 @@ for (const requestKind of ['directory', 'profile', 'effort-only', 'inherit'] as 
         attempted = true
         return { tools: [{ id: 'guest-bound-attempt', name: 'mcp__halo-team__list_model_profiles', input: {} }] }
       }
-      const input = requestKind === 'profile' ? { model_profile: ownerReference } : requestKind === 'effort-only' ? { reasoning_effort: 'high' } : {}
+      const input = requestKind === 'profile' ? { model_profile: ownerReference } : requestKind === 'removed-effort' ? { reasoning_effort: 'high' } : {}
       const reply = securityTool(request, 'spawn_agent', { name: 'Guest inherited worker', prompt: 'GUEST_BOUND_CHILD: Answer within the guest authority.', ...input }, 'guest-bound-attempt')
       attempted = reply.tools?.[0]?.id === 'guest-bound-attempt'
       return reply
@@ -211,7 +213,7 @@ for (const change of ['task-to-inherit', 'inherit-to-task'] as const) {
       if (initialUserInput(request).includes('POLICY_CHILD:')) { children.push(request); return { text: 'PURE_INHERIT_CHILD_CONFIRMED' } }
       const catalog = request.toolResults.find(result => result.id === 'policy-catalog')
       if (!catalog) return securityTool(request, 'list_model_profiles', {}, 'policy-catalog')
-      reference ??= decodeSecurityResult(catalog.text).profiles?.[0]?.selectionRef
+      reference ??= parseModelDirectory(catalog.text).profiles?.[0]?.selectionRef
       if (!held) { held = true; await gate.promise }
       for (const id of attempts) {
         const result = request.toolResults.find(result => result.id === id)

@@ -3,7 +3,8 @@ import { test, expect, acceptance, waitForAcceptanceIdle } from '../fixtures/acc
 import { startAcceptanceModel, initialUserInput, type ModelRequest } from '../fixtures/acceptance-model'
 import { collaboratorReceipt } from '../fixtures/acceptance-collaboration'
 import { assignmentCall } from '../fixtures/acceptance-subagent-models'
-import { addSecuritySource, decodeSecurityResult, securityConversation, securityTool } from '../fixtures/acceptance-subagent-security'
+import { addSecuritySource, securityConversation, securityTool } from '../fixtures/acceptance-subagent-security'
+import { parseModelDirectory } from '../fixtures/acceptance-subagent-wire'
 
 for (const change of ['capability-shrink', 'group-capability-shrink', 'parent-change'] as const) {
   test(`restored member revalidates ${change} without replacing its reasoning`, acceptance('models.subagent-profiles.restore', { change, boundary: 'restart' }), async ({ window, model, acceptanceApp }, info) => {
@@ -28,8 +29,8 @@ for (const change of ['capability-shrink', 'group-capability-shrink', 'parent-ch
       const created = request.toolResults.find(result => result.id === 'restore-spawn')
       if (created) { handle = collaboratorReceipt(created).handle; return { text: 'RESTORE_PARENT_READY' } }
       const catalog = request.toolResults.find(result => result.id === 'restore-catalog')
-      if (!catalog) return securityTool(request, 'list_model_profiles', { query: 'Restore reasoning verifier' }, 'restore-catalog')
-      const reference = decodeSecurityResult(catalog.text).profiles?.find((profile: { name: string }) => profile.name === 'Restore reasoning verifier')?.selectionRef
+      if (!catalog) return securityTool(request, 'list_model_profiles', {}, 'restore-catalog')
+      const reference = parseModelDirectory(catalog.text).profiles?.find((profile: { name: string }) => profile.name === 'Restore reasoning verifier')?.selectionRef
       if (!reference) return { text: 'RESTORE_PROFILE_MISSING' }
       return securityTool(request, 'spawn_agent', { name: 'Restore reasoning worker', prompt: 'RESTORE_CHILD: Remember this assignment across restoration.', model_profile: reference }, 'restore-spawn')
     })
@@ -49,9 +50,14 @@ for (const change of ['capability-shrink', 'group-capability-shrink', 'parent-ch
         expect(group.success, group.error).toBe(true)
         groupId = group.data!.groupId
       }
-      const saved = await assignmentCall(window, 'createSubagentModel', { name: 'Restore reasoning verifier', description: 'Preserve exact reasoning through restore', target: groupId ? { kind: 'group', groupId } : { kind: 'model', sourceId, modelId: targetModel }, reasoningEffort: targetEffort })
+      const saved = await assignmentCall(window, 'createSubagentModel', { name: 'Restore reasoning verifier', description: 'Preserve exact reasoning through restore', target: groupId ? { kind: 'group', groupId } : { kind: 'model', sourceId, modelId: targetModel } })
       expect(saved.success, saved.error).toBe(true)
-      const conversationId = await securityConversation(window, 'RESTORE_PARENT: Create the reasoning verifier once.')
+      const parentModel = change === 'group-capability-shrink' ? 'gpt-6.1-sol' : 'o3'
+      const parentSource = await window.evaluate(model => (globalThis as unknown as { halo: HaloAPI }).halo.aiSourcesUpdateSource('acceptance-local', {
+        model, availableModels: [{ id: model, name: model }],
+      }), parentModel)
+      expect(parentSource.success, parentSource.error).toBe(true)
+      const conversationId = await securityConversation(window, 'RESTORE_PARENT: Create the reasoning verifier once.', undefined, targetEffort)
       await expect.poll(() => Boolean(handle) && children.length > 0, { timeout: 90000 }).toBe(true)
       await waitForAcceptanceIdle(window, conversationId)
       expect(children.every(request => request.body.model === targetModel)).toBe(true)

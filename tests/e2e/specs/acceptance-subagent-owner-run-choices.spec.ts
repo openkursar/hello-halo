@@ -6,7 +6,7 @@ for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) for (con
   test.use({ sdkEngine, automationInterval: trigger === 'schedule' ? '20s' : '24h', aiSource: async ({ model }, use) => {
     await use({ provider: 'openai', apiType: 'chat_completions', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'o3' })
   } })
-  for (const choice of ['inherit', 'effort-only', 'provider-failure'] as const) test(`a real ${trigger} run reviews ${choice}`, acceptance('models.subagent-profiles.owner-routing', { engine: sdkEngine, entry: `${trigger}-run`, choice }), async ({ model, automation, window }, info) => {
+  for (const choice of ['inherit', 'removed-effort', 'provider-failure'] as const) test(`a real ${trigger} run reviews ${choice}`, acceptance('models.subagent-profiles.owner-routing', { engine: sdkEngine, entry: `${trigger}-run`, choice }), async ({ model, automation, window }, info) => {
     test.setTimeout(180000)
     const endpoint = await prepareOwnerChoice(window, choice)
     const script = ownerChoiceScript(choice, { run: true })

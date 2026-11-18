@@ -6,7 +6,7 @@ for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) test.des
   test.use({ sdkEngine, aiSource: async ({ model }, use) => {
     await use({ provider: 'openai', apiType: 'chat_completions', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'o3' })
   } })
-  for (const entry of ['space', 'digital-human'] as const) for (const choice of ['inherit', 'effort-only', 'provider-failure'] as const) {
+  for (const entry of ['space', 'digital-human'] as const) for (const choice of ['inherit', 'removed-effort', 'provider-failure'] as const) {
     test(`${entry} applies ${choice} without selecting an available profile`, acceptance('models.subagent-profiles.owner-routing', { engine: sdkEngine, entry, choice }), async ({ window, model, automation }, info) => {
       test.setTimeout(180000)
       const endpoint = await prepareOwnerChoice(window, choice)
@@ -33,7 +33,7 @@ for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) test.des
         })
         expect(sent.success, sent.error).toBe(true)
       }
-      await expect.poll(() => script.parents.some(request => request.toolResults.some(result => result.id === 'owner-choice-spawn') && (choice === 'provider-failure' ? script.reviewedFailure : request.text.includes('owner-choice-child-complete'))), { timeout: 120000 }).toBe(true)
+      await expect.poll(() => script.parents.some(request => request.toolResults.some(result => result.id === 'owner-choice-spawn') && (choice === 'provider-failure' ? script.reviewedFailure : choice === 'removed-effort' ? script.reviewedRefusal : request.text.includes('owner-choice-child-complete'))), { timeout: 120000 }).toBe(true)
       if (entry === 'space') {
         await waitForOwnerChoiceIdle(window, conversationId, script, choice)
         const history = await window.evaluate(id => (globalThis as unknown as { halo: HaloAPI }).halo.getConversation('halo-temp', id), conversationId)

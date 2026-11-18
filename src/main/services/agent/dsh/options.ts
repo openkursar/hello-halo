@@ -88,7 +88,7 @@ export async function resolveDshOptions(
     url: normalizeApiUrl(credentials.baseUrl, 'anthropic_passthrough'),
     apiType: 'anthropic_passthrough',
   } : undefined)
-  if (inheritedReasoning) {
+  if (inheritedReasoning && !(credentials.isGroup && inheritedReasoning.mode === 'provider-default')) {
     const effort = inheritedReasoning.mode === 'effort' || inheritedReasoning.mode === 'adaptive'
       ? inheritedReasoning.effort!
       : 'off'
