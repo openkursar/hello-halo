@@ -14,6 +14,8 @@ import { cn } from '../../lib/utils'
 interface SettingsNavProps {
   /** Whether running in remote mode */
   isRemoteMode: boolean
+  /** Whether the remote backend is a headless server */
+  serverBackend?: boolean
   /** Currently active section id */
   activeSection: string
   /** Callback when section changes */
@@ -140,9 +142,9 @@ function MobileNavDropdown({
  * Main Settings Navigation Component
  * Renders sidebar on desktop, dropdown on mobile
  */
-export function SettingsNav({ isRemoteMode, activeSection, onSectionChange }: SettingsNavProps) {
+export function SettingsNav({ isRemoteMode, serverBackend = false, activeSection, onSectionChange }: SettingsNavProps) {
   const isMobile = useIsMobile()
-  const navItems = getFilteredNavItems(isRemoteMode)
+  const navItems = getFilteredNavItems(isRemoteMode, serverBackend)
 
   if (isMobile) {
     return (

@@ -13,7 +13,7 @@ vi.mock('../../../src/renderer/api', () => ({ api: env.api }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
 vi.mock('../../../src/renderer/hooks/useSecurityPolicy', () => ({ useSecurityPolicy: () => ({ tunnelSafe: true }) }))
 
-import { RemoteAccessSection } from '../../../src/renderer/components/settings/RemoteAccessSection'
+import { FederationSection } from '../../../src/renderer/components/settings/FederationSection'
 
 class ComponentRunner {
   values: unknown[] = []
@@ -64,7 +64,7 @@ const metadata = (gatewayUrl: string | null) => ({ success: true, productDefault
 let runner: ComponentRunner
 let setConfig: ReturnType<typeof vi.fn>
 function render(gatewayUrl = '') {
-  return runner.render(() => RemoteAccessSection({ config: { federation: { gatewayUrl } } as never, setConfig }))
+  return runner.render(() => FederationSection({ config: { federation: { gatewayUrl } } as never, setConfig }))
 }
 
 beforeEach(() => {
@@ -174,7 +174,7 @@ describe('federation gateway setting', () => {
     render()
     await flush()
     expect(text(render())).not.toContain('Leave empty for LAN-only teams.')
-    expect(log).toHaveBeenCalledWith('[RemoteAccessSection] Failed to load gateway default:', expect.any(Error))
+    expect(log).toHaveBeenCalledWith('[FederationSection] Failed to load gateway default:', expect.any(Error))
   })
 
   it('ignores metadata that arrives after unmount', async () => {

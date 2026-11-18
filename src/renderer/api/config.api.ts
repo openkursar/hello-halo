@@ -216,6 +216,16 @@ export const configApi = {
     return httpRequest('GET', '/api/security/policy')
   },
 
+  // ===== Runtime =====
+  // Whether the backend is a headless server. The desktop window is never
+  // one (server mode opens no window), so only a web client asks.
+  getRuntimeInfo: async (): Promise<ApiResponse<{ serverMode: boolean }>> => {
+    if (isElectron()) {
+      return { success: true, data: { serverMode: false } }
+    }
+    return httpRequest('GET', '/api/system/runtime')
+  },
+
   // ===== Model Capabilities =====
 
   /**

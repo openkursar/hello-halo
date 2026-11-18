@@ -10,6 +10,7 @@ import {
   electronApp,
   getEnabledAuthProviderConfigs,
 } from './_shared'
+import { isServerMode } from '../../foundation/runtime-mode'
 
 /** Matches the client's batch size with headroom; anything beyond is dropped, not queued. */
 const MAX_REPORTS_PER_REQUEST = 100
@@ -76,6 +77,13 @@ export function registerSystemRoutes(app: Express): void {
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
+  })
+
+  // Which kind of process serves this client. A web client cannot tell a
+  // headless server from a desktop shared over Remote Access, and only the
+  // former has no local window where node-level settings could be changed.
+  app.get('/api/system/runtime', (_req: Request, res: Response) => {
+    res.json({ success: true, data: { serverMode: isServerMode() } })
   })
 
 

@@ -863,10 +863,14 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
   })
 
   // POST /api/teams/:teamId/leave — leave a joined office (control-plane).
-  // Mirrors IPC team:leave-office. PIN-only, same as join.
+  // Mirrors IPC team:leave-office. PIN-only, same as join. Like the IPC, an
+  // optional `appIds` list makes only those members leave; the node stays.
   app.post('/api/teams/:teamId/leave', async (req: Request, res: Response) => {
     try {
-      res.json(await leaveTeamOffice(req.params.teamId))
+      const appIds = Array.isArray(req.body?.appIds)
+        ? (req.body.appIds as unknown[]).filter((id): id is string => typeof id === 'string')
+        : undefined
+      res.json(await leaveTeamOffice(req.params.teamId, appIds))
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

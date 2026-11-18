@@ -621,6 +621,10 @@
     "group": "settings"
   },
   {
+    "method": "GET",
+    "path": "/api/system/runtime"
+  },
+  {
     "method": "POST",
     "path": "/api/analytics/report"
   },
