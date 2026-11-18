@@ -64,13 +64,15 @@ function TeamConversationRoom({ spaceId, target, teamDetail }: { spaceId: string
   const seeksParticipant = !!task && !target.appId && !remembered && task.createdByMe === false && task.involvedMe === true
   const participant = seeksParticipant ? involvedOwnMember(ownedTaskMembers(detail, apps), board.activities, board.board?.tasks ?? []) : undefined
   const resolvingParticipant = seeksParticipant && !board.board && !board.failed
-  const chosen = target.appId ?? remembered ?? participant ?? detail.team.leadAppId ?? null
+  const chosen = target.appId ?? remembered ?? participant ?? task?.memberAppId ?? detail.team.leadAppId ?? null
   const member = detail.roster.find(item => item.appId === chosen)
   const selectedAppId = member?.appId ?? null
   const select = useCallback((next: TeamChatTarget) => useChatStore.getState().selectTeamConversation(spaceId, next), [spaceId])
 
   useEffect(() => {
     if (useChatStore.getState().spaceStates.get(spaceId)?.selectedTeamChat !== target) return
+    // Until the task loads, the fallback member is only a guess; pinning it would outrank the task's own member.
+    if (target.epochId && !task) return
     if ((selectedAppId && !target.appId) || (task && task.label !== target.label) || detail.team.name !== target.teamName) {
       select({ ...target, appId: target.appId ?? selectedAppId ?? undefined, label: task?.label ?? target.label, teamName: detail.team.name })
     }
@@ -100,7 +102,7 @@ function TeamConversationRoom({ spaceId, target, teamDetail }: { spaceId: string
   }
   const onTask = (epochId: string, decisionEntry = false) => {
     const next = conversations.find(item => item.epochId === epochId)
-    if (!next || next.kind !== 'native') return
+    if (!next || (next.kind !== 'native' && next.kind !== 'run')) return
     const decision = decisionEntry ? detail.pendingEscalations?.find(item => item.epochId === epochId) : undefined
     select({ teamId: target.teamId, epochId, teamName: detail.team.name, label: next.label,
       ...(decision ? { appId: decision.appId, entryId: decision.entryId, decision: true } : {}) })
@@ -114,7 +116,7 @@ function TeamConversationRoom({ spaceId, target, teamDetail }: { spaceId: string
   return <div className="flex h-full min-h-0 flex-col">
     {chosen && !selectedAppId && <p role="status" className="px-4 py-2 text-xs text-muted-foreground">{t('This member is unavailable. Choose another member to continue.')}</p>}
     <TaskRoom key={room.key} homepageConversation detail={detail} task={task} selectedAppId={selectedAppId}
-      blocked={!!detail.legacyCoordinator} boardState={board} tasks={conversations.filter(item => item.kind === 'native')}
+      blocked={!!detail.legacyCoordinator} boardState={board} tasks={conversations.filter(item => item.kind === 'native' || item.kind === 'run')}
       decisionTarget={target.decision ? target.entryId : undefined} onSelectMember={onMember} onCreated={onCreated}
       onTask={onTask} onActivity={activityId => openProgress(activityId ? { activityId } : undefined)} onExecution={memberAppId => openProgress({ memberAppId })} />
   </div>

@@ -1,12 +1,74 @@
 import { taskTime } from '../../../src/renderer/components/team/workbench/time'
 import { executionTurns } from '../../../src/renderer/components/team/workbench/model'
-import { progressSummary, taskProgress } from '../../../src/renderer/components/team/workbench/progress'
+import { failureCause, progressSummary, taskProgress } from '../../../src/renderer/components/team/workbench/progress'
+import { failureFix } from '../../../src/renderer/components/team/workbench/progress-labels'
 import { describe, expect, it } from 'vitest'
 import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, filterTaskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions, undeliveredParties, taskParticipants, reportGaps } from '../../../src/renderer/components/team/workbench/model'
 import { conversationLabel } from '../../../src/renderer/components/team/run-history'
-import type { TeamConversation, TeamActivity, RosterMember, BlackboardTask, BlackboardFinding } from '../../../src/shared/apps/team-types'
+import { isTeamWork, liveTaskCount, memberState, sortByState, taskState } from '../../../src/renderer/components/team/detail/status'
+import type { TeamConversation, TeamActivity, TeamDetail, RosterMember, BlackboardTask, BlackboardFinding } from '../../../src/shared/apps/team-types'
 import type { ActivityEntry } from '../../../src/shared/apps/app-types'
 const task = (patch: Partial<TeamConversation> = {}): TeamConversation => ({ epochId: 'task', teamId: 'team', kind: 'native', label: 'Task', readonly: false, startedAt: 1, lastActivityAt: 1, ...patch })
+describe('task detail status projection', () => {
+  const detail = { team: { id: 'team' }, roster: [], activities: [] } as unknown as TeamDetail
+  const member = (patch: Partial<RosterMember> = {}): RosterMember => ({ appId: 'a', memberName: 'Ana', role: 'Writer', isLead: false, spaceId: null, status: 'idle', ...patch })
+  it('puts a decision waiting for the user above completion and live work', () => {
+    expect(taskState(detail, task({ waitingForMe: true, completed: true })).key).toBe('waiting_user')
+    expect(taskState(detail, task({ waitingForMe: true })).key).toBe('waiting_user')
+    expect(taskState(detail, task({ completed: true })).key).toBe('done')
+    expect(taskState(detail, task({ active: true })).key).toBe('running')
+  })
+  it('counts a local pending decision even before the task row says so', () => {
+    const withDecision = { ...detail, pendingEscalations: [{ entryId: 'e', appId: 'a', memberName: 'Ana', question: 'Ship it?', epochId: 'task' }] } as never
+    const state = taskState(withDecision, task({ completed: true }))
+    expect(state.key).toBe('waiting_user')
+    expect(state.fact).toEqual({ kind: 'decision', memberName: 'Ana', question: 'Ship it?' })
+  })
+  it('reports a member error on the task it is busy with', () => {
+    const failing = { ...detail, roster: [member({ status: 'error', busy: [{ epochId: 'task', label: 'Draft', kind: 'conversation' }] })] } as never
+    expect(taskState(failing, task({ active: true })).key).toBe('error')
+  })
+  it('ignores a failure the same member has since recovered from', () => {
+    const activities = [
+      { id: '1', kind: 'message', actorAppId: 'a', createdAt: 1, epochId: 'task', status: 'error', subject: 'Timed out' },
+      { id: '2', kind: 'message', actorAppId: 'a', createdAt: 2, epochId: 'task', status: 'ok' },
+    ]
+    expect(taskState({ ...detail, activities } as never, task()).key).toBe('idle')
+    expect(taskState({ ...detail, activities: activities.slice(0, 1) } as never, task()).key).toBe('error')
+  })
+  it('does not infer a stuck state from silence', () => {
+    expect(taskState(detail, task()).key).toBe('idle')
+  })
+  it('settles work nobody is on by its board', () => {
+    expect(taskState(detail, task({ subtasks: { done: 2, open: 0 } })).key).toBe('done')
+    expect(taskState(detail, task({ subtasks: { done: 1, open: 1 } })).key).toBe('idle')
+    expect(taskState(detail, task({ active: true, subtasks: { done: 2, open: 0 } })).key).toBe('running')
+  })
+  it('tells team work from a question the lead simply answered', () => {
+    expect(isTeamWork(task())).toBe(false)
+    for (const patch of [{ subtasks: { done: 0, open: 1 } }, { teamwork: true }, { artifactCount: 1 }, { kind: 'run' as const }]) expect(isTeamWork(task(patch))).toBe(true)
+  })
+  it('orders tasks by need, then by recency', () => {
+    const rows = [task({ epochId: 'done', completed: true, lastActivityAt: 9 }), task({ epochId: 'old', lastActivityAt: 1 }), task({ epochId: 'ask', waitingForMe: true, lastActivityAt: 0 }), task({ epochId: 'new', lastActivityAt: 5 })]
+    expect(sortByState(detail, rows).map(row => row.epochId)).toEqual(['ask', 'new', 'old', 'done'])
+  })
+  it('lets offline outrank any stale member status', () => {
+    expect(memberState(detail, member({ presence: 'offline', status: 'error' }))).toBe('offline')
+    expect(memberState(detail, member({ busy: [{ epochId: 'task', label: 'Draft', kind: 'conversation' }] }))).toBe('working')
+    expect(memberState(detail, member())).toBe('idle')
+  })
+  it('counts each live task once, however many members are on it, and ignores work outside the listed tasks', () => {
+    const busy = (...ids: string[]) => ids.map(epochId => ({ epochId, label: '', kind: 'conversation' as const }))
+    const roster = [member({ appId: 'a', busy: busy('t1', 't2') }), member({ appId: 'b', busy: busy('t1') }), member({ appId: 'c', busy: busy('elsewhere') }), member({ appId: 'd' })]
+    const rows = ['t1', 't2', 't3'].map(epochId => task({ epochId, teamwork: true }))
+    expect(liveTaskCount({ ...detail, roster } as never, rows)).toBe(2)
+    expect(liveTaskCount({ ...detail, roster } as never, [task({ epochId: 't1' })])).toBe(0)
+  })
+  it('does not count work held up on the user as running', () => {
+    expect(liveTaskCount(detail, [task({ teamwork: true, active: true, waitingForMe: true }), task({ epochId: 't2', teamwork: true, active: true })])).toBe(1)
+  })
+})
+
 describe('task workbench projection', () => {
   it('keeps questions above completion and source grouping', () => {
     expect(taskGroup(task({ waitingUser: true, waitingForMe: true, completed: true, kind: 'im' }))).toBe('attention')
@@ -231,7 +293,29 @@ describe('conversation progress', () => {
     const recovered = taskProgress({ ...base, activities: [lost, { ...activity, id: 'later', actorAppId: 'writer', targetAppId: 'lead', createdAt: 2000 } as TeamActivity] })
     expect(recovered.members.find(row => row.appId === 'writer')?.state).not.toBe('failed')
     const turn = taskProgress({ ...base, activities: [{ ...activity, id: 'turn', kind: 'reply', actorAppId: 'analyst', targetAppId: 'lead', status: 'error', createdAt: 1000 } as TeamActivity] })
-    expect(turn.members.find(row => row.appId === 'analyst')).toEqual({ appId: 'analyst', state: 'failed', activityId: 'turn' })
+    expect(turn.members.find(row => row.appId === 'analyst')).toEqual({ appId: 'analyst', state: 'failed', activityId: 'turn', reason: 'Investigate' })
+  })
+  it('keeps why a turn failed and tells what kind of trouble it was', () => {
+    const failedTurn = (subject: string, status: TeamActivity['status'] = 'error') => taskProgress({ ...base, activities: [{ ...activity, id: 'turn', kind: 'reply', actorAppId: 'analyst', targetAppId: 'lead', status, subject, createdAt: 1000 } as TeamActivity] })
+      .members.find(row => row.appId === 'analyst')!
+    const model = failedTurn('The member\'s turn failed: Anthropic API error (400): The model or service ID de…')
+    expect(model.reason).toBe('Anthropic API error (400): The model or service ID de…')
+    expect(failureCause(model)).toBe('model')
+    expect(failureCause(failedTurn('The member\'s turn failed: 401 invalid x-api-key'))).toBe('account')
+    expect(failureCause(failedTurn('The member\'s turn failed: 429 rate_limit_error'))).toBe('quota')
+    expect(failureCause(failedTurn('The member\'s turn failed: 529 overloaded_error'))).toBe('service')
+    expect(failureCause(failedTurn('The member\'s turn failed: fetch failed'))).toBe('network')
+    expect(failureCause(failedTurn('The member did not finish in time (timeout).', 'timeout'))).toBe('timeout')
+    expect(failureCause(failedTurn('The member\'s turn failed: something odd'))).toBeNull()
+  })
+  it('says who has to fix a failed turn: you through its model settings, or its owner', () => {
+    const t = ((key: string, vars?: Record<string, string>) => key.replace(/\{\{(\w+)\}\}/g, (_, name) => vars?.[name] ?? '')) as never
+    const row = { appId: 'analyst', state: 'failed' as const, activityId: 'turn', reason: 'Anthropic API error (400): The model or service ID de…' }
+    expect(failureFix(row, [member('analyst')], t)).toEqual({ text: 'Needs you', changeModel: true })
+    expect(failureFix(row, [member('analyst', { owner: 'Lin', sameMachine: false })], t)).toEqual({ text: 'Lin needs to change its model settings' })
+    expect(failureFix({ ...row, reason: 'something odd' }, [member('analyst', { owner: 'Lin', sameMachine: false })], t)).toEqual({ text: 'Lin needs to look into it' })
+    expect(failureFix({ ...row, reason: 'fetch failed' }, [member('analyst', { owner: 'Lin', sameMachine: false })], t)).toEqual({})
+    expect(failureFix({ ...row, senderAppId: 'lead' }, [member('analyst')], t)).toEqual({})
   })
   it('reads everyone as done once the conversation is completed', () => {
     const progress = taskProgress({ ...base, completed: true, tasks: [work('draft', 'writer', 'done')] })
@@ -275,6 +359,7 @@ describe('shared decision visibility', () => {
       answer: 'Approved', answeredAt: 3000,
     }])
     expect(taskConversationRows([], [request, answer], 'task', 'remote')[0].sharedDecision?.answer).toBe('Approved')
+    expect(taskConversationRows([], [request, answer], 'task', 'remote', [], { sharedDecisions: false })).toEqual([])
   })
 
   it('does not duplicate a shared decision that has a local actionable entry', () => {

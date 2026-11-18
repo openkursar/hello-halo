@@ -32,6 +32,12 @@ promises:
   layout:
     en: The task room and its drawers remain usable in narrow layouts and both themes.
     zh: 任务房间及抽屉在窄屏和两种主题中仍可使用。
+  crew:
+    en: On the Teams page I can see who is on each live task right now and who is talking with whom, without the card resizing as members come and go.
+    zh: 在团队页里我能看到每个进行中任务此刻有谁在做、谁在和谁沟通，成员来去时卡片不会改变高度。
+  outputs:
+    en: From the team page I can find and open every file the team delivered, and get back to the task that produced it.
+    zh: 在团队页里我能找到并打开团队交付的所有文件，并回到产生它的任务。
 scenarios:
   - id: teams.tasks.homepage
     title:
@@ -168,8 +174,8 @@ scenarios:
       - en: In a home team conversation the Lead has handed work to two members; one is working, one asks me a question, and a message to a third never arrived.
         zh: 首页团队对话中 Lead 已把工作交给两位成员：一位工作中，一位向我提问，另有一条发给第三位的消息未送达。
     steps:
-      - en: Read the conversation bar above the composer, open its panel from the status and from "+N", answer from it, view the failure, then open the full progress, fold and unfold subtask groups, open an output from the overview and open its subpages; repeat with nothing to report and at a narrow width.
-        zh: 查看输入框上方的对话条，分别从状态和“+N”打开面板，从面板去回答，查看失败，再打开完整进展，展开收起子任务分组，从总览打开一份产出并进入各子页；在无可报告状态及窄屏下重复。
+      - en: Read the conversation bar above the composer, open its panel from the status and from "+N", answer from it, view the failure, then open the full progress, answer the question there, unfold a step, click a step's member and a face in the team scene, open an output from the overview and open its subpages; compare it with the same task's panel on the team page; repeat with nothing to report and at a narrow width.
+        zh: 查看输入框上方的对话条，分别从状态和“+N”打开面板，从面板去回答，查看失败，再打开完整进展，在其中直接回答问题，展开一个步骤，点击步骤成员和团队现场中的头像，从总览打开一份产出并进入各子页；与团队页中同一任务的面板对照；在无可报告状态及窄屏下重复。
     expected:
       - en: The member avatars, their "+N" chip, a divider and the conversation status form one capsule; the stream has no progress card. The status shows an icon, a one-line summary (waiting for me, failed, waiting for a decision, working, "Completed · N outputs" or "Team progress") and, when there are board tasks, the done/total count and a bar filled only by done tasks, then a chevron that is always there and opens the panel upward even when there is nothing to report. The status always reads in full with no ellipsis; at narrow widths the bar hides first, then avatars fold into "+N". A working member's avatar has a blue dot at its corner, one waiting for me an orange one and a failed one a red one, in the bar and the panel alike; nothing in the bar animates. The current member's row in the panel is highlighted and member names are not truncated.
         zh: 成员头像、“+N”、分隔线与对话状态组成一个胶囊，消息流中不再有进展卡片。状态显示图标、一句话摘要（等你处理、失败、等待决策、工作中、“已完成 · N 份成果”或“团队进展”），有看板任务时显示已完成/总任务数和仅按已完成填充的进度条，最后是始终存在的箭头，即使没有可报告的状态也能向上打开面板。状态始终完整显示、不出现省略号：窄屏时进度条先隐藏，再把头像收进“+N”。工作中成员头像右下角为蓝点，等你处理为橙点，失败为红点，对话条与面板一致；对话条上没有任何动画。面板中当前成员所在行高亮，成员名字不被截断。
@@ -177,10 +183,10 @@ scenarios:
         zh: 状态与“+N”打开同一个全部成员面板，不会自动弹出。面板顶部为团队进展与完成数，成员按需要你处理、工作中、我的数字人、仅查看分组并显示各自在做什么；“去回答”切到该成员及其问题，“查看”在协作记录中打开失败记录。
       - en: Under the Lead's reply a single "Sent a message to X" line replaces the per-member dispatch rows, and failed deliveries no longer appear as rows in the stream; they are told in the conversation bar. Expanded, each message's "To X" heading, and with a single recipient also the footer's "View X's conversation", switches to X in the same conversation with that message expanded and in view; X's "Received a report from Lead" line leads back to the Lead the same way. A message from or to the main chat has a plain heading and leads to team progress instead.
         zh: Lead 回复下方以一行“已发消息给 X”代替逐条派发记录，投递失败不再作为消息流中的行出现，而在对话条上说明。展开后每条消息的“发送给 X”标题（只有一位收件人时还有底部的“查看 X 的对话”）可在同一对话中切到 X，并展开、定位到这条消息；X 那边“收到了 Lead 的报告”同样可切回 Lead。来自或发往主对话的消息标题不可点击，仍进入团队进度。
-      - en: The link at the bottom right of the panel opens Team progress in the canvas, showing a status line, a brief naming only what needs me (once done, how long it took and how much of it waited on people), subtasks grouped as waiting on you, errored, in progress, not started yet and completed, the outputs listed in place newest first (beyond five the rest unfold in place), and links to the collaboration record and members, the members page listing the whole roster with each one's concrete work; opening it again reuses the same tab. The bar stays readable at narrow widths and in both themes. The team workbench keeps its own activity drawer unchanged.
-        zh: 面板右下角链接在画布中打开“团队进度”：状态行、只点出需要我处理之事的简报（完成后给出用时及其中等人确认的时长）、按待你确认/出错/进行中/待开始/已完成分组的子任务、直接列出的产出（最新在前，超过五个可就地展开其余），以及进入协作记录和成员的入口，成员页列出全部成员及各自的具体工作；再次打开复用同一标签页。窄屏和两种主题下对话条仍可读。团队工作台保留原有活动抽屉不变。
-      - en: When the Lead ends the work as done, or every subtask is done or rejected with nobody working, waiting or failed, the bar reads "Completed · N outputs" and the progress shows "Completed · took X", a brief saying what was done (the closing summary only when the Lead ended the work, else how many subtasks completed), how much of that time waited on people and the output count or "No output files", then the outputs right below it with nothing to scroll to, and all subtasks in a folded completed group; a new message or subtask turns it back to in progress.
-        zh: Lead 结束工作，或所有子任务均已完成或被拒绝且没有成员在工作、等待或失败时，对话条显示“已完成 · N 份成果”，进度显示“已完成 · 用时 X”，简报说明完成了什么（仅在 Lead 结束工作时显示收尾总结，否则为几个子任务已完成）、其中等人确认的时长，以及产出份数或“没有产出文件”，产出紧接在简报下方、无需滚动，所有子任务收在折叠的已完成分组中；发出新消息或新增子任务后恢复为进行中。
+      - en: The link at the bottom right of the panel opens Team progress in the canvas, showing a status line, a status line that once done also says how long it took and, when it counts, how much of it waited on people, a bordered brief card whose heading color says the state (faintly tinted amber or red when something needs attention or failed), naming only what needs me, with who is working on what in its footer, questions answered in place with no trip to the chat, the team scene, the subtask timeline, the outputs after it newest first as two columns of cards (beyond six the rest unfold in place), and links to the collaboration record and members, the members page listing the whole roster with each one's concrete work; under its team line and title it reads the same as the team page's task panel. A step's member switches the chat beside to that member; the brief, scene and footer open the member's work in the canvas. Opening it again reuses the same tab. The bar stays readable at narrow widths and in both themes. The team workbench keeps its own activity drawer unchanged.
+        zh: 面板右下角链接在画布中打开“团队进度”：状态行（完成后给出用时，等待时长足够显著时还给出其中等人确认的时长）、带浅色边框、以标题颜色区分状态（需要关注或出错时带淡琥珀或淡红底色）、只点出需要我处理之事并在底栏注明谁在做哪项的简报卡片、原地回答的待确认问题（无需跳回对话）、团队现场、子任务时间轴、其后两列卡片列出的产出（最新在前，超过六个可就地展开其余），以及进入协作记录和成员的入口，成员页列出全部成员及各自的具体工作；团队行与标题之下与团队页中的任务面板一致。点击步骤成员会把旁边的对话切到该成员，简报、现场与底栏则在画布中打开该成员的工作。再次打开复用同一标签页。窄屏和两种主题下对话条仍可读。团队工作台保留原有活动抽屉不变。
+      - en: When the Lead ends the work as done, or every subtask is done or rejected with nobody working, waiting or failed, the bar reads "Completed · N outputs" and the progress shows "Completed · took X", the status line opens with a green check, and a result card with a faint border only when there is more to say than the status line: the summary's opening paragraph in up to three plain lines, an "In this summary" box listing its sections (fading past four), and a footer with the Lead's avatar and "X's summary" plus Full text that opens the rendered summary in place when the glance leaves anything out (the closing summary when the Lead ended the work, else the Lead's last reply when the board settled without it, unless that is a bare acknowledgement), then up to three rejected or unfinished subtasks; the subtask timeline folded until opened and the outputs still after it, the section absent when none are listed; a new message or subtask turns it back to in progress.
+        zh: Lead 结束工作，或所有子任务均已完成或被拒绝且没有成员在工作、等待或失败时，对话条显示“已完成 · N 份成果”，进度显示“已完成 · 用时 X”，状态行以绿色对钩开头，仅当有状态行之外的内容时才显示浅色细边框的结果卡片：总结开头一段（至多三行纯文本）、列出各小节的“本总结包含”框（超过四项渐隐），底部是 Lead 头像和“X 的总结”，速览没有覆盖全部内容时还有“全文”，可在原处展开渲染后的总结（Lead 结束工作时为收尾总结，看板已收尾但 Lead 未结束工作时为 Lead 的最后一条回复，仅一句确认时不显示）；其后列出至多三个被拒绝或未完成的子任务；子任务时间轴默认收起、点开才展开，产出仍位于其后，没有列出产出时不显示该区域；发出新消息或新增子任务后恢复为进行中。
   - id: teams.tasks.conversation-entry
     title:
       en: Begin a team conversation without task onboarding
@@ -546,3 +552,55 @@ scenarios:
     notes:
       en: This verifies form admission and request shape. Application creation and persistence are separate backend evidence.
       zh: 验证表单准入和请求形状；应用创建与持久化需要独立后端证据。
+
+  - id: teams.tasks.live-crew
+    title:
+      en: See who is on a task and who is talking
+      zh: 看到谁在做任务、谁在沟通
+    verifies: [crew, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: An isolated renderer fixture provides a standing team with a live task where five members are busy, one is waiting on a decision, and two of them exchanged a message within the last two minutes, plus a finished task.
+        zh: 隔离界面数据提供一个持久团队：一个进行中任务有五位成员在忙、一位在等决定，其中两位在两分钟内互发过消息；另有一个已完成任务。
+    steps:
+      - en: Read the task rows at desktop and narrow widths, then open the live task.
+        zh: 在桌面和窄屏宽度下查看任务行，再打开进行中任务。
+      - en: Deliver a new message between two more members, let two minutes pass, then make one member idle, in both themes and with reduced motion.
+        zh: 在两种主题及减少动态效果下，投递另两位成员之间的新消息，等待两分钟，再让一位成员空闲。
+    expected:
+      - en: The live row shows the waiting member first, at most four faces (three when narrow) and "+N"; the talking pair overlaps and blinks; the finished row shows no one.
+        zh: 进行中任务行先显示等待中的成员，最多四个头像（窄屏三个）加“+N”；沟通中的两人重叠并眨眼；已完成任务行不显示成员。
+      - en: The task panel's team scene groups the talkers, marks the lead by a bold name, lists everyone else on standby, and keeps its height while members join, stop talking or leave; reduced motion shows no sliding or blinking. Once the task is finished, the stage keeps the Lead and everyone who took part, each with a green check, and standby lists only those who took no part.
+        zh: 任务面板的团队现场把沟通者聚在一起，以加粗名字标出 Lead，其余成员列为空闲；成员加入、停止沟通或离开时高度不变；减少动态效果时没有滑动和眨眼。任务完成后，现场保留 Lead 和所有参与过的成员（各带绿色对钩），空闲区只列未参与的成员。
+    notes:
+      en: Talking is read from activity the page received while open; talk from before the page opened is out of scope.
+      zh: “沟通中”只依据页面打开期间收到的活动；页面打开前的沟通不在范围内。
+
+  - id: teams.tasks.team-outputs
+    title:
+      en: Open the team's delivered files from the team page
+      zh: 从团队页打开团队交付的文件
+    verifies: [outputs, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A controlled standing team has more than 30 outputs across several tasks and months, including one file declared twice in a task and one published by the main chat, plus a teammate reader who sees only some producers.
+        zh: 隔离的持久团队在多个任务和月份中有超过 30 份产出，其中一份在同一任务里声明过两次、一份由主聊天发布；另有一位只能看到部分发布者的队友读者。
+    steps:
+      - en: On the team page click "N outputs" in the header, scroll to the end, open a file, then open a row's task; repeat at a narrow width, in both themes, and as the teammate reader.
+        zh: 在团队页点击页头的“N 个产出”，滚动到底，打开一份文件，再打开某行的来源任务；在窄屏、两种主题下以及以队友读者身份重复。
+    expected:
+      - en: The header count is a button with a chevron that opens the Outputs panel the way Members opens (docked beside the page when wide, full screen when narrow). The panel reads "Outputs" with the all-time total and lists files newest first under Today, Yesterday, Earlier this week, Earlier this month, then by month; each row shows the file icon and name, who produced it ("Main chat" for the main chat), its task as a link and the time. A file declared twice appears once, at its latest declaration.
+        zh: 页头数量是带箭头的按钮，打开“产出”面板的方式与“成员”一致（宽屏停靠在页面旁，窄屏全屏）。面板标题为“产出”并显示全部时间的总数，按今天、昨天、本周更早、本月更早、再按月份分组，最新在前；每行显示文件图标与名称、发布者（主聊天发布时显示“主聊天”）、来源任务链接和时间。同一任务里声明两次的文件只出现一次，位于最近一次声明处。
+      - en: Further pages load while scrolling without repeats; clicking a row opens the file, clicking the task opens that task; with no outputs the panel says so. The teammate reader sees only files from producers they can see, and the total matches.
+        zh: 滚动时继续加载后续分页且不重复；点击行打开文件，点击任务打开该任务；没有产出时面板给出说明。队友读者只看到其可见发布者的文件，总数一致。
+    notes:
+      en: The header counts outputs from this month's tasks; the panel total covers all time, so the two can differ.
+      zh: 页头统计本月任务的产出，面板总数涵盖全部时间，两者可能不同。

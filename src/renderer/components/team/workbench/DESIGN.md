@@ -39,9 +39,132 @@ Native team conversations open in the homepage through the team module's public
 outputs, collaboration history and member execution) opens as a `team-task` tab in
 the right canvas instead of a drawer; the tab reads its own board for the task, and
 reopening it reuses the tab and reveals the requested record or member.
-The Teams page retains its existing workbench, including native conversations,
-management and external/run history; opening or creating work there stays in that
-workbench. Both entry points access the same retained team records.
+The Teams page is for viewing, never chatting. It is one task list (decisions waiting
+on the user first, set aside while a panel is open, since they may belong to other tasks
+and their rows still say so) with no section tabs: the member strip in the header opens the
+member list as a side panel (drilling into one member and back), a gear opens team
+settings as a full-page switch back to the list (closing any open panel), and Invite sits beside Run. Scrolling
+past the team name, or opening a panel that fits beside the list, collapses the header to
+one bar across the page: the team avatar, opening its members; the name with where it
+stands over the goal; the actions. With a panel the bar spans the list and the panel,
+which scroll apart, and puts every team action, "Start task" first, behind one menu so
+the panel's own action leads; too
+narrow, the panel covers the list instead. Docked, a task panel's action and close sit
+on its title row, and a slim bar carries them once the title scrolls away. Every way into a
+conversation is an outward action ("Start task", "Open conversation", "Chat with
+…") that lands on the homepage. A task's side panel (`detail/TaskPanel`) reads like
+an AI client's answer: a brief card, decisions answered in place, the team scene, the
+lead's plan as a subtask timeline headed by a done/total count, and output cards. The
+way into the members' conversations ("Member conversations · N exchanges", counting
+messages and replies between members) closes the scene, under its latest exchanges;
+without a scene it closes the panel. It has no transcript or composer.
+"Open conversation" opens the task on the homepage in place: a conversation someone
+started reopens, and a scheduled, manual or webhook run opens as a conversation of its
+own that joins the homepage list once a person writes into it. A task someone else
+started opens the same way: the user writes through their own digital human there.
+A step unfolds in place into that step alone (`subtaskRecord`): what it was asked (the
+poster's first message to the assignee after posting it, before their next step was
+posted), its status updates, and its closing note and result file. Exchanges between
+members live with the members' conversations. Steps form one
+timeline with no time column, done first, then failed, waiting, running and not
+started. The brief card above already tells what went wrong or waits, so such a step
+is only its colored node and a word beside its member (the reason on hover); waiting
+ones carry Answer. Each step opens with a row level with its node, its
+member with an avatar (opening that member's work in this task) and, at the right, when
+it started and how long it took (running: so far); the title follows, since delegated
+titles are long message openings; then one line of what it did: a running step's latest
+progress, a finished step's closing note (its first line that is not the title) and its
+result file, which opens without unfolding the step.
+Answered questions sit on the same timeline at the time they were asked, as one quiet
+row marked by a chat bubble rather than a status dot so they never read as pending: who
+asked whom and what, that the answer came, and how long it was waited for. They unfold
+into the question and the reply. A step's duration leaves out waits someone else asked for and keeps its
+assignee's own, named. A finished task's status line adds how much of its time went
+on waiting for answers (overlaps counted once; whom it waited on when one person,
+else how many), only when it is at least a minute and a tenth of the time, and leads
+to these questions. The timeline folds away from its heading.
+Hierarchy comes from type and space; the team scene is the panel's only grey surface
+and the brief its only bordered card (`BriefCard`), one faint-bordered shell in every
+state, never a side bar. Running, its small heading says the kind of news (progress;
+needs attention in amber or red with a matching dot, the card then faintly tinted and
+bordered in that color, as are the team page's "Needs you" cards, `toneSurface`;
+progress and results stay untinted). Each line that needs the user opens with the
+member's face before their name, both leading to that member's work inside the team
+(the panel's member view, never the sidebar's conversation list); the panel adds no
+buttons, its decision cards sit right below. A footer past a
+hairline names who is working on which subtask (not those failed or waiting, told above), leading to their work (else how many
+subtasks run). It names only what the status line does not.
+Outputs are borderless file rows that fill on hover.
+A finished task reads as a status board, not a report: the status line opens with a
+green check and "Completed"; the result under it is the same card, read like a document card: the summary's
+opening paragraph in up to three plain lines, a nested outlined box "In this summary"
+listing its section headings (else its top-level items; at most six, fading past four,
+`markdownDigest`), the subtasks left undone (rejected or unfinished, at most three,
+then "+N"), and a footer past a hairline with the lead's avatar and "X's summary"
+(leading to the lead's work) and, when the glance leaves anything out, Full text,
+opening the rendered Markdown in place. With only leftovers the card holds just them; with neither there is none. The task panel keeps its order (team scene, timeline, outputs),
+its timeline folded until asked for. The conclusion is the summary the lead closed the work with;
+work read as finished off a settled board was never closed, so its lead's last reply in
+it stands in (`finalReplyText`, read from the transcripts activity already loads, no
+extra read), unless it is too short to be more than an acknowledgement. The leftover
+lines are read off the board, so they carry no avatar. The outputs section is absent while nothing is listed: files a
+command wrote are never listed, so the page cannot claim there are none.
+Panels go one level deep: the members' conversations (`detail/MemberWork`) are one
+board at the homepage conversation's width, with two views, "All exchanges" and "By
+member": tabs at the start of a row under the panel bar, the type filter as text at its
+end. The row sits outside the record's scroll, on its column, above a full-width rule the
+record scrolls under, so it stays put while reading and switching. "By member" is laid out
+as the homepage conversation: the homepage's own member rail above a locked composer, whose
+status returns to the task overview. Nothing is sent from the Teams page, so the composer
+says the conversation continues on the homepage and offers the way there (an IM chat names
+its app instead); a teammate's member keeps the homepage's own read-only wording. "All
+exchanges" has no rail and no composer: the homepage has no such conversation to continue,
+and every card's avatar already opens its member. "All exchanges" is every exchange and report
+in the task on one timeline, newest first; it is the only place
+members on other computers show what they said when their transcripts cannot be read.
+"By member" is one member's work in this task under one line of whose it is and what it
+is doing; switching to it reopens the member last viewed in this panel, else the first
+in rail order. The scene's conversations line opens "All exchanges"; an avatar anywhere
+(the scene, the lead's summary, a step, a record) opens that member; a link to one
+exchange opens "All exchanges" at it. The raw execution record is one step further; a task opened from a member panel
+replaces it with that task. Opening a task from its list always starts at the overview. An IM chat is answered in its IM app and is not hosted on the
+homepage, so its panel only says so and its members offer no way on. Task rows say
+where work nobody here started came from (the run's trigger, the IM app), then on the
+same line under the title what it produced, its subtasks and when it last moved;
+finished or quiet work leaves its state to the leading icon and its group: a spinner
+while it runs (slowed, not stopped, under reduced motion), a green check once done, a
+dot when waiting, failed or quiet. Rows are parted by a hairline that gives way beside
+the hovered or open row. At the end of a live
+row sit the members on it now (`detail/crew`: working on it, waiting on a decision, or
+stopped by a failure), with members needing the user first; at most four at 24px (three
+at 22px when narrow), the rest as "+N"; hovering them lists everyone with their state
+and who is talking to whom, a talking member's state naming its partners ("Talking with
+Lead"), never a bare "teammates". Two members who wrote to each other in this task within the
+last two minutes overlap and blink (eyes only, never a turned head); "talking" is read
+from the live activity buffer the page already holds, so talk from before the page
+opened is not shown. Members who took part (`participantAppIds`, projected only for a
+team's own task list; it counts team activity and every local member that had a turn of
+its own there, so whoever answered the user directly is included) and are not on it now stack after them: in full on a finished row
+(at most four, then "+N"), faded, smaller and past a divider on a live or quiet one (at
+most three); hovering lists them as "took part". Below the brief card and decisions of
+team work, so what needs the user (or the lead's closing summary) comes before who is
+on it, a task panel's team scene (`detail/TeamScene`) shows the same people at size:
+talking members overlap in a ring (pair, triangle, square, then circle), each status
+dot staying at its own face's bottom-right and layered with that face, so a face in
+front may cover a neighbour's dot but no dot floats on another face, the lead marked by a bold name, everyone else standing alone with its state under its name when
+it is waiting, failed or offline (working and done say it by their dot or check alone); at most the lead and six others, never splitting a pair, then "+N".
+Beside it (below when narrow), parted by space rather than a rule, the members not on the task stand faded, a green check on
+those who did their part. Once the task is finished and nobody is on it, the stage keeps
+those who did the work (the lead first, each with a green check) and the pile holds
+only those who took no part. On the stage a done badge is a check, never a bare green dot, which
+would read as "online" there, a little larger than the other dots so the check stays legible;
+the check is the stage's alone, and switchers, rails and lists keep the plain dot. The stage and that pile keep one height, so members joining
+or leaving slide into place instead of resizing the card; reduced motion drops the
+slide and the blink. Under them, the latest two exchanges while anyone is on it, each opening "All exchanges" at itself. A run is titled by
+its summary, else as work toward the team goal, never by the team's name again. Under
+the team name one line says where the team stands (a failure, a decision for me, how
+many tasks are live, else idle) and what it finished this month with how many outputs. Both entry
+points access the same retained team records.
 The homepage draft invites ordinary conversation, not task creation; starting a
 conversation persists its scope but does not itself assign board work. Member turns
 may explicitly create board tasks. The homepage does not offer a complete-task action
@@ -102,7 +225,8 @@ is a single party. A party with no view of its own (the main conversation, a for
 member) is plain text and the footer leads to team progress instead. The homepage also shows a
 member's replies to teammates and to their turn-end reports as chat replies, even
 before the user writes to it, so collaboration reads as dialogue rather than segment
-cards; replies to periodic checks and run starts stay in execution records, and
+cards; replies to periodic checks stay in execution records (a run's replies to its
+start are how its conversation opens), and
 never a copy of the last reply follows them.
 Live work there reads as a reply being written in personal chat (sender name,
 the same collapsible thought panel, streaming text) with no status frame; its
@@ -152,7 +276,8 @@ present when input is read-only or unavailable. The order stays lead,
 owned, then other members in roster order. Only owned digital humans and local temporary collaborators in this work may send. New homepage
 conversations default to the actual lead even when read-only; a task someone else
 started that one of my members took part in opens on that member (read from the
-board, with no fallback to the lead until the board is known); a missing remembered
+board, with no fallback to the lead until the board is known); an existing task otherwise
+opens on the member it was held with (`memberAppId`) before the lead; a missing remembered
 member requires a new explicit choice. Switching preserves the conversation and
 per-member transcript and draft, never opens private chat, and a team that fits the
 rail needs no overflow chip.
@@ -173,12 +298,17 @@ its given name rather than the id-suffixed handle it is addressed by
 (`memberDisplayName`). A temporary team's lead
 may hand work out by message alone; while its board is empty, each member the lead
 wrote to is one subtask (`delegatedTasks`), done once the member has answered the
-lead's latest message and is not at work. Until then it is titled by the lead's first
+lead's latest message and is not at work. A board finding counts as an answer, and a
+member that has answered before may leave a closing word unanswered: a successful
+turn files nothing, so once that message arrived, the member is idle and no failure
+followed, it is settled. Until then it is titled by the lead's first
 message; once done, by the opening line of the member's report. Such subtasks keep
 the order the work was handed out, since it usually passed from one member to the
 next. This reading
-feeds the bar and the canvas alike, so both settle to completed together; a board
-task, once there is one, replaces it.
+feeds the bar and the canvas alike, and the main process applies the same shared
+reading (`shared/apps/team-delegations.ts`) to the task list's subtask counts, so the
+list, the bar and the canvas settle to completed together; a board task, once there
+is one, replaces it.
 The Teams workbench retains its original composer selector and member rail.
 Member details remain an explicit action in team management.
 The client remembers the last task per team and member choice per task. An

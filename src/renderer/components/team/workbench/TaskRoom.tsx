@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Activity, AlertCircle, ArrowLeft, ArrowRight, Pencil, Check, X } from 'lucide-react'
 import type { RosterMember, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import { buildTeamSessionKey } from '../../../../shared/apps/im-keys'
 import { useMemberPresence, useTeamStore } from '../../../stores/team.store'
 import { useAppsStore } from '../../../stores/apps.store'
+import { useChatStore } from '../../../stores/chat.store'
 import { useTeamViewPrefsStore } from '../../../stores/team-view-prefs.store'
 import { useTranslation } from '../../../i18n'
 import { TeamSessionChat } from '../TeamSessionChat'
@@ -21,10 +22,15 @@ import { ownedTaskMembers } from './members'
 import { navigateToConversation } from '../../../utils/conversation-navigation'
 import { ConversationReferenceScope } from '../../references'
 
-export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreated, onActivity, boardState, decisionTarget, tasks, onTask, onExecution, blocked = false, homepageConversation = false, returnToMain }: {
+export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreated, onActivity, boardState, decisionTarget, tasks, onTask, onExecution, blocked = false, homepageConversation = false, returnToMain, viewOnly }: {
   blocked?: boolean; homepageConversation?: boolean
   /** A temporary team's member, watched from inside the conversation that leads the team: nobody else may message it. */
   returnToMain?: () => void
+  /**
+   * Watched from the Teams page, where nothing is sent: the composer stays locked with `reason`
+   * and `action`, and `header` leads the record.
+   */
+  viewOnly?: { header?: ReactNode; reason?: string; action?: ReactNode }
   detail: TeamDetail; task: TeamConversation | null; selectedAppId: string | null; onSelectMember: (member: RosterMember) => void
   onCreated: (id: string) => void; onActivity: (activityId?: string) => void; boardState: TaskBoardState; decisionTarget?: string; tasks: TeamConversation[]; onTask: (id: string, decisionEntry?: boolean) => void; onExecution: (appId: string) => void
 }) {
@@ -63,16 +69,18 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
     setFocusedDecision(entry.id)
   }
   const progress = useTaskProgress({ detail, task: homepageConversation ? task : null, boardState, decisions: pending.filter(entry => ids.includes(entry.appId)) })
-  const reminder = pending.length > 0 && <button onClick={() => focusDecision(pending.find(item => item.appId === appId) ?? pending[0])} className="mb-2 flex min-h-10 w-full items-center gap-2 rounded-lg border border-halo-warning/30 bg-halo-warning/5 px-3 py-2 text-left text-xs text-halo-warning focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+  // A homepage conversation flags waiting members on its member rail instead.
+  const reminder = !homepageConversation && pending.length > 0 && <button onClick={() => focusDecision(pending.find(item => item.appId === appId) ?? pending[0])} className="mb-2 flex min-h-10 w-full items-center gap-2 rounded-lg border border-halo-warning/30 bg-halo-warning/5 px-3 py-2 text-left text-xs text-halo-warning focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
     <AlertCircle size={15} className="shrink-0" /><span className="min-w-0 flex-1">{t('{{count}} decisions need your answer', { count: pending.length })}</span><span>{t('View')}</span><ArrowRight size={14} />
   </button>
+  const entryAppId = appId && ids.includes(appId) ? appId : undefined
   const ensureEpoch = useCallback((firstMessage: string) => {
-    if (!creating.current) creating.current = openConversation(detail.team.id, Array.from(firstMessage.trim().replace(/\s+/g, ' ')).slice(0, 60).join('') || undefined).then(id => {
+    if (!creating.current) creating.current = openConversation(detail.team.id, Array.from(firstMessage.trim().replace(/\s+/g, ' ')).slice(0, 60).join('') || undefined, entryAppId).then(id => {
       if (id) onCreated(id)
       return id
     }).finally(() => { creating.current = null })
     return creating.current
-  }, [detail.team.id, openConversation, onCreated])
+  }, [detail.team.id, openConversation, onCreated, entryAppId])
   const refresh = () => {
     void useTeamStore.getState().loadDetail(detail.team.id)
     void useTeamStore.getState().loadConversations(detail.team.id)
@@ -94,7 +102,9 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
     }} className="block min-h-8 rounded text-left text-xs text-primary hover:underline">{t('Return to your conversation with {{name}}', { name: detail.roster.find(item => item.appId === lastConversation.appId)?.memberName ?? t('Former member') })} →</button>}
     {otherDecisions.slice(0, 2).map(entry => <button key={entry.entryId} onClick={() => onTask(entry.epochId!, true)} className="block min-h-8 rounded text-left text-xs text-halo-warning hover:underline">{homepageConversation ? t('Needs your answer in {{name}}', { name: tasks.find(item => item.epochId === entry.epochId)?.label ?? t('Another conversation') }) : t('Needs your answer in {{task}}', { task: tasks.find(item => item.epochId === entry.epochId)?.label ?? t('Another task') })} →</button>)}
   </div>
-  const execution = (messages: import('../../../types').Message[], senderShown = false) => epochId && member && appId && isTeamBackgroundTurn(messages) && <ExecutionStatus teamId={detail.team.id} epochId={epochId} appId={appId} remote={member.sameMachine === false} busy={!!member.busy?.some(row => row.epochId === epochId)}
+  const busy = !!member?.busy?.some(row => row.epochId === epochId)
+  const generating = useChatStore(s => !!appId && !!epochId && s.getSession(buildTeamSessionKey(appId, detail.team.id, epochId)).isGenerating)
+  const execution = (messages: import('../../../types').Message[], senderShown = false) => epochId && member && appId && isTeamBackgroundTurn(messages) && <ExecutionStatus teamId={detail.team.id} epochId={epochId} appId={appId} remote={member.sameMachine === false} busy={busy}
     latestResult={homepageConversation ? undefined : [...messages].reverse().find(message => message.role === 'assistant')} onOpen={() => onExecution(appId)} asReply={homepageConversation} senderName={senderShown ? undefined : member.memberName} />
   const [revealActivity, setRevealActivity] = useState<{ appId: string; activityId: string } | null>(null)
   const clearReveal = useCallback(() => setRevealActivity(null), [])
@@ -106,7 +116,7 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
   }
   const timeline = (messages: import('../../../types').Message[], liveThoughts: import('../../../types').Thought[] = []) => <>
     <TaskConversation liveReply={homepageConversation ? senderShown => execution(messages, senderShown) : undefined}
-      onOpenMember={homepageConversation ? openMember : undefined} revealActivity={revealActivity?.appId === appId ? revealActivity.activityId : null} onActivityRevealed={clearReveal} homepageConversation={homepageConversation} authorName={authorName} readonly={blocked || !!returnToMain || !!task?.readonly || !appId || !ids.includes(appId)} messages={messages} activities={boardState.activities} epochId={epochId} appId={appId ?? undefined} detail={detail} showEmpty={!!appId && !!epochId && !boardState.failed && !!boardState.board} onActivity={onActivity}
+      onOpenMember={homepageConversation ? openMember : undefined} revealActivity={revealActivity?.appId === appId ? revealActivity.activityId : null} onActivityRevealed={clearReveal} homepageConversation={homepageConversation} authorName={authorName} readonly={blocked || !!returnToMain || !!viewOnly || !!task?.readonly || !appId || !ids.includes(appId)} messages={messages} activities={boardState.activities} epochId={epochId} appId={appId ?? undefined} detail={detail} showEmpty={!!appId && !!epochId && !boardState.failed && !!boardState.board} working={busy || generating} onActivity={onActivity}
       taskCompleted={!!task?.completed} emptyActions={emptyActions} onHumanConversation={rememberConversation} focusDecision={focusedDecision} onDecisionFocused={() => setFocusedDecision(null)} decisions={decisions.filter(entry => (entry.appId === appId || !ids.includes(entry.appId)) && !decisionHasReceipt(entry, liveThoughts))} onAnswered={entry => { decisionHistory.answered(entry); refresh() }} />
     {!homepageConversation && execution(messages)}
   </>
@@ -134,8 +144,10 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
     : undefined
   const picker = homepageConversation ? <div className="min-w-0 pt-1">
     <TaskMemberSelector roster={detail.roster} selectedAppId={appId} ownedAppIds={ids} waitingAppIds={waitingAppIds} workingAppIds={workingAppIds} progress={conversationProgress} onActivity={task ? onActivity : undefined} onSelect={onSelectMember}
+      onAnswer={id => { const entry = pending.find(item => item.appId === id); if (entry) focusDecision(entry) }}
       temporary={!!returnToMain} />
   </div> : workbenchPicker
+  const viewOnlyReason = viewOnly && (viewOnly.reason ?? t('Viewing only. Continue this conversation on the homepage.'))
   return <section className="flex h-full min-h-0 min-w-0 flex-col" aria-label={homepageConversation ? t('Conversation') : t('Task room')}>
     {!homepageConversation && <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border px-4 py-2">
       {renaming ? <form className="flex min-w-0 flex-1 items-center gap-2" onSubmit={event => { event.preventDefault(); void saveTitle() }}>
@@ -153,19 +165,20 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
     {boardState.failed && <p role="alert" className="px-4 py-2 text-xs text-halo-warning">{t('Could not load collaboration updates.')} <button className="underline" onClick={boardState.retry}>{t('Retry')}</button></p>}
     {decisionHistory.failed && <p role="alert" className="px-4 py-2 text-xs text-halo-warning">{t('Could not load decision history.')} <button onClick={decisionHistory.retry} className="underline">{t('Retry')}</button></p>}
     {renameError && <p role="alert" className="p-2 text-xs text-destructive">{t('Could not rename this task. Please try again.')}</p>}
-    {task?.readonly && task.kind !== 'collab' && <p className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">{task.kind === 'im' ? t('External conversation is read-only. Internal decisions can be answered here.') : t('Run history is read-only. Internal decisions can be answered here.')}</p>}
+    {task?.readonly && task.kind === 'im' && !viewOnly && <p className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">{t('External conversation is read-only. Internal decisions can be answered here.')}</p>}
     {(task?.readonly || !appId) && <div className="shrink-0 px-3">{reminder}</div>}
     {appId && member ? <ConversationReferenceScope conversationId={homepageConversation && epochId ? buildTeamSessionKey(appId, detail.team.id, epochId) : null} conversationTitle={task?.label ?? ''} spaceId={null}><TeamSessionChat key={appId}
       appId={appId} spaceId={apps.find(app => app.id === appId)?.spaceId ?? member.spaceId ?? ''}
-      teamId={detail.team.id} epochId={epochId} isRemote={member.sameMachine === false} ownerName={member.owner ?? presence.ownerName} reachability={presence.reachability} readonly={blocked || !!returnToMain || task?.readonly || !ids.includes(appId)}
-      readonlyMessage={returnToMain ? t('Temporary team members can’t be messaged directly. To change their work, tell the main chat.') : member.sameMachine === false
+      teamId={detail.team.id} epochId={epochId} isRemote={member.sameMachine === false} ownerName={member.owner ?? presence.ownerName} reachability={presence.reachability} readonly={blocked || !!returnToMain || !!viewOnly || task?.readonly || !ids.includes(appId)}
+      readonlyMessage={returnToMain ? t('Temporary team members can’t be messaged directly. To change their work, tell the main chat.') : viewOnly?.reason ? viewOnly.reason : member.sameMachine === false
         ? talkTo ? member.owner ? t('{{name}} is {{owner}}’s digital human. To ask it something, tell {{via}}.', { name: member.memberName, owner: member.owner, via: talkTo.memberName }) : t('{{name}} is a teammate’s digital human. To ask it something, tell {{via}}.', { name: member.memberName, via: talkTo.memberName })
         : member.owner ? t('Viewing {{name}}’s work. Only {{owner}} can send messages.', { name: member.memberName, owner: member.owner }) : t('Viewing this teammate’s digital human. Only its owner can send messages.')
-        : homepageConversation ? t('This conversation is read-only.') : t('This task is read-only.')}
+        : viewOnlyReason || (homepageConversation ? t('This conversation is read-only.') : t('This task is read-only.'))}
       readonlyAction={returnToMain ? <button type="button" onClick={returnToMain} className="inline-flex min-h-8 items-center gap-1 rounded-md px-1.5 text-xs text-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><ArrowLeft size={13} aria-hidden="true" />{t('Back to main chat')}</button>
-        : talkTo && <button type="button" onClick={() => onSelectMember(talkTo)} className="inline-flex min-h-8 items-center gap-1 rounded-md px-1.5 text-xs text-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{t('Talk to {{name}}', { name: talkTo.memberName })}<ArrowRight size={13} aria-hidden="true" /></button>}
+        : viewOnly ? viewOnly.action : talkTo && <button type="button" onClick={() => onSelectMember(talkTo)} className="inline-flex min-h-8 items-center gap-1 rounded-md px-1.5 text-xs text-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{t('Talk to {{name}}', { name: talkTo.memberName })}<ArrowRight size={13} aria-hidden="true" /></button>}
       draftKey={`${detail.team.id}:${task?.workItemId ?? epochId ?? 'draft'}:${appId}`}
-      ensureEpochId={epochId ? undefined : ensureEpoch} toolbarSlot={homepageConversation ? undefined : picker} composerAdjacentSlot={homepageConversation ? picker : undefined} senderName={homepageConversation ? member.memberName : undefined}
+      ensureEpochId={epochId ? undefined : ensureEpoch} toolbarSlot={homepageConversation ? undefined : picker} composerAdjacentSlot={homepageConversation ? picker : undefined}
+      topSlot={viewOnly?.header} senderName={homepageConversation ? member.memberName : undefined}
       authorName={authorName}
       placeholder={homepageConversation ? t('Message {{name}}…', { name: member.memberName }) : undefined}
       aboveInput={reminder} renderMessages={timeline}
@@ -176,6 +189,6 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
       emptyContent={homepageConversation ? undefined : <TaskStartGuide tasks={tasks} onTask={onTask} />}
       emptyTitle={homepageConversation || task ? t('No messages yet') : t('What would you like the team to do?')}
       emptyHint={homepageConversation || task ? undefined : t('Send your first message to create a task. Your digital human will coordinate with the team.')}
-    /></ConversationReferenceScope> : <><div className="min-h-0 flex-1 overflow-y-auto p-4">{timeline([])}<p className="mt-6 text-center text-sm text-muted-foreground">{task && !boardState.board && !boardState.failed ? t('Loading task…') : t('Bring one of your digital humans into this team to start talking.')}</p></div>{homepageConversation && <div className="shrink-0 px-6 pb-[18px]"><div className="mx-auto max-w-chat">{picker}</div></div>}</>}
+    /></ConversationReferenceScope> : <><div className="min-h-0 flex-1 overflow-y-auto p-4">{viewOnly?.header}{timeline([])}<p className="mt-6 text-center text-sm text-muted-foreground">{task && !boardState.board && !boardState.failed ? t('Loading task…') : t('Bring one of your digital humans into this team to start talking.')}</p></div>{homepageConversation && !viewOnly && <div className="shrink-0 px-6 pb-[18px]"><div className="mx-auto max-w-chat">{picker}</div></div>}</>}
   </section>
 }

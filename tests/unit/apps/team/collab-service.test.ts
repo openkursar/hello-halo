@@ -551,4 +551,28 @@ describe('temporary space collaborations', () => {
     expect((await ctx.service.listArtifacts(team.id, epochId)).flatMap(group => group.artifacts.map(artifact => artifact.relativePath)))
       .toEqual(['plan.md', 'team:researcher/sources.md'])
   })
+
+  it('lists the team\u2019s outputs a page at a time, resolved the same way as a run\u2019s', async () => {
+    ctx.dbManager.closeAll()
+    ctx = buildService({
+      spaces: {
+        spaceExists: () => true,
+        createMemberSpace: ({ owningSpaceId }) => owningSpaceId,
+        deleteMemberSpace: vi.fn(),
+        resolveWorkDir: (spaceId) => (spaceId === SPACE ? '/work/project' : null),
+      },
+    })
+    const { team, epochId } = await seedLegacyCollaboration(ctx)
+    const researcher = ctx.store.listMembersByTeam(team.id).find(m => m.memberName === 'researcher')!
+    ctx.store.insertFinding({ id: randomUUID(), teamId: team.id, epochId, authorAppId: spaceCoordinatorAppId(CONVERSATION), body: null, ref: 'plan.md', createdAt: 1000 })
+    ctx.store.insertFinding({ id: randomUUID(), teamId: team.id, epochId, authorAppId: researcher.appId, body: null, ref: 'team:researcher/sources.md', createdAt: 2000 })
+
+    const first = ctx.service.listOutputs(team.id, { offset: 0, limit: 1 })
+    expect(first).toEqual({
+      total: 2,
+      outputs: [{ epochId, appId: researcher.appId, memberName: 'researcher', ref: 'team:researcher/sources.md', name: 'sources.md', path: `/halo/team-work/${team.id}/${epochId}/researcher/sources.md`, at: 2000 }],
+    })
+    expect(ctx.service.listOutputs(team.id, { offset: 1, limit: 1 }).outputs).toMatchObject([{ memberName: 'lead', path: '/work/project/plan.md', at: 1000 }])
+    expect(ctx.service.listOutputs(team.id, { producers: [researcher.appId] }).total).toBe(1)
+  })
 })

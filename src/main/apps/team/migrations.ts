@@ -564,5 +564,18 @@ export const migrations: Migration[] = [
         ON team_epochs(team_id, COALESCE(last_activity_at, started_at) DESC, id DESC)
         WHERE lifecycle = 'conversation' AND chat_key GLOB 'native:*'`)
     }
+  },
+  {
+    version: 27,
+    description: 'List runs a person has written into alongside native conversations',
+    up(db) {
+      db.exec(`
+        ALTER TABLE team_epochs ADD COLUMN first_human_turn_at INTEGER;
+        DROP INDEX idx_epochs_native_recency;
+        CREATE INDEX idx_epochs_native_recency
+          ON team_epochs(team_id, COALESCE(last_activity_at, started_at) DESC, id DESC)
+          WHERE (lifecycle = 'conversation' AND chat_key GLOB 'native:*') OR (lifecycle = 'run' AND first_human_turn_at IS NOT NULL);
+      `)
+    }
   }
 ]

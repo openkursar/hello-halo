@@ -14,6 +14,7 @@ import { DelegationPresetPicker } from '../capability/DelegationPresetPicker'
 import { api } from '../../api'
 import { useTeamStore, detailOf } from '../../stores/team.store'
 import { useAppsStore } from '../../stores/apps.store'
+import { useAppStore } from '../../stores/app.store'
 import { useTranslation } from '../../i18n'
 import { presetOfDelegatedPolicy, withPreset } from './delegated-policy'
 import { firstInviteSaver } from './first-invite'
@@ -29,12 +30,33 @@ interface InvitePayload {
   jti: string
 }
 
+const LINK_SLOT = '\u0000'
+
+/** The "Remote Access is off" notice, with the part naming the setting linked to it. */
+function RemoteAccessOffMessage({ onOpenSettings }: { onOpenSettings: () => void }) {
+  const { t } = useTranslation()
+  const whole = t('Turn on Remote Access in Settings so others can join this team.')
+  // The Remote Access section only exists in the desktop app.
+  if (api.isRemoteMode()) return <>{whole}</>
+  const link = (text: string) => (
+    <button type="button" onClick={onOpenSettings} className="underline underline-offset-2 transition-colors hover:text-primary">
+      {text}
+    </button>
+  )
+  const parts = t('{{link}} so others can join this team.', { link: LINK_SLOT }).split(LINK_SLOT)
+  // A translation that lost its slot still gets one working link.
+  if (parts.length !== 2) return link(whole)
+  return <>{parts[0]}{link(t('Turn on Remote Access in Settings'))}{parts[1]}</>
+}
+
 export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
   const { t } = useTranslation()
+  const openRemoteAccessSettings = useAppStore(state => state.openRemoteAccessSettings)
 
   const [loading, setLoading] = useState(true)
   const [invite, setInvite] = useState<InvitePayload | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [remoteAccessOff, setRemoteAccessOff] = useState(false)
   const [copied, setCopied] = useState(false)
   const [revoking, setRevoking] = useState(false)
   const [revokeError, setRevokeError] = useState<string | null>(null)
@@ -100,6 +122,7 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
   const generate = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setRemoteAccessOff(false)
     setCopied(false)
     setRevokeError(null)
     try {
@@ -109,7 +132,7 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
         const data = res.data as { url: string; jti: string }
         setInvite({ url: data.url, jti: data.jti })
       } else if (res.error === 'REMOTE_ACCESS_OFF') {
-        setError(t('Turn on Remote Access in Settings so others can join this team.'))
+        setRemoteAccessOff(true)
       } else {
         setError(t('Could not create an invite. Please try again.'))
       }
@@ -174,10 +197,12 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
               <Loader2 className="h-4 w-4 animate-spin" />
               {t('Creating an invite link…')}
             </div>
-          ) : error ? (
+          ) : error || remoteAccessOff ? (
             <div className="space-y-3">
               <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm text-foreground">
-                {error}
+                {remoteAccessOff
+                  ? <RemoteAccessOffMessage onOpenSettings={() => { onClose(); openRemoteAccessSettings() }} />
+                  : error}
               </p>
               <button
                 onClick={generate}

@@ -68,7 +68,6 @@ export function useTeamArtifacts(
   // reader was about to click would go dead under the pointer.
   const loadedKey = useRef<string | null>(null)
   const key = `${teamId}\u0000${epochId ?? ''}`
-  const { t } = useTranslation()
 
   useEffect(() => {
     let cancelled = false
@@ -131,6 +130,20 @@ export function useTeamArtifacts(
     [byRef]
   )
 
+  const openEntry = useOpenTeamArtifact(teamId, openInCanvas)
+
+  const open = useCallback((ref: string) => {
+    const entry = byRef.get(ref) ?? byRef.get(baseName(ref))
+    if (entry) void openEntry(entry)
+  }, [byRef, openEntry])
+
+  return { has, open, openEntry, status, list }
+}
+
+/** Open one shared file of a team, telling the reader in a toast when it cannot be. */
+export function useOpenTeamArtifact(teamId: string, openInCanvas?: OpenOutput) {
+  const { t } = useTranslation()
+
   const describeFailure = useCallback((reason: TeamArtifactOpenFailure | undefined, owner: string | null | undefined): string => {
     const who = owner ?? t('a teammate')
     switch (reason) {
@@ -156,7 +169,7 @@ export function useTeamArtifacts(
     useNotificationStore.getState().show({ id: 'team-artifact-open', title, variant, duration: 6000 })
   }, [])
 
-  const openEntry = useCallback(async (entry: ArtifactEntry) => {
+  return useCallback(async (entry: Pick<ArtifactEntry, 'name' | 'path' | 'ref' | 'epochId'>) => {
     // Remote mode has no local application to open into, and the returned path
     // would name the server's disk — download the bytes instead.
     if (api.isRemoteMode()) {
@@ -182,11 +195,4 @@ export function useTeamArtifacts(
       notify(describeFailure('error', null), 'error')
     }
   }, [teamId, describeFailure, notify, t, openInCanvas])
-
-  const open = useCallback((ref: string) => {
-    const entry = byRef.get(ref) ?? byRef.get(baseName(ref))
-    if (entry) void openEntry(entry)
-  }, [byRef, openEntry])
-
-  return { has, open, openEntry, status, list }
 }

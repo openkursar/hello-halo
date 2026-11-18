@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { BlackboardTask, TeamConversation, TeamDetail } from '../../../src/shared/apps/team-types'
+import type { BlackboardTask, TeamConversation, TeamDetail, TeamPendingEscalation } from '../../../src/shared/apps/team-types'
 
 vi.mock('../../../src/renderer/i18n', () => ({
   useTranslation: () => ({ t: (text: string, vars?: Record<string, unknown>) => text.replace(/\{\{(\w+)\}\}/g, (_, key) => String(vars?.[key])) }),
@@ -9,73 +9,107 @@ vi.mock('../../../src/renderer/i18n', () => ({
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({
   AutomationAvatar: ({ name }: { name: string }) => createElement('span', { 'data-avatar': name }),
 }))
-import { TeamTaskOverview, type TaskOutput } from '../../../src/renderer/components/team/TeamTaskOverview'
+vi.mock('../../../src/renderer/components/apps/EscalationCard', () => ({ EscalationCard: () => createElement('div', { 'data-escalation': true }) }))
+vi.mock('../../../src/renderer/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => content }))
+vi.mock('../../../src/renderer/utils/people-navigation', () => ({ openPersonModelSettings: vi.fn() }))
+import { TeamTaskOverview } from '../../../src/renderer/components/team/TeamTaskOverview'
+import type { TaskOverview } from '../../../src/renderer/components/team/detail/TaskBody'
+import type { TaskOutput } from '../../../src/renderer/components/team/workbench/task-record'
 import type { TaskActivityData } from '../../../src/renderer/components/team/workbench/useTaskActivity'
-import type { TaskProgress } from '../../../src/renderer/components/team/workbench/progress'
 
 const subtask = (id: string, status: BlackboardTask['status']) => ({ id, title: `task ${id}`, status, assigneeAppId: 'a', createdByAppId: 'lead', createdAt: 1, updatedAt: 2 } as BlackboardTask)
 const output = (name: string): TaskOutput => ({ entry: { name, path: `/out/${name}`, ref: name, epochId: 'e' }, at: null })
 
-function render({ tasks, outputs = [], status = 'ready', finished = true, task = {}, roster = [], open = {} }: {
+function render({ tasks, outputs = [], status = 'ready', finished = true, task = {}, roster = [], open = {}, finals = new Map(), decisions = [], onTalkTo = vi.fn() }: {
   tasks: BlackboardTask[]; outputs?: TaskOutput[]; status?: 'loading' | 'ready' | 'failed'; finished?: boolean; task?: Partial<TeamConversation>; roster?: unknown[]; open?: Record<string, boolean>
+  finals?: Map<string, string>; decisions?: TeamPendingEscalation[]; onTalkTo?: (appId: string) => void
 }) {
   const data = {
-    tasks, activities: [], pending: [], busy: [], loaded: true, failed: false, retry: vi.fn(),
-    artifacts: { status, list: outputs.map(row => row.entry), openEntry: vi.fn() },
+    tasks, activities: [], pending: decisions, participants: [], busy: [], loaded: true, failed: false, retry: vi.fn(),
+    reports: { reports: [], finals, unavailable: [], loading: false },
+    artifacts: { status, list: outputs.map(row => row.entry), openEntry: vi.fn(), has: () => false, open: vi.fn() },
   } as unknown as TaskActivityData
-  const progress: TaskProgress = { members: [], counts: { done: 0, in_progress: 0, blocked: 0, pending: 0, rejected: 0 }, total: tasks.length, finished }
+  const overview: TaskOverview = {
+    progress: { members: [], counts: { done: 0, in_progress: 0, blocked: 0, pending: 0, rejected: 0 }, total: tasks.length, finished },
+    stateKey: finished ? 'done' : 'running',
+    lastActs: new Map(),
+    outputs,
+  }
   return renderToStaticMarkup(createElement(TeamTaskOverview, {
     detail: { team: { id: 't', name: 'Team', leadAppId: 'lead' }, roster } as unknown as TeamDetail,
-    task: { epochId: 'e', label: 'Work', startedAt: 1, ...task } as TeamConversation,
-    data, progress, lastActs: new Map(), outputs, open,
-    onToggle: vi.fn(), onDecision: vi.fn(), onOpenMember: vi.fn(), onOpenActivity: vi.fn(), onGo: vi.fn(),
+    task: { epochId: 'e', label: 'Work', startedAt: 1, kind: 'run', ...task } as TeamConversation,
+    taskSpaceId: 's', data, overview, held: { decisions, answeringId: null, setAnswering: vi.fn() }, open, setOpen: vi.fn(),
+    onOpenWork: vi.fn(), onTalkTo, onOpenExchange: vi.fn(), onGo: vi.fn(),
   }))
 }
 
-describe('team task overview once finished', () => {
-  it('lists the outputs right under the brief, with nothing to scroll to', () => {
-    const html = render({ tasks: [subtask('1', 'done')], outputs: [output('report.md')] })
-    expect(html.indexOf('aria-label="Outputs"')).toBeLessThan(html.indexOf('aria-label="Subtasks"'))
-    expect(html).not.toContain('View outputs')
-    const working = render({ tasks: [subtask('1', 'done')], outputs: [output('report.md')], finished: false })
-    expect(working.indexOf('aria-label="Outputs"')).toBeGreaterThan(working.indexOf('aria-label="Subtasks"'))
-  })
-  it('briefs only what the status line does not say, and drops the brief when that is nothing', () => {
-    const html = render({ tasks: [subtask('1', 'done'), subtask('2', 'done')] })
-    expect(html).toContain('2/2 subtasks')
-    expect(html).toContain('No output files')
-    expect(html).not.toContain('aria-label="Outputs"')
-    expect(render({ tasks: [subtask('1', 'done'), subtask('2', 'rejected')] })).toContain('1 subtasks completed, 1 rejected')
-    expect(render({ tasks: [subtask('1', 'done')], task: { finishedAt: 5, summary: 'Shipped' } })).toContain('>Shipped</p>')
-    const plain = render({ tasks: [subtask('1', 'done')], outputs: [output('report.md')] })
-    expect(plain).not.toContain('subtasks completed')
-    expect(plain).not.toContain('bg-card')
-  })
-  it('lists settled subtasks plainly under the strip, grouping only work still moving', () => {
-    const settled = render({ tasks: [subtask('1', 'done'), subtask('2', 'done')] })
-    expect(settled).toContain('task 1')
-    expect(settled).not.toContain('aria-expanded')
-    expect(settled).toContain('h-[5px]')
-    const moving = render({ tasks: [subtask('1', 'done'), subtask('2', 'in_progress')], finished: false })
-    expect(moving).toContain('aria-expanded')
-    expect(moving).toContain('h-[5px]')
-  })
-  it('opens the assignee\'s conversation from any subtask, done or not started', () => {
-    const inButton = (html: string, text: string) => new RegExp(`<button[^>]*>(?:(?!</button>).)*${text}`).test(html)
-    const roster = [{ appId: 'a', memberName: 'Ann' }]
-    expect(inButton(render({ tasks: [subtask('1', 'done')], roster }), 'task 1')).toBe(true)
-    expect(inButton(render({ tasks: [subtask('1', 'pending'), subtask('2', 'in_progress')], finished: false, open: { pending: true }, roster }), 'task 1')).toBe(true)
-    expect(inButton(render({ tasks: [subtask('1', 'done')] }), 'task 1')).toBe(false)
-  })
+describe('team task overview', () => {
   it('heads the page with the task, the team as its context', () => {
     const html = render({ tasks: [] })
     expect(html.indexOf('Team')).toBeLessThan(html.indexOf('<h2'))
     expect(html).toMatch(/<h2[^>]*>Work<\/h2>/)
   })
+  it('keeps the outputs after the subtasks, running or finished', () => {
+    for (const finished of [true, false]) {
+      const html = render({ tasks: [subtask('1', 'done')], outputs: [output('report.md')], finished })
+      expect(html.indexOf('aria-label="Outputs"')).toBeGreaterThan(html.indexOf('aria-label="Subtasks"'))
+    }
+  })
+  it('answers a waiting question in place instead of leaving for the chat', () => {
+    const decision = { entryId: 'q1', appId: 'a', memberName: 'Ann', question: 'Which region?', epochId: 'e', entry: { ts: 1 } } as unknown as TeamPendingEscalation
+    const html = render({ tasks: [subtask('1', 'in_progress')], finished: false, decisions: [decision] })
+    expect(html).toContain('Which region?')
+    expect(html).toContain('>Reply</button>')
+    expect(html).not.toContain('Go to reply')
+  })
+  it('shows who is on the work as the team scene, for team work only', () => {
+    expect(render({ tasks: [subtask('1', 'in_progress')], finished: false, roster: [{ appId: 'a', memberName: 'Ann' }] })).toContain('aria-label="Team scene"')
+    expect(render({ tasks: [], task: { kind: undefined } })).not.toContain('aria-label="Team scene"')
+  })
+  it('drops the brief when a finished task has nothing beyond its status line', () => {
+    const html = render({ tasks: [subtask('1', 'done'), subtask('2', 'done')] })
+    expect(html).not.toContain('data-tone')
+    expect(html).not.toContain('aria-label="Outputs"')
+    expect(render({ tasks: [subtask('1', 'done')], task: { finishedAt: 5, summary: 'Shipped' } })).toContain('>Shipped</p>')
+  })
+  it('signs the closing summary with the lead, and only that', () => {
+    const roster = [{ appId: 'lead', memberName: 'Lin', isLead: true }]
+    const brief = (html: string) => html.match(/<section data-tone.*?<\/section>/)?.[0] ?? ''
+    const summary = brief(render({ tasks: [subtask('1', 'done')], task: { finishedAt: 5, summary: 'Shipped' }, roster }))
+    expect(summary).toContain('data-avatar="Lin"')
+    expect(summary).toContain('Lin’s summary')
+    const tally = brief(render({ tasks: [subtask('1', 'done'), subtask('2', 'rejected')], roster }))
+    expect(tally).toContain('Result')
+    expect(tally).not.toContain('data-avatar')
+  })
+  it('falls back to the lead\'s last reply when a settled board was never closed', () => {
+    const roster = [{ appId: 'lead', memberName: 'Lin', isLead: true }]
+    const finals = new Map([['lead', '## Done\n**All** shipped'], ['a', 'not the lead']])
+    const html = render({ tasks: [subtask('1', 'done')], roster, finals })
+    expect(html).toContain('Lin’s summary')
+    expect(html).toContain('>All shipped</p>')
+    expect(html).not.toContain('not the lead')
+    const sections = render({ tasks: [subtask('1', 'done')], roster, finals: new Map([['lead', 'Shipped the pricing table.\n\n## Pricing\nx\n\n## Advice\ny']]) })
+    expect(sections).toContain('In this summary')
+    expect(sections).toContain('<li class="truncate">Pricing</li><li class="truncate">Advice</li>')
+    expect(render({ tasks: [subtask('1', 'done')], roster, finals: new Map([['lead', 'Got it, thanks']]) })).not.toContain('data-tone')
+  })
+  it('tints a running brief by whether anything needs attention', () => {
+    expect(render({ tasks: [subtask('1', 'in_progress')], finished: false })).toContain('data-tone="calm"')
+    expect(render({ tasks: [subtask('1', 'blocked')], finished: false })).toContain('data-tone="error"')
+  })
+  it('puts the face of whoever an error is about before their name, leading to their work in the team', () => {
+    const brief = render({ tasks: [subtask('1', 'blocked')], finished: false, roster: [{ appId: 'a', memberName: 'Ann' }] }).match(/<section data-tone="error".*?<\/section>/)?.[0] ?? ''
+    expect(brief).toMatch(/<button[^>]*><span data-avatar="Ann"><\/span><b>Ann<\/b><\/button> ran into an error: task 1<\/p>/)
+  })
+  it('lays the subtasks out as the same timeline the team page shows', () => {
+    const html = render({ tasks: [subtask('1', 'done'), subtask('2', 'in_progress')], finished: false, roster: [{ appId: 'a', memberName: 'Ann' }] })
+    expect(html).toMatch(/Subtasks<span[^>]*>1\/2<\/span>/)
+    expect(html).toContain('<ol class="pl-3">')
+    expect(html).toContain('View Ann’s work')
+  })
   it('keeps unknown outputs from reading as none', () => {
-    const loading = render({ tasks: [subtask('1', 'done')], status: 'loading' })
-    expect(loading).toContain('Loading outputs…')
-    expect(loading).not.toContain('No output files')
+    expect(render({ tasks: [subtask('1', 'done')], status: 'loading' })).toContain('Loading outputs…')
     expect(render({ tasks: [subtask('1', 'done')], status: 'failed' })).toContain('Could not load outputs.')
   })
 })

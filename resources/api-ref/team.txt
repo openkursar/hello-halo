@@ -36,6 +36,7 @@ operations on this page:
   DELETE /api/teams/<teamId>/members/<appId>                         Remove a member from a team   !! destructive
   POST   /api/teams/<teamId>/members/<appId>/send                    Send a message to one team member in one conversation and wait for its reply
   POST   /api/teams/<teamId>/members/<appId>/stop                    Stop the turn one team member is running in one conversation
+  GET    /api/teams/<teamId>/outputs                                 List every file a team produced across its work, newest first
   POST   /api/teams/<teamId>/pause                                   Stop all open runs of this team
   POST   /api/teams/<teamId>/run                                     Start independent work with a standing team
   GET    /api/teams/<teamId>/triggers                                List a team's schedules and other triggers
@@ -227,6 +228,11 @@ POST   /api/teams/<teamId>/members/<appId>/stop                    Stop the turn
      # body: {"epochId": "<epochId — a conversation from GET /api/teams/:teamId/conversations>"}
      # out: {success:true,data:{ok,stopped,reason?}}  — stopped:false means nothing was running
      # note: epochId is required, as for send. To stop the whole team run instead, POST /api/teams/:teamId/pause.
+
+GET    /api/teams/<teamId>/outputs                                 List every file a team produced across its work, newest first
+     curl -s "$HALO_API_URL/api/teams/<teamId>/outputs?offset=0&limit=30" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{outputs:[{epochId,appId,memberName,ref,name,path,at}],total}}
+     # note: limit defaults to 30 (max 100). epochId names the work the file came from. Read a file with your own file tools at its path.
 
 POST   /api/teams/<teamId>/pause                                   Stop all open runs of this team
      # note: reversible — can be undone or corrected afterward.

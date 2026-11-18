@@ -160,7 +160,8 @@ export interface TeamState {
 
   // ── Conversations ────────────────────────
   loadConversations: (teamId: string) => Promise<void>
-  openConversation: (teamId: string, title?: string) => Promise<string | null>
+  /** `memberAppId` records which of my members the conversation is held with, so every viewer opens it there. */
+  openConversation: (teamId: string, title?: string, memberAppId?: string) => Promise<string | null>
   renameConversation: (teamId: string, epochId: string, title: string | null) => Promise<boolean>
   archiveConversation: (teamId: string, epochId: string) => Promise<boolean>
   selectConversation: (epochId: string | null) => void
@@ -515,9 +516,9 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     }
   }),
 
-  openConversation: async (teamId, title) => {
+  openConversation: async (teamId, title, memberAppId) => {
     try {
-      const res = await api.teamOpenConversation(teamId, title)
+      const res = await api.teamOpenConversation(teamId, title, memberAppId)
       if (res.success && res.data) {
         const epochId = (res.data as { epochId: string }).epochId
         await get().loadConversations(teamId)

@@ -3,6 +3,7 @@ import type { RosterMember, TeamConversation, TeamDetail } from '../../../../sha
 import { parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
+import type { TaskActivityKind } from './model'
 import type { TaskActivityData } from './useTaskActivity'
 import { TaskActivityTimeline } from './TaskActivityTimeline'
 import { TaskExecutionView } from './TaskExecutionView'
@@ -42,8 +43,9 @@ export function TaskMemberExecution({ detail, task, member, homepageConversation
 }
 
 /** Report gaps, the empty state and the timeline; the heading belongs to the caller. */
-export function TaskCollaborationHistory({ data, detail, task, focusActivityId, homepageConversation, onOpenMember }: {
+export function TaskCollaborationHistory({ data, detail, task, focusActivityId, homepageConversation, onOpenMember, kind, onKindChange }: {
   data: TaskActivityData; detail: TeamDetail; task: TeamConversation; focusActivityId?: string; homepageConversation: boolean; onOpenMember?: (appId: string) => void
+  kind?: TaskActivityKind | null; onKindChange?: (kind: TaskActivityKind | null) => void
 }) {
   const { t } = useTranslation()
   const { reports, gaps, activities, findings, artifacts } = data
@@ -57,6 +59,6 @@ export function TaskCollaborationHistory({ data, detail, task, focusActivityId, 
     </div>}
     {gaps.elsewhere.length > 0 && <p className="mb-3 break-words text-xs leading-5 text-muted-foreground">{t('Reports from members on offline computers are not shown: {{owners}}.', { owners: gaps.elsewhere.map(ownerLabel).join(', ') })}</p>}
     {data.loaded && !reports.loading && !reports.unavailable.length && !activities.length && !reports.reports.length && <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center"><MessageSquare size={22} className="mx-auto mb-2 text-muted-foreground/50" /><p className="text-xs text-muted-foreground">{t('No activity yet')}</p></div>}
-    <TaskActivityTimeline focusActivityId={activities.find(activity => activity.id === focusActivityId || activity.refId === focusActivityId)?.id ?? focusActivityId} messages={reports.reports} activities={activities} detail={detail} showEmpty={false} onOpenMember={onOpenMember} taskCompleted={!!task.completed} canOpenArtifact={ref => { const finding = findings.find(row => row.id === ref); return !!finding?.ref && artifacts.has(finding.ref) }} openArtifact={ref => { const finding = findings.find(row => row.id === ref); if (finding?.ref) artifacts.open(finding.ref) }} />
+    <TaskActivityTimeline focusActivityId={activities.find(activity => activity.id === focusActivityId || activity.refId === focusActivityId)?.id ?? focusActivityId} messages={reports.reports} activities={activities} detail={detail} showEmpty={false} onOpenMember={onOpenMember} kind={kind} onKindChange={onKindChange} taskCompleted={!!task.completed} canOpenArtifact={ref => { const finding = findings.find(row => row.id === ref); return !!finding?.ref && artifacts.has(finding.ref) }} openArtifact={ref => { const finding = findings.find(row => row.id === ref); if (finding?.ref) artifacts.open(finding.ref) }} />
   </>
 }

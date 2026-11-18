@@ -71,7 +71,7 @@ import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { combinedDisposable } from '../platform/event'
 import { initMemory } from '../platform/memory'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, deliverRunCollaborationSource, releaseTeamEpochSessions, getAppRuntime } from '../apps/runtime'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, deliverRunCollaborationSource, releaseTeamEpochSessions, getAppRuntime, listTeamAnsweredMembers } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService, collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
@@ -1234,6 +1234,7 @@ async function initPlatformAndApps(): Promise<void> {
         const binding = getActiveImChannelManager()?.getInstanceConfig(parsed.instanceId)
         return binding?.teamId === teamId ? binding.appId : undefined
       },
+      listAnsweredMembers: listTeamAnsweredMembers,
       appManager,
       getRuntime: () => getActiveTeamRuntime(),
       getTriggerSync: () => teamTriggerScheduler,

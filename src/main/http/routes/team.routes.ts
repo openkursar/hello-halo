@@ -163,13 +163,10 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
   // identity owns; seeing PEERS' artifacts requires a board-wide scope (full
   // visibility AND discoverable). Fail-closed: a credential mapping to no member
   // sees nothing. PIN requests (no credential) pass through unchanged.
-  function projectArtifactsForCredential(
-    req: Request,
-    teamId: string,
-    groups: TeamArtifactGroup[],
-  ): TeamArtifactGroup[] {
+  /** The members whose files this caller may see; null means every member's. */
+  function visibleProducers(req: Request, teamId: string): string[] | null {
     const cred = getOfficeCredential(req)
-    if (!cred) return groups
+    if (!cred) return null
     const store = getTeamStore()
     if (!store) return []
     const ownAppIds = resolveOfficeMemberAppIds(teamId, cred.identity)
@@ -182,8 +179,16 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
       const scope = gate.parseScope(member)
       return scope.visibility === 'full' && scope.discoverable
     })
-    if (canSeePeers) return groups
-    return groups.filter((g) => ownAppIds.includes(g.appId))
+    return canSeePeers ? null : ownAppIds
+  }
+
+  function projectArtifactsForCredential(
+    req: Request,
+    teamId: string,
+    groups: TeamArtifactGroup[],
+  ): TeamArtifactGroup[] {
+    const visible = visibleProducers(req, teamId)
+    return visible ? groups.filter((g) => visible.includes(g.appId)) : groups
   }
 
   // GET /api/teams — list teams (optional ?spaceId=)
@@ -581,6 +586,28 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
       if (!service) return
       const groups = await service.listArtifacts(req.params.teamId)
       res.json({ success: true, data: projectArtifactsForCredential(req, req.params.teamId, groups) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/teams/:teamId/outputs — every file the team produced, newest first, paged
+  app.get('/api/teams/:teamId/outputs', async (req: Request, res: Response) => {
+    try {
+      if (!officeGateOk(req, res, req.params.teamId)) return
+      const service = getServiceOrFail(res)
+      if (!service) return
+      const offset = Number(req.query.offset)
+      const limit = Number(req.query.limit)
+      const producers = visibleProducers(req, req.params.teamId) ?? undefined
+      res.json({
+        success: true,
+        data: service.listOutputs(req.params.teamId, {
+          offset: Number.isFinite(offset) ? offset : undefined,
+          limit: Number.isFinite(limit) ? limit : undefined,
+          producers,
+        }),
+      })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

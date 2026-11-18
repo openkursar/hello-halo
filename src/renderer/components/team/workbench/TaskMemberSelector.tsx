@@ -28,7 +28,7 @@ export interface ConversationProgress {
  * ending in the all-members toggle, then its status, which opens the team progress.
  * `waitingAppIds` / `workingAppIds` describe this conversation only, never a member-wide flag.
  */
-export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waitingAppIds = EMPTY, workingAppIds = EMPTY, progress, onActivity, onSelect, temporary = false }: {
+export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waitingAppIds = EMPTY, workingAppIds = EMPTY, progress, onActivity, onSelect, onAnswer, temporary = false }: {
   roster: readonly RosterMember[]
   selectedAppId: string | null
   ownedAppIds: readonly string[]
@@ -37,6 +37,8 @@ export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waiting
   progress?: ConversationProgress | null
   onActivity?: (activityId?: string) => void
   onSelect: (member: RosterMember) => void
+  /** Opens the decision a waiting member asked the user here. */
+  onAnswer?: (appId: string) => void
   /**
    * A temporary team led by the ordinary conversation it sits in: its members are
    * watched, not talked to, and none is current while that conversation is shown.
@@ -123,7 +125,10 @@ export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waiting
   if (!ordered.length) return null
   const cardOf = (member: RosterMember) => {
     const row = progressOf.get(member.appId)
-    const kind = [...new Set([member.isLead ? t('Team lead') : '', member.role?.trim() ?? ''])].filter(Boolean).join(' · ')
+    // A lead's role is often "Team Lead" itself, in English or any casing; show it once.
+    const role = member.role?.trim() ?? ''
+    const leadRole = member.isLead && [t('Team lead'), 'Team lead'].some(name => name.toLowerCase() === role.toLowerCase())
+    const kind = [member.isLead ? t('Team lead') : '', leadRole ? '' : role].filter(Boolean).join(' · ')
     const state: { text: string; tone: string } | null = row?.state === 'waiting' ? { text: memberProgressText(row, roster, t), tone: 'bg-halo-warning' }
       : waiting.has(member.appId) ? { text: t('Waiting for you'), tone: 'bg-halo-warning' }
         : row?.state === 'failed' ? { text: memberProgressText(row, roster, t), tone: 'bg-destructive' }
@@ -137,16 +142,20 @@ export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waiting
     return { kind, duty: member.duty?.trim() ?? '', state, readOnly, access, offline, label: [member.memberName, kind, state?.text, access, offline].filter(Boolean).join(' · ') }
   }
   const hiddenWaiting = hidden.filter(member => waiting.has(member.appId)).length
-  const pick = (member: RosterMember) => { if (member.appId !== selectedAppId) onSelect(member) }
+  const pick = (member: RosterMember) => {
+    if (onAnswer && waiting.has(member.appId)) onAnswer(member.appId)
+    else if (member.appId !== selectedAppId) onSelect(member)
+  }
   const toggle = (from: HTMLElement | null) => { opener.current = from; setPanelOpen(open => !open) }
   const close = (refocus = true) => { setPanelOpen(false); if (refocus) opener.current?.focus() }
 
   const summary = progress ? progressSummary(progress.progress, progress.leadAppId) : null
-  const label = progress && summary ? progressSummaryText(summary, progress.outputCount, t) : null
+  // With nothing to report yet, the segment stays as a quiet way into the team progress.
+  const label = progress && summary ? progressSummaryText(summary, progress.outputCount, t) : onActivity ? t('Team progress') : null
   const { counts, total } = progress?.progress ?? { counts: null, total: 0 }
   const attention = summary?.kind === 'waiting' || summary?.kind === 'failed' || summary?.kind === 'decision'
   const tone = summary?.kind === 'failed' ? 'text-destructive' : attention ? 'text-halo-warning' : 'text-subtle-foreground'
-  const icon = !summary ? null
+  const icon = !summary ? <ListChecks size={14} className="text-faint-foreground" />
     : attention ? <AlertCircle size={14} />
       : summary.kind === 'working' ? <span className="flex h-3.5 w-3.5 items-center justify-center"><i className="h-2 w-2 rounded-full bg-primary" /></span>
         : summary.kind === 'done' ? <CheckCircle2 size={14} className="text-halo-success" />
@@ -181,6 +190,7 @@ export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waiting
             <AutomationAvatar name={member.memberName} size={24} />
             {readOnly && <i aria-hidden="true" className="avatar-lock-badge"><Lock strokeWidth={3} /></i>}
             {state && <i aria-hidden="true" data-tone={state} className="avatar-status-dot" />}
+            {onAnswer && state === 'waiting' && !selected && <span aria-hidden="true" className="member-rail-ask">{t('Needs your answer')}</span>}
           </span>
           <span className="member-rail-name truncate text-[13px] font-semibold text-foreground">{member.memberName}</span>
           {!selected && <span aria-hidden="true" className="member-rail-tip" data-card="">
@@ -224,7 +234,7 @@ export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waiting
       {statusBody && <span ref={statusSegment} className="flex shrink-0 items-center">
         <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-border" />
         {onActivity
-          ? <button type="button" aria-label={`${statusLabel} · ${t('View team progress')}`} onClick={() => onActivity()}
+          ? <button type="button" aria-label={summary ? `${statusLabel} · ${t('View team progress')}` : t('View team progress')} onClick={() => onActivity()}
             className={`member-rail-status relative z-[1] flex h-[34px] items-center gap-2 whitespace-nowrap rounded-full pl-2 pr-3 text-[12.5px] transition-colors duration-100 hover:bg-foreground/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${tone} ${attention ? '' : 'hover:text-foreground'}`}>
             {statusBody}
             <span aria-hidden="true" className="member-rail-tip">{t('View team progress')}</span>

@@ -20,16 +20,16 @@ const CONTENT_TEXT = 'text-[13px] leading-relaxed text-foreground/85 [overflow-w
 
 /**
  * A record's text: short text in full; longer text as its first lines, opening in place
- * into the rendered whole, which is only rendered once opened.
+ * into the rendered whole, which is only rendered once opened. `full` always shows it whole.
  */
-function ActivityContent({ content, attention = false }: { content: string; attention?: boolean }) {
+export function ActivityContent({ content, attention = false, full = false }: { content: string; attention?: boolean; full?: boolean }) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const details = useRef<HTMLDetailsElement>(null)
   if (attention) return <div className="mt-3 break-words text-sm"><MarkdownRenderer content={content} /></div>
   const text = content.trim()
   const preview = markdownPreview(text)
-  if (preview.length <= 160 && preview.split('\n').length <= 3) {
+  if (full || (preview.length <= 160 && preview.split('\n').length <= 3)) {
     return preview === text ? <p className={`mt-2 whitespace-pre-line ${CONTENT_TEXT}`}>{text}</p>
       : <div className={`mt-2 ${CONTENT_TEXT}`}><MarkdownRenderer content={text} /></div>
   }
@@ -53,14 +53,18 @@ function ActivityContent({ content, attention = false }: { content: string; atte
   </details>
 }
 
-function KindFilter({ value, onChange }: { value: TaskActivityKind | null; onChange: (kind: TaskActivityKind | null) => void }) {
+/** `bare` reads as text, for a toolbar beside tabs. */
+export function KindFilter({ value, onChange, bare = false }: { value: TaskActivityKind | null; onChange: (kind: TaskActivityKind | null) => void; bare?: boolean }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const options: [TaskActivityKind | null, string][] = [[null, t('All types')], ['output', t('Outputs')], ['decision', t('Decision')], ['failed', t('Failed')]]
+  const label = options.find(([kind]) => kind === value)?.[1]
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger ariaLabel={t('Filter by type')} className={`min-h-8 w-32 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${value ? 'border-primary/30 bg-primary/5 text-primary' : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
-      <Funnel size={13} className="shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1 truncate text-left">{options.find(([kind]) => kind === value)?.[1]}</span><ChevronDown size={12} className="shrink-0 opacity-60" aria-hidden="true" />
-    </PopoverTrigger>
+    {bare ? <PopoverTrigger ariaLabel={t('Filter by type')} className={`min-h-8 items-center gap-1 rounded-md px-1.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary ${value ? 'text-primary' : 'text-subtle-foreground hover:text-foreground'}`}>
+      <span className="truncate">{label}</span><ChevronDown size={13} className="shrink-0 opacity-70" aria-hidden="true" />
+    </PopoverTrigger> : <PopoverTrigger ariaLabel={t('Filter by type')} className={`min-h-8 w-32 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${value ? 'border-primary/30 bg-primary/5 text-primary' : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
+      <Funnel size={13} className="shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1 truncate text-left">{label}</span><ChevronDown size={12} className="shrink-0 opacity-60" aria-hidden="true" />
+    </PopoverTrigger>}
     <PopoverContent align="end" className="w-32 py-1">
       {options.map(([kind, label]) => <button key={kind ?? 'all'} type="button" onClick={() => { onChange(kind); setOpen(false) }} className="flex min-h-8 w-full items-center gap-2 px-3 text-left text-xs hover:bg-secondary/80">
         <span className="flex-1">{label}</span>{kind === value && <Check size={13} className="text-primary" aria-hidden="true" />}
@@ -69,19 +73,18 @@ function KindFilter({ value, onChange }: { value: TaskActivityKind | null; onCha
   </Popover>
 }
 
-export function TaskActivityTimeline({ messages, activities, detail, showEmpty = true, canOpenArtifact, openArtifact, onOpenMember, focusActivityId, taskCompleted = false }: {
+/** Passing `kind` hides the built-in type filter: the caller places its own (with `onKindChange`) or fixes it. */
+export function TaskActivityTimeline({ messages, activities, detail, showEmpty = true, canOpenArtifact, openArtifact, onOpenMember, focusActivityId, taskCompleted = false, kind: kindProp, onKindChange }: {
   messages: TaskMemberReport[]; activities: TeamActivity[]; detail: TeamDetail; showEmpty?: boolean; focusActivityId?: string; canOpenArtifact?: (ref: string) => boolean; openArtifact: (ref: string) => void; onOpenMember?: (appId: string) => void; taskCompleted?: boolean
+  kind?: TaskActivityKind | null; onKindChange?: (kind: TaskActivityKind | null) => void
 }) {
   const { t } = useTranslation()
   const liveRows = useMemo(() => taskActivityRows(messages, activities), [messages, activities])
   const [readingRows, setReadingRows] = useState<TaskActivityRow[] | null>(null)
-  const [kind, setKindState] = useState<TaskActivityKind | null>(null)
+  const [kindState, setKindState] = useState<TaskActivityKind | null>(null)
+  const kind = kindProp !== undefined ? kindProp : kindState
+  const setKind = onKindChange ?? setKindState
   const rows = useMemo(() => filterTaskActivityRows(readingRows ?? liveRows, kind), [readingRows, liveRows, kind])
-  const [page, setPage] = useState(0)
-  const setKind = (next: TaskActivityKind | null) => {
-    setKindState(next)
-    setPage(0)
-  }
   const pendingCount = useMemo(() => {
     if (!readingRows) return 0
     const visible = new Set(recordIds(readingRows))
@@ -96,9 +99,7 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
     if (!target) {
       const holds = (list: TaskActivityRow[]) => list.some(row => row.activities?.some(activity => activity.id === focusActivityId))
       if (readingRows && holds(liveRows)) setReadingRows(liveRows)
-      if (kind && !holds(rows) && holds(liveRows)) return setKind(null)
-      const index = rows.findIndex(row => row.activities?.some(activity => activity.id === focusActivityId))
-      if (index >= 0) setPage(Math.floor(index / 50))
+      if (kind && !holds(rows) && holds(liveRows)) setKind(null)
       return
     }
     setReadingRows(current => current ?? liveRows)
@@ -115,7 +116,7 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
       focused.current = focusActivityId
     })
     return () => cancelAnimationFrame(frame)
-  }, [focusActivityId, rows, liveRows, readingRows, page, kind])
+  }, [focusActivityId, rows, liveRows, readingRows, kind])
   const members = useMemo(() => new Map(detail.roster.map(member => [member.appId, member])), [detail.roster])
   const names = useMemo(() => new Map(detail.roster.map(member => [member.appId, member.memberName])), [detail.roster])
   const name = (id: string) => parseSpaceCoordinatorAppId(id) ? t('Main chat') : names.get(id) ?? t('Former member')
@@ -159,22 +160,21 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
     {pendingCount > 0 && <div className="sticky top-[var(--page-sticky-top,0px)] z-10 -mb-3 h-0">
       <button onClick={() => {
         setReadingRows(liveRows)
-        setPage(0)
         container.current?.scrollIntoView({ block: 'start' })
       }} className="absolute left-1/2 top-1 flex min-h-9 -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-primary/20 bg-background px-4 py-2 text-xs font-medium text-primary shadow-md hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><ArrowUp size={14} aria-hidden="true" /><span role="status">{t('Show {{count}} new updates', { count: pendingCount })}</span></button>
     </div>}
-    {liveRows.length > 0 && <div className="flex justify-end"><KindFilter value={kind} onChange={setKind} /></div>}
+    {kindProp === undefined && liveRows.length > 0 && <div className="flex justify-end"><KindFilter value={kind} onChange={setKind} /></div>}
     {rows.length === 0 && kind && liveRows.length > 0
       ? <p className="py-10 text-center text-sm text-muted-foreground">{t('No matching records')} <button type="button" onClick={() => setKind(null)} className="text-primary hover:underline">{t('Clear filters')}</button></p>
       : showEmpty && rows.length === 0 && <p className="py-10 text-center text-sm text-muted-foreground">{t('No activity yet')}</p>}
-    {rows.slice(page * 50, (page + 1) * 50).map((row, index) => {
+    {rows.map((row, index) => {
       const acts = row.activities
       const date = row.at === null ? t('Time unknown') : new Date(row.at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
       const day = row.at === null ? 'unknown' : new Date(row.at).toDateString()
-      const previousAt = index > 0 ? rows[page * 50 + index - 1].at : null
+      const previousAt = index > 0 ? rows[index - 1].at : null
       const previousDate = index > 0 ? previousAt === null ? 'unknown' : new Date(previousAt).toDateString() : null
       return <div key={row.id} className="min-w-0">
-        {day !== previousDate && <div className="mb-3 flex items-center gap-3 pt-2 text-[11px] text-muted-foreground"><span className="h-px flex-1 bg-border" /><span>{date}</span><span className="h-px flex-1 bg-border" /></div>}
+        {day !== previousDate && <div className="mb-3 pt-2 text-center text-[11px] text-muted-foreground">{date}</div>}
         {row.message && row.notice ? <article data-message-id={row.message.id} className="min-w-0 rounded-xl border border-border bg-secondary/20 p-3">
           <div className="flex items-start gap-2.5">
             <span className="mt-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground"><Bell size={14} aria-hidden="true" /></span>
@@ -189,6 +189,5 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
         </article> : acts?.map(activityCard)}
       </div>
     })}
-    {rows.length > 50 && <nav className="flex justify-between text-xs text-primary"><button disabled={page === 0} onClick={() => setPage(value => Math.max(0, value - 1))} className="min-h-9 disabled:opacity-40">{t('Newer updates')}</button><button disabled={(page + 1) * 50 >= rows.length} onClick={() => setPage(value => value + 1)} className="min-h-9 disabled:opacity-40">{t('Older updates')}</button></nav>}
   </div>
 }

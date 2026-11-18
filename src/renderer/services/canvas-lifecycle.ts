@@ -88,10 +88,12 @@ export interface TabViewState {
 
 export interface TeamTaskViewMemory {
   section?: 'overview' | 'history' | 'members'
-  /** Subtask groups opened or closed against their default, by group id. */
+  /** Sections opened or closed against their default, by key. */
   open?: Record<string, boolean>
   /** The member whose execution was open. */
   memberAppId?: string
+  /** Everyone's exchanges were open. */
+  allMembers?: boolean
 }
 
 /**

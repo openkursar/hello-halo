@@ -27,7 +27,7 @@ interface AppState {
   view: AppView
   returnTo: AppView | null
   /** A place in Settings to open on its next visit; consumed there. */
-  settingsFocus: 'claude-code' | 'proxy' | null
+  settingsFocus: 'claude-code' | 'proxy' | 'remote-access' | null
   isLoading: boolean
   error: string | null
 
@@ -55,6 +55,8 @@ interface AppState {
   /** Settings, opened at Claude Code's setup. */
   openClaudeCodeSettings: () => void
   openProxySettings: () => void
+  /** Settings, opened at Remote Access. */
+  openRemoteAccessSettings: () => void
   clearSettingsFocus: () => void
   // Land in the main app experience: resolves which space to open via
   // space.store's own selection rule (space.store.ts:selectDefaultSpace —
@@ -133,6 +135,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openProxySettings: () => {
     set({ settingsFocus: 'proxy' })
+    get().navigate('settings')
+  },
+
+  openRemoteAccessSettings: () => {
+    set({ settingsFocus: 'remote-access' })
     get().navigate('settings')
   },
 

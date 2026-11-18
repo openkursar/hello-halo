@@ -16,8 +16,10 @@ import { taskTime } from './time'
 import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, undeliveredParties, type SharedTaskDecision } from './model'
 import { UndeliveredNote } from './UndeliveredNote'
 
-export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation, taskCompleted = false, homepageConversation = false, readonly = false, authorName, liveReply, onOpenMember, revealActivity, onActivityRevealed }: {
+export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, working = false, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation, taskCompleted = false, homepageConversation = false, readonly = false, authorName, liveReply, onOpenMember, revealActivity, onActivityRevealed }: {
   messages: Message[]; activities: TeamActivity[]; epochId: string | null; appId?: string; detail: TeamDetail; showEmpty: boolean; onActivity: (id?: string) => void
+  /** The member is running a turn here, drawn by `liveReply`, so the conversation is not empty. */
+  working?: boolean
   decisions?: ActivityEntry[]; onAnswered?: (entry: ActivityEntry) => void
   focusDecision?: string | null; onDecisionFocused?: () => void
   emptyActions?: ReactNode; onHumanConversation?: (appId: string) => void
@@ -37,7 +39,8 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
   useEffect(() => { if (hasHumanConversation && appId) onHumanConversation?.(appId) }, [hasHumanConversation, appId, onHumanConversation])
   const attached = useMemo(() => new Map(decisions.map(decision => [decision.id, decisionMessageId(decision, messages)])), [decisions, messages])
   const inputs = useMemo(() => inputsByReply(messages), [messages])
-  const rows = useMemo(() => taskConversationRows(messages, activities, epochId, appId, decisions.filter(decision => !attached.get(decision.id)), { compact: homepageConversation }), [messages, activities, epochId, appId, decisions, attached, homepageConversation])
+  const remote = detail.roster.find(member => member.appId === appId)?.sameMachine === false
+  const rows = useMemo(() => taskConversationRows(messages, activities, epochId, appId, decisions.filter(decision => !attached.get(decision.id)), { compact: homepageConversation, sharedDecisions: remote }), [messages, activities, epochId, appId, decisions, attached, homepageConversation, remote])
   const viewMore = homepageConversation ? t('View in team progress') : t('View more in task activity')
   const viewMoreLink = (activityId: string) => (
     <button onClick={() => onActivity(activityId)} className="inline-flex items-center gap-0.5 text-primary hover:underline">
@@ -100,7 +103,9 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
     }
     const frame = requestAnimationFrame(() => {
       card.scrollIntoView({ block: 'center' })
-      card.focus({ preventScroll: true })
+      // Land in the reply box when there is one, so the user can answer right away.
+      const target = card.querySelector<HTMLElement>('textarea:not([disabled]), input:not([type="hidden"]):not([disabled])') ?? card
+      target.focus({ preventScroll: true })
       onDecisionFocused?.()
     })
     return () => cancelAnimationFrame(frame)
@@ -128,7 +133,7 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
       hour: '2-digit', minute: '2-digit',
     })
   }
-  const decisionCard = (decision: ActivityEntry) => <article key={decision.id} id={`decision-${decision.id}`} tabIndex={-1} className="scroll-m-4 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary">
+  const decisionCard = (decision: ActivityEntry) => <article key={decision.id} id={`decision-${decision.id}`} tabIndex={-1} className="scroll-m-4 rounded-xl focus:outline-none">
         <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground"><AutomationAvatar name={name(decision.appId)} size={22} /><span>{name(decision.appId)}</span><TaskTimestamp value={decision.ts} recordId={decision.id} format="datetime" className="ml-auto text-[11px] tabular-nums" /></div>
         <EscalationCard compactResolved entry={decision} appId={decision.appId} onResolved={onAnswered} />
       </article>
@@ -192,7 +197,7 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
     </details>
   }
   return <div ref={root} className="min-w-0 space-y-3">
-    {showEmpty && homepageConversation && !rows.length && appId && <div className="flex min-h-[55vh] flex-col items-center justify-center px-4 text-center">
+    {showEmpty && homepageConversation && !rows.length && !working && appId && <div className="flex min-h-[55vh] flex-col items-center justify-center px-4 text-center">
       <span className="avatar-alive flex"><AutomationAvatar name={name(appId)} size={44} /></span>
       <p className="mt-4 text-sm text-muted-foreground">{readonly ? t('No messages yet') : t('Send a message to start chatting with {{name}}', { name: name(appId) })}</p>
       {emptyActions}

@@ -16,6 +16,9 @@ export interface MemberProgress {
   activityId?: string
   /** Failed: whose message never arrived; absent when the member's own turn failed. */
   senderAppId?: string | null
+  /** Failed own turn: why, as the engine reported it. */
+  reason?: string
+  timedOut?: boolean
 }
 
 export interface TaskProgress {
@@ -98,13 +101,40 @@ export function progressSummary(progress: TaskProgress, leadAppId: string | null
   return { kind: progress.finished ? 'done' : 'idle' }
 }
 
+export type FailureCause = 'model' | 'account' | 'quota' | 'service' | 'network' | 'timeout'
+
+const CAUSES: readonly [Exclude<FailureCause, 'timeout'>, RegExp][] = [
+  ['model', /model.{0,40}(not.?found|not exist|deprecated|retired|invalid|unsupported|not supported)|service id|model_not_found|unknown model|no such model/i],
+  ['account', /\b(401|403)\b|authenticat|unauthori[sz]ed|invalid.{0,12}(api.?key|token)|permission denied/i],
+  ['quota', /\b429\b|rate.?limit|quota|insufficient|billing|balance|credit/i],
+  ['service', /\b(500|502|503|504|529)\b|overloaded|service unavailable/i],
+  ['network', /ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|fetch failed|socket hang up|network/i],
+]
+
+/** What kind of trouble a member's own failed turn ran into; null when the error says nothing recognisable. */
+export function failureCause(row: Pick<MemberProgress, 'reason' | 'timedOut'>): FailureCause | null {
+  if (row.timedOut) return 'timeout'
+  if (!row.reason) return null
+  return CAUSES.find(([, pattern]) => pattern.test(row.reason!))?.[0] ?? null
+}
+
+/** Causes only the member's model settings can fix, so they fall to whoever owns it. */
+export function isSettingsCause(cause: FailureCause | null): boolean {
+  return cause === 'model' || cause === 'account' || cause === 'quota'
+}
+
+type FailureRecord = Pick<MemberProgress, 'senderAppId' | 'reason' | 'timedOut'> & { activityId: string }
+
+/** The collaboration runtime's lead-in to a failed turn's record; what follows is the engine's error. */
+const TURN_FAILED_PREFIX = /^The (?:member|teammate)['’]s turn failed:\s*/
+
 /**
  * Each member's latest failure that nothing has answered since: a message that
  * never reached it, or its own turn that failed. Anything it did afterwards, or
  * it being at work now, means it has moved on.
  */
 function latestFailures(activities: readonly TeamActivity[], busy: ReadonlySet<string>) {
-  const result = new Map<string, { activityId: string; senderAppId?: string | null; at: number }>()
+  const result = new Map<string, FailureRecord & { at: number }>()
   const lastActed = new Map<string, number>()
   for (const activity of activities) {
     const at = taskTime(activity.createdAt) ?? 0
@@ -113,15 +143,17 @@ function latestFailures(activities: readonly TeamActivity[], busy: ReadonlySet<s
     if (undelivered?.recipientAppId) {
       if (at >= (result.get(undelivered.recipientAppId)?.at ?? -1)) result.set(undelivered.recipientAppId, { activityId: activity.id, senderAppId: undelivered.senderAppId, at })
     } else if (failedTurn) {
-      if (at >= (result.get(activity.actorAppId)?.at ?? -1)) result.set(activity.actorAppId, { activityId: activity.id, at })
+      if (at >= (result.get(activity.actorAppId)?.at ?? -1)) {
+        result.set(activity.actorAppId, { activityId: activity.id, at, ...(activity.status === 'timeout' ? { timedOut: true } : { reason: activity.subject.replace(TURN_FAILED_PREFIX, '').trim() || undefined }) })
+      }
     } else {
       lastActed.set(activity.actorAppId, Math.max(at, lastActed.get(activity.actorAppId) ?? -1))
     }
   }
-  const open = new Map<string, { activityId: string; senderAppId?: string | null }>()
-  for (const [appId, failure] of result) {
-    if (busy.has(appId) || (lastActed.get(appId) ?? -1) > failure.at) continue
-    open.set(appId, { activityId: failure.activityId, ...(failure.senderAppId !== undefined ? { senderAppId: failure.senderAppId } : {}) })
+  const open = new Map<string, FailureRecord>()
+  for (const [appId, { at, ...failure }] of result) {
+    if (busy.has(appId) || (lastActed.get(appId) ?? -1) > at) continue
+    open.set(appId, failure)
   }
   return open
 }

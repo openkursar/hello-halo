@@ -190,25 +190,29 @@ export function conversationMessages(messages: Message[]): Message[] {
   })
 }
 
-const nudgeTriggerKinds = ['periodic_check', 'run_start']
-
 /**
  * The homepage reads a member as one chat: replies to teammates and to their
  * turn-end reports join the owner's dialogue, and what a teammate sent is drawn on
- * the reply from the collaboration record. Replies to checks and run starts stay in
- * the execution records.
+ * the reply from the collaboration record. Replies to checks stay in the execution
+ * records; a run's replies to its start are how that run's conversation opens.
  */
 function homepageMessages(messages: Message[]): Message[] {
   const conversation = new Set(conversationMessages(messages))
   return messages.filter(message => conversation.has(message) || (message.role === 'assistant'
     && !!(message.content.trim() || message.error)
-    && !nudgeTriggerKinds.includes(message.metadata?.teamTriggerKind ?? '')))
+    && message.metadata?.teamTriggerKind !== 'periodic_check'))
 }
 
 export function taskReportMessages(messages: Message[]): Message[] {
   const conversation = new Set(conversationMessages(messages))
   return messages.filter(message => (message.content.trim() || message.error) &&
     (isSystemNotification(message) || (message.role === 'assistant' && !conversation.has(message))))
+}
+
+/** A member's last word in the task: its latest reply with text, replies to periodic checks aside. */
+export function finalReplyText(messages: readonly Message[]): string | undefined {
+  return messages.findLast(message => message.role === 'assistant' && !message.error
+    && message.metadata?.teamTriggerKind !== 'periodic_check' && message.content.trim())?.content.trim()
 }
 
 export type ConversationRow =
@@ -289,10 +293,11 @@ function carriedDeliveries(messages: Message[], conversation: readonly Message[]
 /**
  * `compact` is the homepage conversation: replies to teammates are part of the
  * dialogue, failures are told by the progress card instead, and what a reply
- * handed on is drawn under that reply.
+ * handed on is drawn under that reply. `sharedDecisions` is off for a member on this
+ * machine: its decisions reach the local inbox and are drawn as answerable cards.
  */
-export function taskConversationRows(messages: Message[], activities: TeamActivity[], epochId: string | null, appId?: string, decisions: ActivityEntry[] = [], { compact = false }: { compact?: boolean } = {}): ConversationRow[] {
-  const sharedDecisions = sharedTaskDecisions(activities, epochId, appId, new Set(decisions.map(decision => decision.id)))
+export function taskConversationRows(messages: Message[], activities: TeamActivity[], epochId: string | null, appId?: string, decisions: ActivityEntry[] = [], { compact = false, sharedDecisions: withShared = true }: { compact?: boolean; sharedDecisions?: boolean } = {}): ConversationRow[] {
+  const sharedDecisions = withShared ? sharedTaskDecisions(activities, epochId, appId, new Set(decisions.map(decision => decision.id))) : []
   const conversation = compact ? homepageMessages(messages) : conversationMessages(messages)
   const carried = compact ? carriedDeliveries(messages, conversation) : new Set<string>()
   const entries: Array<{

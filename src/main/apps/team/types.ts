@@ -229,6 +229,8 @@ export interface TeamEpochRow {
   outcome?: string | null
   /** Last turn into this epoch; added in migration v11 (null → started_at). */
   last_activity_at?: number | null
+  /** First person-written turn into a run; added in migration v27 (null → never). */
+  first_human_turn_at?: number | null
 }
 
 /** Row shape from the `team_triggers` table. */
@@ -432,12 +434,27 @@ export interface TeamStore {
   listRecentActivityByEpoch(teamId: string, epochId: string, limit: number): TeamActivity[]
   /** Acts of an epoch created strictly after `sinceCreatedAt`, oldest first. */
   listActivityByEpochSince(teamId: string, epochId: string, sinceCreatedAt: number): TeamActivity[]
+  /** Messages, replies and findings of the given epochs, oldest first: what settles delegated work. */
+  listExchangesByEpochs(teamId: string, epochIds: string[]): TeamActivity[]
   /** Every act of a team, across epochs — the replication snapshot's source. */
+  /** Conversations people started here, and runs a person has since written into. */
   listNativeTaskEpochs(spaceId: string, localAppIds: string[], limit: number, cursor?: { at: number; id: string }, epochIds?: string[], scope?: NativeTaskScope): TeamEpoch[]
-  getConversationStats(teamId: string, ownAppIds: string[], epochIds?: string[], includeOutputs?: boolean): {
+  /** `detailed` adds output counts and participants, which only a team's own task list shows. */
+  getConversationStats(teamId: string, ownAppIds: string[], epochIds?: string[], detailed?: boolean): {
     involved: Set<string>
     outputCounts: Map<string, number>
     unansweredDecisionMembers: Map<string, string[]>
+    /** Board subtasks per epoch that has any: how many are done and how many are still open. */
+    subtasks: Map<string, { done: number; open: number }>
+    /** Epochs where the lead messaged another member or heard back from one. */
+    teamwork: Set<string>
+    /** Members with any trace per epoch: activity either way, board work created or taken, findings. */
+    participants: Map<string, string[]>
+  }
+  /** Declared files across the team's runs, newest first; `producers` keeps only those members' declarations. */
+  listOutputRefs(teamId: string, page: { offset: number; limit: number; producers?: string[] }): {
+    rows: Array<{ epochId: string; appId: string; ref: string; at: number }>
+    total: number
   }
   listActivityByTeam(teamId: string): TeamActivity[]
   /**
@@ -475,6 +492,8 @@ export interface TeamStore {
   reopenEpoch(epochId: string): void
   /** Stamp a turn entering this epoch (monotonic; never moves backwards). */
   touchEpoch(epochId: string, at: number): void
+  /** Record the first time a person wrote into a run; true only for that first write. */
+  markRunHumanTurn(epochId: string, at: number): boolean
   /** Set a conversation epoch's user-facing title (rename). */
   renameEpoch(epochId: string, title: string | null): void
   /**

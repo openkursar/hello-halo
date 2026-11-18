@@ -1641,6 +1641,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       return false
     }
     store.touchEpoch(epochId, Date.now())
+    // A run a person has written into joins their conversations from then on.
+    if (fromHuman && epoch.lifecycle === 'run' && store.markRunHumanTurn(epochId, Date.now())) emitTeamUpdated(teamId)
     const reopeningTask = epoch.workItem?.status === 'completed'
     if (reopeningTask) store.updateWorkItem(epochId, { status: 'open' })
     // Resume activity without changing the identity of this work.

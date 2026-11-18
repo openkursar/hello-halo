@@ -55,8 +55,18 @@ function groupOf(task: BlackboardTask, member: MemberProgress | undefined): Subt
   }
 }
 
-/** How long each done task took: from when it was taken up (else posted) to when it was marked done. */
-export function subtaskDurations(tasks: readonly BlackboardTask[], activities: readonly TeamActivity[]): Map<string, number> {
+export interface SubtaskDuration {
+  ms: number
+  /** Part of `ms` its assignee spent waiting for an answer it asked for. */
+  waited: number
+}
+
+/**
+ * How long each done task took: from when it was taken up (else posted) to when it
+ * was marked done. Waits for answers someone else asked for are left out; the
+ * assignee's own count, since they belong to this task.
+ */
+export function subtaskDurations(tasks: readonly BlackboardTask[], activities: readonly TeamActivity[]): Map<string, SubtaskDuration> {
   const started = new Map<string, number>()
   const finished = new Map<string, number>()
   for (const activity of activities) {
@@ -66,49 +76,87 @@ export function subtaskDurations(tasks: readonly BlackboardTask[], activities: r
     if (activity.status === 'in_progress') started.set(activity.refId, Math.min(at, started.get(activity.refId) ?? at))
     else if (activity.status === 'done') finished.set(activity.refId, Math.max(at, finished.get(activity.refId) ?? at))
   }
-  const result = new Map<string, number>()
+  const waits = decisionWaitSpans(activities)
+  const result = new Map<string, SubtaskDuration>()
   for (const task of tasks) {
     if (task.status !== 'done') continue
-    const span = (finished.get(task.id) ?? task.updatedAt) - (started.get(task.id) ?? task.createdAt)
-    if (span > 0) result.set(task.id, span)
+    const from = started.get(task.id) ?? task.createdAt
+    const to = finished.get(task.id) ?? task.updatedAt
+    const within = waits.map(({ appId, span: [start, end] }) => ({ own: appId === task.assigneeAppId, span: [Math.max(start, from), Math.min(end, to)] as [number, number] }))
+      .filter(({ span: [start, end] }) => end > start)
+    const waited = unionLength(within.filter(row => row.own).map(row => row.span))
+    const ms = to - from - (unionLength(within.map(row => row.span)) - waited)
+    if (ms > 0) result.set(task.id, { ms, waited })
   }
   return result
 }
 
-export interface DecisionWait {
-  /** Whose answer was awaited, as `ownerOf` names it. */
-  owner: string
-  ms: number
+export interface SubtaskRecord {
+  /** The poster's first message to the assignee after posting it, before their next task was posted. */
+  brief: TeamActivity | null
+  /** Status changes on this task, oldest first. */
+  updates: TeamActivity[]
+}
+
+export function subtaskRecord(task: BlackboardTask, activities: readonly TeamActivity[]): SubtaskRecord {
+  const updates = activities.filter(activity => activity.kind === 'task_update' && activity.refId === task.id)
+    .sort((a, b) => (taskTime(a.createdAt) ?? 0) - (taskTime(b.createdAt) ?? 0))
+  const posted = taskTime(task.createdAt)
+  if (posted === null || !task.assigneeAppId) return { brief: null, updates }
+  let nextPost = Infinity
+  for (const activity of activities) {
+    const at = taskTime(activity.createdAt)
+    if (activity.kind === 'task_post' && activity.refId !== task.id && activity.targetAppId === task.assigneeAppId && at !== null && at > posted) nextPost = Math.min(nextPost, at)
+  }
+  let brief: TeamActivity | null = null
+  let briefAt = Infinity
+  for (const activity of activities) {
+    const at = taskTime(activity.createdAt)
+    if (activity.kind !== 'message' || activity.actorAppId !== task.createdByAppId || activity.targetAppId !== task.assigneeAppId || at === null || at < posted || at >= nextPost || at >= briefAt) continue
+    brief = activity
+    briefAt = at
+  }
+  return { brief, updates }
 }
 
 /**
- * Time spent waiting for answers, per person who had to answer. Each person's
- * waits are merged where they overlap, so parallel questions count once.
- * Beyond `limit` people, the rest are returned together as `others`.
+ * All time spent waiting for answers, overlaps counted once, and whose answers
+ * they were, as `ownerOf` names them.
  */
-export function decisionWaits(activities: readonly TeamActivity[], ownerOf: (appId: string) => string, limit = 3): { shown: DecisionWait[]; others: { count: number; ms: number } | null } {
-  const asked = new Map<string, { appId: string; at: number }>()
-  const answered = new Map<string, number>()
+export function decisionWaitTotal(activities: readonly TeamActivity[], ownerOf: (appId: string) => string): { owners: string[]; ms: number } {
+  const spans = decisionWaitSpans(activities)
+  return { owners: [...new Set(spans.map(row => ownerOf(row.appId)))], ms: unionLength(spans.map(row => row.span)) }
+}
+
+export interface AnsweredDecision {
+  id: string
+  /** Who asked. */
+  appId: string
+  askedAt: number
+  answeredAt: number
+  ask: TeamActivity
+  answer: TeamActivity
+}
+
+/** Each answered decision, earliest asked first. */
+export function answeredDecisions(activities: readonly TeamActivity[]): AnsweredDecision[] {
+  const asked = new Map<string, { activity: TeamActivity; at: number }>()
+  const answered = new Map<string, { activity: TeamActivity; at: number }>()
   for (const activity of activities) {
     if (activity.kind !== 'decision' || !activity.refId) continue
     const at = taskTime(activity.createdAt)
     if (at === null) continue
-    if (activity.status === 'escalation') asked.set(activity.refId, { appId: activity.actorAppId, at })
-    else if (activity.status === 'ok') answered.set(activity.refId, at)
+    if (activity.status === 'escalation') asked.set(activity.refId, { activity, at })
+    else if (activity.status === 'ok') answered.set(activity.refId, { activity, at })
   }
-  const byOwner = new Map<string, [number, number][]>()
-  for (const [id, request] of asked) {
-    const end = answered.get(id)
-    if (end === undefined || end <= request.at) continue
-    const owner = ownerOf(request.appId)
-    byOwner.set(owner, [...(byOwner.get(owner) ?? []), [request.at, end]])
-  }
-  const all = [...byOwner].map(([owner, spans]) => ({ owner, spans, ms: unionLength(spans) })).sort((a, b) => b.ms - a.ms)
-  const rest = all.slice(limit)
-  return {
-    shown: all.slice(0, limit).map(({ owner, ms }) => ({ owner, ms })),
-    others: rest.length ? { count: rest.length, ms: unionLength(rest.flatMap(row => row.spans)) } : null,
-  }
+  return [...asked].flatMap(([id, ask]) => {
+    const reply = answered.get(id)
+    return !reply || reply.at <= ask.at ? [] : [{ id, appId: ask.activity.actorAppId, askedAt: ask.at, answeredAt: reply.at, ask: ask.activity, answer: reply.activity }]
+  }).sort((a, b) => a.askedAt - b.askedAt)
+}
+
+function decisionWaitSpans(activities: readonly TeamActivity[]): { appId: string; span: [number, number] }[] {
+  return answeredDecisions(activities).map(row => ({ appId: row.appId, span: [row.askedAt, row.answeredAt] }))
 }
 
 export function unionLength(spans: readonly [number, number][]): number {

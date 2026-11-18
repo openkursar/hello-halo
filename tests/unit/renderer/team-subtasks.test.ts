@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decisionWaits, subtaskBoard, subtaskDurations, unionLength } from '../../../src/renderer/components/team/workbench/subtasks'
+import { answeredDecisions, decisionWaitTotal,subtaskBoard, subtaskDurations, unionLength } from '../../../src/renderer/components/team/workbench/subtasks'
 import { formatSpan } from '../../../src/renderer/components/team/workbench/time'
 import type { MemberProgress } from '../../../src/renderer/components/team/workbench/progress'
 import type { BlackboardTask, TeamActivity } from '../../../src/shared/apps/team-types'
@@ -71,7 +71,7 @@ describe('subtask durations', () => {
       act({ refId: 't', status: 'in_progress', createdAt: 8 * MIN }),
       act({ refId: 't', status: 'done', createdAt: 20 * MIN }),
     ])
-    expect(durations.get('t')).toBe(15 * MIN)
+    expect(durations.get('t')).toEqual({ ms: 15 * MIN, waited: 0 })
   })
 
   it('falls back to when it was posted and last changed, and skips open or rejected tasks', () => {
@@ -80,7 +80,20 @@ describe('subtask durations', () => {
       row('open', 'in_progress', { createdAt: 0, updatedAt: 9 * MIN }),
       row('no', 'rejected', { createdAt: 0, updatedAt: 9 * MIN }),
     ], [])
-    expect([...durations]).toEqual([['plain', 3 * MIN]])
+    expect([...durations]).toEqual([['plain', { ms: 3 * MIN, waited: 0 }]])
+  })
+
+  it('leaves out waits others asked for and keeps the assignee\u2019s own', () => {
+    const decision = (id: string, actorAppId: string, from: number, to: number) => [
+      act({ kind: 'decision', status: 'escalation', refId: id, actorAppId, createdAt: from }),
+      act({ kind: 'decision', status: 'ok', refId: id, actorAppId: 'x', createdAt: to }),
+    ]
+    const durations = subtaskDurations([row('t', 'done', { createdAt: 0, updatedAt: 300 * MIN, assigneeAppId: 'a' })], [
+      ...decision('lead', 'lead', 3 * MIN, 100 * MIN),
+      ...decision('own', 'a', 50 * MIN, 150 * MIN),
+      ...decision('late', 'a', 290 * MIN, 310 * MIN),
+    ])
+    expect(durations.get('t')).toEqual({ ms: 253 * MIN, waited: 110 * MIN })
   })
 })
 
@@ -88,21 +101,24 @@ describe('decision waits', () => {
   const ask = (id: string, appId: string, at: number) => act({ kind: 'decision', status: 'escalation', refId: id, actorAppId: appId, createdAt: at })
   const answer = (id: string, at: number) => act({ kind: 'decision', status: 'ok', refId: id, actorAppId: 'x', createdAt: at })
 
-  it('counts parallel questions to one person once and ignores unanswered ones', () => {
-    const waits = decisionWaits([
+  it('counts overlapping waits once across everyone and ignores unanswered ones', () => {
+    const total = decisionWaitTotal([
       ask('a', 'mine', 0), answer('a', 10 * MIN),
       ask('b', 'mine', 5 * MIN), answer('b', 15 * MIN),
-      ask('c', 'theirs', 0), answer('c', 3 * MIN),
-      ask('open', 'mine', 20 * MIN),
+      ask('c', 'theirs', 12 * MIN), answer('c', 20 * MIN),
+      ask('d', 'also-theirs', 30 * MIN), answer('d', 31 * MIN),
+      ask('open', 'mine', 40 * MIN),
     ], appId => (appId === 'mine' ? '' : 'Zhang'))
-    expect(waits).toEqual({ shown: [{ owner: '', ms: 15 * MIN }, { owner: 'Zhang', ms: 3 * MIN }], others: null })
+    expect(total).toEqual({ owners: ['', 'Zhang'], ms: 21 * MIN })
   })
 
-  it('folds everyone past the limit together', () => {
-    const activities = ['p1', 'p2', 'p3', 'p4', 'p5'].flatMap((id, index) => [ask(id, id, 0), answer(id, (10 - index) * MIN)])
-    const waits = decisionWaits(activities, appId => appId, 3)
-    expect(waits.shown.map(row => row.owner)).toEqual(['p1', 'p2', 'p3'])
-    expect(waits.others).toEqual({ count: 2, ms: 7 * MIN })
+  it('lists answered questions with who asked, earliest first', () => {
+    const rows = answeredDecisions([
+      answer('late', 40 * MIN), ask('late', 'lead', 30 * MIN),
+      ask('early', 'writer', 5 * MIN), answer('early', 9 * MIN),
+      ask('open', 'lead', 50 * MIN),
+    ])
+    expect(rows.map(row => [row.id, row.appId, row.askedAt, row.answeredAt])).toEqual([['early', 'writer', 5 * MIN, 9 * MIN], ['late', 'lead', 30 * MIN, 40 * MIN]])
   })
 
   it('merges overlapping spans', () => {

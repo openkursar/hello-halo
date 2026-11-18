@@ -21,10 +21,18 @@ import { detailForTask, ownedTaskMembers } from './workbench/members'
 import { LegacyTeamNotice } from './workbench/LegacyTeamNotice'
 import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import { navigateToConversation } from '../../utils/conversation-navigation'
+import { TeamDetailPage } from './detail/TeamDetailPage'
 
 const TeamCreateDialog = lazy(() => import('./TeamCreateDialog').then(module => ({ default: module.TeamCreateDialog })))
 
 export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { detail: TeamDetail; onBack?: () => void; spaceEntry?: boolean }) {
+  if (!teamDetail.team.ephemeral && !teamDetail.legacyCoordinator && !(spaceEntry && teamDetail.team.coordinatorConversationId)) {
+    return <TeamDetailPage detail={teamDetail} onBack={onBack} />
+  }
+  return <LegacyTeamView detail={teamDetail} onBack={onBack} spaceEntry={spaceEntry} />
+}
+
+function LegacyTeamView({ detail: teamDetail, onBack, spaceEntry = false }: { detail: TeamDetail; onBack?: () => void; spaceEntry?: boolean }) {
   const { t } = useTranslation()
   const navigationTarget = usePeopleViewStore(state => state.teamTarget)
   const [width, setWidth] = useState(() => window.innerWidth)

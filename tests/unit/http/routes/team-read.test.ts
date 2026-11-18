@@ -52,6 +52,7 @@ const sendToMember = vi.fn<[unknown], Promise<unknown>>()
 const stopMember = vi.fn<[unknown], Promise<unknown>>()
 const listConversations = vi.fn<[string], unknown[]>()
 const listArtifacts = vi.fn<[string, string?], Promise<unknown[]>>()
+const listOutputs = vi.fn<[string, { offset?: number; limit?: number; producers?: string[] }?], unknown>()
 
 vi.mock('../../../../src/main/apps/team', async () => ({
   workMemberPrincipalId: (await vi.importActual<typeof import('../../../../src/main/apps/team/work-members')>('../../../../src/main/apps/team/work-members')).workMemberPrincipalId,
@@ -67,6 +68,7 @@ vi.mock('../../../../src/main/apps/team', async () => ({
     stopMember: (input: unknown) => stopMember(input),
     listConversations: (teamId: string) => listConversations(teamId),
     listArtifacts: (teamId: string, epochId?: string) => listArtifacts(teamId, epochId),
+    listOutputs: (teamId: string, page?: { offset?: number; limit?: number; producers?: string[] }) => listOutputs(teamId, page),
   }),
   getTeamStore: () => ({
     listMembersByTeam: (teamId: string) => listMembersByTeam(teamId),
@@ -338,6 +340,7 @@ describe('cross-office isolation on team read routes', () => {
       '/api/teams/Y/epochs/e1/board',
       '/api/teams/Y/epochs/e1/roster',
       '/api/teams/Y/epochs/e1/artifacts',
+      '/api/teams/Y/outputs',
     ]
     await withServer(buildApp('X'), async (base) => {
       for (const p of paths) {
@@ -654,6 +657,28 @@ describe('GET /api/teams/:teamId/artifacts scope projection', () => {
       const body = await res.json()
       expect(body.data).toEqual([])
     })
+  })
+})
+
+describe('GET /api/teams/:teamId/outputs', () => {
+  it('passes the page through and lists every producer for the owner', async () => {
+    listOutputs.mockReturnValue({ outputs: [], total: 0 })
+    await withServer(buildApp(null), async (base) => {
+      const body = await (await fetch(`${base}/api/teams/X/outputs?offset=30&limit=30`)).json()
+      expect(body).toEqual({ success: true, data: { outputs: [], total: 0 } })
+    })
+    expect(listOutputs).toHaveBeenLastCalledWith('X', { offset: 30, limit: 30, producers: undefined })
+  })
+
+  it('narrows a narrow reader to its own files before paging, so the total is its own', async () => {
+    listMembersByTeam.mockReturnValue([
+      { appId: 'member-self', memberIdentity: 'id-reader', scopeJson: JSON.stringify({ visibility: 'assigned', discoverable: false }) },
+    ])
+    listOutputs.mockReturnValue({ outputs: [], total: 0 })
+    await withServer(buildApp('X'), async (base) => {
+      expect((await fetch(`${base}/api/teams/X/outputs`)).status).toBe(200)
+    })
+    expect(listOutputs).toHaveBeenLastCalledWith('X', { offset: undefined, limit: undefined, producers: ['member-self'] })
   })
 })
 

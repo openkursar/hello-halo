@@ -324,6 +324,7 @@ export class TeamStore implements ITeamStore {
   private readonly stmtGetEpochById: Database.Statement
   private readonly stmtEndEpoch: Database.Statement
   private readonly stmtTouchEpoch: Database.Statement
+  private readonly stmtMarkRunHumanTurn: Database.Statement
   private readonly stmtReopenEpoch: Database.Statement
   private readonly stmtListEpochsByTeam: Database.Statement
   private readonly stmtGetCurrentEpochForTeam: Database.Statement
@@ -598,6 +599,10 @@ export class TeamStore implements ITeamStore {
       UPDATE team_epochs
       SET last_activity_at = MAX(COALESCE(last_activity_at, 0), @at)
       WHERE id = @id
+    `)
+    this.stmtMarkRunHumanTurn = db.prepare(`
+      UPDATE team_epochs SET first_human_turn_at = @at
+      WHERE id = @id AND lifecycle = 'run' AND first_human_turn_at IS NULL
     `)
     // Reversible seal: reopen a hibernated epoch (keep summary as last snapshot).
     this.stmtReopenEpoch = db.prepare(`
@@ -1428,6 +1433,13 @@ export class TeamStore implements ITeamStore {
     return (this.stmtListActivityByEpochSince.all(teamId, epochId, sinceCreatedAt) as TeamActivityRow[]).map(rowToActivity)
   }
 
+  listExchangesByEpochs(teamId: string, epochIds: string[]): TeamActivity[] {
+    if (!epochIds.length) return []
+    return (this.db.prepare(`SELECT * FROM team_activity
+      WHERE team_id = ? AND epoch_id IN (SELECT value FROM json_each(?)) AND kind IN ('message', 'reply', 'finding')
+      ORDER BY created_at ASC, rowid ASC`).all(teamId, JSON.stringify(epochIds)) as TeamActivityRow[]).map(rowToActivity)
+  }
+
   listRecentActivityByEpoch(teamId: string, epochId: string, limit: number): TeamActivity[] {
     const rows = this.stmtListRecentActivityByEpoch.all(teamId, epochId, limit) as TeamActivityRow[]
     return rows.reverse().map(rowToActivity)
@@ -1460,7 +1472,7 @@ export class TeamStore implements ITeamStore {
                 AND (task.created_by_app_id IN (SELECT value FROM json_each(@appIds)) OR task.assignee_app_id IN (SELECT value FROM json_each(@appIds)))))))` : ''
     const walk = this.db.prepare(`SELECT candidate.* FROM team_epochs candidate ${epochIds === undefined ? 'INDEXED BY idx_epochs_native_recency' : ''}
       WHERE candidate.team_id = @teamId
-        AND candidate.lifecycle = 'conversation' AND candidate.chat_key GLOB 'native:*'
+        AND ((candidate.lifecycle = 'conversation' AND candidate.chat_key GLOB 'native:*') OR (candidate.lifecycle = 'run' AND candidate.first_human_turn_at IS NOT NULL))
         ${epochIds !== undefined ? 'AND candidate.id IN (SELECT value FROM json_each(@epochIds))' : ''}
         ${scopeFilter}
         ${cursor ? 'AND (COALESCE(candidate.last_activity_at, candidate.started_at), candidate.id) < (@at, @id)' : ''}
@@ -1478,10 +1490,13 @@ export class TeamStore implements ITeamStore {
     return rows.map(row => this.hydrateEpoch(row))
   }
 
-  getConversationStats(teamId: string, ownAppIds: string[], epochIds?: string[], includeOutputs = true): {
+  getConversationStats(teamId: string, ownAppIds: string[], epochIds?: string[], detailed = true): {
     involved: Set<string>
     outputCounts: Map<string, number>
     unansweredDecisionMembers: Map<string, string[]>
+    subtasks: Map<string, { done: number; open: number }>
+    teamwork: Set<string>
+    participants: Map<string, string[]>
   } {
     const scope = epochIds === undefined ? '' : ' AND epoch_id IN (SELECT value FROM json_each(@epochs))'
     const bindings = { teamId, own: JSON.stringify(ownAppIds), ...(epochIds === undefined ? {} : { epochs: JSON.stringify(epochIds) }) }
@@ -1489,7 +1504,7 @@ export class TeamStore implements ITeamStore {
       WHERE team_id = @teamId ${scope} AND (actor_app_id IN (SELECT value FROM json_each(@own)) OR target_app_id IN (SELECT value FROM json_each(@own)))
       UNION SELECT DISTINCT epoch_id FROM blackboard_tasks WHERE team_id = @teamId ${scope}
       AND (created_by_app_id IN (SELECT value FROM json_each(@own)) OR assignee_app_id IN (SELECT value FROM json_each(@own)))`).all(bindings) as { epoch_id: string }[] : []
-    const counts = includeOutputs ? this.db.prepare(`SELECT epoch_id, COUNT(*) AS count FROM (
+    const counts = detailed ? this.db.prepare(`SELECT epoch_id, COUNT(*) AS count FROM (
       SELECT epoch_id, ref FROM blackboard_findings WHERE team_id = @teamId ${scope} AND ref IS NOT NULL AND ref != ''
       UNION SELECT epoch_id, result_ref AS ref FROM blackboard_tasks WHERE team_id = @teamId ${scope} AND result_ref IS NOT NULL AND result_ref != ''
     ) GROUP BY epoch_id`).all(bindings) as { epoch_id: string; count: number }[] : []
@@ -1508,11 +1523,48 @@ export class TeamStore implements ITeamStore {
       ORDER BY request.epoch_id, request.actor_app_id`).all(bindings) as { epoch_id: string; actor_app_id: string }[]
     const unansweredDecisionMembers = new Map<string, string[]>()
     for (const row of waiting) unansweredDecisionMembers.set(row.epoch_id, [...(unansweredDecisionMembers.get(row.epoch_id) ?? []), row.actor_app_id])
+    const subtasks = this.db.prepare(`SELECT epoch_id, SUM(status = 'done') AS done, SUM(status IN ('pending', 'in_progress', 'blocked')) AS open
+      FROM blackboard_tasks WHERE team_id = @teamId ${scope} GROUP BY epoch_id`).all(bindings) as { epoch_id: string; done: number; open: number }[]
+    const teamwork = this.db.prepare(`SELECT DISTINCT epoch_id FROM team_activity
+      WHERE team_id = @teamId ${scope} AND kind IN ('message', 'reply')
+        AND (actor_app_id NOT IN (SELECT app_id FROM team_members WHERE team_id = @teamId AND is_lead = 1)
+          OR target_app_id NOT IN (SELECT app_id FROM team_members WHERE team_id = @teamId AND is_lead = 1))`).all(bindings) as { epoch_id: string }[]
+    const taking = detailed ? this.db.prepare(`SELECT DISTINCT epoch_id, app_id FROM (
+      SELECT epoch_id, actor_app_id AS app_id FROM team_activity WHERE team_id = @teamId ${scope}
+      UNION ALL SELECT epoch_id, target_app_id FROM team_activity WHERE team_id = @teamId ${scope} AND target_app_id IS NOT NULL
+      UNION ALL SELECT epoch_id, created_by_app_id FROM blackboard_tasks WHERE team_id = @teamId ${scope}
+      UNION ALL SELECT epoch_id, assignee_app_id FROM blackboard_tasks WHERE team_id = @teamId ${scope} AND assignee_app_id IS NOT NULL
+      UNION ALL SELECT epoch_id, author_app_id FROM blackboard_findings WHERE team_id = @teamId ${scope}
+    ) WHERE app_id IN (SELECT app_id FROM team_members WHERE team_id = @teamId)`).all(bindings) as { epoch_id: string; app_id: string }[] : []
+    const participants = new Map<string, string[]>()
+    for (const row of taking) participants.set(row.epoch_id, [...(participants.get(row.epoch_id) ?? []), row.app_id])
     return {
       involved: new Set(involved.map(row => row.epoch_id)),
       outputCounts: new Map(counts.map(row => [row.epoch_id, row.count])),
       unansweredDecisionMembers,
+      subtasks: new Map(subtasks.map(row => [row.epoch_id, { done: row.done, open: row.open }])),
+      teamwork: new Set(teamwork.map(row => row.epoch_id)),
+      participants,
     }
+  }
+
+  listOutputRefs(teamId: string, page: { offset: number; limit: number; producers?: string[] }): {
+    rows: Array<{ epochId: string; appId: string; ref: string; at: number }>
+    total: number
+  } {
+    const only = (column: string) => page.producers ? ` AND ${column} IN (SELECT value FROM json_each(@producers))` : ''
+    // One row per (run, ref); SQLite takes the bare columns from the latest declaration.
+    const declared = `SELECT epoch_id, ref, app_id, MAX(at) AS at FROM (
+      SELECT epoch_id, ref, author_app_id AS app_id, created_at AS at FROM blackboard_findings
+        WHERE team_id = @teamId AND ref IS NOT NULL AND ref != ''${only('author_app_id')}
+      UNION ALL SELECT epoch_id, result_ref, assignee_app_id, updated_at FROM blackboard_tasks
+        WHERE team_id = @teamId AND result_ref IS NOT NULL AND result_ref != '' AND assignee_app_id IS NOT NULL${only('assignee_app_id')}
+    ) GROUP BY epoch_id, ref`
+    const bindings = { teamId, ...(page.producers ? { producers: JSON.stringify(page.producers) } : {}) }
+    const rows = this.db.prepare(`${declared} ORDER BY at DESC, epoch_id, ref LIMIT @limit OFFSET @offset`)
+      .all({ ...bindings, limit: page.limit, offset: page.offset }) as Array<{ epoch_id: string; ref: string; app_id: string; at: number }>
+    const { total } = this.db.prepare(`SELECT COUNT(*) AS total FROM (${declared})`).get(bindings) as { total: number }
+    return { rows: rows.map(row => ({ epochId: row.epoch_id, appId: row.app_id, ref: row.ref, at: row.at })), total }
   }
 
   listActivityByTeam(teamId: string): TeamActivity[] {
@@ -1603,6 +1655,10 @@ export class TeamStore implements ITeamStore {
   /** Stamp a turn entering this epoch, so a list of work can sort by recency. */
   touchEpoch(epochId: string, at: number): void {
     this.stmtTouchEpoch.run({ id: epochId, at })
+  }
+
+  markRunHumanTurn(epochId: string, at: number): boolean {
+    return this.stmtMarkRunHumanTurn.run({ id: epochId, at }).changes > 0
   }
 
   getEpochById(epochId: string): TeamEpoch | null {

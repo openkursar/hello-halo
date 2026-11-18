@@ -88,8 +88,12 @@ describe('TeamService — conversations + pending escalations', () => {
   let pending: PendingEscalationRecord[]
 
   function build() {
+    return createTeamService(buildDeps())
+  }
+
+  function buildDeps(): TeamServiceDeps {
     const runtime = makeRuntime(store, busyByApp)
-    const deps: TeamServiceDeps = {
+    return {
       store,
       appManager: { getApp: (id: string) => ({ id, spaceId: SPACE, spec: { name: id } }), listApps: ({ spaceId }: { spaceId: string }) => spaceId === SPACE ? [{ id: LEAD_APP }, { id: MEMBER_APP }] : [] } as never,
       getRuntime: () => runtime as never,
@@ -99,7 +103,6 @@ describe('TeamService — conversations + pending escalations', () => {
       getPendingEscalations: () => pending,
       describeChatKey: () => 'WeCom Group',
     }
-    return createTeamService(deps)
   }
 
   beforeEach(() => {
@@ -230,6 +233,57 @@ describe('TeamService — conversations + pending escalations', () => {
     const { epochId } = await svc.openConversation(TEAM_ID)
     busyByApp.set(MEMBER_APP, [{ epochId, kind: 'conversation', label: '' }])
     expect(svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.active).toBe(true)
+  })
+
+  it('counts work handed out by message as subtasks while the board is empty', async () => {
+    const svc = build()
+    const { epochId } = await svc.openConversation(TEAM_ID, 'Brief')
+    const message = (id: string, actorAppId: string, targetAppId: string, createdAt: number) => store.insertActivity({
+      id, teamId: TEAM_ID, epochId, kind: 'message', actorAppId, targetAppId, subject: 'Draft', body: null,
+      refId: null, correlationId: null, status: 'sent', createdAt,
+    })
+    const subtasks = () => svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.subtasks
+    message('ask', LEAD_APP, MEMBER_APP, 100)
+    expect(subtasks()).toEqual({ done: 0, open: 1 })
+    message('answer', MEMBER_APP, LEAD_APP, 200)
+    expect(subtasks()).toEqual({ done: 1, open: 0 })
+    busyByApp.set(MEMBER_APP, [{ epochId, kind: 'conversation', label: '' }])
+    expect(subtasks()).toEqual({ done: 0, open: 1 })
+  })
+
+  it('names who took part in a task in roster order, only on the team task list', async () => {
+    const svc = build()
+    const { epochId } = await svc.openConversation(TEAM_ID, 'Brief')
+    const { epochId: quiet } = await svc.openConversation(TEAM_ID, 'Quiet')
+    const participants = (id: string) => svc.listConversations(TEAM_ID).find(c => c.epochId === id)?.participantAppIds
+    store.insertActivity({
+      id: 'ask', teamId: TEAM_ID, epochId, kind: 'message', actorAppId: 'outsider-app', targetAppId: MEMBER_APP, subject: 'Draft', body: null,
+      refId: null, correlationId: null, status: 'sent', createdAt: 100,
+    })
+    expect(participants(epochId)).toEqual([MEMBER_APP])
+    busyByApp.set(LEAD_APP, [{ epochId, kind: 'conversation', label: '' }])
+    expect(participants(epochId)).toEqual(store.listMembersByTeam(TEAM_ID).map(member => member.appId))
+    expect(participants(quiet)).toBeUndefined()
+    expect(svc.listNativeTasks({ spaceId: SPACE }).items.every(item => !('participantAppIds' in item))).toBe(true)
+  })
+
+  it('counts whoever answered the user directly as taking part, though it left no team activity', async () => {
+    const answeredIn = new Map<string, string[]>()
+    const listAnsweredMembers = vi.fn((_teamId: string, appIds: readonly string[], epochIds: readonly string[]) =>
+      new Map([...answeredIn].filter(([epochId]) => epochIds.includes(epochId)).map(([epochId, ids]) => [epochId, ids.filter(id => appIds.includes(id))])))
+    const svc = createTeamService({ ...buildDeps(), listAnsweredMembers })
+    const { epochId: direct } = await svc.openConversation(TEAM_ID, 'Direct', MEMBER_APP)
+    const { epochId: lead } = await svc.openConversation(TEAM_ID, 'Lead')
+    const { epochId: quiet } = await svc.openConversation(TEAM_ID, 'Quiet')
+    answeredIn.set(direct, [MEMBER_APP])
+    answeredIn.set(lead, [LEAD_APP])
+    const participants = (id: string) => svc.listConversations(TEAM_ID).find(c => c.epochId === id)?.participantAppIds
+    expect(participants(direct)).toEqual([MEMBER_APP])
+    expect(participants(lead)).toEqual([LEAD_APP])
+    expect(participants(quiet)).toBeUndefined()
+    listAnsweredMembers.mockClear()
+    svc.listNativeTasks({ spaceId: SPACE })
+    expect(listAnsweredMembers).not.toHaveBeenCalled()
   })
 
   it('projects a teammate decision as visible but not answerable on this machine', async () => {

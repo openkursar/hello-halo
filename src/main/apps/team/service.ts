@@ -59,6 +59,7 @@ import type {
   EpochBoard,
   EpochRoster,
   TeamArtifactGroup,
+  TeamOutputPage,
   TeamArtifactOpenResult,
   TeamArtifact,
   TeamConversation,
@@ -74,6 +75,7 @@ import type {
   TeamParticipant,
 } from '../../../shared/apps/team-types'
 import { isRemoteMember, toLocalMembers } from '../../../shared/apps/team-types'
+import { delegatedTasks } from '../../../shared/apps/team-delegations'
 import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
 import { parseSpaceCollabChatKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 
@@ -90,6 +92,8 @@ export interface TeamServiceDeps {
   store: TeamStore
   getViewerIdentity?: () => string
   getConversationMember?: (teamId: string, chatKey: string) => string | undefined
+  /** Per conversation, which of these local members have had a turn there; answering the user directly leaves no team activity. */
+  listAnsweredMembers?: (teamId: string, appIds: readonly string[], epochIds: readonly string[]) => Map<string, string[]>
   /** Live occupancy of the original space conversation, including its reserved turn. */
   isConversationBusy?: (conversationId: string) => boolean
   appManager: AppManagerService
@@ -296,6 +300,8 @@ export interface TeamService {
   setTrigger(teamId: string, input: TeamTriggerInput, triggerId?: string): TeamTrigger
   removeTrigger(teamId: string, triggerId: string): void
   listArtifacts(teamId: string, epochId?: string): Promise<TeamArtifactGroup[]>
+  /** Every file the team declared across its work, newest first, a page at a time. */
+  listOutputs(teamId: string, page?: { offset?: number; limit?: number; producers?: string[] }): TeamOutputPage
   /**
    * Resolve a shared file to a path this machine can open. Location-transparent:
    * a teammate's file is fetched from their machine and written here read-only,
@@ -1660,23 +1666,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const groups = new Map<string, { spaceId: string | null; seen: Set<string>; artifacts: TeamArtifact[] }>()
     const createdAt = new Date(epoch.startedAt).toISOString()
 
-    const teamFolderDir = getRuntime()?.teamFolders.sharedDir(teamId, epoch.id) ?? null
     for (const { appId, ref } of refs) {
-      // A coordinating space conversation has no app record; it works in the team's own space.
-      const spaceId = parseSpaceCoordinatorAppId(appId)
-        ? team.owningSpaceId
-        : appManager.getApp(appId)?.spaceId ?? null
-      const workDir = spaceId ? deps.spaces.resolveWorkDir?.(spaceId) ?? null : null
-      const path = isTeamFolderRef(ref)
-        ? teamFolderDir
-          ? join(teamFolderDir, ref.slice(TEAM_FOLDER_REF_PREFIX.length))
-          : ref
-        : isAbsolute(ref)
-          ? ref
-          : workDir
-            ? join(workDir, ref)
-            : ref
-
+      const { spaceId, path } = resolveRef(team, epoch.id, appId, ref)
       let g = groups.get(appId)
       if (!g) {
         g = { spaceId, seen: new Set(), artifacts: [] }
@@ -1687,12 +1678,42 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       g.artifacts.push(buildRefArtifact(path, ref, spaceId, createdAt))
     }
 
-    // Membership changes cannot remove a publication from the historical record.
-    return Array.from(groups, ([appId, g]) => {
-      const memberName = memberById.get(appId)?.memberName ??
-        (parseSpaceCoordinatorAppId(appId) ? SPACE_COORDINATOR_MEMBER_NAME : appManager.getApp(appId)?.spec.name ?? '')
-      return { appId, memberName, spaceId: g.spaceId, epochId: epoch.id, artifacts: g.artifacts }
+    return Array.from(groups, ([appId, g]) => ({ appId, memberName: producerName(memberById, appId), spaceId: g.spaceId, epochId: epoch.id, artifacts: g.artifacts }))
+  }
+
+  /** Every file the team declared, newest first, one page at a time. `producers` narrows it to those members' files. */
+  function listOutputs(teamId: string, page: { offset?: number; limit?: number; producers?: string[] } = {}): TeamOutputPage {
+    const team = requireTeam(teamId)
+    const offset = Math.max(0, Math.floor(page.offset ?? 0))
+    const limit = Math.min(100, Math.max(1, Math.floor(page.limit ?? 30)))
+    const { rows, total } = store.listOutputRefs(teamId, { offset, limit, producers: page.producers })
+    const memberById = new Map(store.listMembersByTeam(teamId).map((m) => [m.appId, m]))
+    const outputs = rows.map(({ epochId, appId, ref, at }) => {
+      const { path } = resolveRef(team, epochId, appId, ref)
+      return { epochId, appId, memberName: producerName(memberById, appId), ref, name: basename(path), path, at }
     })
+    return { outputs, total }
+  }
+
+  /** Where a declared ref points on this machine, and the space it was made in. */
+  function resolveRef(team: Team, epochId: string, appId: string, ref: string): { spaceId: string | null; path: string } {
+    // A coordinating space conversation has no app record; it works in the team's own space.
+    const spaceId = parseSpaceCoordinatorAppId(appId)
+      ? team.owningSpaceId
+      : appManager.getApp(appId)?.spaceId ?? null
+    if (isTeamFolderRef(ref)) {
+      const teamFolderDir = getRuntime()?.teamFolders.sharedDir(team.id, epochId) ?? null
+      return { spaceId, path: teamFolderDir ? join(teamFolderDir, ref.slice(TEAM_FOLDER_REF_PREFIX.length)) : ref }
+    }
+    if (isAbsolute(ref)) return { spaceId, path: ref }
+    const workDir = spaceId ? deps.spaces.resolveWorkDir?.(spaceId) ?? null : null
+    return { spaceId, path: workDir ? join(workDir, ref) : ref }
+  }
+
+  // Membership changes cannot remove a publication from the historical record.
+  function producerName(memberById: Map<string, TeamMember>, appId: string): string {
+    return memberById.get(appId)?.memberName ??
+      (parseSpaceCoordinatorAppId(appId) ? SPACE_COORDINATOR_MEMBER_NAME : appManager.getApp(appId)?.spec.name ?? '')
   }
 
   /**
@@ -2009,7 +2030,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
   }
 
-  function projectConversations(team: Team, openEpochs: TeamEpoch[], includeOutputs = true, pending?: PendingEscalationRecord[]): TeamConversation[] {
+  function projectConversations(team: Team, openEpochs: TeamEpoch[], detailed = true, pending?: PendingEscalationRecord[]): TeamConversation[] {
     if (openEpochs.length === 0) return []
     const teamId = team.id
     const selectedIds = new Set(openEpochs.map(epoch => epoch.id))
@@ -2025,9 +2046,13 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const activeEpochIds = new Set(rt?.getActiveEpochIds?.(teamId))
     const participantWork = store.getParticipantWorkStates(teamId)
     for (const [epochId, state] of participantWork) if (state.active) activeEpochIds.add(epochId)
+    const busyByEpoch = new Map<string, Set<string>>()
     for (const m of members) {
       const busy = isJoined ? store.getJoinedMemberBusy(teamId, m.appId) : rt?.getMemberBusy(m.appId, teamId) ?? []
-      for (const b of busy) activeEpochIds.add(b.epochId)
+      for (const b of busy) {
+        activeEpochIds.add(b.epochId)
+        busyByEpoch.set(b.epochId, (busyByEpoch.get(b.epochId) ?? new Set()).add(m.appId))
+      }
     }
     const localWaitingMembers = new Map<string, string[]>()
     const memberIds = new Set(members.map(member => member.appId))
@@ -2040,10 +2065,20 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
 
     const ownIds = new Set(members.filter(m => !isRemoteMember(m)).map(m => m.appId))
-    const { involved, outputCounts, unansweredDecisionMembers } = store.getConversationStats(teamId, [...ownIds], openEpochs.map(epoch => epoch.id), includeOutputs)
+    const { involved, outputCounts, unansweredDecisionMembers, subtasks, teamwork, participants } = store.getConversationStats(teamId, [...ownIds], openEpochs.map(epoch => epoch.id), detailed)
+    const answered = detailed ? deps.listAnsweredMembers?.(teamId, [...ownIds], openEpochs.map(epoch => epoch.id)) : undefined
+    // Work handed out by message alone leaves the board empty; settle it the way the task panel does.
+    const delegated = [...teamwork].filter(epochId => !subtasks.has(epochId))
+    const messages = store.listExchangesByEpochs(teamId, delegated)
+    for (const epochId of delegated) {
+      const rows = delegatedTasks({ teamId, epochId, leadAppId: team.leadAppId ?? null, activities: messages.filter(row => row.epochId === epochId), busyAppIds: busyByEpoch.get(epochId) ?? new Set() })
+      const done = rows.filter(row => row.status === 'done').length
+      if (rows.length) subtasks.set(epochId, { done, open: rows.length - done })
+    }
     const joinedStatuses = isJoined ? store.getJoinedMemberStatuses(teamId) : null
     const membersByAppId = new Map(members.map(member => [member.appId, member]))
     const memberOrder = new Map(members.map((member, index) => [member.appId, index]))
+    const byRoster = (left: string, right: string) => ((memberOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (memberOrder.get(right) ?? Number.MAX_SAFE_INTEGER)) || left.localeCompare(right)
     return openEpochs.map((epoch) => {
       const chatKey = epoch.chatKey ?? ''
       const kind = epoch.lifecycle === 'run' ? 'run' : conversationKindOf(chatKey)
@@ -2060,10 +2095,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         ...sharedWaiting,
         ...localWaiting,
         ...(participantWork.get(epoch.id)?.waitingAppIds ?? []),
-      ])].sort((left, right) => {
-        const byRoster = (memberOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (memberOrder.get(right) ?? Number.MAX_SAFE_INTEGER)
-        return byRoster || left.localeCompare(right)
-      })
+      ])].sort(byRoster)
+      const participantAppIds = detailed ? [...new Set([...(participants.get(epoch.id) ?? []), ...(answered?.get(epoch.id) ?? []), ...(busyByEpoch.get(epoch.id) ?? []), ...waitingMembers])].sort(byRoster) : []
       return {
         epochId: epoch.id,
         teamId,
@@ -2079,9 +2112,11 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         triggerType: epoch.triggerType,
         summary: epoch.summary,
         artifactCount: outputCounts.get(epoch.id) ?? 0,
+        ...(subtasks.has(epoch.id) ? { subtasks: subtasks.get(epoch.id) } : {}),
+        ...(teamwork.has(epoch.id) ? { teamwork: true } : {}),
         label: (kind !== 'collab' && epoch.workItem?.title) || (kind === 'run' ? team.name : deriveConversationLabel(store, epoch, deps.describeChatKey, members)),
-        // IM chats are answered in the IM app; native + member chats are writable here.
-        readonly: kind === 'im' || kind === 'run' || isReadonlyCollaboration(team, epoch),
+        // IM chats are answered in the IM app; a run is continued in place like a native chat.
+        readonly: kind === 'im' || isReadonlyCollaboration(team, epoch),
         ...(memberAppId ? { memberAppId } : {}),
         ...(kind === 'im' ? { channel: 'im' } : {}),
         startedAt: epoch.startedAt,
@@ -2090,6 +2125,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         waitingUser: waitingMembers.length > 0,
         waitingForMe: localWaiting.length > 0,
         ...(waitingMembers.length > 0 ? { waitingMemberAppIds: waitingMembers } : {}),
+        ...(participantAppIds.length > 0 ? { participantAppIds } : {}),
       }
     })
   }
@@ -2164,6 +2200,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     pauseTeam,
     dissolveTeam,
     listArtifacts,
+    listOutputs,
     openArtifact,
     listToolAudit,
     listEpochs,

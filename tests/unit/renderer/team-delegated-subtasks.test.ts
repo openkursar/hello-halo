@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BlackboardTask, RosterMember, TeamActivity, TeamDetail } from '../../../src/shared/apps/team-types'
-import { conversationSubtasks, delegatedTasks } from '../../../src/renderer/components/team/workbench/delegations'
+import { conversationSubtasks } from '../../../src/renderer/components/team/workbench/delegations'
+import { delegatedTasks } from '../../../src/shared/apps/team-delegations'
 import { taskProgress } from '../../../src/renderer/components/team/workbench/progress'
 
 const LEAD = 'space-conv-lead'
@@ -10,7 +11,9 @@ const act = (actorAppId: string, targetAppId: string, createdAt: number, extra: 
   subject: `${actorAppId} to ${targetAppId}`, body: null, refId: null, correlationId: null, status: 'sent', createdAt, ...extra,
 })
 const member = (appId: string, busy = false) => ({ appId, memberName: appId, ...(busy ? { busy: [{ epochId: 'e' }] } : {}) } as RosterMember)
-const derive = (activities: TeamActivity[], roster = [member('a'), member('b')]) => delegatedTasks({ teamId: 't', epochId: 'e', leadAppId: LEAD, activities, roster })
+const derive = (activities: TeamActivity[], roster = [member('a'), member('b')]) => delegatedTasks({
+  teamId: 't', epochId: 'e', leadAppId: LEAD, activities, busyAppIds: new Set(roster.filter(row => row.busy?.length).map(row => row.appId)),
+})
 
 describe('delegatedTasks', () => {
   it('makes one subtask per member the lead wrote to, titled by the first message', () => {
@@ -36,10 +39,33 @@ describe('delegatedTasks', () => {
     expect(rows.map(row => row.title)).toEqual(['Reviewed citywalk-draft.md and fixed 3 facts', 'Write the draft'])
   })
 
-  it('reopens when the lead asks again, and ignores failed answers', () => {
-    expect(derive([act(LEAD, 'a', 1), act('a', LEAD, 2), act(LEAD, 'a', 3)])[0].status).toBe('in_progress')
+  it('keeps the first message as title when the report opens with a bare path, carrying the path as its result', () => {
+    const rows = derive([
+      act(LEAD, 'a', 1, { subject: 'Sweep the trigger claims' }),
+      act('a', LEAD, 2, { body: '`content-strategy/reviews/sweep.md`\nFound 14 claims' }),
+      act(LEAD, 'b', 3, { subject: 'Fix the scripts' }),
+      act('b', LEAD, 4, { body: 'fixes.md' }),
+    ])
+    expect(rows.map(row => [row.title, row.resultRef])).toEqual([['Sweep the trigger claims', 'content-strategy/reviews/sweep.md'], ['Fix the scripts', 'fixes.md']])
+  })
+
+  it('reopens while the member works on a later ask, and ignores failed answers', () => {
+    expect(derive([act(LEAD, 'a', 1), act('a', LEAD, 2), act(LEAD, 'a', 3)], [member('a', true)])[0].status).toBe('in_progress')
     expect(derive([act(LEAD, 'a', 1), act('a', LEAD, 2, { kind: 'reply', status: 'error' })])[0].status).toBe('in_progress')
     expect(derive([act(LEAD, 'a', 1), act('a', LEAD, 2, { kind: 'reply', status: 'ok' })])[0].status).toBe('done')
+  })
+
+  it('settles a closing word left unanswered by a member that has reported, unless it failed or never arrived', () => {
+    expect(derive([act(LEAD, 'a', 1), act('a', LEAD, 2), act(LEAD, 'a', 3, { subject: 'Approved, no need to reply' })])[0].status).toBe('done')
+    expect(derive([act(LEAD, 'a', 1), act('a', LEAD, 2), act(LEAD, 'a', 3), act('a', LEAD, 4, { kind: 'reply', status: 'error' })])[0].status).toBe('in_progress')
+    expect(derive([act(LEAD, 'a', 1), act('a', LEAD, 2), act(LEAD, 'a', 3, { status: 'undelivered' })])[0].status).toBe('in_progress')
+    expect(derive([act(LEAD, 'a', 1)])[0].status).toBe('in_progress')
+  })
+
+  it('counts a board finding after the ask as the member\'s answer', () => {
+    const finding = (at: number) => act('a', '', at, { kind: 'finding', targetAppId: null, body: 'Replaced all four notes' })
+    expect(derive([act(LEAD, 'a', 1), finding(2)])[0]).toMatchObject({ status: 'done', title: 'Replaced all four notes' })
+    expect(derive([finding(0), act(LEAD, 'a', 1)])[0].status).toBe('in_progress')
   })
 
   it('ignores messages between members the lead set to work, and from other epochs', () => {

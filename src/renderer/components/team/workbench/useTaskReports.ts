@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { RosterMember } from '../../../../shared/apps/team-types'
 import type { Message } from '../../../types'
 import { api } from '../../../api'
-import { taskReportMessages, type TaskMemberReport } from './model'
+import { finalReplyText, taskReportMessages, type TaskMemberReport } from './model'
 
 function sameMembers(current: string[], failures: Set<string>): boolean {
   return current.length === failures.size && current.every(id => failures.has(id))
@@ -11,10 +11,12 @@ function sameMembers(current: string[], failures: Set<string>): boolean {
 
 /**
  * `unavailable` lists the members whose latest read failed, or came only from
- * the copy kept here while their owner was unreachable.
+ * the copy kept here while their owner was unreachable. `finals` holds each
+ * member's latest reply, read from the same transcripts.
  */
 export function useTaskReports(teamId: string, epochId: string, roster: RosterMember[], reload: number) {
   const [reports, setReports] = useState<TaskMemberReport[]>([])
+  const [finals, setFinals] = useState<ReadonlyMap<string, string>>(() => new Map())
   const [unavailable, setUnavailable] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const historiesRef = useRef(new Map<string, TaskMemberReport[]>())
@@ -32,6 +34,7 @@ export function useTaskReports(teamId: string, epochId: string, roster: RosterMe
       historiesRef.current.clear()
       scopeRef.current = scope
       setReports([])
+      setFinals(new Map())
     }
     const histories = historiesRef.current
     const failures = new Set<string>()
@@ -56,6 +59,9 @@ export function useTaskReports(teamId: string, epochId: string, roster: RosterMe
             if ((result as { stale?: boolean }).stale) failures.add(id)
             else failures.delete(id)
             setReports([...histories.values()].flat())
+            const final = finalReplyText(messages)
+            setFinals(current => current.get(id) === final ? current
+              : new Map([...current].filter(([appId]) => appId !== id).concat(final ? [[id, final]] : [])))
           } catch (error) {
             if (!disposed) {
               console.warn('[TaskActivity] Member reports unavailable', { teamId, epochId, appId: id, error })
@@ -87,5 +93,5 @@ export function useTaskReports(teamId: string, epochId: string, roster: RosterMe
     if (!members.length) setLoading(false)
     return () => { disposed = true; unsubscribe(); releases.forEach(release => release()) }
   }, [teamId, epochId, membersKey, reload])
-  return { reports, unavailable, loading }
+  return { reports, finals, unavailable, loading }
 }

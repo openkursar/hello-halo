@@ -1022,6 +1022,11 @@
   },
   {
     "method": "GET",
+    "path": "/api/teams/:teamId/outputs",
+    "group": "team"
+  },
+  {
+    "method": "GET",
     "path": "/api/teams/:teamId/conversations",
     "group": "team"
   },

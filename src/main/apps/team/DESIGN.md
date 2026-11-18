@@ -20,8 +20,11 @@ facade. The team store remains authoritative; the library stores no mirror of
 published refs and imports no Halo application code.
 
 The homepage reads `listNativeTasks({ spaceId, limit, cursor })`: a bounded,
-recency-ordered page of native conversation metadata for persistent teams.
-Hosted teams use their owning space; joined teams qualify through a local member
+recency-ordered page of native conversation metadata for persistent teams. A run
+joins it once a person has written into it: the first human turn stamps the epoch's
+`first_human_turn_at` (schema v27) and emits a team update, and the list query and
+its partial index share one predicate. IM chats are answered in their IM app, so
+their projection stays read-only; runs are writable in place. Hosted teams use their owning space; joined teams qualify through a local member
 installed in that space. The cursor is scoped to that space and ordered by last
 activity plus epoch id. Page projection reads only selected-epoch statistics,
 without transcripts or artifact counts. This is separate from the workbench's
@@ -306,6 +309,10 @@ logged), written through on every change.
   - Published outputs are projected from findings and task results, independently
     of the current roster. Removing a publisher cannot hide its earlier files;
     opening still requires a known local producer or the existing owner fetch.
+    `listOutputs` pages the same projection team-wide (one row per epoch and
+    ref, at its latest declaration, newest first) for the team page's Outputs
+    panel; a narrow reader is filtered to its visible producers in SQL so
+    totals and pages stay consistent.
   - The first `spawn_agent` lazily ensures the conversation's scope, then adds
     a participant. The host captures the source model, engine and effective
     permissions; the model supplies only its assignment and optional name or

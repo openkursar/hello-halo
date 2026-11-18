@@ -399,6 +399,10 @@ export interface TeamConversation {
   triggerType?: TeamRunTriggerType
   summary?: string | null
   artifactCount?: number
+  /** Board subtasks by outcome; absent when the work was never split. */
+  subtasks?: { done: number; open: number }
+  /** True once the lead brought another member into the work. */
+  teamwork?: boolean
 
   epochId: string
   teamId: string
@@ -424,6 +428,8 @@ export interface TeamConversation {
   waitingForMe?: boolean
   /** Members whose owners currently owe a decision in this task. */
   waitingMemberAppIds?: string[]
+  /** Members who took part in this task in roster order; only on a team's own task list. */
+  participantAppIds?: string[]
 }
 
 /** One busy assignment of a member: which thing it is serving, with a label. */
@@ -922,6 +928,24 @@ export interface TeamArtifact {
   size?: number
 }
 
+/** One file the team produced, in the team-wide outputs listing. Opening goes by `epochId` + `ref`. */
+export interface TeamOutput {
+  epochId: string
+  appId: string
+  memberName: string
+  ref: string
+  name: string
+  /** Resolved against this machine; only a hint when the producer runs elsewhere. */
+  path: string
+  /** When it was last declared (ms). */
+  at: number
+}
+
+export interface TeamOutputPage {
+  outputs: TeamOutput[]
+  total: number
+}
+
 /** Files produced by one member during a run, grouped for the team artifacts view. */
 export interface TeamArtifactGroup {
   appId: string
@@ -1316,6 +1340,7 @@ export const TEAM_IPC = {
   pause: 'team:pause',
   getDetail: 'team:get-detail',
   listArtifacts: 'team:list-artifacts',
+  listOutputs: 'team:list-outputs',
   openArtifact: 'team:open-artifact',
   listTriggers: 'team:list-triggers',
   setTrigger: 'team:set-trigger',

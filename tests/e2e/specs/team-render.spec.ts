@@ -203,10 +203,9 @@ test.describe('Task workbench interaction', () => {
     await expect(window.locator('textarea')).toBeVisible()
     await navigateToTeams(window)
     await window.getByRole('button', { name: /Workbench review/ }).click()
-    await window.getByRole('navigation', { name: 'Tasks', exact: true }).getByRole('button', { name: /Product research/ }).click()
-    const taskRoom = window.getByRole('region', { name: 'Task room' })
-    await expect(taskRoom).toHaveCount(1)
-    await expect(window.getByRole('navigation', { name: 'Tasks', exact: true })).toBeVisible()
+    await window.getByRole('navigation', { name: 'Team sections', exact: true }).getByRole('button', { name: 'Tasks', exact: true }).click()
+    await window.getByRole('button', { name: /Product research/ }).first().click()
+    await expect(window.getByRole('region', { name: 'Task details', exact: true })).toHaveCount(1)
     await openHomepageTeam(window)
     await window.getByRole('button', { name: 'Product research', exact: true }).click()
     await expect(current).toHaveAccessibleName(/^Research( · |$)/)
@@ -424,7 +423,7 @@ test.describe('Task workbench interaction', () => {
     await expect(dialog.getByRole('button', { name: 'Approve scope', exact: true })).toHaveCount(0)
     await dialog.getByRole('button', { name: /Go to conversation to answer/ }).click()
     await expect(dialog).toHaveCount(0)
-    await expect(room.locator('#decision-decision-1')).toBeFocused()
+    await expect(room.locator('#decision-decision-1:focus-within')).toHaveCount(1)
     await room.getByRole('button', { name: 'Approve scope', exact: true }).click()
     await expect(room.getByText('Approve the research scope?', { exact: true })).toHaveCount(0)
   })
@@ -505,14 +504,14 @@ test.describe('Task workbench interaction', () => {
   })
 
   for (const kind of ['im', 'run'] as const) {
-    test(`${kind} history is readable without an editable composer`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "teams.tasks.readonly-kind", evidence: "ui", mode: "none", variant: { kind } }) } }, async ({ electronApp, window }) => {
+    test(`${kind} history stays out of editable conversations`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "teams.tasks.readonly-kind", evidence: "ui", mode: "none", variant: { kind } }) } }, async ({ electronApp, window }) => {
       await openTeamWorkbench(electronApp, window, { readonlyKind: kind })
-      const room = window.getByRole('region', { name: 'Task room' })
-      await expect(room.locator('textarea')).toHaveCount(0)
-      await expect(room.getByRole('combobox')).toHaveCount(0)
-      await expect(room.getByText('This task is read-only.', { exact: true })).toBeVisible()
-      await room.getByRole('button', { name: 'Task activity', exact: true }).click()
-      await expect(window.getByRole('dialog', { name: 'Task activity' })).toBeVisible()
+      const taskPanel = window.getByRole('region', { name: 'Task details', exact: true })
+      await expect(taskPanel.locator('textarea')).toHaveCount(0)
+      await expect(taskPanel.getByRole('button', { name: 'Open conversation', exact: true })).toHaveCount(0)
+      const entry = kind === 'run' ? 'View run record (read-only)' : 'View original chat (read-only)'
+      await expect(taskPanel.getByRole('button', { name: entry, exact: true })).toBeVisible()
+      await expect(taskPanel.getByText(/collaboration records/)).toBeVisible()
     })
   }
 

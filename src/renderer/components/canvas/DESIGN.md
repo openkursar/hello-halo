@@ -202,30 +202,26 @@ and re-titles it on reuse. The progress (`components/team/TeamTaskProgress.tsx`)
 reads the board itself (`useTaskBoard`), so it does not depend on the chat
 staying mounted. It opens on one overview (`TeamTaskOverview.tsx`) headed by the
 task: the team as one line of context above it (its name, or "Temporary team" with
-the keep action, and who is in it), the task title as the page heading, its status
-and subtask count, and a brief card that names only what needs the user — then
-subtasks grouped by status (`workbench/subtasks.ts`), the outputs newest first, one
-line each (five, the rest unfolding in place) and a link to the collaboration
-record. Once every subtask is settled the groups give way to a plain list under
-the strip. Every subtask, whatever its state, switches the chat to its assignee in
-this conversation, as picking them in the member selector would. A temporary team's
-member opens in place of the chat of the conversation that leads it
-(`collab-member-view.store`); on a machine without that conversation it opens the
-member's execution here instead. The collaboration record and members are subpages one step away.
+the keep action, and who is in it, opening the members page) and the task title as
+the page heading, then the same body as the team page's task panel
+(`team/detail/TaskBody`): status line, brief card, decisions answered in place, the
+team scene, the subtask timeline and the outputs after it, wherever the work stands.
+Only the shells differ: the panel has "Open conversation", the canvas the team line.
+A subtask's assignee switches the chat to them in this conversation, as picking them
+in the member selector would; the brief, scene and footer open that member's execution
+here. A temporary team's member opens in place of the chat of the conversation that
+leads it (`collab-member-view.store`); on a machine without that conversation it opens
+the member's execution here instead. The collaboration record ("Member conversations")
+and members are subpages one step away.
 The work reads as done once it was ended as done (`finishedAt`, or archived) or
 every subtask is done or rejected with nobody still working, waiting or failed
 (`taskProgress().finished`); a new message or subtask turns it back to in progress.
-Once done, the outputs move up under the brief, since they are what the reader came
-for. The brief then adds only what the status line does not say: the closing summary
-when the work was ended, rejected subtasks, how much of the time shown was waiting on
-people, and that there are no outputs; with none of these it is left out. Outputs
-still loading or failing to load show as such, never as none.
 The members page lists the whole roster, each with its concrete work here (the
 task in hand or next, what it finished, the work it split out); members outside
 this conversation are listed last; the others switch the chat to them, as a subtask
 does.
 `reveal.activityId` opens the collaboration record at that record;
-`reveal.memberAppId` opens that member's execution. The page, subtask groups
+`reveal.memberAppId` opens that member's execution. The page, sections
 opened or closed against their default, and open member execution are kept in
 `tab.view.teamTask`, so returning to the tab lands there again. Its outputs open as canvas
 tabs (`openFile` on the resolved local copy, so binaries still go to the system

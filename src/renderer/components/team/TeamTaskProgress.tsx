@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
-import type { BlackboardFinding, BlackboardTask, TeamActivity, TeamConversation, TeamDetail } from '../../../shared/apps/team-types'
+import type { BlackboardTask, TeamActivity, TeamConversation, TeamDetail } from '../../../shared/apps/team-types'
 import type { TeamTaskViewMemory } from '../../services/canvas-lifecycle'
 import { useTeamStore, useTeamView } from '../../stores/team.store'
 import { useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
@@ -10,12 +10,14 @@ import { useTranslation } from '../../i18n'
 import { formatTimeAgo } from '../../utils/format-time'
 import { openTeamConversation } from '../../utils/team-conversation-navigation'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
-import type { ArtifactEntry, OpenOutput } from './TeamArtifacts'
-import { TeamTaskOverview, type TaskOutput } from './TeamTaskOverview'
+import type { OpenOutput } from './TeamArtifacts'
+import { useHeldDecisions } from './detail/DecisionCard'
+import { useTaskOverview } from './detail/TaskBody'
+import { TeamTaskOverview } from './TeamTaskOverview'
 import { detailForTask } from './workbench/members'
-import { taskProgress, type MemberProgress, type TaskProgress as Progress } from './workbench/progress'
+import type { MemberProgress, TaskProgress as Progress } from './workbench/progress'
 import { memberProgressText, progressMemberName } from './workbench/progress-labels'
-import { compareTaskTimes, taskTime } from './workbench/time'
+import { taskTime } from './workbench/time'
 import { useTaskBoard } from './workbench/useTaskBoard'
 import { useTaskActivity } from './workbench/useTaskActivity'
 import { TaskCollaborationHistory, TaskMemberExecution } from './workbench/TaskActivitySections'
@@ -85,19 +87,9 @@ function TaskProgress({ spaceId, task, teamDetail, memory, reveal, onRevealHandl
     handled.current(reveal.seq)
   }, [reveal, showActivity])
 
-  const progress = useMemo(() => taskProgress({
-    epochId: task.epochId, roster: detail.roster, leadAppId: detail.team.leadAppId ?? null, activities: data.activities, tasks: data.tasks,
-    decisions: data.pending.map(row => ({ id: row.entryId, appId: row.appId, question: row.question })),
-    waitingAppIds: task.waitingMemberAppIds ?? [], participants: data.participants, completed: !!task.completed || task.finishedAt !== undefined,
-  }), [task.epochId, task.waitingMemberAppIds, task.completed, task.finishedAt, detail.roster, detail.team.leadAppId, data.activities, data.tasks, data.pending, data.participants])
-  const lastActs = useMemo(() => latestActs(data.activities), [data.activities])
-  const outputs = useMemo(() => newestOutputs(data.artifacts.list, data.findings), [data.artifacts.list, data.findings])
+  const overview = useTaskOverview(detail, task, data)
+  const held = useHeldDecisions(data.pending)
 
-  const onDecision = (entryId: string) => {
-    const question = detail.pendingEscalations?.find(item => item.entryId === entryId)
-    if (!question) return
-    if (openTeamConversation(spaceId, { teamId: detail.team.id, epochId: task.epochId, teamName: detail.team.name, label: task.label, appId: question.appId, entryId, decision: true })) onLeave?.()
-  }
   // A temporary team's members show in the conversation that leads it, which only its own machine has.
   const onTalkTo = (appId: string) => {
     if (task.kind === 'collab') {
@@ -116,23 +108,22 @@ function TaskProgress({ spaceId, task, teamDetail, memory, reveal, onRevealHandl
   </div>
   const inspected = detail.roster.find(member => member.appId === executionMember)
   return <div key={inspected ? `member:${inspected.appId}` : section} className="h-full overflow-y-auto">
-    {/* Overview and members are single-line lists that use extra width; history and member conversations keep a reading width.
+    {/* Members are single-line lists that use extra width; the rest keep a reading width.
         The sticky back bar's height, so sticky content below it stops underneath instead of behind it. */}
-    <div className={`mx-auto ${!inspected && section !== 'history' ? 'max-w-5xl' : 'max-w-3xl'} px-4 pb-8 pt-[18px] [--page-sticky-top:2.75rem] sm:px-6 sm:pb-10 sm:pt-[22px]`}>
+    <div className={`mx-auto ${!inspected && section === 'members' ? 'max-w-5xl' : 'max-w-3xl'} px-4 pb-8 pt-[18px] [--page-sticky-top:2.75rem] sm:px-6 sm:pb-10 sm:pt-[22px]`}>
       {data.failed && <div role="alert" className="mb-3 flex items-start gap-2 rounded-xl bg-destructive/5 p-3 text-xs text-destructive"><AlertCircle size={15} className="shrink-0" /><span className="flex-1">{t('Could not load conversation history.')}</span><button onClick={data.retry} className="inline-flex shrink-0 items-center gap-1 rounded hover:underline"><RefreshCw size={12} />{t('Retry')}</button></div>}
       {inspected ? <>
         {back(() => setExecutionMember(null))}
         <div className="space-y-4"><TaskMemberExecution detail={detail} task={task} member={inspected} homepageConversation /></div>
-      </> : section === 'overview' ? <TeamTaskOverview detail={detail} task={task} data={data} progress={progress} lastActs={lastActs} outputs={outputs} open={open}
-        onToggle={(group, value) => setOpen(current => ({ ...current, [group]: value }))} onDecision={onDecision} onOpenMember={onTalkTo}
-        onOpenActivity={activityId => showActivity(activityId, Date.now())} onGo={setSection} />
+      </> : section === 'overview' ? <TeamTaskOverview detail={detail} task={task} taskSpaceId={spaceId} data={data} overview={overview} held={held} open={open} setOpen={setOpen}
+        onOpenWork={setExecutionMember} onTalkTo={onTalkTo} onOpenExchange={id => showActivity(id, Date.now())} onGo={setSection} />
         : <>
           {back(() => setSection('overview'))}
           {section === 'history' && <Page title={t('Collaboration record')} subtitle={t('How the lead split the work and what members handed over')}>
             <TaskCollaborationHistory key={focus?.seq} data={data} detail={detail} task={task} focusActivityId={focus?.activityId} homepageConversation onOpenMember={onTalkTo} />
           </Page>}
           {section === 'members' && <Page title={t('Members')} subtitle={t('{{count}} members', { count: detail.roster.length })}>
-            <MembersPage detail={detail} progress={progress} tasks={data.tasks} lastActs={lastActs} onOpen={onTalkTo} />
+            <MembersPage detail={detail} progress={overview.progress} tasks={data.tasks} lastActs={overview.lastActs} onOpen={onTalkTo} />
           </Page>}
         </>}
     </div>
@@ -206,30 +197,4 @@ function MembersPage({ detail, progress, tasks, lastActs, onOpen }: {
         : <div key={member.appId} className={rowClass}>{content}</div>
     })}
   </section>)}</>
-}
-
-function latestActs(activities: readonly TeamActivity[]): Map<string, TeamActivity> {
-  const result = new Map<string, TeamActivity>()
-  for (const activity of activities) {
-    const current = result.get(activity.actorAppId)
-    if (!current || (taskTime(activity.createdAt) ?? 0) >= (taskTime(current.createdAt) ?? 0)) result.set(activity.actorAppId, activity)
-  }
-  return result
-}
-
-/** Outputs newest first, dated by when they were shared on the board; undated ones keep their order at the end. */
-function newestOutputs(list: readonly ArtifactEntry[], findings: readonly BlackboardFinding[]): TaskOutput[] {
-  const sharedAt = new Map<string, number>()
-  for (const finding of findings) {
-    const at = taskTime(finding.createdAt)
-    if (!finding.ref || at === null) continue
-    for (const key of [finding.ref, baseName(finding.ref)]) sharedAt.set(key, Math.max(at, sharedAt.get(key) ?? at))
-  }
-  return list
-    .map(entry => ({ entry, at: sharedAt.get(entry.ref) ?? sharedAt.get(entry.name) ?? null }))
-    .sort((a, b) => compareTaskTimes(a.at, b.at, true))
-}
-
-function baseName(path: string): string {
-  return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
 }

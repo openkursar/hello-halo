@@ -111,6 +111,14 @@ export const MODULE: RouteModuleMeta = {
       returns: '{success:true,data:[{appId,memberName,spaceId,epochId,artifacts:[{name,type:"file"|"folder",path,relativePath,size?,createdAt}]}]}',
       notes: 'For a specific past run use GET /api/teams/:teamId/epochs/:epochId/artifacts. Read a file with your own file tools at its path.',
     },
+    'GET /api/teams/:teamId/outputs': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'List every file a team produced across its work, newest first',
+      query: '?offset=0&limit=30',
+      returns: '{success:true,data:{outputs:[{epochId,appId,memberName,ref,name,path,at}],total}}',
+      notes: 'limit defaults to 30 (max 100). epochId names the work the file came from. Read a file with your own file tools at its path.',
+    },
     'GET /api/teams/:teamId/conversations': {
       expose: 'ai',
       group: 'team',

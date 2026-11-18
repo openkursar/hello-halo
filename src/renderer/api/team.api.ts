@@ -13,6 +13,7 @@ import type {
   ProposedMember,
   TeamTriggerInput,
   TeamArtifactOpenResult,
+  TeamOutputPage,
   TeamRunResult,
   EpochRoster,
 } from '../../shared/apps/team-types'
@@ -56,6 +57,11 @@ export const teamApi = {
   teamListArtifacts: async (teamId: string): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamListArtifacts(teamId)
     return httpRequest('GET', `/api/teams/${teamId}/artifacts`)
+  },
+
+  teamListOutputs: async (teamId: string, offset: number, limit: number): Promise<ApiResponse<TeamOutputPage>> => {
+    if (isElectron()) return window.halo.teamListOutputs({ teamId, offset, limit })
+    return httpRequest('GET', `/api/teams/${teamId}/outputs?offset=${offset}&limit=${limit}`)
   },
 
   /**

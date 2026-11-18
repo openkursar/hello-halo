@@ -97,6 +97,19 @@ describe('task member navigation', () => {
     expect(html).toContain('aria-label="remote · Read-only"')
     expect(html).toContain('aria-label="actual-lead · Team lead · Working… · You can message it"')
   })
+  it('floats the ask over the waiting member’s own avatar only when it can be answered here', () => {
+    const waitingAppIds = new Set(['own-a'])
+    const html = render(roster, 'own-b', { waitingAppIds, onAnswer: vi.fn() })
+    expect(html.match(/member-rail-ask/g)).toHaveLength(1)
+    expect(html).toMatch(/data-avatar="own-a"(?:(?!<\/button>).)*member-rail-ask/)
+    expect(render(roster, 'own-b', { waitingAppIds })).not.toContain('member-rail-ask')
+    expect(render(roster, 'own-a', { waitingAppIds, onAnswer: vi.fn() })).not.toContain('member-rail-ask')
+  })
+  it('names a lead whose role is "Team Lead" only once', () => {
+    const lead = { ...member('boss', true), role: 'Team Lead' } as RosterMember
+    const html = render([lead, ...roster], 'own-b', { ownedAppIds: ['boss', 'own-b'] })
+    expect(html).toContain('aria-label="boss · Team lead · You can message it"')
+  })
   it('cards a member with its role, duty, state here and who may message it, read-only members included', () => {
     const writer = { ...member('writer'), role: 'Copywriter', duty: 'Drafts the launch copy', owner: 'Alice', presence: 'offline' } as RosterMember
     const html = render([...roster, writer], 'own-b', { workingAppIds: new Set(['writer']) })
@@ -139,7 +152,7 @@ describe('task member navigation', () => {
   })
   it('mounts navigation independently of input availability without moving reminders or changing draft identity', () => {
     const chat = readFileSync(new URL('../../../src/renderer/components/team/TeamSessionChat.tsx', import.meta.url), 'utf8')
-    expect(chat.indexOf('{composerAdjacentSlot &&')).toBeLessThan(chat.indexOf('{readonly ? <LockedComposer'))
+    expect(chat.indexOf('{composerAdjacentSlot &&')).toBeLessThan(chat.indexOf('readonly ? <LockedComposer'))
     expect(chat.indexOf('{aboveInput}')).toBeGreaterThan(chat.indexOf("reachability === 'offline' ?"))
     expect(chat).toContain('key={inputIdentity.current.key}')
     const room = readFileSync(new URL('../../../src/renderer/components/team/workbench/TaskRoom.tsx', import.meta.url), 'utf8')

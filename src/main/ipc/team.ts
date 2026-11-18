@@ -138,6 +138,10 @@ export function registerTeamIpc(): void {
     handle('team:list-artifacts', (s) => s.listArtifacts(teamId))
   )
 
+  ipcMain.handle(TEAM_IPC.listOutputs, async (_e, input: { teamId: string; offset?: number; limit?: number }) =>
+    handle('team:list-outputs', (s) => s.listOutputs(input.teamId, { offset: input.offset, limit: input.limit }))
+  )
+
   // ── team:chat-messages — a member's team-channel chat history for ONE run ──
   // The read logic lives in readTeamMemberHistory (apps/runtime/app-chat) so the
   // IPC and HTTP surfaces share a single source of truth. spaceId is accepted for

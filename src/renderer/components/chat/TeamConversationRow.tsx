@@ -11,35 +11,11 @@ import { useTeamChatPinsStore } from '../../stores/team-chat-pins.store'
 import { useTeamChatHiddenStore } from '../../stores/team-chat-hidden.store'
 import { teamTaskHoverCard, type RowHoverCard } from './conversation-row-format'
 import { openTeamConversation } from '../../utils/team-conversation-navigation'
-import type { TeamAvatarFaces, TeamListRow } from '../../hooks/useTeamConversationRows'
+import type { TeamListRow } from '../../hooks/useTeamConversationRows'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
-import { AutomationAvatar } from '../apps/AutomationAvatar'
+import { TeamAvatar } from '../team/TeamAvatar'
 
-const MAX_OVERFLOW_LABEL = 99
-const FACE_SLOTS = 4
 const MENU_HEIGHT = 116
-
-function TeamListAvatar({ faces, name }: { faces: TeamAvatarFaces; name: string }) {
-  const { names, overflow } = faces
-  const veiled = overflow > 0 && names.length === FACE_SLOTS
-  const slots = names.length + (overflow > 0 && !veiled ? 1 : 0)
-  const label = overflow > MAX_OVERFLOW_LABEL ? '…' : `+${overflow}`
-  const labelClass = cn('font-bold leading-none tabular-nums', label.length > 2 ? 'text-[6px] tracking-tighter' : 'text-[7px]')
-  const place = (index: number) => ({ left: slots === 3 && index === 2 ? 3 : (index % 2) * 6, top: Math.floor(index / 2) * 6, zIndex: index })
-  return <span aria-hidden="true" className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
-    {names.length === 0
-      ? <span className="text-[11px] font-medium text-muted-foreground">{Array.from(name.trim())[0] ?? ''}</span>
-      : slots === 1
-        ? <AutomationAvatar name={names[0]} size={18} />
-        : <span className={cn('relative isolate w-[18px]', slots === 2 ? 'h-3' : 'h-[18px]')}>
-          {names.map((memberName, index) => <span key={index} className="absolute overflow-hidden rounded-full ring-1 ring-background" style={place(index)}>
-            <AutomationAvatar name={memberName} size={12} />
-            {veiled && index === names.length - 1 && <span className={cn('absolute inset-0 flex items-center justify-center bg-foreground/30 text-background', labelClass)}>{label}</span>}
-          </span>)}
-          {overflow > 0 && !veiled && <span className={cn('absolute flex h-3 w-3 items-center justify-center rounded-full bg-border text-muted-foreground ring-1 ring-background', labelClass)} style={place(names.length)}>{label}</span>}
-        </span>}
-  </span>
-}
 
 export function TeamConversationRow({ row, spaceId, onToggle, onRefresh, onSelected, onHover, onHoverEnd, compact = false }: {
   row: TeamListRow
@@ -97,7 +73,7 @@ export function TeamConversationRow({ row, spaceId, onToggle, onRefresh, onSelec
       onToggle={toggle}
       onNew={() => { if (openTeamConversation(spaceId, { teamId: row.teamId, epochId: null, teamName: row.name })) onSelected?.() }}
       newLabel={t('New team conversation')}
-      avatar={<button type="button" title={t('View {{name}}', { name: row.name })} aria-label={t('View {{name}}', { name: row.name })} onClick={() => { openPersonTeam({ teamId: row.teamId }); onSelected?.() }} className="flex shrink-0 rounded-[6px] transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><TeamListAvatar faces={row.avatar} name={row.name} /></button>}
+      avatar={<button type="button" title={t('View {{name}}', { name: row.name })} aria-label={t('View {{name}}', { name: row.name })} onClick={() => { openPersonTeam({ teamId: row.teamId }); onSelected?.() }} className="flex shrink-0 rounded-[6px] transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><TeamAvatar faces={row.avatar} name={row.name} /></button>}
     />
   }
   const { task } = row
@@ -121,7 +97,7 @@ export function TeamConversationRow({ row, spaceId, onToggle, onRefresh, onSelec
   }
   return <div>
     <div data-menu-open={menuPosition ? '' : undefined} className={cn('group relative flex w-full items-center gap-1.5 rounded-sm pr-1.5 py-1.5 text-[13px] transition-colors ease-halo', 'data-[menu-open]:bg-secondary data-[menu-open]:text-foreground theme-dark:data-[menu-open]:text-foreground has-[:focus-visible]:bg-secondary', row.standalone ? 'pl-2.5' : 'pl-9', active ? 'bg-secondary text-foreground font-medium' : 'text-foreground/80 hover:bg-secondary hover:text-foreground theme-dark:text-muted-foreground theme-dark:hover:text-foreground')} onMouseEnter={event => { if (!editing) onHover?.(event.currentTarget, teamTaskHoverCard(task, t)) }} onMouseLeave={onHoverEnd}>
-      {row.standalone && <button type="button" title={t('View {{name}}', { name: task.teamName })} aria-label={t('View {{name}}', { name: task.teamName })} onClick={() => { openPersonTeam({ teamId: task.teamId }); onSelected?.() }} className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[6px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><TeamListAvatar faces={row.avatar} name={task.teamName} /></button>}
+      {row.standalone && <button type="button" title={t('View {{name}}', { name: task.teamName })} aria-label={t('View {{name}}', { name: task.teamName })} onClick={() => { openPersonTeam({ teamId: task.teamId }); onSelected?.() }} className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[6px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><TeamAvatar faces={row.avatar} name={task.teamName} /></button>}
       {(task.waitingForMe || task.active) && <TaskStatusDot status={task.waitingForMe ? 'waiting' : 'generating'} size="sm" className={row.standalone ? undefined : 'absolute left-6 top-1/2 -translate-y-1/2'} />}
       {editing ? <form className="flex min-w-0 flex-1" onSubmit={event => { event.preventDefault(); save() }}>
         <input autoFocus aria-label={t('Conversation title...')} value={title} onChange={event => setTitle(event.target.value)} onFocus={event => event.currentTarget.select()} onBlur={save} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setEditing(false) } }} className="flex-1 text-sm bg-input border border-border rounded px-2 py-1 focus:outline-none focus:border-primary min-w-0" />

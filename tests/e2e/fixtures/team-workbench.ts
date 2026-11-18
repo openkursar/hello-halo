@@ -51,7 +51,8 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
       { appId: 'temporary-remote', memberName: 'Remote Collaborator', sameMachine: false, isLead: false, spaceId: null, role: 'Review', status: 'idle', presence: 'online', busy: [], owner: 'Taylor' },
     ] : []
     const taskMembers = taskRoster.map(member => ({ ...member, teamId: team.id, epochId: 'epoch-0', parentAppId: 'lead', isTemporary: true, aiProvisioned: false, addedAt: now, origin: member.sameMachine ? 'local' : 'remote', ownerNodeId: member.sameMachine ? 'self' : 'peer' }))
-    const tasks = ['Product research', 'Release notes'].map((label, index) => ({ epochId: `epoch-${index}`, workItemId: `work-${index}`, teamId: team.id, kind: 'native', label, readonly: false, startedAt: now, lastActivityAt: now + index, createdByMe: true, involvedMe: true, completed: false }))
+    const tasks = ['Product research', 'Release notes'].map((label, index) => ({ epochId: `epoch-${index}`, workItemId: `work-${index}`, teamId: team.id, kind: 'native', label, readonly: false, startedAt: now, lastActivityAt: now + index, createdByMe: true, involvedMe: true, completed: false,
+      ...(index === 0 ? { subtasks: { done: 1, open: 1 } } : { teamwork: true }) }))
     if (remoteDecision) Object.assign(tasks[0], { waitingUser: true, waitingForMe: false, waitingMemberAppIds: ['remote'] })
     if (readonlyKind) Object.assign(tasks[0], { kind: readonlyKind, readonly: true, memberAppId: 'lead' })
     const activities = [
@@ -85,7 +86,7 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
     if (temporaryParticipants) Object.assign(detail, { pendingEscalations: [{ entryId: temporaryDecision.id, appId: 'temporary', epochId: 'epoch-0', memberName: 'Investigator', question: temporaryDecision.content.question, entry: temporaryDecision }] })
     if (legacyRecovery) Object.assign(detail, { legacyCoordinator: legacyRecovery })
     if (legacyRecovery?.repairDeferred) Object.assign(team, { coordinatorConversationId: 'source-conversation' })
-    const apps = roster.filter(member => member.sameMachine).map(member => ({ id: member.appId, spaceId: 'halo-temp', status: 'active', permissions: { granted: [], denied: [] }, installedAt: now, userConfig: {}, spec: { name: member.memberName, type: 'automation', version: '1.0.0', description: 'Renderer fixture', system_prompt: 'Fixture', subscription: [], config_schema: [] } }))
+    const apps = roster.filter(member => member.sameMachine).map(member => ({ id: member.appId, spaceId: 'halo-temp', status: 'active', permissions: { granted: [], denied: [] }, installedAt: now, userConfig: {}, userOverrides: {}, spec: { name: member.memberName, type: 'automation', version: '1.0.0', description: 'Renderer fixture', system_prompt: 'Fixture', subscription: [], config_schema: [] } }))
     const bind = (channel: string, handler: (...args: any[]) => unknown) => {
       ipcMain.removeHandler(channel)
       ipcMain.handle(channel, (_event, ...args) => handler(...args))
@@ -198,8 +199,8 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
   await page.getByRole('button', { name: /Workbench review/ }).click()
   await page.setViewportSize({ width: 1440, height: 1000 })
   if (options.legacyRecovery) return
-  const sidebar = page.getByRole('navigation', { name: 'Tasks', exact: true })
-  if (options.readonlyKind) await sidebar.getByRole('searchbox', { name: 'Search tasks' }).fill('Product research')
-  await sidebar.getByRole('button', { name: /Product research/ }).click()
-  if (options.ownCount !== 0 && !options.historyFailure) await page.getByRole('region', { name: 'Task room' }).getByText('Please research this product.', { exact: true }).waitFor()
+  const taskRow = page.getByRole('button', { name: /Product research/ }).first()
+  await expect(taskRow).toBeVisible()
+  await taskRow.click()
+  if (options.ownCount !== 0 && !options.historyFailure) await expect(page.getByTitle('Product research', { exact: true })).toBeVisible()
 }

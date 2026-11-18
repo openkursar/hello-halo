@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
-import type { ActivityEntry } from '../../../../shared/apps/app-types'
+import { getEscalationQuestions, type ActivityEntry } from '../../../../shared/apps/app-types'
 import { conversationSubtasks } from './delegations'
 import { taskParticipants } from './model'
 import { taskProgress, type TaskProgress } from './progress'
@@ -22,7 +22,7 @@ export function useTaskProgress({ detail, task, boardState, decisions }: {
   return useMemo(() => {
     if (!task) return null
     const waitingAppIds = task.waitingMemberAppIds ?? []
-    const answerable = decisions.map(entry => ({ id: entry.id, appId: entry.appId, question: entry.content.summary.replace(/\s+/g, ' ').trim() }))
+    const answerable = decisions.map(entry => ({ id: entry.id, appId: entry.appId, question: (getEscalationQuestions(entry.content)[0]?.question ?? '').replace(/\s+/g, ' ').trim() }))
     const participants = taskParticipants({
       epochId: task.epochId, activities: boardState.activities, tasks, findings, roster: detail.roster, reports: [],
       memberAppIds: [...answerable.map(row => row.appId), ...waitingAppIds],

@@ -703,6 +703,8 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   teamSetTrigger: (input: { teamId: string; trigger: TeamTriggerInput; triggerId?: string }) => Promise<IpcResponse>
   teamRemoveTrigger: (input: { teamId: string; triggerId: string }) => Promise<IpcResponse>
   teamListArtifacts: (teamId: string) => Promise<IpcResponse>
+  /** Every file the team produced, newest first, one page at a time. */
+  teamListOutputs: (input: { teamId: string; offset?: number; limit?: number }) => Promise<IpcResponse<import('../shared/apps/team-types').TeamOutputPage>>
   /**
    * Resolve a shared file to a path this machine can open. Addressed by ref,
    * because a listing's path only resolves for a member running here.
@@ -1159,6 +1161,7 @@ const api: HaloAPI = {
   teamPause: (teamId) => ipcRenderer.invoke(TEAM_IPC.pause, teamId),
   teamGetDetail: (teamId) => ipcRenderer.invoke(TEAM_IPC.getDetail, teamId),
   teamListArtifacts: (teamId) => ipcRenderer.invoke(TEAM_IPC.listArtifacts, teamId),
+  teamListOutputs: (input) => ipcRenderer.invoke(TEAM_IPC.listOutputs, input),
   teamOpenArtifact: (input) => ipcRenderer.invoke(TEAM_IPC.openArtifact, input),
   teamListTriggers: (teamId) => ipcRenderer.invoke(TEAM_IPC.listTriggers, teamId),
   teamSetTrigger: (input) => ipcRenderer.invoke(TEAM_IPC.setTrigger, input),

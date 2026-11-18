@@ -597,6 +597,36 @@ describe('TeamStore', () => {
     })
   })
 
+  describe('team outputs', () => {
+    beforeEach(() => {
+      store.insertFinding(makeFinding({ id: 'f1', epochId: 'e1', authorAppId: 'a', ref: 'plan.md', createdAt: 100 }))
+      store.insertFinding(makeFinding({ id: 'f2', epochId: 'e1', authorAppId: 'b', ref: 'plan.md', createdAt: 300 }))
+      store.insertFinding(makeFinding({ id: 'f3', epochId: 'e2', authorAppId: 'a', ref: 'plan.md', createdAt: 200 }))
+      store.insertFinding(makeFinding({ id: 'f4', epochId: 'e2', authorAppId: 'a', ref: null, createdAt: 900 }))
+      store.insertTask(makeTask({ id: 't1', epochId: 'e2', assigneeAppId: 'b', resultRef: 'report.xlsx', updatedAt: 400 }))
+      store.insertTask(makeTask({ id: 't2', epochId: 'e2', assigneeAppId: null, resultRef: 'orphan.md', updatedAt: 999 }))
+      store.insertFinding(makeFinding({ id: 'other', teamId: 'team-2', epochId: 'x', ref: 'theirs.md', createdAt: 999 }))
+    })
+
+    it('lists each run\u2019s file once, newest first, under its latest declaration', () => {
+      const { rows, total } = store.listOutputRefs('team-1', { offset: 0, limit: 10 })
+      expect(total).toBe(3)
+      expect(rows).toEqual([
+        { epochId: 'e2', appId: 'b', ref: 'report.xlsx', at: 400 },
+        { epochId: 'e1', appId: 'b', ref: 'plan.md', at: 300 },
+        { epochId: 'e2', appId: 'a', ref: 'plan.md', at: 200 },
+      ])
+    })
+
+    it('pages without changing the total, and narrows to the given producers', () => {
+      expect(store.listOutputRefs('team-1', { offset: 1, limit: 1 })).toEqual({ rows: [{ epochId: 'e1', appId: 'b', ref: 'plan.md', at: 300 }], total: 3 })
+      expect(store.listOutputRefs('team-1', { offset: 0, limit: 10, producers: ['a'] })).toEqual({
+        rows: [{ epochId: 'e2', appId: 'a', ref: 'plan.md', at: 200 }, { epochId: 'e1', appId: 'a', ref: 'plan.md', at: 100 }],
+        total: 2,
+      })
+    })
+  })
+
   // ===========================================================================
   // team_epochs
   // ===========================================================================
