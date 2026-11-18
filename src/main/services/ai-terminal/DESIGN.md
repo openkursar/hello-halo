@@ -16,9 +16,11 @@ A pty-backed terminal subsystem, modeled on `services/ai-browser`:
   or UI window: a task keeps running across model switches, session rebuilds,
   and canvas open/close.
 
-Platform: macOS + Windows only. Linux is excluded at packaging (node-pty
-prebuilds omitted); `isTerminalAvailable()` gates the whole feature so it never
-appears in the capability index, toolset menu, or transport on Linux.
+Platform: macOS, Windows, Linux x64. node-pty ships mac/win prebuilds in the npm
+package; the Linux binary is vendored at `resources/prebuilds/node-pty/` and
+installed by `scripts/prepare-binaries.mjs` (see that file for how to rebuild it).
+`isTerminalAvailable()` gates the whole feature so it never appears in the
+capability index, toolset menu, or transport where no prebuild is packaged.
 
 ## 2) Process model (pty host) — the architectural core
 

@@ -253,6 +253,7 @@
       "!resources/ocr/**/*",
       "!resources/git-bash/**/*",
       "!resources/office-runtime/**/*",
+      "!resources/prebuilds/**/*",
       "product.json",
       "halo-local/dist/**/*",
       "!node_modules/@capacitor/**",

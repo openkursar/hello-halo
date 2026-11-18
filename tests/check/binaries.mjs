@@ -203,8 +203,8 @@ const BINARY_DEPENDENCIES = [
   },
 
   // node-pty - Native PTY (pseudo-terminal) for the terminal panel feature
-  // Mac/Win prebuilds ship with the npm package.
-  // Linux x64 prebuilds are compiled via Docker by prepare-binaries.mjs.
+  // Mac/Win prebuilds ship with the npm package; the Linux x64 binary is
+  // vendored in resources/ and installed by prepare-binaries.mjs.
   // afterPack.cjs strips non-target platform directories and .pdb debug symbols.
   {
     name: 'Mac arm64 node-pty',
@@ -248,8 +248,20 @@ const BINARY_DEPENDENCIES = [
       }
     }
   },
-  // node-pty Linux: terminal panel is not supported on Linux (no public prebuilds available).
-  // Linux users get Halo without the terminal feature. Platform check at runtime handles this.
+  {
+    name: 'Linux x64 node-pty',
+    path: 'node_modules/node-pty/prebuilds/linux-x64/pty.node',
+    platform: 'linux',
+    fix: 'npm run prepare:all',
+    validate: (filePath) => {
+      try {
+        const stats = fs.statSync(filePath)
+        return { valid: stats.size > 20 * 1024, info: `${(stats.size / 1024).toFixed(0)} KB` }
+      } catch {
+        return { valid: false, info: 'cannot read file' }
+      }
+    }
+  },
 
   // ripgrep - the Halo SDK engine's Grep tool runs it; most machines have none.
   ...Object.entries(ripgrep.PREPARE_PLATFORM_KEYS).map(([platform, key]) => ({
