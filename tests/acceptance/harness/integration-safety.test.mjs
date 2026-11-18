@@ -98,12 +98,13 @@ for (const { contactsBroker, integrityFault } of [
     './source.mjs': `let calls=0;export async function sourceIdentity(){calls++;return {...${JSON.stringify(revision)},...(${integrityFault === 'source'} && calls>2?{worktreeHash:'changed-after-tests'}:{})}}`,
     './build.mjs': `let calls=0;export async function verifyBuild(){calls++;if(${integrityFault === 'build'} && calls>1)throw new Error('Application build output changed after the controlled build');return {id:'build',builtAt:'2026-01-01T00:00:00Z',inputs:{rootSha256:'inputs'},artifacts:{rootSha256:'artifacts'},sdk:{state:'absent'},platform:process.platform,architecture:process.arch,node:process.versions.node}}`,
     './process.mjs': processStub,
+    './package.mjs': 'export async function verifyPackagedApplication(){throw new Error("Unexpected packaged execution")}',
     '../adapters/cluster.mjs': 'export async function discoverClusterTests(){return []};export async function executeClusterTests(){throw new Error("Unexpected cluster execution")}',
   }
   const compiled = path.join(directory, 'execution.mjs')
   await fs.symlink(path.join(repository, 'node_modules'), path.join(directory, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
   await build({ entryPoints: [path.join(repository, 'scripts/acceptance/lib/execution.mjs')], outfile: compiled, bundle: true, platform: 'node', format: 'esm', packages: 'external', logLevel: 'silent', plugins: [{ name: 'isolated-run-facilities', setup(build) {
-    build.onResolve({ filter: /^\.\/(source|build|process)\.mjs$/ }, args => args.importer.endsWith('/execution.mjs') ? { path: args.path, namespace: 'run-facility' } : undefined)
+    build.onResolve({ filter: /^\.\/(source|build|process|package)\.mjs$/ }, args => args.importer.endsWith('/execution.mjs') ? { path: args.path, namespace: 'run-facility' } : undefined)
     build.onResolve({ filter: /^\.\.\/adapters\/cluster\.mjs$/ }, args => args.importer.endsWith('/execution.mjs') ? { path: args.path, namespace: 'run-facility' } : undefined)
     build.onLoad({ filter: /.*/, namespace: 'run-facility' }, args => ({ contents: stubs[args.path], loader: 'js' }))
   } }] })

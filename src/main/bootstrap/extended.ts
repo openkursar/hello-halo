@@ -25,6 +25,7 @@
 import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerAiGroupsHandlers } from '../ipc/ai-groups'
+import { registerSubagentModelsHandlers } from '../ipc/subagent-models'
 import { GROUP_ROUTE_EVENT } from '../../shared/types/ai-groups-runtime'
 import { powerMonitor } from 'electron'
 import { registerSecurityHandlers } from '../ipc/security'
@@ -1524,6 +1525,7 @@ export function initializeExtendedServices(): void {
   // Load-balancing groups: the router learns what a group is, and what it reports
   // about a conversation's model reaches every window (IPC) and remote client (WS).
   registerAiGroupsHandlers()
+  registerSubagentModelsHandlers()
   stopGroupRouting = startGroupRouting(info => {
     sendToRenderer(GROUP_ROUTE_EVENT, info)
     broadcastToAll(GROUP_ROUTE_EVENT, { ...info })

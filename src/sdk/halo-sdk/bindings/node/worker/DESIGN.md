@@ -57,7 +57,10 @@ temporary reservation that owns cancellation and cleanup, without creating an
 agent session, connecting tools or invoking a model. Reads honor caller and
 shutdown cancellation, and release the reservation on both success and failure.
 
-The private host/worker protocol is version 5. The host and bundled worker must
+The private host/worker protocol is version 6. Local model selection callbacks
+use cancellable asynchronous RPC; host preparation returns explicit standard
+provider configurations, while custom providers are prepared in the Worker setup
+module. Prepared execution leases remain owned by that execution environment. The host and bundled worker must
 agree on this version before creating sessions. Explicit `codeSearch` options
 are cloneable configuration; the service itself stays in the host and is exposed
 through the existing cancellable callback RPC. Matching workspaces and backend

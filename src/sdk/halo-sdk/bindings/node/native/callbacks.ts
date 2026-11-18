@@ -22,6 +22,8 @@ import { nativeProviderDescriptor, type NativeProviderDescriptor } from './provi
 import { mcpToolRegistration, type McpToolRegistration } from './mcp-tool-identities.js';
 import { prepareHttpAttempt } from './http-trust.js';
 import { decodeWire } from './wire.js';
+import type { LocalModelSelectionHost } from '../contracts/collaboration/sdk/index.js';
+import { createProvider } from './provider-factory.js';
 
 const CALLBACK = '__haloSdkNativeCallback';
 const SIGNAL = '__haloSdkNativeSignal';
@@ -44,7 +46,7 @@ export class NativeCallbacks {
   private readonly context = new AsyncResource('AgentSdkNativeSession');
   private readonly callbacks = new Map<string, Callback>();
   private readonly active = new Map<string, AbortController>();
-  private readonly streams = new Map<string, { iterator: AsyncGenerator<StreamEvent, void, undefined>; controller: AbortController }>();
+  private readonly streams = new Map<string, { iterator: AsyncGenerator<StreamEvent, void, undefined>; controller: AbortController; nativeModelBindingId?: string }>();
   private readonly tools = new Map<string, Tool>();
   private readonly servers = new Map<string, Server>();
   private readonly registeredTools = new Map<string, Map<string, any>>();
@@ -52,6 +54,9 @@ export class NativeCallbacks {
   private readonly mcpRegistrationIds = new WeakMap<McpToolRegistration, string>();
   private readonly mcpFinalizer = new FinalizationRegistry<string>(id => this.mcpRegistrations.delete(id));
   private provider?: LlmProvider;
+  private modelSelection?: LocalModelSelectionHost;
+  private readonly modelProviders = new Map<string, LlmProvider>();
+  bindModelSelection(host: LocalModelSelectionHost | undefined): void { this.modelSelection = host; }
   private codeSearch?: CodeSearchService;
   private handle?: Pick<NativeHandle, 'contextCall' | 'contextAsync' | 'contextEmit' | 'sharedContext'> & Partial<Pick<NativeHandle, 'command'> & Pick<NativeLoopHandle, 'toolDiscoveryState'>>;
   private readonly toolContextCache = new ToolContextCache();
@@ -96,7 +101,10 @@ export class NativeCallbacks {
     const { abortController: _abort, provider, customTools, mcpServers, env, ...plain } = options;
     this.provider = provider;
     this.codeSearch = includesCodeSearch(options) ? codeSearchBridge(options) : undefined;
-    const encoded = this.encodeValue(plain) as Record<string, unknown>;
+    const host = options.collaboration && options.collaboration.mode === 'local' ? options.collaboration.modelSelection : undefined;
+    this.bindModelSelection(host);
+    const safePlain = host ? { ...plain, collaboration: { ...options.collaboration, modelSelection: { parentBinding: host.parentBinding, policy: host.policy, policyRevision: host.policyRevision } } } : plain;
+    const encoded = this.encodeValue(safePlain) as Record<string, unknown>;
     encoded.nativeProcessEnv = { ...process.env };
     const inheritedReadDeny = readDenyFloor(options);
     if (inheritedReadDeny.length) encoded.nativeReadDenyRoots = inheritedReadDeny;
@@ -206,6 +214,53 @@ export class NativeCallbacks {
   private async invoke(method: string, params: any, controller: AbortController): Promise<unknown> {
     if (method === 'http.prepare') { prepareHttpAttempt(); return null; }
     const signal = controller.signal;
+    if (method === 'modelSelection.getCatalog') {
+      if (!this.modelSelection) throw new Error('Model selection is not registered');
+      return this.modelSelection.getCatalog({ signal, knownRevision: params.knownRevision });
+    }
+    if (method === 'modelSelection.prepare') {
+      if (!this.modelSelection) throw new Error('Model selection is not registered');
+      const binding = await this.modelSelection.prepare(params.request, { signal });
+      signal.throwIfAborted();
+      if (this.closed) throw new Error('Model preparation owner is closed');
+      if (!binding || typeof binding !== 'object' || Boolean(binding.provider) === Boolean(binding.providerConfig)) {
+        throw new TypeError('Prepared model binding requires exactly one explicit provider connection');
+      }
+      if (binding.providerConfig && binding.providerConfig.type !== 'anthropic' && binding.providerConfig.type !== 'openai-compat') {
+        throw new TypeError('Prepared model providerConfig requires an explicit provider type');
+      }
+      const provider = binding.provider ?? createProvider(binding.providerConfig!);
+      const builtin = nativeProviderDescriptor(provider);
+      const encodedProvider = builtin ? { __haloSdkNativeBuiltinProvider: this.encodeValue(builtin) } : {
+        id: provider.id, name: provider.name, capabilities: provider.capabilities(), __haloSdkNativeProvider: true,
+      };
+      signal.throwIfAborted();
+      if (this.closed) throw new Error('Model preparation owner is closed');
+      const nativeModelBindingId = randomUUID();
+      const { bindingId, restoreRef, model, targetKind, contextWindow, maxOutputTokens, modalities, reasoning, modelPricing } = binding;
+      const result = { bindingId, restoreRef, model, targetKind, contextWindow, maxOutputTokens, modalities, reasoning,
+        provider: encodedProvider, nativeModelBindingId, ...(modelPricing ? { modelPricing } : {}) };
+      this.modelProviders.set(nativeModelBindingId, provider);
+      return result;
+    }
+    if (method === 'modelSelection.release') {
+      this.modelProviders.delete(params.nativeModelBindingId);
+      for (const [streamId, stream] of this.streams) {
+        if (stream.nativeModelBindingId !== params.nativeModelBindingId) continue;
+        this.streams.delete(streamId);
+        stream.controller.abort();
+        void stream.iterator.return().catch(error => {
+          if (!isAbortError(error)) getLogger('Native').warn('Child provider stream cleanup failed', { error: String(error) });
+        });
+      }
+      return null;
+    }
+    if (method === 'modelSelection.provider') {
+      const provider = this.modelProviders.get(params.nativeModelBindingId);
+      if (!provider) throw new Error('Child model provider lease is no longer available');
+      if (typeof params.method !== 'string' || !params.method.startsWith('provider.')) throw new Error('Invalid child provider callback');
+      return this.invokeProvider(params.method, params.params, controller, provider, params.nativeModelBindingId);
+    }
     if (method === 'mcp.public.call') {
       const registration = this.mcpRegistrations.get(params.registrationId)?.deref();
       if (!registration) throw new Error('MCP tool registration is no longer available');
@@ -446,16 +501,22 @@ export class NativeCallbacks {
       if (!tool || tool.enabled === false) throw new Error('Unknown host MCP tool');
       return tool.handler(params.input, { signal });
     }
+    if (method.startsWith('provider.')) return this.invokeProvider(method, params, controller, this.provider);
+    throw new Error(`Unknown native callback method: ${method}`);
+  }
+
+  private async invokeProvider(method: string, params: any, controller: AbortController, provider?: LlmProvider, nativeModelBindingId?: string): Promise<unknown> {
+    const signal = controller.signal;
     if (method === 'provider.start') {
-      if (!this.provider) throw new Error('No custom provider is registered');
+      if (!provider) throw new Error('No custom provider is registered');
       const request = this.request(params, signal);
       const streamId = randomUUID();
-      this.streams.set(streamId, { iterator: this.provider.createMessageStream(request), controller });
+      this.streams.set(streamId, { iterator: provider.createMessageStream(request), controller, nativeModelBindingId });
       return streamId;
     }
     if (method === 'provider.next') {
       const stream = this.streams.get(params.streamId);
-      if (!stream) throw new Error('Provider stream is no longer available');
+      if (!stream || stream.nativeModelBindingId !== nativeModelBindingId) throw new Error('Provider stream is no longer available');
       const abort = () => stream.controller.abort();
       signal.addEventListener('abort', abort, { once: true });
       try {
@@ -466,6 +527,7 @@ export class NativeCallbacks {
     }
     if (method === 'provider.return') {
       const stream = this.streams.get(params.streamId);
+      if (stream && stream.nativeModelBindingId !== nativeModelBindingId) throw new Error('Provider stream belongs to another execution');
       this.streams.delete(params.streamId);
       if (stream) {
         stream.controller.abort();
@@ -478,11 +540,11 @@ export class NativeCallbacks {
       return null;
     }
     if (method === 'provider.complete') {
-      if (!this.provider) throw new Error('No custom provider is registered');
-      return this.provider.createMessage(this.request(params, signal));
+      if (!provider) throw new Error('No custom provider is registered');
+      return provider.createMessage(this.request(params, signal));
     }
-    if (method === 'provider.models') return this.provider?.listModels?.() ?? [];
-    if (method === 'provider.health') return this.provider?.healthCheck?.() ?? { status: 'healthy' };
+    if (method === 'provider.models') return provider?.listModels?.() ?? [];
+    if (method === 'provider.health') return provider?.healthCheck?.() ?? { status: 'healthy' };
     throw new Error(`Unknown native callback method: ${method}`);
   }
 
@@ -524,6 +586,7 @@ export class NativeCallbacks {
     this.directContext = undefined; this.directReadState = undefined; this.contextReadStates.clear(); this.backgroundEntries.clear();
     this.hookChains.clear(); this.hookOutputs.clear(); this.hookReferences.clear(); this.hookInput = undefined; this.toolInput = undefined; this.hookFields = undefined; this.provider = undefined;
     this.codeSearch = undefined;
+    this.modelSelection = undefined; this.modelProviders.clear();
     this.context.emitDestroy();
   }
 }

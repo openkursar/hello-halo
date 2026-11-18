@@ -1,7 +1,7 @@
 {
-  "totalRoutes": 332,
+  "totalRoutes": 338,
   "expose": {
-    "ai": 207,
+    "ai": 213,
     "wrapped": 11,
     "internal": 114,
     "unlabeled": 0
@@ -13,7 +13,7 @@
     "team": 31,
     "knowledge-base": 22,
     "channels": 22,
-    "settings": 17,
+    "settings": 23,
     "store": 39,
     "terminal": 6
   },
@@ -21,6 +21,7 @@
     "config",
     "ai-sources",
     "ai-groups",
+    "subagent-models",
     "space",
     "agent",
     "terminal",

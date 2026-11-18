@@ -74,6 +74,11 @@ impl Provider {
         Self::configure(options, Self::raw(options, bridge, transport)?)
     }
     fn configure(options: &Value, mut provider: Self) -> Result<Self> {
+        if let Some(modalities) = options["nativeModelModalities"].as_array() {
+            for (modality, capability) in [("image","imageInput"),("pdf","pdfInput"),("audio","audioInput"),("video","videoInput")] {
+                provider.capabilities[capability] = json!(modalities.iter().any(|value|value == modality) && provider.capabilities[capability] == true);
+            }
+        }
         let mode = super::tool_calling::mode(options);
         let prompt_tools = mode != "native" || options["nativePromptAdapter"] == true;
         let config = ProviderConfiguration {

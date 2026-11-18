@@ -301,7 +301,9 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
   // but Playwright needs Electron in full app mode to connect via CDP.
   const { ELECTRON_RUN_AS_NODE: _, ...cleanEnv } = process.env
 
+  const hiddenWindows = process.env.HALO_E2E_HIDDEN_WINDOWS === '1'
   if (process.env.HALO_E2E_PACKAGED_APP) {
+    if (hiddenWindows) throw new Error('Hidden-window testing requires the controlled source bootstrap')
     if (options.bootstrapObserver) throw new Error('Startup observation requires the source application bootstrap')
     return electron.launch({
       executablePath: appEntryPath,
@@ -316,7 +318,7 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
   fs.mkdirSync(userData, { recursive: true })
   // macOS resolves appData independently of HOME. Isolate browser storage before main imports.
   // Selectors are English UI labels, so the renderer must not follow the OS language.
-  fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.commandLine.appendSwitch('lang', 'en-US');\napp.setPath('appData',${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\n${options.bootstrapObserver ? `require(${JSON.stringify(options.bootstrapObserver)});\n` : ''}import(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
+  fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.commandLine.appendSwitch('lang', 'en-US');\napp.setPath('appData',${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\n${hiddenWindows ? `require(${JSON.stringify(path.join(__dirname, 'hidden-windows.cjs'))});\n` : ''}${options.bootstrapObserver ? `require(${JSON.stringify(options.bootstrapObserver)});\n` : ''}import(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
   const identityModule = process.env.PERF_CONTENT_IDENTITY_RUN ? await import('../../perf/build-identity/index.mjs') : undefined
   // Pixel assertions compare CSS sRGB values, not the host monitor's color profile.
   const launchArgs = ['--force-color-profile=srgb', ...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), bootstrap]
@@ -350,6 +352,11 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
     fs.rmSync(bootstrap, { force: true }); throw error
   })
   instance.once('close', () => fs.rmSync(bootstrap, { force: true }))
+  if (hiddenWindows) {
+    await instance.evaluate(({ BrowserWindow }) => {
+      if (BrowserWindow.getAllWindows().some(window => window.isVisible())) throw new Error('An isolated test window became visible')
+    })
+  }
   if (identityModule && identityFile) {
     try {
       const observed = await instance.evaluate(({ app }) => ({

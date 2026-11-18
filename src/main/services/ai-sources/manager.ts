@@ -17,6 +17,7 @@
  */
 
 import { app } from 'electron'
+import { seedSubagentModelSettings } from './subagent-models'
 import { v4 as uuidv4 } from 'uuid'
 import type {
   AISourceProvider,
@@ -284,6 +285,7 @@ class AISourceManager {
   private getAiSourcesConfig(): AISourcesConfig {
     const config = getConfig() as any
     const aiSources = config.aiSources
+    seedSubagentModelSettings(aiSources)
     if (aiSources?.version === 2 && Array.isArray(aiSources.sources)) {
       return aiSources
     }

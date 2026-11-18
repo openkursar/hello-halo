@@ -1,0 +1,9 @@
+{
+  "nameCodePoints": 80,
+  "descriptionCodePoints": 1000,
+  "queryCodePoints": 200,
+  "catalogBytes": 1048576,
+  "pageDefault": 10,
+  "pageMaximum": 20,
+  "resultBytes": 16384
+}

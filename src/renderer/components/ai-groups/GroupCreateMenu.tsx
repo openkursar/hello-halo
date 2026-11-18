@@ -9,7 +9,7 @@ import { useTranslation } from '../../i18n'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { GroupIcon } from './group-parts'
 
-export function GroupCreateMenu({ onCreate }: { onCreate: () => void }) {
+export function GroupCreateMenu({ onCreate, onConfigureModels }: { onCreate: () => void; onConfigureModels?: () => void }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   return (
@@ -37,6 +37,7 @@ export function GroupCreateMenu({ onCreate }: { onCreate: () => void }) {
               <span className="block text-xs text-muted-foreground">{t('Switch between several models automatically')}</span>
             </span>
           </button>
+          {onConfigureModels && <button type="button" onClick={() => { setOpen(false); onConfigureModels() }} className="flex min-h-11 w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-secondary">{t('Configure model assignments')}</button>}
         </PopoverContent>
       </Popover>
     </div>

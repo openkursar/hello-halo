@@ -82,6 +82,19 @@ users without a legacy app repair. Team scratch remains under the global team-wo
 root. Project files do not move; old relative project references are not promised
 to resolve against the new working directory. No artifact-origin model is added.
 
+## Delegated model authority
+
+Source and member tool endpoints consume the agent service's optional delegated
+model endpoint. Its SDK catalog/schema is registered only for an owner-authorized
+turn with saved model settings. Guests and external colleague requests keep
+ordinary inheritance but cannot request profile or reasoning overrides. Every
+new participant captures the actual direct parent's reasoning independently of
+that optional capability. Preparation completes before collaboration workspace
+allocation, and existing request/stop guards are rechecked afterwards. Member
+endpoint release eagerly closes its catalog; engine-owned broker catalogs remain
+owned by their server objects and native wrappers release their storage on
+collection.
+
 ## Layer position
 
 Kernel adapters (`message-bus`, `blackboard`, `checks`, `team-tools`) depend on

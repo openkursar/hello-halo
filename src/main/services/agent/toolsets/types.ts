@@ -2,6 +2,7 @@
 
 import type { AgentModelSelection } from '../../../../shared/types/ai-sources'
 import type { EngineId } from '../../../../shared/types/engine'
+import type { DelegatedModelContext } from '../delegated-model'
 
 export interface ToolsetExecutionOptions {
   engineId: EngineId
@@ -32,6 +33,7 @@ export interface ToolsetScope {
   requiredToolsets?: readonly string[]
   /** Captured with the session, not the next turn's pending model selection. */
   modelSelection?: AgentModelSelection
+  modelContext?: () => DelegatedModelContext
   /** Read the captured execution's effective grants when work is delegated. */
   executionOptions?: () => ToolsetExecutionOptions
   collaborationEnabled?: boolean

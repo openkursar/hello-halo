@@ -104,6 +104,36 @@
   },
   {
     "method": "GET",
+    "path": "/api/subagent-models",
+    "group": "settings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/subagent-models/create",
+    "group": "settings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/subagent-models/update",
+    "group": "settings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/subagent-models/clear-builtin",
+    "group": "settings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/subagent-models/delete",
+    "group": "settings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/subagent-models/set-selection-mode",
+    "group": "settings"
+  },
+  {
+    "method": "GET",
     "path": "/api/spaces/halo",
     "group": "workspace"
   },

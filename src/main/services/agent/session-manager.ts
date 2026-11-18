@@ -36,7 +36,8 @@ import { purgeStaleMcpOAuth } from './mcp-auth-state'
 import { onMcpServerRecovered } from './mcp-manager'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
-import { captureToolsetExecutionOptions, resolveCredentialsForSdk, buildUserSessionSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint, getSdkSourceId } from './sdk-config'
+import { captureToolsetExecutionOptions, resolveCredentialsForSdk, buildUserSessionSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint, delegatedModelPolicyFingerprint, getSdkSourceId } from './sdk-config'
+import { captureDelegatedModelContext, getSessionDelegatedModelContext } from './delegated-model'
 import { resolveSpaceMemorySession } from './space-memory'
 import { applySessionReasoningEffort, pickReasoningEffort } from './reasoning-effort'
 import { startConsumer, type ConsumerHandle, type ConsumerContext } from './session-consumer'
@@ -986,7 +987,8 @@ async function getOrCreateSessionResult(
   if (inFlight) {
     const sameSource = inFlight.sourceId === getSdkSourceId(sdkOptions)
     const invalidated = isRebuildPending(conversationId)
-    const shareable = !invalidated && sameSource && inFlight.engineId === engineId && (
+    const shareable = !invalidated && sameSource && inFlight.engineId === engineId &&
+      inFlight.modelPolicyFingerprint === delegatedModelPolicyFingerprint() && (
       !gates?.requireFreshInputs ||
       (inFlight.inputsFingerprint !== undefined &&
         inFlight.inputsFingerprint === computeSessionInputsFingerprint(sdkOptions))
@@ -1016,6 +1018,7 @@ async function getOrCreateSessionResult(
   }
 
   const leaseRequests = new Set<SessionLeaseRequest>(leaseRequest ? [leaseRequest] : [])
+  const modelPolicyFingerprint = delegatedModelPolicyFingerprint()
   const promise = getOrCreateV2SessionInner(
     spaceId, conversationId, sdkOptions, sessionId, workDir,
     consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases, gates
@@ -1034,6 +1037,7 @@ async function getOrCreateSessionResult(
     // Same opt-out as the fingerprint stored on the session: a lazy-MCP caller
     // (main chat) has no eager inputs to hash, and no gated caller either.
     inputsFingerprint: buildMcpServers ? undefined : computeSessionInputsFingerprint(sdkOptions),
+    modelPolicyFingerprint,
     sourceId: getSdkSourceId(sdkOptions),
   }
   inFlightSessionCreations.set(conversationId, record)
@@ -1063,6 +1067,7 @@ interface InFlightSessionCreation {
   leaseRequests: Set<SessionLeaseRequest>
   session?: V2SDKSession
   sourceId?: string
+  modelPolicyFingerprint?: string
   /** Inputs the creation was invoked with; undefined for lazy-MCP callers. */
   inputsFingerprint: string | undefined
 }
@@ -1204,8 +1209,9 @@ async function getOrCreateV2SessionInner(
   // Tool set + system prompt baked in eagerly by app chat / automation runs.
   // Main chat builds MCP servers lazily (buildMcpServers) and drives toolset
   // changes via requestSessionRebuild, so it opts out to avoid double-handling.
+  const modelPolicyFingerprint = delegatedModelPolicyFingerprint()
   const currentInputsFingerprint = buildMcpServers
-    ? undefined
+    ? modelPolicyFingerprint
     : computeSessionInputsFingerprint(sdkOptions)
 
   // Check if we have an existing session for this conversation
@@ -1600,6 +1606,8 @@ async function ensureSessionWarmInner(spaceId: string, conversationId: string, m
     Object.assign(record, buildCreationTimeServers({
       spaceId, conversationId, workDir, toolContextMode,
       executionOptions: () => captureToolsetExecutionOptions(sdkOptions, engineId, record),
+      modelContext: credentials.sourceId ? () => getSessionDelegatedModelContext(v2Sessions.get(conversationId)?.session) ?? captureDelegatedModelContext(
+        { modelSourceId: credentials.sourceId!, modelId: credentials.model }, engineId, sdkOptions, undefined, credentials.capabilities) : undefined,
       modelSelection: credentials.sourceId
         ? { modelSourceId: credentials.sourceId, modelId: credentials.model }
         : undefined,

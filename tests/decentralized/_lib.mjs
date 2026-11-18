@@ -14,6 +14,7 @@ import crypto from 'crypto'
 import path from 'path'
 import fs from 'fs'
 import { clusterDetached } from './_acceptance.mjs'
+import { prepareNodeEntry, waitHiddenNodeReady } from '../../scripts/cluster/node-bootstrap.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const PROJECT_ROOT = path.resolve(__dirname, '../..')
@@ -377,7 +378,7 @@ export async function reviveNode(node, clusterDir = '.cluster') {
   const out = fs.openSync(node.logFile ?? path.join(nodeDir, 'node.log'), 'a')
   const electronBinary = (await import('electron')).default
   const { ELECTRON_RUN_AS_NODE: _ignored, ...cleanEnv } = process.env
-  const child = spawn(electronBinary, [appEntry], {
+  const child = spawn(electronBinary, [prepareNodeEntry(appEntry, nodeDir)], {
     cwd: PROJECT_ROOT,
     detached: clusterDetached(),
     stdio: ['ignore', out, out],
@@ -425,13 +426,15 @@ export async function reviveNode(node, clusterDir = '.cluster') {
     else process.kill(-child.pid, 'SIGTERM')
     throw error
   }
+  const startupDeadline = Date.now() + 60000
   const ok = await pollUntil(
     async () => {
       const r = await api(node, 'GET', '/api/teams')
       return r.status === 200
     },
-    { timeoutMs: 60_000, intervalMs: 1000 },
+    { timeoutMs: Math.max(1, startupDeadline - Date.now()), intervalMs: 1000 },
   )
+  if (ok) await waitHiddenNodeReady(nodeDir, node.pid, appEntry, startupDeadline)
   return ok ? node.pid : null
 }
 

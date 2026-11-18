@@ -99,6 +99,7 @@ export class CodexAppServerSession {
   private exitListeners = new Set<(error?: Error) => void>()
   private pendingHaloQuestionIds = new Set<string>()
   private serverHandlerDisposer: (() => void) | null = null
+  private abortDisposer: (() => void) | null = null
 
   /**
    * Implements V2SDKSession.query — the CC SDK shape Halo's session-manager
@@ -158,9 +159,15 @@ export class CodexAppServerSession {
   }
 
   static async create(sdkOptions: Record<string, any>): Promise<CodexAppServerSession> {
-    const launch = await resolveExternalRuntimeLaunch('codex', { signal: sdkOptions.abortController?.signal })
+    const signal = sdkOptions.abortController?.signal as AbortSignal | undefined
+    signal?.throwIfAborted()
+    const launch = await resolveExternalRuntimeLaunch('codex', { signal })
     if (!launch) throw new EngineUnavailableError('codex', 'No compatible Codex installation is selected')
     const options = await resolveCodexOptions(sdkOptions)
+    if (signal?.aborted) {
+      await options.mcpBridge?.close()
+      signal.throwIfAborted()
+    }
     const sessionId = (sdkOptions.resume as string | undefined) || randomUUID()
     const adapter = new CodexAppServerSession(options, sessionId, {
       spaceId: sdkOptions.spaceId,
@@ -168,8 +175,24 @@ export class CodexAppServerSession {
       resume: sdkOptions.resume,
       strictNativeResume: sdkOptions.strictNativeResume === true,
     }, launch)
-    await adapter.start()
-    return adapter
+    if (signal) {
+      const abort = () => {
+        console.warn('[Codex][session] Execution cancelled; closing owned native resources')
+        void adapter.close().catch(error => console.error('[Codex][session] Cancelled execution cleanup failed:', error))
+      }
+      signal.addEventListener('abort', abort, { once: true })
+      adapter.abortDisposer = () => signal.removeEventListener('abort', abort)
+      if (signal.aborted) abort()
+    }
+    try {
+      signal?.throwIfAborted()
+      await adapter.start()
+      signal?.throwIfAborted()
+      return adapter
+    } catch (error) {
+      await adapter.close()
+      throw error
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -187,6 +210,7 @@ export class CodexAppServerSession {
   }
 
   private async doStart(): Promise<void> {
+    if (this.closed) throw new Error('Codex session creation was cancelled')
     const connection = createCodexConnection({
       launch: this.launch,
       env: this.options.env,
@@ -200,6 +224,10 @@ export class CodexAppServerSession {
     })
     this.connection = connection
     await connection.start()
+    if (this.closed) {
+      await connection.stop()
+      throw new Error('Codex session creation was cancelled')
+    }
 
     const rpc = new JsonRpcClient({
       stdin: connection.stdin,
@@ -438,6 +466,8 @@ export class CodexAppServerSession {
 
   private async disposeResources(): Promise<void> {
     this.closed = true
+    this.abortDisposer?.()
+    this.abortDisposer = null
 
     // Reject any AskUserQuestion bridges waiting on user input.
     for (const id of this.pendingHaloQuestionIds) {

@@ -59,6 +59,19 @@ test('the serialized guard preserves the actual HTTP handler, requested port and
   assert.throws(readRemoteLoopbackGuard, /no remote binding guard/)
 })
 
+test('a scoped remote shutdown preserves unrelated loopback services', async () => {
+  installRemoteLoopbackGuard()
+  const remote = createServer((_request, response) => response.end('remote'))
+  const internal = createServer((_request, response) => response.end('internal'))
+  servers.push(remote, internal)
+  for (const server of [remote, internal]) await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const remotePort = remote.address().port
+  assert.throws(() => restoreRemoteLoopbackGuard(remotePort), /listener is active/)
+  await close(remote)
+  assert.deepEqual(restoreRemoteLoopbackGuard(remotePort), { restored: true, violations: [] })
+  assert.equal(await (await fetch(`http://127.0.0.1:${internal.address().port}`)).text(), 'internal')
+})
+
 test('options and implicit-host overloads bind actual loopback listeners and retain their callbacks', async () => {
   installRemoteLoopbackGuard()
   for (const options of [{ port: 0, host: '::', backlog: 16 }, 0]) {

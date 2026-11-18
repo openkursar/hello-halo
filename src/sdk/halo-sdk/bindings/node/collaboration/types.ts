@@ -1,6 +1,8 @@
 export type TaskStatus = 'pending' | 'in_progress' | 'done' | 'rejected' | 'blocked';
 
-export interface SpawnInput {
+import type { ListModelProfilesInput, SpawnModelSelection } from '../contracts/collaboration/model-selection.js';
+
+export interface SpawnInput extends SpawnModelSelection {
   prompt: string;
   name?: string;
   cwd?: string;
@@ -9,6 +11,7 @@ export interface SpawnInput {
 
 export interface CollaborationInputs {
   spawn_agent: SpawnInput;
+  list_model_profiles: ListModelProfilesInput;
   team_send: { to: string; message: string };
   team_read_board: { mine?: boolean; status?: TaskStatus };
   team_read_member: { member: string; before?: number };

@@ -12,7 +12,7 @@ import type { CollaborationResult, CollaborationServer, CollaborationToolDescrip
 import type { LocalCollaborationOptions, SdkCollaborationBinding } from '../contracts/collaboration/sdk/index.js';
 import type { TeamEnvelope, TeamTriggerContext } from '../collaboration/protocol.js';
 export { appendCollaborationPrompt, localCollaborationSettings } from './collaboration-contract.js';
-export type { LocalCollaborationOptions, SdkCollaborationBinding } from '../contracts/collaboration/sdk/index.js';
+export type { LocalCollaborationOptions, SdkCollaborationBinding, LocalModelSelectionHost, PreparedModelBinding, ModelPreparationRequest, ModelCatalogUpdate } from '../contracts/collaboration/sdk/index.js';
 
 interface OptionsReference { options: Options; scopes: Set<number>; view: Record<string, unknown> }
 interface CallbackScope { callbacks: NativeCallbacks; reference: number; attached: boolean }
@@ -23,6 +23,8 @@ export function createSdkCollaboration(options: {
   settings?: LocalCollaborationOptions;
   deliverToSource(envelope: TeamEnvelope, trigger: TeamTriggerContext): Promise<'dispatched' | 'mid_turn' | 'buffered'>;
 }): SdkCollaborationBinding {
+  const modelCallbacks = new NativeCallbacks();
+  modelCallbacks.bindModelSelection(options.settings?.modelSelection);
   const references = new Map<number, OptionsReference>();
   const scopes = new Map<number, CallbackScope>();
   const identities = new WeakMap<object, number>();
@@ -97,17 +99,23 @@ export function createSdkCollaboration(options: {
       case 'attachScope': { const scope = scopes.get(input.scope); if (scope) scope.attached = true; return; }
       case 'detachScope': retireScope(input.scope); return;
       case 'hostCall': {
+        if (typeof input.method === 'string' && input.method.startsWith('modelSelection.')) {
+          return modelCallbacks.call(input.id, input.method, input.params);
+        }
         const scope = scopes.get(input.scope);
         if (!scope) throw new Error('The collaborator callback scope is closed.');
         return scope.callbacks.call(input.id, input.method, input.params);
       }
-      case 'cancelCallback': scopes.get(input.scope)?.callbacks.cancel(input.id); return;
+      case 'cancelCallback': modelCallbacks.cancel(input.id); scopes.get(input.scope)?.callbacks.cancel(input.id); return;
       case 'log': routeNativeLog(input.record); return;
       case 'deliverToSource': return options.deliverToSource(input.envelope, input.trigger);
       default: throw new Error(`Unknown SDK collaboration callback: ${name}`);
     }
   });
-  const handle = new (loadBinding().NativeSdkCollaboration)(stringifyNativeValue({ sessionId: options.sessionId, settings: options.settings ?? {} }), callbacks.callback);
+  const settings = options.settings?.modelSelection ? { ...options.settings,
+    modelSelection: { parentBinding: options.settings.modelSelection.parentBinding,
+      policy: options.settings.modelSelection.policy, policyRevision: options.settings.modelSelection.policyRevision } } : options.settings ?? {};
+  const handle = new (loadBinding().NativeSdkCollaboration)(stringifyNativeValue({ sessionId: options.sessionId, settings }), callbacks.callback);
   handleReference = new WeakRef(handle);
   const call = <T>(name: string, input: unknown = {}): T => {
     try { return JSON.parse(handle.call(name, stringifyNativeValue(input), callbacks.callback)) as T; }
@@ -125,15 +133,21 @@ export function createSdkCollaboration(options: {
     } catch (error) { throw callbacks.error(error); }
     finally { signal?.removeEventListener('abort', abort); }
   };
+  const allowedTools = new Set<string>(COLLABORATION_TOOL_NAMES);
+  if (options.settings?.modelSelection) allowedTools.add('list_model_profiles');
   const server: CollaborationServer = {
     type: 'sdk', name: 'halo-team', instance: {
       name: 'halo-team', version: '2.0.0',
       listTools: () => call<CollaborationToolDescriptor[]>('definitions'),
       async callTool(name, input, context = {}) {
-        if (!COLLABORATION_TOOL_NAMES.includes(name as typeof COLLABORATION_TOOL_NAMES[number])) return undefined;
+        if (!allowedTools.has(name)) return undefined;
         if (context.signal?.aborted) { console.warn(`[Collaboration] Cancelled before execution: tool=${name}`); return collaborationText(collaborationValue<string>('feedback', { kind: 'cancelled' }), true); }
         try { return await start<CollaborationResult>('tool', { name, input }, context.signal); }
         catch (error) {
+          if (error instanceof Error && 'code' in error && error.code === 'MODEL_SELECTION') {
+            console.warn(`[Collaboration] Model selection rejected: stage=operation tool=${name}`);
+            return collaborationText(error.message, true);
+          }
           console.error(`[Collaboration] Operation failed: tool=${name}`, error);
           try { return call<CollaborationResult>('operationFailed'); }
           catch { return collaborationText(collaborationValue<string>('feedback', { kind: 'failed' }), true); }
@@ -162,6 +176,7 @@ export function createSdkCollaboration(options: {
       closing ??= start<void>('close').finally(async () => {
         references.clear();
         await Promise.all([...scopes.keys()].map(closeScope));
+        await modelCallbacks.close();
       });
       return closing;
     },

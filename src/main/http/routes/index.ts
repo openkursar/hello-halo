@@ -10,6 +10,7 @@ import type { Express } from 'express'
 import { registerConfigRoutes } from './config.routes'
 import { registerAiSourcesRoutes } from './ai-sources.routes'
 import { registerAiGroupsRoutes } from './ai-groups.routes'
+import { registerSubagentModelsRoutes } from './subagent-models.routes'
 import { registerSpaceRoutes } from './space.routes'
 import { registerAgentRoutes } from './agent.routes'
 import { registerTerminalRoutes } from './terminal.routes'
@@ -33,6 +34,7 @@ export function registerApiRoutes(app: Express, options: { assistant?: boolean }
   registerConfigRoutes(app)
   registerAiSourcesRoutes(app)
   registerAiGroupsRoutes(app)
+  registerSubagentModelsRoutes(app)
   registerSpaceRoutes(app)
   registerAgentRoutes(app)
   registerTerminalRoutes(app)

@@ -18,6 +18,7 @@ async function fixture(context) {
   await write('tests/decentralized/_lib.mjs', await fs.readFile(fileURLToPath(new URL('../../decentralized/_lib.mjs', import.meta.url))))
   await write('tests/decentralized/_acceptance.mjs', `export { clusterDetached } from ${JSON.stringify(new URL('../../decentralized/_acceptance.mjs', import.meta.url).href)};`)
   await write('scripts/cluster/launch-nodes.mjs', await fs.readFile(fileURLToPath(new URL('../../../scripts/cluster/launch-nodes.mjs', import.meta.url))))
+  await write('scripts/cluster/node-bootstrap.mjs', await fs.readFile(fileURLToPath(new URL('../../../scripts/cluster/node-bootstrap.mjs', import.meta.url))))
   await write('node_modules/electron/package.json', JSON.stringify({ name: 'electron', main: 'index.cjs' }))
   await write('node_modules/electron/index.cjs', 'module.exports = process.execPath;')
   await write('out/main/index.cjs', `const fs=require('node:fs');const path=require('node:path');const http=require('node:http');const config=JSON.parse(fs.readFileSync(path.join(process.env.HALO_DATA_DIR,'config.json'),'utf8'));http.createServer((_request,response)=>response.end(JSON.stringify({success:true,data:[]}))).listen(config.port,'127.0.0.1');`)

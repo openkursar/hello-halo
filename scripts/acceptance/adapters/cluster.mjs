@@ -52,7 +52,7 @@ export async function preserveClusterDiagnostics(root, profiles, destination, en
   const summary = { manifestAvailable: !!manifest, nodes: (manifest?.nodes ?? []).map(node => ({ index: node.index, pid: node.pid, startupReady: node.ready, identityId: node.identityId, port: node.port })), logs: [] }
   await fs.mkdir(destination, { recursive: true })
   for (const folder of folders.filter(entry => entry.isDirectory() && /^node-\d+$/.test(entry.name))) {
-    for (const relative of ['node.log', '.halo/logs/main.log']) {
+    for (const relative of ['node.log', '.halo/logs/main.log', 'hidden-windows-ready.json', 'hidden-windows-final.json']) {
       const source = path.join(profiles, folder.name, relative)
       const handle = await fs.open(source, 'r').catch(error => { if (error.code === 'ENOENT') return null; throw error })
       if (!handle) continue
@@ -61,7 +61,7 @@ export async function preserveClusterDiagnostics(root, profiles, destination, en
         const bytes = Math.min(stat.size, 1024 * 1024)
         const buffer = Buffer.alloc(bytes)
         await handle.read(buffer, 0, bytes, stat.size - bytes)
-        const name = `${folder.name}-${relative === 'node.log' ? 'process' : 'main'}.log`
+        const name = relative.startsWith('hidden-windows-') ? `${folder.name}-${relative}` : `${folder.name}-${relative === 'node.log' ? 'process' : 'main'}.log`
         await fs.writeFile(path.join(destination, name), redact(buffer.toString('utf8'), root, secrets))
         summary.logs.push({ file: name, originalBytes: stat.size, retainedBytes: bytes })
       } finally { await handle.close() }

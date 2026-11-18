@@ -143,7 +143,7 @@ export function preserveManagedSources(updates: Record<string, unknown>, existin
     ? current!.currentId
     : sources.some(source => source.id === incoming.currentId) ? incoming.currentId : sources[0]?.id ?? null
   // Groups change only through their own operations. An account this save drops leaves its models out of them.
-  const { groups: _staleGroups, currentGroupId: _staleGroup, ...rest } = incoming
+  const { groups: _staleGroups, currentGroupId: _staleGroup, subagentModels: _staleSubagentModels, ...rest } = incoming
   const kept = new Set(sources.map(source => source.id))
   const groups = (current?.version === 2 ? current.groups : undefined)
     ?.map(group => ({ ...group, members: group.members.filter(member => kept.has(member.sourceId)) }))
@@ -152,6 +152,7 @@ export function preserveManagedSources(updates: Record<string, unknown>, existin
     sources,
     currentId,
     ...(groups ? { groups } : {}),
+    ...(current?.subagentModels ? { subagentModels: current.subagentModels } : {}),
     ...(current?.version === 2 && current.currentGroupId ? { currentGroupId: current.currentGroupId } : {}),
   }
 }

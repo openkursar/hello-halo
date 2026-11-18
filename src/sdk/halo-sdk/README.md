@@ -232,6 +232,90 @@ messages, and Bash, MCP, or optional backends may use subprocesses. Workers are
 not an operating-system security sandbox; the host owns identity, permissions,
 and deployment policy.
 
+## Optional collaborator model selection
+
+Local collaborators inherit their direct parent's effective model and reasoning
+settings. Applications may additionally register `collaboration.modelSelection`
+with a captured `policy` (`inherit` or `task`), `policyRevision`, non-secret
+`parentBinding`, an asynchronous `getCatalog`, and a cancellable `prepare` callback.
+Without this registration, the existing collaboration tools and guidance remain
+unchanged.
+
+The host supplies its authorized profile catalog and exact provider bindings.
+`spawn_agent` then accepts opaque `model_profile` references from the bounded
+`list_model_profiles` directory and an optional `reasoning_effort`. Profiles do
+not change tools, permissions, workspaces, budgets or execution engines. Provider
+credentials stay in execution-owned bindings, not profile results or member
+snapshots. A restored collaborator is prepared from its saved binding identity;
+renaming or removing a profile does not silently select another account.
+
+The engine-independent `/collaboration` entry exposes shared planning,
+finalization, restoration validation and `ModelProfileCatalogView`. Hosts retain
+one view per authorized catalog revision and close it when replaced, so ordinary
+selection does not repeatedly copy or validate the entire directory. The
+`/collaboration/protocol` entry exports browser-safe types and resource limits,
+without importing an execution runtime. See the
+[collaboration contract](bindings/node/collaboration/DESIGN.md#optional-model-selection)
+for the public interfaces and responsibility boundaries. Worker hosts transport
+standard provider configurations; custom providers are constructed in Worker
+setup rather than transferred across the Worker boundary.
+
+A local host can bind its own application model service without exposing that
+service to model tools:
+
+```ts
+import type { LocalModelSelectionHost } from '@hello-halo/agent-sdk/collaboration/sdk';
+
+const modelSelection: LocalModelSelectionHost = {
+  policy: 'inherit',
+  policyRevision: applicationModels.policyRevision,
+  parentBinding: applicationModels.parentBinding,
+  getCatalog({ knownRevision, signal }) {
+    signal.throwIfAborted();
+    const catalog = applicationModels.authorizedCatalog;
+    return knownRevision === catalog.revision
+      ? { kind: 'unchanged', revision: catalog.revision }
+      : { kind: 'snapshot', catalog };
+  },
+  async prepare(request, { signal }) {
+    const binding = request.kind === 'restore'
+      ? await applicationModels.restoreExact(request.snapshot, signal)
+      : await applicationModels.prepareExact(request.plan, signal);
+    return {
+      ...binding.metadata,
+      providerConfig: { type: 'openai-compat', apiKey: binding.apiKey, baseUrl: binding.baseUrl },
+    };
+  },
+};
+
+const session = await runtime.createSession({
+  model: applicationModels.parentModel,
+  providerConfig: applicationModels.parentProviderConfig,
+  collaboration: { mode: 'local', modelSelection },
+});
+```
+
+`applicationModels` is application-owned code: it must recheck authorization,
+resolve the exact logical binding on restore, and honor cancellation. A catalog
+revision must change whenever its authorized contents or policy changes. Standard
+prepared connections require an explicit provider `type`; custom providers stay
+in their execution environment. The SDK releases its callback leases and streams,
+but custom providers must manage external resources through their own lifecycle.
+`prepare` returns only target metadata, optional target pricing, and exactly one
+provider connection (`providerConfig` or `provider`), not `Options` or a partial
+session configuration. It cannot change tools, permissions, hooks, storage,
+workspaces, system prompts, or the shared execution budget.
+
+Usage is aggregated through the existing collaboration accounting. Supply the
+target's `modelPricing` when an estimate is needed; never apply the parent's price
+to a different child's tokens. Missing usage or pricing is unknown, not proof of
+zero consumption or a precise provider bill. Per-model totals are not an
+account-level billing ledger.
+
+These are routing and lifecycle contracts, not a claim that automated model
+selection improves task quality or reduces billed costs. Those outcomes require
+comparable real-model evaluation.
+
 ## Design influences
 
 Halo adopts Claude Code's publicly documented tool and session interface

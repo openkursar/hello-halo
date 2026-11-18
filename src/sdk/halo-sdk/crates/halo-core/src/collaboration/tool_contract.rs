@@ -12,14 +12,42 @@ pub fn definitions_with_harness(harness: &ResolvedHarness) -> Vec<Value> {
     }
 }
 
+pub fn model_selection_guidance(capability: &Value) -> Result<String> {
+    let id = match capability["policy"].as_str() {
+        Some("inherit") => TextId::CollaborationModelSelectionInherit,
+        Some("task") => TextId::CollaborationModelSelectionTask,
+        _ => return Err(Error::new("MODEL_SELECTION", "Unknown model selection policy.")),
+    };
+    Ok(baseline().text(id).to_owned())
+}
+
+pub fn definitions_with_model_selection(harness: &ResolvedHarness, capability: &Value) -> Result<Vec<Value>> {
+    model_selection_guidance(capability)?;
+    let mut tools = definitions_with_harness(harness);
+    let spawn = tools.iter_mut().find(|tool| tool["name"] == "spawn_agent").unwrap();
+    spawn["inputSchema"]["properties"]["model_profile"] = serde_json::json!({"type":"string","description":harness.text(TextId::CollaborationModelSelectionProfileField)});
+    spawn["inputSchema"]["properties"]["reasoning_effort"] = serde_json::json!({"type":"string","description":harness.text(TextId::CollaborationModelSelectionEffortField)});
+    let description = format!("{} {}", harness.text(TextId::CollaborationModelSelectionListDescription), model_selection_guidance(capability)?);
+    tools.push(serde_json::json!({"name":"list_model_profiles","description":description,"inputSchema":{"type":"object","properties":{"query":{"type":"string"},"cursor":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":crate::collaboration::model_selection::limits()["pageMaximum"]}},"required":[],"additionalProperties":false}}));
+    Ok(tools)
+}
+
 pub fn parse_input(name: &str, input: &Value) -> Result<Value> {
+    parse_input_with_model_selection(name, input, None)
+}
+
+pub fn parse_input_with_model_selection(name: &str, input: &Value, capability: Option<&Value>) -> Result<Value> {
     let invalid = |id: TextId, values: &[(&str, Message)]| {
         Error::new("COLLABORATION_ARGUMENTS", "").with_harness(id, values)
     };
     let supplied = input
         .as_object()
         .ok_or_else(|| invalid(TextId::CollaborationArgumentsExpectedObject, &[]))?;
-    let definition = definitions()
+    let definitions = match capability {
+        Some(capability) => definitions_with_model_selection(&baseline(), capability)?,
+        None => definitions(),
+    };
+    let definition = definitions
         .into_iter()
         .find(|v| v["name"] == name)
         .ok_or_else(|| {

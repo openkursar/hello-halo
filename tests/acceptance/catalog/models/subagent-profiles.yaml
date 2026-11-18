@@ -1,0 +1,241 @@
+version: 1
+id: models.subagent-profiles
+module: models
+title:
+  en: Model assignments for delegated work
+  zh: 子 Agent 模型分工
+story:
+  en: My delegated work inherits the model and reasoning I chose unless I deliberately configure and request another permitted model assignment.
+  zh: 委派工作继承我选择的模型和推理设置；只有我主动配置并授权时才使用其他允许的模型分工。
+basis: proposed
+references:
+  - src/main/services/agent/DESIGN.md
+  - src/main/apps/runtime/team/DESIGN.md
+  - src/main/services/ai-sources/subagent-models.ts
+  - src/renderer/components/subagent-models/
+promises:
+  quiet: Advanced assignments appear only after opening the existing add menu; viewing or cancelling empty slots never persists or activates them, changes the main selection, or adds model tools, prompts, polling or routing requests.
+  slots: Small, Medium and Large remain in fixed order, cannot be renamed or deleted, may remain unconfigured, and only bound targets enter the runtime catalog. Clearing preserves description and identity, increments revision and removes target reasoning.
+  editor: Assignments use inline labelled keyboard-accessible editors, one at a time. Failure and conflicts preserve the draft, Escape does not silently discard it, cancellation restores focus, and dark and light desktop and narrow layouts have no horizontal overflow.
+  persistence: Targeted owner IPC and HTTP operations persist atomically, validate names, targets and effort, reject stale revisions and protect managed assignments from stale whole-config saves. Accounts and the main selection remain unchanged.
+  activation: The first saved bound assignment activates the optional capability with inherit as default. Task selection requires a bound target; removing the last one resets to inherit without stopping existing work.
+  inheritance: Every newly created collaborator inherits its direct parent's effective provider-default, off, effort, budget or adaptive reasoning captured from the actual execution, even without advanced assignments. Later parent changes never rewrite existing collaborators; older records without snapshots retain their compatibility behavior.
+  selection: An enabled owner execution can query bounded nonsecret assignments and select only a registered exact target. Explicit effort overrides assignment default then target default; an unqualified inherit uses direct parent reasoning. Selection never changes engine, tools, permissions, system prompt or workspace authority.
+  identity: Siblings and nested collaborators use their own exact account and model, including identically named models on distinct accounts. Parent requests remain on the parent account, and ordinary error and usage reporting is retained without a second retry or silent upgrade.
+  restoration: Existing advanced bindings retain their logical account, model and reasoning through assignment edits, deletion, idle retirement and restart. Removed accounts or groups fail strictly rather than falling back globally; rotated credentials and explicit same-account connection edits use current credentials and capabilities.
+  policy: An endpoint with an obsolete selection-policy revision rejects every override including effort-only, even after querying again; unmodified inheritance and existing children continue until the next safe rebuild.
+  authority: Guest IM and external colleague work has no assignment catalog and cannot override profile or effort. Its existing permitted inheritance remains valid, with trusted parent reasoning; owner remote web is not treated as a guest. Local execution snapshots never enter public or replicated team records.
+  cancellation: A stopped or revoked execution cannot commit or start a child after delayed model preparation. Stopping one collaborator never stops unrelated siblings or sessions, and failures before commit leave no workspace or member side effects.
+  compatibility: Unsupported engine, group, delegated-account or reasoning combinations fail before requests and workspace creation, without fallback to another engine or account.
+scenarios:
+  - id: models.subagent-profiles.hidden
+    title: View and cancel the advanced panel without activating it
+    verifies: [quiet, slots]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    expected:
+      - Only the more-add menu exposes the entry; opening it shows three empty fixed slots without a persisted subagentModels record or model requests.
+      - Cancelling an editor and collapsing the panel leaves the main account and model unchanged.
+  - id: models.subagent-profiles.configuration
+    title: Persist targeted assignment changes without changing the main model
+    verifies: [slots, persistence, activation]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      transport: [ipc, http]
+    expected:
+      - Bind one builtin and create, rename and delete a custom assignment through the actual transport; restart retains the exact committed state.
+      - Builtins cannot be deleted or renamed; clearing retains slot identity and description, increases revision and clears target and effort.
+      - The last bound target's removal resets task to inherit and leaves all three empty slots visible without changing accounts or main selection.
+  - id: models.subagent-profiles.conflict
+    title: Reject invalid or concurrent writes without partial state
+    verifies: [persistence]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      rejection: [stale-revision, duplicate-name, missing-account, missing-group, invalid-effort, builtin-delete, builtin-rename, task-empty]
+    expected:
+      - The failed operation returns an explicit error and leaves the complete persisted settings and account selection unchanged.
+  - id: models.subagent-profiles.stale-config
+    title: A stale whole-config save cannot erase or revive assignments
+    verifies: [persistence]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    expected:
+      - A snapshot captured before targeted changes cannot revert a profile, revive its deleted state or roll back the current selection policy.
+  - id: models.subagent-profiles.inline
+    title: Configure assignments in place across themes and widths
+    verifies: [editor, slots, activation]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      theme: [dark, light]
+      width: ['1280', '390']
+    expected:
+      - Three fixed headings precede the secondary custom entry; labelled editors remain in place with no modal or horizontal overflow.
+      - Save and conflict errors preserve input, Escape preserves the draft, cancellation restores focus, and a real saved target survives restart.
+      - Screenshots record the actual themed application at the requested width.
+  - id: models.subagent-profiles.baseline-reasoning
+    title: Every delegation entry inherits actual parent reasoning without configuration
+    verifies: [inheritance, quiet]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      engine: [halo, anthropic, codex, dsh]
+      entry: [space, digital-human, owner-im, manual-run, schedule-run, webhook-run, team-member, nested]
+      reasoning: [provider-default, high, max, low, off, budget, adaptive]
+    expected:
+      - Observe parent and child requests at valid local model endpoints and assert the engine's exact supported wire mapping, with no model-selection tool or prompt additions.
+      - Unsupported combinations remain explicitly blocked or are refused before side effects; an engine fallback cannot establish the requested variant.
+  - id: models.subagent-profiles.owner-routing
+    title: Owner delegation routes exact configured models on every entry
+    verifies: [selection, identity, compatibility]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      engine: [halo, anthropic, codex, dsh]
+      entry: [space, digital-human, owner-im, manual-run, schedule-run, webhook-run, team-member, nested, owner-web]
+      choice: [inherit, profile, effort-only, provider-failure]
+    expected:
+      - The real creation tool's selected profile reaches its own local endpoint and wire model; unqualified inheritance stays on the direct parent.
+      - Actual requested and active engine identities agree; accepted creation is distinct from provider success and errors follow the original result path.
+  - id: models.subagent-profiles.reasoning-precedence
+    title: Apply effort precedence without retaining another target's thinking fields
+    verifies: [selection, inheritance]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      selection: [inherit, effort-only, profile-default, target-default, explicit-effort, same-model-profile]
+    expected:
+      - Requests carry the exact finalized reasoning and target limits, with no leftover off, budget or adaptive fields and no silent clamping.
+  - id: models.subagent-profiles.concurrent
+    title: Concurrent parents, siblings and descendants never cross account or reasoning state
+    verifies: [identity, inheritance]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      topology: [siblings-same-model-distinct-accounts, parents-distinct-reasoning, nested-direct-parent]
+    expected:
+      - Independent endpoints receive only their expected requests and reasoning; parents continue on their own targets and usage is counted once per execution.
+  - id: models.subagent-profiles.restore
+    title: Restore an existing binding without reinterpreting the current assignment
+    verifies: [restoration, inheritance]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      change: [profile-edit, profile-delete-recreate, builtin-clear-rebind, account-delete, group-delete, credential-rotation, same-account-endpoint-edit, capability-shrink, group-capability-shrink, legacy-no-snapshot, parent-change]
+      boundary: [idle, restart]
+    expected:
+      - Existing member identity and history remain attached to the original logical target and reasoning; current credentials and capabilities are revalidated.
+      - Revoked targets and incompatible restored reasoning fail without a global fallback, while ordinary old conversation fallback remains unchanged.
+  - id: models.subagent-profiles.policy-race
+    title: Recheck policy and references across asynchronous preparation
+    verifies: [policy, cancellation, restoration]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      change: [task-to-inherit, inherit-to-task, profile-revision, account-removal, permission-revocation]
+    expected:
+      - A delayed preparation cannot create a child under obsolete policy, target revision, account identity or authority.
+      - Stale endpoints cannot requery to regain profile or effort-only overrides; pure inheritance and existing children are unaffected.
+  - id: models.subagent-profiles.origin
+    title: Restricted callers keep inheritance but cannot borrow owner model choices
+    verifies: [authority, inheritance]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      origin: [guest-im, external-colleague, remote-office]
+      request: [inherit, profile, effort-only, directory]
+    expected:
+      - The host refuses forbidden overrides before resolution and side effects, omits the directory, and permits only existing authorized inheritance with trusted reasoning.
+      - No local account identifiers, restore snapshots or credentials appear in public or replicated records.
+  - id: models.subagent-profiles.stop
+    title: Stop delayed preparation and running members without late resurrection
+    verifies: [cancellation]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      engine: [halo, anthropic, codex, dsh]
+      boundary: [prepare, late-oauth-result, child-stream, parent-stop, run-stop]
+    expected:
+      - Only owned execution resources stop, late preparation creates no member or model request, and unrelated siblings and sessions remain usable.
+  - id: models.subagent-profiles.incompatible
+    title: Reject unsupported targets and arbitrary model parameters before side effects
+    verifies: [compatibility, selection]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      target: [codex-group, non-cc-delegated, unsupported-effort, stale-reference, raw-model, raw-url, raw-account, unconfigured-slot]
+    expected:
+      - Refusal produces no workspace, member or provider request and never falls back to a different engine, global account or another assignment.
+  - id: models.subagent-profiles.directory
+    title: Reach the complete bounded nonsecret directory without background routing work
+    verifies: [quiet, selection, authority]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      condition: [large-catalog, stale-cursor, scope-change, unicode-injection, secret-canary]
+    expected:
+      - Every authorized bound entry is reachable through bounded complete pages; stale snapshots fail explicitly, and secrets or unconfigured slots never enter the model result.
+      - Queries use local known data and introduce no provider discovery, independent routing model or full catalog tool enum.
+  - id: models.subagent-profiles.intent
+    title: Real models follow task scope rather than automatically choosing a cheaper model
+    verifies: [selection, identity]
+    platforms: [darwin, win32, linux]
+    profiles: [live]
+    evidence: live-model
+    mode: live
+    automation: planned
+    variants:
+      intent: [inherit-unspecified, explicit-name, explicit-model, task-bounded-choice, automatic-task, ambiguous-account, provider-failure, injected-description]
+    notes: Requires separate explicit model and cost authorization; scripted routing cannot establish instruction quality or savings.

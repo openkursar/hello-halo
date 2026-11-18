@@ -127,6 +127,10 @@ interface NativeBinding {
   NativeHistoryRead: new(sessionId: string, options: string) => NativeHistoryHandle;
   NativeProviderTransport: new() => NativeProviderTransportHandle;
   NativeCollaborationValue: new(options: string) => NativeCollaborationValueHandle;
+  NativeModelProfileCatalog: new(options: string) => {
+    call(name: 'plan' | 'query', payload: string): string;
+    close(): void;
+  };
   NativeTurnGate: new(options: string, callback: NativeCollaborationCallback) => NativeTurnGateHandle;
   NativeCollaborationStore: new(options: string, callback: NativeCollaborationCallback) => NativeCollaborationStoreHandle;
   NativeCollaborationWorkspace: new(operation: string, payload: string) => NativeHistoryHandle;

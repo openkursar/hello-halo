@@ -5,6 +5,8 @@
  * Import from this module for clean access to all AI source functionality.
  */
 
+export { SubagentModelError, getSubagentModelConfigurationSnapshot, type SubagentModelConfigurationSnapshot, getSubagentModelSettings, getSubagentModelProfile, listSubagentModels, createSubagentModel, updateSubagentModel, clearBuiltinSubagentModel, deleteSubagentModel, setSubagentModelSelectionMode } from './subagent-models'
+
 // Manager
 export { getAISourceManager, AISourceManager } from './manager'
 export { watchCatalogSignals, type CatalogSignal } from './catalog-signals'

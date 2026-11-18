@@ -40,6 +40,7 @@ import {
 import { emitAgentEvent, emitHumanRequest } from './events'
 import {
   acquireV2Session,
+  v2Sessions,
   getSessionEngineId,
   isSessionBusy,
   updateConsumerDisplayModel,
@@ -53,6 +54,7 @@ import { formatTurnAttachments } from './references'
 import { opensWithSlashCommand } from './opening-context'
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { captureToolsetExecutionOptions, resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
+import { captureDelegatedModelContext, getSessionDelegatedModelContext, setSessionDelegatedModelContext } from './delegated-model'
 import { resolveSpaceMemorySession, buildSpaceMemoryPreamble } from './space-memory'
 import { applyReasoningEffort, pickReasoningEffort } from './reasoning-effort'
 import { createConversationSink } from './conversation-sink'
@@ -315,6 +317,8 @@ async function sendMessageInner(request: AgentRequest, maintenanceSignal: AbortS
       Object.assign(record, buildCreationTimeServers({
         spaceId, conversationId, workDir, toolContextMode,
         executionOptions: () => captureToolsetExecutionOptions(sdkOptions, engineId, record),
+        modelContext: credentials.sourceId ? () => getSessionDelegatedModelContext(v2Sessions.get(conversationId)?.session) ?? captureDelegatedModelContext(
+          { modelSourceId: credentials.sourceId!, modelId: credentials.model }, engineId, sdkOptions, undefined, credentials.capabilities) : undefined,
         requiredToolsets: imageFallback ? [OCR_TOOLSET_ID] : undefined,
         modelSelection: credentials.sourceId
           ? { modelSourceId: credentials.sourceId, modelId: credentials.model }
@@ -416,6 +420,8 @@ async function sendMessageInner(request: AgentRequest, maintenanceSignal: AbortS
       if (v2Session.setMaxThinkingTokens) {
         await v2Session.setMaxThinkingTokens(thinkingBudget)
       }
+      if (credentials.sourceId) setSessionDelegatedModelContext(v2Session, captureDelegatedModelContext(
+        { modelSourceId: credentials.sourceId, modelId: credentials.model }, engineId, sdkOptions, undefined, credentials.capabilities))
     } catch (e) {
       console.error(`[Agent][${conversationId}] Failed to set dynamic params:`, e)
     }

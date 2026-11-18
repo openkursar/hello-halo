@@ -9,6 +9,7 @@
 import { authApi } from './auth.api'
 import { configApi } from './config.api'
 import { aiGroupsApi } from './ai-groups.api'
+import { subagentModelsApi } from './subagent-models.api'
 import { spaceApi } from './space.api'
 import { conversationApi } from './conversation.api'
 import { agentApi } from './agent.api'
@@ -42,6 +43,7 @@ export const api = {
   ...authApi,
   ...configApi,
   ...aiGroupsApi,
+  ...subagentModelsApi,
   ...spaceApi,
   ...conversationApi,
   ...agentApi,

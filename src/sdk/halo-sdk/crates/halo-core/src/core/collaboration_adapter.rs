@@ -34,6 +34,10 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+#[path = "collaboration_adapter_tests.rs"]
+mod tests;
+
 const PREFIX: &str = "mcp__halo-team__";
 #[derive(Clone)]
 struct Retained {
@@ -50,6 +54,7 @@ struct Child {
     consuming: AtomicBool,
     last_used: std::sync::atomic::AtomicU64,
     fingerprint: String,
+    model_lease: Option<String>,
 }
 impl Child {
     fn set_accepting(&self, accepting: bool) {
@@ -149,6 +154,10 @@ impl SourceOwner for SessionOwner {
     fn host_services(&self) -> crate::bridge::HostServices {
         self.services.clone()
     }
+    fn options(&self, _current: &Value) -> Result<SourceOptions> {
+        let session = self.session()?;
+        Ok(SourceOptions { value: session.controls.options(&session.options), lease: None })
+    }
     fn harness(&self, options: &Value) -> Result<Arc<ResolvedHarness>> {
         let session = self.session()?;
         let tools = session.tools.lock().unwrap().clone();
@@ -242,12 +251,30 @@ pub struct SdkCollaboration {
     workspace_locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     executing: Mutex<HashSet<String>>,
     receipts: Mutex<Value>,
+    model_catalog: AsyncMutex<Option<Arc<collaboration::model_selection::ValidatedModelCatalog>>>,
+    model_policy_revision: Mutex<Option<String>>,
+    prepared_models: Mutex<HashMap<String, Value>>,
     new_request: AtomicBool,
     lifetime: CancellationToken,
     closed: CancellationToken,
     closing: AtomicBool,
     max_idle: usize,
     access_sequence: std::sync::atomic::AtomicU64,
+}
+struct PreparedLease {
+    owner: Weak<SdkCollaboration>,
+    binding: Option<Value>,
+}
+impl Drop for PreparedLease {
+    fn drop(&mut self) {
+        let Some(binding) = self.binding.take() else { return; };
+        let Some(owner) = self.owner.upgrade() else { return; };
+        crate::runtime::spawn(async move {
+            if let Err(error) = owner.release_model(&binding).await {
+                tracing::warn!(code=%error.code,"Collaboration model preparation cleanup failed");
+            }
+        });
+    }
 }
 struct Executor(Weak<SdkCollaboration>);
 struct Source(Weak<SdkCollaboration>);
@@ -318,6 +345,66 @@ fn policy(options: &Value) -> String {
         options["hooks"]
     ]))
 }
+fn model_metadata(binding: &Value) -> Value {
+    let mut metadata = json!({});
+    for key in ["bindingId", "restoreRef", "model", "targetKind", "contextWindow", "maxOutputTokens", "modalities", "reasoning"] {
+        if let Some(value) = binding.get(key) { metadata[key] = value.clone(); }
+    }
+    metadata
+}
+fn effective_reasoning(options: &Value) -> Value {
+    if options["nativeEffectiveReasoning"].is_object() {
+        return options["nativeEffectiveReasoning"].clone();
+    }
+    let normalized = if options["nativeResolvedConfig"] == true {
+        options.clone()
+    } else {
+        super::config::resolve(options).unwrap_or_else(|_| options.clone())
+    };
+    let mut resolved = super::effort::resolve(&normalized);
+    let maximum = options["maxOutputTokens"]
+        .as_f64()
+        .or_else(|| normalized["maxTokens"].as_f64())
+        .unwrap_or(16384.0);
+    resolved.thinking = super::token_budget::effective_thinking(&resolved.thinking, maximum);
+    let effort = if options["provider"]["__haloSdkNativeBuiltinProvider"]["kind"] == "anthropic" {
+        normalized["effort"].as_str().filter(|effort| !effort.is_empty())
+    } else {
+        resolved.reasoning.as_deref()
+    };
+    match resolved.thinking["type"].as_str() {
+        Some("enabled") => {
+            let mut value = json!({"version":1,"mode":"budget","budgetTokens":resolved.thinking["budgetTokens"].as_f64().unwrap_or(0.0) as u64});
+            if let Some(effort) = effort { value["effort"] = effort.into(); }
+            value
+        }
+        Some("adaptive") => {
+            let mut value = json!({"version":1,"mode":"adaptive"});
+            if let Some(effort) = effort { value["effort"] = effort.into(); }
+            value
+        }
+        Some("disabled") => json!({"version":1,"mode":"off"}),
+        _ => json!({"version":1,"mode":"provider-default"}),
+    }
+}
+fn apply_reasoning(options: &mut Value, reasoning: &Value) -> Result<()> {
+    collaboration::model_selection::validate_effective_reasoning(reasoning)?;
+    options["nativeEffectiveReasoning"] = reasoning.clone();
+    for key in ["thinking", "maxThinkingTokens", "adaptiveThinking", "effort", "thinkingExplicit"] {
+        options.as_object_mut().unwrap().remove(key);
+    }
+    options["thinkingExplicit"] = true.into();
+    options["effort"] = "".into();
+    if let Some(effort) = reasoning.get("effort") { options["effort"] = effort.clone(); }
+    options["thinking"] = match reasoning["mode"].as_str() {
+        Some("off") => json!({"type":"disabled"}),
+        Some("budget") => json!({"type":"enabled","budgetTokens":reasoning["budgetTokens"]}),
+        Some("adaptive") => json!({"type":"adaptive"}),
+        Some("effort") | Some("provider-default") => { options["thinkingExplicit"] = false.into(); json!({"type":"disabled"}) },
+        _ => return Err(Error::new("MODEL_SELECTION", "The saved reasoning mode is not supported.")),
+    };
+    Ok(())
+}
 fn lock_for(locks: &Mutex<HashMap<String, Arc<AsyncMutex<()>>>>, id: &str) -> Arc<AsyncMutex<()>> {
     locks
         .lock()
@@ -347,6 +434,11 @@ impl SdkCollaboration {
         options: Value,
         settings: Value,
     ) -> Result<Arc<Self>> {
+        if let Some(selection) = settings.get("modelSelection") {
+            if !matches!(selection["policy"].as_str(),Some("inherit" | "task")) || !selection["policyRevision"].as_str().is_some_and(|value|!value.is_empty()) || !selection["parentBinding"]["bindingId"].as_str().is_some_and(|value|!value.is_empty()) || !selection["parentBinding"]["restoreRef"].as_str().is_some_and(|value|!value.is_empty()) {
+                return Err(Error::new("MODEL_SELECTION","Model selection requires a policy revision and a trusted parent binding."));
+            }
+        }
         let max_idle = settings
             .get("maxIdleSessions")
             .filter(|value| !value.is_null())
@@ -379,7 +471,7 @@ impl SdkCollaboration {
             budget: Arc::new(super::execution_budget::ExecutionBudget::new()),
             this: this.clone(),
             options: Mutex::new(options),
-            settings,
+            settings: settings.clone(),
             runtime: AsyncMutex::new(None),
             runtime_view: Mutex::new(Weak::new()),
             journal: AsyncMutex::new(None),
@@ -392,6 +484,9 @@ impl SdkCollaboration {
             workspace_locks: Mutex::new(HashMap::new()),
             executing: Mutex::new(HashSet::new()),
             receipts: Mutex::new(json!({})),
+            model_catalog: AsyncMutex::new(None),
+            model_policy_revision: Mutex::new(settings["modelSelection"]["policyRevision"].as_str().map(str::to_owned)),
+            prepared_models: Mutex::new(HashMap::new()),
             new_request: AtomicBool::new(false),
             lifetime: CancellationToken::new(),
             closed: CancellationToken::new(),
@@ -402,6 +497,126 @@ impl SdkCollaboration {
     }
     pub fn update_options(&self, options: Value) {
         *self.options.lock().unwrap() = options;
+    }
+    fn model_selection_enabled(&self) -> bool {
+        self.settings["modelSelection"].is_object()
+    }
+    pub fn model_capability(&self) -> Option<Value> {
+        self.model_selection_enabled().then(||json!({"policy":self.settings["modelSelection"]["policy"]}))
+    }
+    fn tool_definitions(&self, harness: &ResolvedHarness) -> Vec<Value> {
+        let tools = match self.model_capability() {
+            Some(capability) => collaboration::tool_contract::definitions_with_model_selection(harness,&capability).expect("validated model selection capability"),
+            None => return definitions(harness),
+        };
+        tools.into_iter().map(|tool|json!({"name":format!("{PREFIX}{}",tool["name"].as_str().unwrap()),"description":tool["description"],"input_schema":tool["inputSchema"],"mcpSource":{"server":"halo-team","name":tool["name"],"toolDescription":tool["description"]}})).collect()
+    }
+    async fn model_callback(&self, method: &str, params: Value, cancel: &CancellationToken) -> Result<Value> {
+        if cancel.is_cancelled() || self.lifetime.is_cancelled() {
+            return Err(Error::cancelled());
+        }
+        self.owner.call_child(self.owner.session_id(), method, params, cancel).await
+    }
+    async fn catalog(&self, cancel: &CancellationToken) -> Result<Arc<collaboration::model_selection::ValidatedModelCatalog>> {
+        let mut saved = self.model_catalog.lock().await;
+        let update = self.model_callback("modelSelection.getCatalog", json!({"knownRevision":saved.as_ref().map(|catalog|catalog.revision())}), cancel).await?;
+        match update["kind"].as_str() {
+            Some("snapshot") => {
+                let catalog = update["catalog"].clone();
+                if serde_json::to_vec(&catalog)?.len() > 1024 * 1024 || !catalog["revision"].is_string() || !catalog["policyRevision"].is_string() {
+                    return Err(Error::new("MODEL_SELECTION", "The model catalog is invalid or exceeds its byte limit."));
+                }
+                *saved = Some(Arc::new(collaboration::model_selection::ValidatedModelCatalog::new(catalog)?));
+            }
+            Some("unchanged") if saved.as_ref().is_some_and(|catalog|Some(catalog.revision()) == update["revision"].as_str()) => {},
+            _ => return Err(Error::new("MODEL_SELECTION", "The model catalog update does not match this execution scope.")),
+        }
+        let catalog = saved.as_ref().unwrap().clone();
+        let mut revision = self.model_policy_revision.lock().unwrap();
+        revision.get_or_insert_with(||catalog.policy_revision().into());
+        Ok(catalog)
+    }
+    fn parent_options(&self, caller: &str) -> Result<Value> {
+        if let Some(child) = self.sessions.lock().unwrap().get(caller) {
+            return Ok(child.session.controls.options(&child.session.options));
+        }
+        let mut options = self.options()?.value;
+        if let Some(runtime) = self.runtime_view.lock().unwrap().upgrade() {
+            if let Some(member) = runtime.store.get("member", caller) {
+                if member["model"].is_string() { options["model"] = member["model"].clone(); }
+                if member["inheritedReasoning"].is_object() { apply_reasoning(&mut options, &member["inheritedReasoning"])?; }
+            }
+        }
+        Ok(options)
+    }
+    async fn query_models(&self, caller: &str, input: &Value, cancel: &CancellationToken) -> Result<Value> {
+        let catalog = self.catalog(cancel).await?;
+        let options = self.parent_options(caller)?;
+        let runtime = self.runtime_view.lock().unwrap().upgrade().ok_or_else(Error::cancelled)?;
+        let member = runtime.store.get("member", caller);
+        let identity = member.as_ref().map(|member|&member["modelSelection"]).filter(|snapshot|snapshot.is_object()).unwrap_or(&self.settings["modelSelection"]["parentBinding"]);
+        let parent = json!({"bindingId":identity["bindingId"],"restoreRef":identity["restoreRef"],"model":options["model"],"reasoning":effective_reasoning(&options)});
+        let revision = self.model_policy_revision.lock().unwrap().clone().unwrap();
+        let result = catalog.query(&json!({"parent":parent,"policyRevision":revision,"input":input}))?;
+        Ok(collaboration::tool_contract::text(serde_json::to_string(&result)?,false))
+    }
+    async fn prepare_spawn_model(
+        &self,
+        caller: &str,
+        input: &Value,
+        mut member: Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value> {
+        let parent_options = self.parent_options(caller)?;
+        let reasoning = effective_reasoning(&parent_options);
+        member["inheritedReasoning"] = reasoning.clone();
+        member["model"] = parent_options["model"].clone();
+        if !self.model_selection_enabled() {
+            return Ok(member);
+        }
+        let runtime = self.runtime_view.lock().unwrap().upgrade()
+            .ok_or_else(Error::cancelled)?;
+        let parent_snapshot = runtime.store.get("member", caller)
+            .map(|member| member["modelSelection"].clone());
+        let identity = parent_snapshot.as_ref()
+            .filter(|snapshot| snapshot.is_object())
+            .unwrap_or(&self.settings["modelSelection"]["parentBinding"]);
+        let parent = json!({"bindingId":identity["bindingId"],"restoreRef":identity["restoreRef"],"model":parent_options["model"],"reasoning":reasoning});
+        let catalog = self.catalog(cancel).await?;
+        let policy_revision = self.model_policy_revision.lock().unwrap().clone().unwrap();
+        let mut selection = json!({});
+        for key in ["model_profile", "reasoning_effort"] {
+            if let Some(value) = input.get(key) {
+                selection[key] = value.clone();
+            }
+        }
+        let plan = catalog.plan(&json!({"input":selection,"parent":parent,"policyRevision":policy_revision}))?;
+        let binding = self.model_callback("modelSelection.prepare", json!({"request":{"kind":"new","plan":plan},"childSessionId":member["id"]}),cancel).await?;
+        let mut lease = PreparedLease {
+            owner: self.this.clone(),
+            binding: Some(binding.clone()),
+        };
+        let finalized = collaboration::model_selection::finalize_model_selection(&json!({"plan":plan,"binding":model_metadata(&binding)}));
+        let snapshot = match finalized {
+            Ok(snapshot) if !cancel.is_cancelled() && !self.lifetime.is_cancelled() => snapshot,
+            result => { return Err(result.err().unwrap_or_else(Error::cancelled)); }
+        };
+        let current_catalog = self.catalog(cancel).await;
+        if current_catalog.as_ref().map_or(true, |current|current.revision() != catalog.revision()) {
+            return Err(Error::new("MODEL_SELECTION", "Model settings changed during preparation. Query the model profiles again."));
+        }
+        member["model"] = snapshot["model"].clone();
+        member["inheritedReasoning"] = snapshot["reasoning"].clone();
+        member["modelSelection"] = snapshot;
+        self.prepared_models.lock().unwrap().insert(member["id"].as_str().unwrap().into(),binding);
+        lease.binding.take();
+        Ok(member)
+    }
+    async fn release_model(&self, binding: &Value) -> Result<()> {
+        if let Some(id) = binding["nativeModelBindingId"].as_str() {
+            self.owner.call_child(self.owner.session_id(), "modelSelection.release", json!({"nativeModelBindingId":id}), &CancellationToken::new()).await?;
+        }
+        Ok(())
     }
     fn options(&self) -> Result<SourceOptions> {
         let current = self.options.lock().unwrap().clone();
@@ -649,7 +864,7 @@ impl SdkCollaboration {
         let lock = lock_for(&self.session_locks, id);
         let _guard = lock.lock().await;
         let base = self.options()?;
-        let fingerprint = policy(&base);
+        let fingerprint = format!("{}:{}:{}", policy(&base), member["modelSelection"], member["inheritedReasoning"]);
         let existing = self.sessions.lock().unwrap().get(id).cloned();
         if let Some(existing) = existing {
             if existing.fingerprint == fingerprint && !existing.session.lifetime.is_cancelled() {
@@ -684,7 +899,24 @@ impl SdkCollaboration {
             add_member(runtime.store.as_ref(), updated)?;
             runtime.store.flush().await?;
         }
-        let placement = self.workspace(member, cancel).await?;
+        let pending_binding = self.prepared_models.lock().unwrap().remove(id);
+        let prepared = if member["modelSelection"].is_object() {
+            let binding = if let Some(binding) = pending_binding {
+                binding
+            } else {
+                self.model_callback("modelSelection.prepare", json!({"request":{"kind":"restore","snapshot":member["modelSelection"]},"childSessionId":id}),cancel).await?
+            };
+            if let Err(message) = collaboration::model_selection::validate_model_selection_restore(&json!({"snapshot":member["modelSelection"],"binding":model_metadata(&binding)})) {
+                self.release_model(&binding).await?;
+                return Err(message);
+            }
+            Some(binding)
+        } else { None };
+        let mut prepared_lease = PreparedLease { owner: self.this.clone(), binding: prepared.clone() };
+        let placement = match self.workspace(member, cancel).await {
+            Ok(placement) => placement,
+            Err(error) => { return Err(error); }
+        };
         if cancel.is_cancelled() || self.lifetime.is_cancelled() {
             return Err(Error::new("ABORT_ERR", "")
                 .with_harness(TextId::CollaborationFeedbackCreationCancelled, &[]));
@@ -695,6 +927,25 @@ impl SdkCollaboration {
             config.as_object_mut().unwrap().remove(key);
         }
         config["model"] = model.into();
+        if member["inheritedReasoning"].is_object() {
+            apply_reasoning(&mut config, &member["inheritedReasoning"])?;
+            if !member["modelSelection"].is_object()
+                && base["provider"]["__haloSdkNativeProvider"] == true
+            {
+                config["effort"] = base["effort"].clone();
+            }
+        }
+        if let Some(binding) = &prepared {
+            if !binding["provider"].is_object() {
+                return Err(Error::new("MODEL_SELECTION", "The prepared model has no explicit provider connection."));
+            }
+            config["provider"] = binding["provider"].clone();
+            config["contextWindow"] = binding["contextWindow"].clone();
+            config["maxOutputTokens"] = binding["maxOutputTokens"].clone();
+            config["nativeModelModalities"] = binding["modalities"].clone();
+            config["modelPricing"] = binding.get("modelPricing").map(|price|json!({binding["model"].as_str().unwrap():price})).unwrap_or_else(||json!({}));
+            for key in ["apiKey", "anthropicBaseUrl", "providerConfig", "betas"] { config.as_object_mut().unwrap().remove(key); }
+        }
         config["sessionId"] = id.into();
         config["continue"] = false.into();
         config["forkSession"] = false.into();
@@ -772,7 +1023,7 @@ impl SdkCollaboration {
         ) {
             Ok(session) => session,
             Err(error) => {
-                if let Some(checkpoint) = checkpoint {
+                    if let Some(checkpoint) = checkpoint {
                     self.checkpoints
                         .lock()
                         .unwrap()
@@ -796,11 +1047,13 @@ impl SdkCollaboration {
                 self.access_sequence.fetch_add(1, Ordering::SeqCst),
             ),
             fingerprint,
+            model_lease: prepared.as_ref().and_then(|binding|binding["nativeModelBindingId"].as_str().map(str::to_owned)),
         });
         self.sessions
             .lock()
             .unwrap()
             .insert(id.into(), child.clone());
+        prepared_lease.binding.take();
         self.start_pump(child.clone(), sender);
         let cancelled =
             tokio::select! {_=cancel.cancelled()=>true,_=child.ready.cancelled()=>false};
@@ -867,7 +1120,11 @@ impl SdkCollaboration {
                         let pending = callbacks.clone();
                         let source = owner.clone();
                         let session = child.session.clone();
+                        let lease = child.model_lease.clone();
                         crate::runtime::spawn(async move {
+                            let (method, params) = if method.starts_with("provider.") && lease.is_some() {
+                                ("modelSelection.provider".to_owned(), json!({"nativeModelBindingId":lease,"method":method,"params":params}))
+                            } else { (method, params) };
                             let outcome = source
                                 .call_child(&session.session_id, &method, params, &token)
                                 .await;
@@ -919,6 +1176,9 @@ impl SdkCollaboration {
         let result = child.session.wait_closed().await;
         settled.cancel();
         self.owner.unregister_child(&child.session.session_id);
+        if let Some(id) = &child.model_lease {
+            self.release_model(&json!({"nativeModelBindingId":id})).await?;
+        }
         result
     }
     async fn retire_locked(&self, id: &str) -> Result<()> {
@@ -1327,7 +1587,8 @@ impl SdkCollaboration {
         harness: Arc<ResolvedHarness>,
     ) -> Result<Value> {
         let name = name.strip_prefix(PREFIX).unwrap_or(name);
-        let input = match collaboration::tool_contract::parse_input(name, &input) {
+        let capability = self.model_capability();
+        let input = match collaboration::tool_contract::parse_input_with_model_selection(name, &input, capability.as_ref()) {
             Ok(input) => input,
             Err(error) => {
                 tracing::warn!(tool = name, "Collaboration arguments rejected");
@@ -1347,6 +1608,9 @@ impl SdkCollaboration {
             let runtime = self.ensure().await?;
             if cancel.is_cancelled() {
                 return Err(Error::cancelled());
+            }
+            if name == "list_model_profiles" {
+                return self.query_models(&runtime.coordinator_id, &input, cancel).await;
             }
             runtime
                 .call_with_harness(
@@ -1414,6 +1678,11 @@ impl SdkCollaboration {
             checkpoint.close().await;
         }
         self.checkpoints.lock().unwrap().clear();
+        let prepared = std::mem::take(&mut *self.prepared_models.lock().unwrap());
+        for binding in prepared.into_values() {
+            if let Err(error) = self.release_model(&binding).await { failure.get_or_insert(error); }
+        }
+        self.model_catalog.lock().await.take();
         if let Some(file) = self.journal.lock().await.take() {
             if let Err(error) = file.close().await {
                 failure.get_or_insert(error);
@@ -1507,10 +1776,10 @@ impl CollaborationTools for SdkCollaboration {
         self.compact_state(None, cancel).await
     }
     fn definitions(&self) -> Vec<Value> {
-        definitions(&baseline())
+        self.tool_definitions(&baseline())
     }
     fn definitions_with_harness(&self, harness: &ResolvedHarness) -> Vec<Value> {
-        definitions(harness)
+        self.tool_definitions(harness)
     }
     fn is_readonly(&self, name: &str) -> bool {
         readonly(name)
@@ -1539,10 +1808,10 @@ impl CollaborationTools for MemberTools {
         true
     }
     fn definitions(&self) -> Vec<Value> {
-        definitions(&baseline())
+        self.owner.upgrade().map_or_else(Vec::new, |owner|owner.tool_definitions(&baseline()))
     }
     fn definitions_with_harness(&self, harness: &ResolvedHarness) -> Vec<Value> {
-        definitions(harness)
+        self.owner.upgrade().map_or_else(Vec::new, |owner|owner.tool_definitions(harness))
     }
     fn is_readonly(&self, name: &str) -> bool {
         readonly(name)
@@ -1560,6 +1829,12 @@ impl CollaborationTools for MemberTools {
     ) -> Result<Value> {
         let owner = weak_owner(&self.owner)?;
         let runtime = owner.ensure().await?;
+        let name = name.strip_prefix(PREFIX).unwrap_or(name);
+        let capability = owner.model_capability();
+        let input = collaboration::tool_contract::parse_input_with_model_selection(name, &input, capability.as_ref())?;
+        if name == "list_model_profiles" {
+            return owner.query_models(&self.caller, &input, cancel).await.map(tool_result);
+        }
         runtime
             .call_with_harness(
                 &self.caller,
@@ -1599,6 +1874,18 @@ impl SourceDelivery for Source {
 }
 #[async_trait]
 impl SessionExecutor for Executor {
+    fn model_selection_capability(&self) -> Option<Value> {
+        self.0.upgrade().and_then(|owner|owner.model_capability())
+    }
+    async fn prepare_spawn(&self, caller: &str, input: &Value, member: Value, cancel: &CancellationToken) -> Result<Value> {
+        weak_owner(&self.0)?.prepare_spawn_model(caller, input, member, cancel).await
+    }
+    async fn discard_spawn(&self, member: &Value) -> Result<()> {
+        let owner = weak_owner(&self.0)?;
+        let binding = owner.prepared_models.lock().unwrap().remove(member["id"].as_str().unwrap_or(""));
+        if let Some(binding) = binding { owner.release_model(&binding).await?; }
+        Ok(())
+    }
     async fn execute(&self, request: MemberExecutionRequest) -> Result<TurnCompletion> {
         weak_owner(&self.0)?.execute_member(request).await
     }

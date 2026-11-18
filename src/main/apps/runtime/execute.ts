@@ -52,6 +52,7 @@ import {
   createSession,
   openAgentExecution,
   captureToolsetExecutionOptions,
+  captureDelegatedModelContext,
   getEngineCapabilities,
   resolveCredentialsForSdk,
   buildUserSessionSdkOptions,
@@ -411,6 +412,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       principal: { appId: app.id, permissions: app.permissions, environment, disabledTools: app.userOverrides?.disabledTools },
       modelSelection: { modelSourceId: credentials.sourceId!, modelId: credentials.model },
       grants: () => captureToolsetExecutionOptions(sdkOptions, engineId, sdkOptions.mcpServers ?? {}),
+      modelContext: () => captureDelegatedModelContext(
+        { modelSourceId: credentials.sourceId!, modelId: credentials.model }, engineId, sdkOptions, undefined, credentials.capabilities),
       // A stop from outside the run (stop, task closed, person removed, quit) is the execution's to carry out.
       signal: abortSignal,
     })

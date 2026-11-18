@@ -62,7 +62,18 @@ export class HostCallbacks {
   }
 
   private encodeValue(value: unknown, owner?: object): unknown {
-    if (typeof value === 'function') return { [CALLBACK]: this.add(value.bind(owner)) };
+    if (typeof value === 'function') {
+      const callback = value.bind(owner);
+      const modelSelection = owner && Object.hasOwn(owner, 'parentBinding') && Object.hasOwn(owner, 'getCatalog') && Object.hasOwn(owner, 'prepare');
+      return { [CALLBACK]: this.add(modelSelection && value === (owner as { prepare: unknown }).prepare ? async (...args: any[]) => {
+        const binding = await callback(...args);
+        if (binding?.provider !== undefined) throw new TypeError('Custom model providers must be prepared inside the worker setup module');
+        if (!binding?.providerConfig || !['anthropic', 'openai-compat'].includes(binding.providerConfig.type)) {
+          throw new TypeError('Worker model preparation requires an explicit standard providerConfig');
+        }
+        return binding;
+      } : callback) };
+    }
     if (!value || typeof value !== 'object') return value;
     if (Array.isArray(value)) return value.map(item => this.encodeValue(item));
     if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {

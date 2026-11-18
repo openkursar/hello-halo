@@ -387,6 +387,21 @@ checkpoint. Re-enabling persistence writes a self-contained history checkpoint
 before executing more work. Permission and tool configuration are rebuilt from
 the host rather than copied from the old executor.
 
+Local model selection captures the direct parent's effective reasoning independently
+of optional profile registration. Registered selections persist only safe binding
+identity and normalized reasoning; provider objects and credentials remain in an
+execution-owned callback lease. Work requests and summaries encode that same
+normalized setting without provider-specific effort clamping. Target input
+modalities and context/output ceilings replace the parent's model capabilities,
+and target pricing is installed under its wire-model identity.
+
+Resident collaborators retain their prepared binding until the existing retirement
+or source-policy rebuild boundary. Reuse compares policy, exact saved binding and
+reasoning; capabilities are revalidated when the binding is prepared again. Hosts
+must retire or rebuild execution at their normal safe boundary when a live binding's
+capabilities or authorization change; this adapter does not poll providers or
+refresh credentials on every model request.
+
 Tool working memory uses the session's configured storage directory and obeys
 `persistSession: false`. Shell cwd/environment, todos, goal state and file-read
 checks survive retirement. Background shell resources can be borrowed from the

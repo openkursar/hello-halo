@@ -143,6 +143,48 @@ Ordinary CC history attempts Halo's compatible native resume on demand; only a f
 resume reads bounded neutral history. If both sources fail, continuation fails without
 starting an empty session or changing the previous binding.
 
+## Delegated model execution
+
+`delegated-model.ts` captures the direct parent's resolved model and normalized
+reasoning separately from its tool grants. Every newly created local participant
+stores `inheritedReasoning`, even without model profiles; older records without
+that field retain their legacy restoration behavior. Space sessions keep their
+latest successfully applied reasoning in a session-keyed weak snapshot, so a
+warmed broker does not delegate with an earlier turn's thinking settings.
+Routed snapshots use the router's public `resolveOpenAIReasoning` mapping:
+engine settings are not necessarily the final upstream effort. Codex's thread
+level and dsh's fixed Messages defaults remain unchanged for ordinary parent
+sessions. Frozen router-supported levels and off controls are applied to child
+requests through their captured adapter options, including after configuration
+changes; unsupported native modes are refused rather than approximated.
+
+`subagent-models.ts` consumes the SDK collaboration catalog, plan and finalize
+contract. Its optional endpoint captures the policy revision and lazily retains
+one bounded native catalog view per local configuration revision and engine.
+Profile metadata is projected by `subagent-model-catalog.ts`; no credential or
+configuration object is returned to a model. Unconfigured settings register no
+new tools or guidance. Policy changes enter the existing session-input
+fingerprint and therefore take effect at the existing safe rebuild boundary.
+
+Model preparation precedes workspace allocation. The caller, cancellation,
+profile revision, policy and logical account identity are checked again after
+asynchronous credential preparation. A finalized binding is local-only participant
+data; restoration uses strict account/group resolution and the SDK's restore
+validator against current capabilities. It never substitutes the global account.
+The ordinary conversation resolver retains its deleted-account fallback.
+
+Assignments do not choose engines or expand grants. `subagent-model-metadata.ts`
+checks the inherited engine against the target protocol and prepares current
+capacity, modalities and supported reasoning mappings. Codex requires a single
+OpenAI-compatible account; groups are unavailable to it, and delegated CLI
+accounts require Claude Code. Group restoration rechecks the current common
+capabilities, not a frozen member list. A removed profile does not revoke an
+existing binding, but removing its account/group or revoking execution authority
+can make that binding unusable. Owner-authorized local work may query the
+assignment catalog; guest and external-colleague work retain permitted inheritance
+without profile or effort overrides. Safe catalog projection excludes local
+account identifiers and connection details from model results and public records.
+
 ## 2) Single Source of Truth Contract
 
 - **Session state (thoughts, tool calls, token usage) is authoritative in the main process.** The renderer consumes events and must not persist agent state independently.
@@ -825,12 +867,14 @@ Switching thinking off is enforced by the router, not the engine: with no
 its profile names. An HTTP send with `thinkingEnabled: false` and no picked
 level still only lowers the budget.
 
-The two engine ladders overlap but neither contains the other, so a level is
-clamped per engine rather than forwarded. These values configure a local
-process, where an out-of-enum value fails as an opaque startup error rather
-than a reportable API error — nothing unrecognized is passed through. The
-router is the exception and forwards levels, because there the upstream
-returns an error the user can act on.
+The native engine ladders overlap but neither contains the other, so local
+launch/thread values are clamped to their engine's accepted enum. This does not
+limit the separate picked level carried to the router: for example, a routed
+`max` selection is not made unavailable merely because Codex's thread enum has
+no `max`. The router applies the target's declared mapping and reports upstream
+errors through the existing path. Frozen child reasoning is validated against
+target capabilities before execution and encoded separately from native engine
+launch defaults; unsupported modes are refused, not silently approximated.
 
 `reasoningEffort` exists only on `ModelCapabilityOverride`, never on a preset:
 a value there is always something the user typed, which is what makes
