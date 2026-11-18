@@ -62,16 +62,19 @@ export function applyEnvConfig(): void {
     const apiKey = aiKey || ''
     const model = env('HALO_AI_MODEL') || FALLBACK_MODEL
     const now = new Date().toISOString()
+    const name = `${provider} (env)`
+    // Conversations bind to a source id; a fresh id each boot would orphan them.
+    const previous = cfg.aiSources?.sources?.find(s => s.name === name)
     const source: AISource = {
-      id: uuidv4(),
-      name: `${provider} (env)`,
+      id: previous?.id ?? uuidv4(),
+      name,
       provider,
       authType: 'api-key',
       apiUrl,
       apiKey,
       model,
       availableModels: [{ id: model, name: model }],
-      createdAt: now,
+      createdAt: previous?.createdAt ?? now,
       updatedAt: now,
     }
     overrides.aiSources = { version: 2, currentId: source.id, sources: [source] }

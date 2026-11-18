@@ -83,6 +83,31 @@ describe('env-config', () => {
       expect(saved.aiSources.sources[0].apiUrl).toBe('https://api.anthropic.com')
     })
 
+    it('keeps the env source id across restarts so conversations stay bound', () => {
+      setConfig({
+        remoteAccess: { password: 'x' },
+        aiSources: { version: 2, currentId: 'kept-id', sources: [{ id: 'kept-id', name: 'anthropic (env)', createdAt: 'then' }] },
+      })
+      process.env.HALO_AI_API_KEY = 'sk-new'
+      applyEnvConfig()
+      const saved = (saveConfig as unknown as MockFn).mock.calls[0][0]
+      expect(saved.aiSources.currentId).toBe('kept-id')
+      expect(saved.aiSources.sources[0]).toMatchObject({ id: 'kept-id', createdAt: 'then', apiKey: 'sk-new' })
+    })
+
+    it('a provider change starts a new env source', () => {
+      setConfig({
+        remoteAccess: { password: 'x' },
+        aiSources: { version: 2, currentId: 'old-id', sources: [{ id: 'old-id', name: 'anthropic (env)', createdAt: 'then' }] },
+      })
+      process.env.HALO_AI_PROVIDER = 'openai'
+      process.env.HALO_AI_API_KEY = 'sk-new'
+      applyEnvConfig()
+      const saved = (saveConfig as unknown as MockFn).mock.calls[0][0]
+      expect(saved.aiSources.sources[0].id).not.toBe('old-id')
+      expect(saved.aiSources.sources[0].name).toBe('openai (env)')
+    })
+
     it('aiUrl alone triggers a source build', () => {
       setConfig({ remoteAccess: { password: 'x' } })
       process.env.HALO_AI_API_URL = 'https://gw.example.com'
