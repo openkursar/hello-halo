@@ -102,7 +102,7 @@ has_app_entry || die "build produced no out/main/index.{cjs,mjs}"
 # 3) Cross-build the linux-x64 unpacked app (afterPack swaps in linux natives).
 log "packaging linux-x64 (electron-builder)..."
 rm -rf dist/linux-unpacked
-node_modules/.bin/electron-builder --linux dir --x64
+node_modules/.bin/electron-builder --linux dir --x64 --config electron-builder.cjs --publish never
 [ -x dist/linux-unpacked/halo ] || die "electron-builder produced no dist/linux-unpacked/halo"
 
 log "verifying packaged product.json against the server profile..."
@@ -114,6 +114,25 @@ node -e '
   if (JSON.stringify(packed) !== JSON.stringify(expected)) process.exit(1)
 ' dist/linux-unpacked/resources/app.asar "$SERVER_PRODUCT" \
   || die "packaged product.json differs from ${SERVER_PRODUCT#"$PROJECT_ROOT"/}"
+
+log "verifying packaged Halo worker launch files..."
+node -e '
+  const fs = require("fs")
+  const path = require("path")
+  const asar = require("@electron/asar")
+  const archive = process.argv[1]
+  const sdk = "node_modules/@hello-halo/agent-sdk"
+  if (!asar.listPackage(archive).includes(`/${sdk}/package.json`)) {
+    console.log("[build-server] Halo SDK is absent; skipping its worker launch check (afterPack enforces required engines)")
+    process.exit(0)
+  }
+  for (const file of [`${sdk}/dist/worker/entry.js`, "out/main/worker/halo-setup.cjs"]) {
+    if (!asar.statFile(archive, file).unpacked || !fs.statSync(path.join(archive + ".unpacked", file)).isFile()) {
+      throw new Error(`Halo worker launch file is not unpacked: ${file}`)
+    }
+  }
+' dist/linux-unpacked/resources/app.asar \
+  || die "packaged Halo worker launch files are missing or not unpacked"
 
 # 4) Compress + split into the repo's bundle/.
 log "compressing + splitting bundle into $OUT_REPO/bundle/ ..."
