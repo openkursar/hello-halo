@@ -130,7 +130,7 @@ for (const path of [
 }
 vi.mock('../../../src/renderer/components/memory/MemorySettingsPanel', () => ({ MemorySettingsPanel: () => null }))
 vi.mock('../../../src/renderer/components/common/HttpTriggerCard', () => ({ HttpTriggerCard: () => null }))
-vi.mock('../../../src/renderer/hooks/useDataContent', () => ({ useDataContent: () => undefined }))
+vi.mock('../../../src/renderer/hooks/useDataContent', () => ({ useDataContent: () => ({ unreadable: false }) }))
 vi.mock('../../../src/renderer/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => content }))
 vi.mock('../../../src/renderer/components/apps/ActivitySource', () => ({ ActivitySource: () => null }))
 vi.mock('../../../src/renderer/components/apps/EscalationCard', () => ({ EscalationCard: () => null }))
