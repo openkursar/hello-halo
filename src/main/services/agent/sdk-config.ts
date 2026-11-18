@@ -41,7 +41,7 @@ import { assertDelegatedAuthReady } from './cli-auth'
 import { waitForSdkInitialization } from './initialization'
 import { getDeviceIdentity } from '../../foundation/device-identity'
 import { applyOfficeRuntimeEnv } from '../office-runtime'
-import { applyProxyEnv } from '../proxy-policy'
+import { applyProxyEnv, mcpServerUrls } from '../proxy-policy'
 import { WorkingDirectoryUnavailableError } from './working-dir'
 import { createMemoryWriteHooks, type MemoryWriteGuardConfig } from '../../platform/memory'
 import { buildModelPricingTable } from '../../../shared/constants/model-pricing'
@@ -121,6 +121,8 @@ export interface SdkEnvParams {
   selfApi?: { url: string; token: string }
   /** Current session's space, exported as HALO_SPACE_ID alongside `selfApi` and only with it. */
   spaceId?: string
+  /** The session's MCP servers; the remote ones' hosts are subject to the proxy policy. */
+  mcpServers?: Record<string, unknown> | null
 }
 
 // ============================================
@@ -896,8 +898,9 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
 
   // The Settings proxy and the hosts that bypass it, as every route gets them
   // (the CLI's WebFetch and the MCP servers it connects included). The loopback
-  // router is always among the bypassed hosts.
-  applyProxyEnv(env, getConfig().network)
+  // router is always among the bypassed hosts. The model and remote MCP
+  // endpoints are named so a proxy limited to some hosts can leave them out.
+  applyProxyEnv(env, getConfig().network, [params.anthropicBaseUrl, ...mcpServerUrls(params.mcpServers)])
 
   // Bundled Office runtime: make the halo-node shim resolvable on PATH. No-op
   // (one log line) when the runtime bundle is absent.
@@ -1018,6 +1021,7 @@ async function assembleSdkOptions(
     sourceId: credentials.sourceId,
     selfApi,
     spaceId,
+    mcpServers,
   })
 
   validateWorkingDirectory(workDir, spaceId)

@@ -29,7 +29,7 @@ import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../../openai-c
 import type { ApiCredentials } from '../types'
 import type { AskForApproval, SandboxMode, ThreadStartParams } from './types/codex-protocol'
 import { prepareCodexMcpServers } from './mcp-config'
-import { applyProxyEnv } from '../../proxy-policy'
+import { applyProxyEnv, mcpServerUrls } from '../../proxy-policy'
 import type { SdkMcpBridge } from '../mcp/sdk-bridge'
 import { assertEngineSourceCompatible } from '../../../../shared/engine-source'
 
@@ -152,7 +152,8 @@ async function buildCodexEnv(
 
   env.CODEX_HOME = ensureCodexHome()
   env.DISABLE_TELEMETRY = '1'
-  applyProxyEnv(env, getConfig().network)
+  // The model goes through the loopback router; remote MCP endpoints are named.
+  applyProxyEnv(env, getConfig().network, mcpServerUrls(sdkOptions.mcpServers))
 
   // Router-encoded keys / any other env additions buildThreadConfig
   // declared. These MUST land in process env — Codex's `env_key` lookup

@@ -234,6 +234,22 @@
       },
       "required": ["mode"]
     },
+    "networkPolicy": {
+      "type": "object",
+      "description": "Network routing defaults (enterprise/custom builds only), for a deployment whose intranet is reached directly and whose public services are reachable only through an egress proxy. Omit for open-source builds — the proxy then covers every host.",
+      "properties": {
+        "proxyOnly": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "When non-empty, the only hosts that take the proxy; every other host goes direct. Same syntax as the proxy bypass list: exact host, \"*.example.com\" or \".example.com\" for subdomains only, \"host:port\", IP range. Applied in server mode only; config.json network.proxyOnly (or HALO_PROXY_ONLY) replaces it."
+        },
+        "imScanViaProxy": {
+          "type": "boolean",
+          "description": "When true, WeCom bot QR-code sign-in takes the IM route (the proxy unless IM channels are set to connect directly). Omit/false to connect directly (default)."
+        }
+      },
+      "additionalProperties": false
+    },
     "telemetry": {
       "type": "object",
       "description": "Self-hosted telemetry configuration (enterprise/custom builds only). Endpoint and apiKey ship inside the package (user-readable) — per-variant configuration, not secrets; keep them committed in the variant repo. Omit the whole block for open-source builds — the provider stays disabled and every sensitive field is dropped by default.",

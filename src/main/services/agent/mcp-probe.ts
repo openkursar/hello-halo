@@ -25,6 +25,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import { proxyFetch } from '../proxy-fetch'
 import { getAppManager } from '../app-bridge'
 import { appToSdkServerConfig } from './helpers'
 import { purgeStaleMcpOAuth } from './mcp-auth-state'
@@ -69,9 +70,11 @@ function buildTransport(config: SdkServerConfig): Transport {
     if (!config.url) throw new Error('MCP server config has no URL')
     const url = new URL(config.url)
     const requestInit = config.headers ? { headers: config.headers } : undefined
+    // The app's route, as a session's MCP connection would take it.
+    const options = { requestInit, fetch: proxyFetch }
     return config.type === 'http'
-      ? new StreamableHTTPClientTransport(url, { requestInit })
-      : new SSEClientTransport(url, { requestInit })
+      ? new StreamableHTTPClientTransport(url, options)
+      : new SSEClientTransport(url, options)
   }
   if (!config.command) throw new Error('MCP server config has no command')
   return new StdioClientTransport({

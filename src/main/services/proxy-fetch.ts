@@ -33,7 +33,7 @@ import { Readable } from 'node:stream'
 import { ProxyAgent } from 'proxy-agent'
 import { getConfig, onNetworkConfigChange } from '../foundation/config.service'
 import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from '../foundation/logging'
-import { chromiumBypassRules, compileBypassList, proxyBypassList, type ProxySettings } from './proxy-policy'
+import { chromiumBypassRules, compileBypassList, effectiveProxyOnly, proxyBypassList, type ProxySettings } from './proxy-policy'
 import { proxyRequiredMessage, type ProxyRequiredReason } from '../../shared/constants/proxy-required'
 import type { ProxyRouteInfo } from '../../shared/rpc/contracts/system.contract'
 
@@ -173,6 +173,10 @@ interface ProxyState {
   proxy: string | null
   bypass: string[]
   goesDirect: (url: string) => boolean
+  /** The only hosts that take the proxy (server mode, see effectiveProxyOnly); empty = every host. */
+  proxyOnly: string[]
+  /** Whether a host is on `proxyOnly`; null when the list is empty. */
+  proxied: ((url: string) => boolean) | null
   /** Guarded requests (see ProxyFetchOptions) are refused instead of going direct. */
   requireProxyForOAuth: boolean
 }
@@ -185,10 +189,13 @@ let _proxyState: ProxyState | undefined
 
 function proxyStateFrom(network: (ProxySettings & { requireProxyForOAuth?: boolean }) | undefined): ProxyState {
   const bypass = proxyBypassList(network, [process.env.NO_PROXY, process.env.no_proxy])
+  const proxyOnly = effectiveProxyOnly(network?.proxyOnly)
   return {
     proxy: network?.proxy?.trim() || null,
     bypass,
     goesDirect: compileBypassList(bypass),
+    proxyOnly,
+    proxied: proxyOnly.length > 0 ? compileBypassList(proxyOnly) : null,
     requireProxyForOAuth: network?.requireProxyForOAuth === true,
   }
 }
@@ -243,12 +250,13 @@ function applyProxyToBrowserSession(proxy: string | null, bypass: string[]): voi
   }
 }
 
-onNetworkConfigChange(({ proxy, browserUseProxy, noProxy, requireProxyForOAuth }) => {
-  _proxyState = proxyStateFrom({ proxy, noProxy, requireProxyForOAuth })
+onNetworkConfigChange(({ proxy, browserUseProxy, noProxy, proxyOnly, requireProxyForOAuth }) => {
+  _proxyState = proxyStateFrom({ proxy, noProxy, proxyOnly, requireProxyForOAuth })
   // AI Browser only follows Settings proxy when explicitly opted-in;
   // otherwise it uses the system proxy (Electron default behavior).
   applyProxyToBrowserSession(browserUseProxy ? _proxyState.proxy : null, _proxyState.bypass)
-  console.log(`[ProxyFetch] App proxy updated: ${_proxyState.proxy || 'none (auto-detect from system)'}, browser: ${browserUseProxy ? 'follows settings' : 'system'}, direct: ${_proxyState.bypass.join(',')}`)
+  console.log(`[ProxyFetch] App proxy updated: ${_proxyState.proxy || 'none (auto-detect from system)'}, browser: ${browserUseProxy ? 'follows settings' : 'system'}, direct: ${_proxyState.bypass.join(',')}` +
+    (_proxyState.proxyOnly.length > 0 ? `, proxied only: ${_proxyState.proxyOnly.join(',')}` : ''))
 })
 
 function getProxyState(): ProxyState {
@@ -265,11 +273,23 @@ function getProxyState(): ProxyState {
   return _proxyState
 }
 
-/** The proxy a request takes: none for a bypassed host, else the Settings proxy, else the system's. */
-async function resolveProxyUrl(url: string): Promise<string | null> {
-  const { proxy, goesDirect } = getProxyState()
-  if (goesDirect(url)) return null
-  return proxy ?? await resolveSystemProxy(url)
+/**
+ * Whether `proxyOnly` sends a request direct. A guarded request while Settings
+ * requires a proxy is never excluded: the account's rule outranks the list.
+ */
+function excludedByProxyOnly(state: ProxyState, url: string, guarded: boolean): boolean {
+  if (!state.proxied || (guarded && state.requireProxyForOAuth)) return false
+  return !state.proxied(url)
+}
+
+/**
+ * The proxy a request takes: none for a bypassed host or one `proxyOnly`
+ * excludes, else the Settings proxy, else the system's.
+ */
+async function resolveProxyUrl(url: string, guarded = false): Promise<string | null> {
+  const state = getProxyState()
+  if (state.goesDirect(url) || excludedByProxyOnly(state, url, guarded)) return null
+  return state.proxy ?? await resolveSystemProxy(url)
 }
 
 // ============================================================================
@@ -302,7 +322,7 @@ export interface ProxyFetchOptions {
 async function resolveGuardedProxyUrlFor(url: string, guarded: boolean): Promise<string | null> {
   const state = getProxyState()
   if (!guarded || !state.requireProxyForOAuth) return resolveProxyUrl(url)
-  const proxyUrl = await resolveProxyUrl(url)
+  const proxyUrl = await resolveProxyUrl(url, true)
   if (!proxyUrl) {
     const reason = state.goesDirect(url) ? 'bypassed' : 'none'
     console.warn(`[ProxyFetch] Guarded request refused: reason=${reason} host=${URL.canParse(url) ? new URL(url).host : ''}`)
@@ -677,8 +697,10 @@ export async function resolveProxyDialAgent(url: string, signal: AbortSignal): P
  * is host and port only; proxy credentials never leave this module.
  */
 export async function describeProxyRoute(url: string): Promise<ProxyRouteInfo> {
-  const { proxy, goesDirect } = getProxyState()
-  if (goesDirect(url)) return { kind: 'direct', listed: true }
+  const state = getProxyState()
+  const { proxy, goesDirect } = state
+  // The accounts this describes are the guarded ones.
+  if (goesDirect(url) || excludedByProxyOnly(state, url, true)) return { kind: 'direct', listed: true }
   const via = proxy ? 'settings' : 'system'
   const proxyUrl = proxy ?? await resolveSystemProxy(url)
   if (!proxyUrl) return { kind: 'direct', listed: false }
