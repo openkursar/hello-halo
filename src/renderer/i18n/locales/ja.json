@@ -3417,6 +3417,7 @@
   "This file has merge conflicts. Resolve them in a terminal, or ask the AI to.": "このファイルにはマージコンフリクトがあります。ターミナルで解決するか、AI に依頼してください。",
   "This file is no longer where it was published from — it was moved or deleted.": "このファイルは移動または削除されたため、公開元の場所に存在しなくなりました。",
   "This file is on {{owner}}’s computer and can’t be fetched right now.": "このファイルは{{owner}}さんのコンピューター上にあるため、現在取得できません。",
+  "This file is outside the workspace and cannot be read here.": "このファイルはワークスペースの外にあるため、ここでは読み取れません。",
   "This file is too large to copy here. Ask {{owner}} to share it another way.": "このファイルは大きすぎてここにコピーできません。{{owner}} さんに別の方法での共有をお願いしてください。",
   "This folder is no longer a Git repository.": "このフォルダはもう Git リポジトリではありません。",
   "This folder is too large to watch. Watched folders are meant for a small set of documents.": "このフォルダは大きすぎて監視できません。監視フォルダは少数のドキュメントを対象としています。",

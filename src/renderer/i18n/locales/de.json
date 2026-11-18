@@ -3417,6 +3417,7 @@
   "This file has merge conflicts. Resolve them in a terminal, or ask the AI to.": "Diese Datei hat Merge-Konflikte. Lösen Sie sie in einem Terminal oder bitten Sie die KI darum.",
   "This file is no longer where it was published from — it was moved or deleted.": "Diese Datei befindet sich nicht mehr an dem Ort, von dem aus sie veröffentlicht wurde — sie wurde verschoben oder gelöscht.",
   "This file is on {{owner}}’s computer and can’t be fetched right now.": "Diese Datei befindet sich auf dem Computer von {{owner}} und kann derzeit nicht abgerufen werden.",
+  "This file is outside the workspace and cannot be read here.": "Diese Datei liegt außerhalb des Arbeitsbereichs und kann hier nicht gelesen werden.",
   "This file is too large to copy here. Ask {{owner}} to share it another way.": "Diese Datei ist zu groß, um sie hierher zu kopieren. Bitten Sie {{owner}}, sie auf andere Weise mit Ihnen zu teilen.",
   "This folder is no longer a Git repository.": "Dieser Ordner ist kein Git-Repository mehr.",
   "This folder is too large to watch. Watched folders are meant for a small set of documents.": "Dieser Ordner ist zu groß, um überwacht zu werden. Überwachte Ordner sind für eine kleine Anzahl von Dokumenten gedacht.",
