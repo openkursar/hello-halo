@@ -16,6 +16,8 @@ vi.mock('../../../../src/main/services/tlon/watcher', () => ({
   stopWatchersForKB: vi.fn(async () => {}),
   startLinkedDirWatch: vi.fn(async () => {}),
   stopLinkedDirWatch: vi.fn(async () => {}),
+  refreshLinkedWatches: vi.fn(async () => {}),
+  rescanKB: vi.fn(),
 }))
 vi.mock('@parcel/watcher', () => ({
   default: {

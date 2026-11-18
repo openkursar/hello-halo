@@ -60,6 +60,21 @@ export interface KnowledgeBaseEntry {
   stats: KBStats
   /** At most one KB is the default; new conversations auto-load it. */
   isDefault?: boolean
+  /** Per-KB source limits; absent fields use the built-in defaults. */
+  options?: KBOptions
+}
+
+/**
+ * Per-KB limits for large, curated document sets. Each is bounded; an
+ * unset field keeps the default.
+ */
+export interface KBOptions {
+  /** Accepted source files a watched folder may hold (default 500, at most 20000). */
+  maxLinkedFiles?: number
+  /** Extra plain-text extensions to learn, e.g. ".yaml" (at most 32; archives and executables are refused). */
+  extraExtensions?: string[]
+  /** Documents listed in the injected document map (default 200, at most 2000). */
+  mapMaxDocs?: number
 }
 
 /** Registry file persisted to ~/.halo/knowledge-bases-index.json */
@@ -90,6 +105,8 @@ export interface IngestHashesV1 {
     extractorRevision?: number
     /** Device of a watched-folder source when learned; tells an emptied folder from an unmounted volume. */
     sourceDev?: number
+    /** Content version of the watched folder when this source was learned. */
+    version?: string
     protection?: {
       revision: number
       sourceHash: string
@@ -100,6 +117,10 @@ export interface IngestHashesV1 {
       reason: string
     }
   }>
+  /** Current content version of each watched folder that has one, keyed by its configured path. */
+  versions?: Record<string, string>
+  /** Unlinked folders whose learned text leaves the corpus at the next batch commit. */
+  forget?: string[]
 }
 
 export interface IngestJob {
@@ -157,6 +178,8 @@ export interface RawFileStatus {
 export interface KBSource {
   name: string
   path: string
+  /** Content version of the watched folder the document came from, when it has one. */
+  version?: string
 }
 
 export interface IngestProgressEvent {
@@ -183,6 +206,7 @@ export interface CreateKBInput {
   icon?: string
   description?: string
   linkedDirs?: Array<{ path: string; label: string }>
+  options?: KBOptions
 }
 
 export interface UpdateKBInput {
@@ -190,6 +214,17 @@ export interface UpdateKBInput {
   icon?: string
   description?: string
   status?: KBStatus
+  /** Replaces the KB's options; null restores every default. */
+  options?: KBOptions | null
+}
+
+export interface RemoveLinkedDirOptions {
+  /**
+   * Also retire what was learned from the folder. Applied together with the
+   * next learning batch, so a folder replaced by another (a new release) never
+   * leaves the KB empty in between.
+   */
+  forget?: boolean
 }
 
 export interface AddRawFilesResult {

@@ -37,7 +37,7 @@ POST   /api/tlon                                                   Create a know
           -d '{"name":"Product Docs"}'
      # body: {"name":"Product Docs"}
      # out: {success:true,data:{id,name,icon,description,status:"active",createdAt,updatedAt,path,linkedDirs:[],spaceIds:[],appIds:[],stats:{...}}}
-     # note: Optional fields: icon, description, linkedDirs (array of {path,label}).
+     # note: Optional fields: icon, description, linkedDirs (array of {path,label}), options ({maxLinkedFiles?: 1-20000, extraExtensions?: up to 32 plain-text extensions like ".yaml", mapMaxDocs?: 1-2000}). An invalid option rejects the whole request.
 
 GET    /api/tlon                                                   List all knowledge collections
      curl -s "$HALO_API_URL/api/tlon" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
@@ -55,7 +55,7 @@ PUT    /api/tlon/<kbId>                                            Rename or edi
           -d '{"name":"New name"}'
      # body: {"name":"New name"}
      # out: {success:true,data:<updated entry>} or {success:false,error:"Knowledge base not found"}
-     # note: All fields optional: name, icon, description, status ("active"|"paused"|"error").
+     # note: All fields optional: name, icon, description, status ("active"|"paused"|"error"), options (same shape as on create; replaces the current options, null restores the defaults). An invalid option rejects the whole update with nothing changed. Changing options rescans the collection; text of an extension no longer accepted leaves it.
 
 DELETE /api/tlon/<kbId>                                            Delete a knowledge collection and all its data
      !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
@@ -127,7 +127,7 @@ DELETE /api/tlon/<kbId>/linked-dirs/<linkId>                       Stop watching
      # note: reversible — can be undone or corrected afterward.
      curl -sX DELETE "$HALO_API_URL/api/tlon/<kbId>/linked-dirs/<linkId>" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true,data:<removal result>}
-     # note: Only removes the watch registration — the target folder and its files are untouched, and can be re-linked.
+     # note: Only removes the watch registration — the target folder and its files are untouched, and can be re-linked. By default what was learned from it stays searchable. Add ?forget=true to also retire that text: it leaves together with the next indexing batch (or after about 10 seconds if none starts), so unlinking an old release and linking its replacement right after never leaves the collection empty. Linking the same path again before then cancels the forget.
 
 POST   /api/tlon/<kbId>/linked-dirs/<linkId>/retry                 Look for an unavailable linked directory again and resume watching it if it is back
      # note: reversible — can be undone or corrected afterward.
@@ -157,7 +157,7 @@ POST   /api/tlon/<kbId>/resolve-sources                            Map paths rea
           -H "Content-Type: application/json" \
           -d '{"readPaths":["/absolute/path/inside/the/collection"]}'
      # body: {"readPaths":["/absolute/path/inside/the/collection"]}
-     # out: {success:true,data:[{name:string,path:string}]}  — deduped, absolute, files that still exist
+     # out: {success:true,data:[{name:string,path:string,version?:string}]}  — deduped, absolute, files that still exist; version is the content version of the watched folder the document came from (its VERSION.md first line, else its git commit)
      # note: Turns the copies a collection holds into citable originals. Paths that no longer exist are dropped silently, so a shorter list than you sent is normal. 400 when readPaths is not an array; an empty array is accepted and returns nothing.
 
 POST   /api/tlon/<kbId>/unbind-app                                 Unbind a knowledge collection from a digital human

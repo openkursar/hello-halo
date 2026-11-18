@@ -24,6 +24,8 @@ vi.mock('../../../../src/main/services/tlon/watcher', () => ({
   stopWatchersForKB: vi.fn(async () => {}),
   startLinkedDirWatch: vi.fn(async () => {}),
   stopLinkedDirWatch: vi.fn(async () => {}),
+  refreshLinkedWatches: vi.fn(async () => {}),
+  rescanKB: vi.fn(),
 }))
 // Belt and braces: if the real watcher module still loads (dynamic import),
 // its native subscribe must never touch the real filesystem watch API.

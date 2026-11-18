@@ -31,6 +31,7 @@ import {
 import type {
   CreateKBInput,
   UpdateKBInput,
+  RemoveLinkedDirOptions,
 } from '../../shared/types/tlon'
 
 export interface ControllerResponse<T = unknown> {
@@ -152,9 +153,9 @@ export function addLinkedDir(
   } catch (e) { return fail(e) }
 }
 
-export function removeLinkedDir(kbId: string, linkId: string): ControllerResponse {
+export function removeLinkedDir(kbId: string, linkId: string, options?: RemoveLinkedDirOptions): ControllerResponse {
   try {
-    return ok(svcRemoveLinkedDir(kbId, linkId))
+    return ok(svcRemoveLinkedDir(kbId, linkId, { forget: options?.forget === true }))
   } catch (e) { return fail(e) }
 }
 

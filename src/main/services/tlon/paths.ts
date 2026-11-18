@@ -64,6 +64,11 @@ export function getKBHashesPath(id: KnowledgeBaseId): string {
   return join(getKBIngestDir(id), 'hashes.json')
 }
 
+/** Text extracted by a running batch, moved into text/ when the batch commits. */
+export function getKBStagingDir(id: KnowledgeBaseId): string {
+  return join(getKBIngestDir(id), 'staging')
+}
+
 /** Owner-maintained text of removed sources: kept, but outside the searched text/ dir. */
 export function getKBRetainedDir(id: KnowledgeBaseId): string {
   return join(getKBIngestDir(id), 'retained')

@@ -95,9 +95,10 @@ export function registerTlonRoutes(app: Express): void {
     res.json(tlonController.addLinkedDir(req.params.kbId, { path, label: label || path }))
   })
 
-  // DELETE /api/tlon/:kbId/linked-dirs/:linkId — unlink a directory
+  // DELETE /api/tlon/:kbId/linked-dirs/:linkId[?forget=true] — unlink a directory
   app.delete('/api/tlon/:kbId/linked-dirs/:linkId', (req: Request, res: Response) => {
-    res.json(tlonController.removeLinkedDir(req.params.kbId, req.params.linkId))
+    const forget = req.query.forget === 'true'
+    res.json(tlonController.removeLinkedDir(req.params.kbId, req.params.linkId, { forget }))
   })
 
   // POST /api/tlon/:kbId/linked-dirs/:linkId/retry — look for an unavailable directory again

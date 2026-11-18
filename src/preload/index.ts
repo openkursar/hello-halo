@@ -22,6 +22,7 @@ import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLiveP
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
 import type { PickedLocalEntry } from '../shared/attached-paths'
+import type { KBOptions as TlonKBOptions } from '../shared/types/tlon'
 import type { ProxyRouteInfo } from '../shared/rpc/contracts/system.contract'
 import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../shared/types/im-channel'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
@@ -279,11 +280,11 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   onToolsetsRequested: (callback: (data: unknown) => void) => () => void
 
   // Tlon (knowledge base)
-  tlonCreate: (input: { name: string; icon?: string; description?: string; linkedDirs?: Array<{ path: string; label: string }> }) => Promise<IpcResponse>
+  tlonCreate: (input: { name: string; icon?: string; description?: string; linkedDirs?: Array<{ path: string; label: string }>; options?: TlonKBOptions }) => Promise<IpcResponse>
   tlonList: () => Promise<IpcResponse>
   tlonListForSpace: (spaceId: string) => Promise<IpcResponse>
   tlonGet: (kbId: string) => Promise<IpcResponse>
-  tlonUpdate: (kbId: string, updates: { name?: string; icon?: string; description?: string; status?: string }) => Promise<IpcResponse>
+  tlonUpdate: (kbId: string, updates: { name?: string; icon?: string; description?: string; status?: string; options?: TlonKBOptions | null }) => Promise<IpcResponse>
   tlonDelete: (kbId: string) => Promise<IpcResponse>
   tlonSetDefault: (kbId: string | null) => Promise<IpcResponse>
   tlonBindSpace: (kbId: string, spaceId: string) => Promise<IpcResponse>
@@ -291,7 +292,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   tlonBindApp: (kbId: string, appId: string) => Promise<IpcResponse>
   tlonUnbindApp: (kbId: string, appId: string) => Promise<IpcResponse>
   tlonAddLinkedDir: (kbId: string, dir: { path: string; label: string }) => Promise<IpcResponse>
-  tlonRemoveLinkedDir: (kbId: string, linkId: string) => Promise<IpcResponse>
+  tlonRemoveLinkedDir: (kbId: string, linkId: string, options?: { forget?: boolean }) => Promise<IpcResponse>
   tlonRetryLinkedDir: (kbId: string, linkId: string) => Promise<IpcResponse>
   tlonAddFiles: (kbId: string, filePaths: string[]) => Promise<IpcResponse>
   tlonListRaw: (kbId: string) => Promise<IpcResponse>
