@@ -21,6 +21,7 @@ operations on this page:
   POST   /api/skills/restore-legacy                                  Recover an explicitly selected legacy removed skill
   POST   /api/skills/save                                            Save one skill instruction file against the revision just read   !! destructive
   POST   /api/skills/set-enabled                                     Enable or disable one skill copy without deleting its files
+  GET    /api/store/app-detail                                       Get full detail for one store listing by slug (preferred)
   GET    /api/store/app-document                                     Get a listing's SKILL.md/README document
   GET    /api/store/apps                                             List store listings (legacy, non-paginated; prefer POST /api/store/query)
   GET    /api/store/apps/<slug>                                      Get full detail for one store listing by slug
@@ -184,6 +185,11 @@ POST   /api/skills/set-enabled                                     Enable or dis
      # out: {success:true,data:<SkillCopy>} or {success:false,error}
      # note: enabled must be a boolean. This affects only the named copy; a lower-priority copy can become effective. Inspect list afterwards and distinguish new-session availability from context already loaded by a running conversation.
 
+GET    /api/store/app-detail                                       Get full detail for one store listing by slug (preferred)
+     curl -s "$HALO_API_URL/api/store/app-detail" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{entry:{slug,name,version,...},spec:<AppSpec>,registryId}} or {success:false,error}
+     # err: Required query parameter: slug. URL-encode the entire slug, including slashes and special characters. 400 = missing or invalid slug.
+
 GET    /api/store/app-document                                     Get a listing's SKILL.md/README document
      curl -s "$HALO_API_URL/api/store/app-document" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true,data:{content:string|null}}
@@ -197,7 +203,7 @@ GET    /api/store/apps                                             List store li
 GET    /api/store/apps/<slug>                                      Get full detail for one store listing by slug
      curl -s "$HALO_API_URL/api/store/apps/<slug>" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true,data:{entry:{slug,name,version,...},spec:<AppSpec>,registryId}} or {success:false,error}
-     # note: A scoped slug goes in the path as-is: GET /api/store/apps/owner/repo.
+     # note: For a scoped slug ("owner/repo") use GET /api/store/app-detail?slug=... instead; this path form only resolves single-segment slugs through the API.
 
 POST   /api/store/apps/<slug>/install                              Install an app from the store by slug (REST-style path variant)
      # note: reversible — can be undone or corrected afterward.
@@ -211,7 +217,7 @@ POST   /api/store/apps/<slug>/install                              Install an ap
      # note: Pass "spaceId":null only when the user explicitly asked for a global install (mcp/skill types only).
      # note: Optional field: userConfig (object).
      # note: Identical behavior to POST /api/store/install (slug in path instead of body), including the 403 MCP_COMMAND_BLOCKED case.
-     # note: A scoped slug goes in the path as-is: POST /api/store/apps/owner/repo/install.
+     # note: For a scoped slug ("owner/repo") use POST /api/store/install with the slug in the body instead; this path form only resolves single-segment slugs through the API.
 
 GET    /api/store/capabilities                                     Get which store features this build supports (publish, reviews, install counts)
      curl -s "$HALO_API_URL/api/store/capabilities" -H "Authorization: Bearer $HALO_API_TOKEN"

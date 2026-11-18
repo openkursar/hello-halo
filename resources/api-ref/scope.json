@@ -601,6 +601,10 @@
   },
   {
     "method": "GET",
+    "path": "/api/store/app-detail"
+  },
+  {
+    "method": "GET",
     "path": "/api/store/apps/:slug"
   },
   {

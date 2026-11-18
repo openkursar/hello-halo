@@ -75,6 +75,25 @@ export function registerStoreRoutes(app: Express): void {
     }
   })
 
+  // GET /api/store/app-detail?slug=... — preferred detail route. The slug is a
+  // query parameter, so scoped slugs ("owner/repo") need no path wildcard and
+  // the self-API classifier matches the documented URL as-is.
+  app.get('/api/store/app-detail', async (req: Request, res: Response) => {
+    const slug = req.query.slug
+    if (typeof slug !== 'string' || !slug.trim()) {
+      console.warn('[HTTP] Store detail request rejected: missing or invalid slug')
+      res.status(400).json({ success: false, error: 'Missing required query parameter: slug' })
+      return
+    }
+    try {
+      const result = await storeController.getStoreAppDetail(slug)
+      res.json(result)
+    } catch (error) {
+      console.error('[HTTP] Store detail query failed:', (error as Error).message)
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // GET /api/store/apps/:slug — get store app detail (scoped slugs included)
   app.get('/api/store/apps/*slug', async (req: Request, res: Response) => {
     try {

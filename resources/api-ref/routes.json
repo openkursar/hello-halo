@@ -1150,6 +1150,11 @@
   },
   {
     "method": "GET",
+    "path": "/api/store/app-detail",
+    "group": "store"
+  },
+  {
+    "method": "GET",
     "path": "/api/store/apps/:slug",
     "group": "store"
   },
