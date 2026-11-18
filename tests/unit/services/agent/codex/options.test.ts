@@ -29,7 +29,8 @@ vi.mock('../../../../../src/main/services/agent/codex/mcp-config', () => ({
 }))
 
 import { resolveCodexOptions } from '../../../../../src/main/services/agent/codex/options'
-import { encodeBackendConfig, decodeBackendConfig } from '../../../../../src/main/openai-compat-router'
+import { encodeBackendConfig, decodeBackendConfig, convertAnthropicToOpenAIChat, convertAnthropicToOpenAIResponses } from '../../../../../src/main/openai-compat-router'
+import { applyEffectiveReasoning, applyReasoningEffort, captureEffectiveReasoning } from '../../../../../src/main/services/agent/reasoning-effort'
 
 function credentials(): ApiCredentials {
   return {
@@ -166,6 +167,45 @@ describe('Codex captured-account egress', () => {
     await expect(resolveCodexOptions({ apiCredentials })).rejects.toThrow('captured API credentials')
     expect(state.getApiCredentials).not.toHaveBeenCalled()
     expect(state.prepareMcp).not.toHaveBeenCalled()
+  })
+})
+
+describe('Codex delegated upstream reasoning', () => {
+  it.each(['chat_completions', 'responses'] as const)('preserves actual %s reasoning across direct-parent snapshots', async apiType => {
+    const { codexResponsesToAnthropicRequest } = await import('../../../../../src/main/openai-compat-router/server/codex-responses-handler')
+    const cases = [
+      { model: 'gpt-6-1-sol', picked: 'max', expected: 'max' },
+      { model: 'gpt-5-pro', picked: 'off', expected: 'high' },
+      { model: 'gpt-5-5-pro', picked: 'off', expected: 'medium' },
+      { model: 'gpt-6-luna', picked: 'off', expected: 'none' },
+      { model: 'deepseek-flash', picked: 'off', expected: undefined },
+      { model: 'gpt-4o', picked: 'off', expected: undefined },
+      { model: 'o3', picked: undefined, expected: 'low' },
+      { model: 'gpt-6-1-sol', picked: undefined, configured: 'max', expected: 'max' },
+      { model: 'unknown-model', picked: undefined, configured: 'vendor-depth', expected: 'vendor-depth' },
+    ] as const
+    for (const fixture of cases) {
+      const configured = 'configured' in fixture ? fixture.configured : undefined
+      const selected = { ...credentials(), provider: 'openai' as const, apiType, model: fixture.model,
+        capabilities: { ...credentials().capabilities!, reasoningEffort: configured } }
+      const parent: Record<string, any> = { model: fixture.model, apiCredentials: selected }
+      applyReasoningEffort(parent, true, selected.capabilities, fixture.picked)
+      const upstream = async (options: Record<string, any>) => {
+        const resolved = await resolveCodexOptions(options)
+        const descriptor = decodeBackendConfig(resolved.env.HALO_ROUTER_KEY!)!
+        const request = codexResponsesToAnthropicRequest({ model: fixture.model, input: 'Independent reasoning check.', reasoning: { effort: resolved.reasoningEffort } })
+        const conversion = { reasoningEffort: descriptor.reasoningEffort, pickedReasoningEffort: descriptor.pickedReasoningEffort }
+        const body = apiType === 'responses' ? convertAnthropicToOpenAIResponses(request, conversion).request : convertAnthropicToOpenAIChat(request, conversion).request
+        return { effort: 'reasoning' in body ? body.reasoning?.effort : 'reasoning_effort' in body ? body.reasoning_effort : undefined, thinking: 'thinking' in body ? body.thinking : undefined }
+      }
+      const before = await upstream(parent)
+      expect(before.effort, JSON.stringify(fixture)).toBe(fixture.expected)
+      const snapshot = captureEffectiveReasoning(parent, 'codex', selected.capabilities)
+      const child: Record<string, any> = { model: fixture.model, apiCredentials: selected }
+      applyEffectiveReasoning(child, snapshot, selected.capabilities, 'codex')
+      expect(await upstream(child), JSON.stringify(fixture)).toEqual(before)
+      expect(captureEffectiveReasoning(child, 'codex', selected.capabilities)).toEqual(snapshot)
+    }
   })
 })
 

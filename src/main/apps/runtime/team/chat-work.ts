@@ -62,7 +62,7 @@ export function openConversationWork(request: ExecutionWorkRequest, source: Sour
 
   const binding = bindSourceToolSession({
     spaceId: principal.environment.spaceId!, conversationId: key, workDir: principal.environment.workDir,
-    modelSelection: request.modelSelection, origin: requester?.origin,
+    modelSelection: request.modelSelection, modelContext: request.modelContext, origin: requester?.origin,
     collaborationEnabled: request.mayDelegate(), publicationRefusal: requester?.publicationRefusal,
   }, { source: participantSource, requestId: sourceRequestId, canSpawn: request.mayDelegate })
   const server = markMcpServerSettings(binding.server, {

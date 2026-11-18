@@ -8,6 +8,40 @@ const capabilities = { streaming: true, toolCalling: true, thinking: false, imag
 const request: ProviderRequest = { model: 'fixture', messages: [], maxTokens: 10, stream: true };
 
 describe('native extension bridge', () => {
+  it('isolates prepared sibling providers and rejects late preparation after cancellation', async () => {
+    const bridge = new NativeCallbacks();
+    const seen: string[] = [];
+    const provider = (id: string): LlmProvider => ({ id, name: id, capabilities: () => capabilities,
+      async createMessage() { seen.push(id); return { content: [], usage: { inputTokens: 0, outputTokens: 0 }, stopReason: 'end_turn' } as any; },
+      async *createMessageStream() { seen.push(id); },
+    });
+    bridge.encode({ provider: provider('parent') });
+    const metadata = { bindingId: 'binding', restoreRef: 'restore', model: 'fixture', targetKind: 'single' as const,
+      contextWindow: 32000, maxOutputTokens: 1000, modalities: ['text'], reasoning: { default: { version: 1 as const, mode: 'provider-default' as const } } };
+    let complete!: (value: any) => void;
+    bridge.bindModelSelection({ policy: 'inherit', policyRevision: 'one', parentBinding: { bindingId: 'parent', restoreRef: 'parent' },
+      getCatalog() { throw new Error('Unexpected catalog'); },
+      async prepare(input) {
+        if (input.kind === 'restore') return new Promise(resolve => { complete = resolve; });
+        return { ...metadata, provider: provider(input.plan.parent.bindingId) };
+      },
+    });
+    const prepare = (id: string) => bridge.call(id, 'modelSelection.prepare', { request: { kind: 'new', plan: { parent: { bindingId: id } } } }) as Promise<any>;
+    const [first, second] = await Promise.all([prepare('first'), prepare('second')]);
+    const invoke = (lease: any, method: string, params: unknown) => bridge.call(Math.random().toString(), 'modelSelection.provider', { nativeModelBindingId: lease.nativeModelBindingId, method, params });
+    await Promise.all([invoke(first, 'provider.complete', request), invoke(second, 'provider.complete', request), bridge.call('parent', 'provider.complete', request)]);
+    expect(seen).toEqual(['first', 'second', 'parent']);
+    const streamId = await invoke(first, 'provider.start', request);
+    await expect(invoke(second, 'provider.next', { streamId })).rejects.toThrow('no longer available');
+    await bridge.call('release', 'modelSelection.release', first);
+    await expect(invoke(first, 'provider.complete', request)).rejects.toThrow('lease');
+    await invoke(second, 'provider.complete', request);
+    const pending = bridge.call('pending', 'modelSelection.prepare', { request: { kind: 'restore', snapshot: {} } });
+    bridge.cancel('pending');
+    complete({ ...metadata, provider: provider('late') });
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await bridge.close();
+  });
   it('retains permission input mutations when the callback throws', async () => {
     const bridge = new NativeCallbacks();
     const encoded = bridge.encode({ canUseTool: async (_name, input, options) => {

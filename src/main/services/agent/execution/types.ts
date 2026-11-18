@@ -19,6 +19,7 @@ import type { ImPermissionContext, ImSessionContext } from '../../../../shared/t
 import type { TranscriptProvenance } from '../../../../shared/types/transcript'
 import type { IDisposable } from '../../../platform/event'
 import type { ToolsetExecutionOptions } from '../toolsets/types'
+import type { DelegatedModelContext } from '../delegated-model'
 
 // ── What an entry describes ─────────────────────────────────────────────────
 
@@ -78,6 +79,7 @@ export interface AgentExecutionOptions {
   readonly key: string
   readonly principal: ExecutionPrincipal
   readonly modelSelection?: AgentModelSelection
+  modelContext?(): DelegatedModelContext
   /** The tool grants the engine session holds right now: what delegated work inherits; read when work is first delegated. */
   grants(): ToolsetExecutionOptions
   readonly requester?: ExecutionRequester
@@ -196,6 +198,7 @@ export interface ExecutionWorkRequest {
   readonly key: string
   readonly principal: ExecutionPrincipal
   readonly modelSelection: AgentModelSelection | undefined
+  modelContext?(): DelegatedModelContext
   readonly requester: ExecutionRequester | undefined
   readonly source: ExecutionSource
   /** The tool grants the execution holds right now: what delegated work inherits. */

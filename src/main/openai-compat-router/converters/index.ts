@@ -7,6 +7,8 @@
  * - OpenAI Responses API
  */
 
+export { resolveReasoning as resolveOpenAIReasoning } from './reasoning-effort'
+
 // Request converters
 export {
   convertAnthropicToOpenAIChat,

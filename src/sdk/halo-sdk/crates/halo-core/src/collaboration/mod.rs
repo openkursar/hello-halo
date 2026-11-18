@@ -4,6 +4,7 @@ pub mod board_pages;
 pub mod board_writes;
 pub mod journal;
 pub mod message_bus;
+pub mod model_selection;
 pub mod protocol;
 pub mod runtime;
 pub mod snapshot;
@@ -37,6 +38,7 @@ pub fn is_refusal(error: &crate::error::Error) -> bool {
     matches!(
         error.code.as_str(),
         "closed"
+            | "MODEL_SELECTION"
             | "member_missing"
             | "caller_stopped"
             | "execution_replaced"

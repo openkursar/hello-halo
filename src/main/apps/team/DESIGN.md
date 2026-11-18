@@ -115,6 +115,12 @@ node. Local execution configuration is stored separately: model selection,
 engine, environment, assignment and permission floor never appear in a public
 participant projection. A remote record cannot install local execution settings.
 
+New local execution records also retain the direct parent's normalized
+`inheritedReasoning`. Advanced model selections additionally retain the SDK's
+versioned `modelBinding`; neither field enters participant replication. Missing
+reasoning on legacy records keeps legacy restoration, while explicit bindings
+restore their original logical account/group and model strictly.
+
 Standing membership queries remain unchanged without an epoch argument. Scoped
 queries combine the standing roster with that epoch's participants; a different
 or missing epoch never exposes them. `work-members.ts` owns this projection and

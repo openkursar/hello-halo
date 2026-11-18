@@ -52,6 +52,19 @@ describe('source tool endpoints', () => {
     expect(endpoint(first).source().label).toBe('second')
   })
 
+  it('a reused endpoint captures the current direct parent reasoning without evaluating the source', () => {
+    const firstContext = { selection: { modelSourceId: 'a', modelId: 'first' }, engineId: 'halo' as const,
+      reasoning: { version: 1 as const, mode: 'off' as const } }
+    const secondContext = { selection: { modelSourceId: 'b', modelId: 'second' }, engineId: 'halo' as const,
+      reasoning: { version: 1 as const, mode: 'budget' as const, budgetTokens: 8192 } }
+    const first = bindSourceToolSession({ ...scope(false), modelContext: () => firstContext }, callbacks('first'))
+    const source = vi.fn(callbacks('second').source)
+    bindSourceToolSession({ ...scope(false), modelContext: () => secondContext }, { ...callbacks('second'), source })
+    const server = first.server as unknown as { scope: { modelContext(): unknown } }
+    expect(server.scope.modelContext()).toEqual(secondContext)
+    expect(source).not.toHaveBeenCalled()
+  })
+
   it('releasing a retired endpoint leaves its successor in place; releasing the current one revokes it', () => {
     const first = bindSourceToolSession(scope(true), callbacks('first'))
     const second = bindSourceToolSession(scope(true), callbacks('second'))

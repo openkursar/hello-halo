@@ -96,6 +96,7 @@ impl SessionControls {
             options["permissionMode"] = mode.clone();
         }
         if let Some(thinking) = &values.thinking {
+            options.as_object_mut().unwrap().remove("nativeEffectiveReasoning");
             options["thinking"] = thinking.clone();
             options["thinkingExplicit"] = json!(true);
         }
@@ -295,6 +296,7 @@ impl ActorState<'_> {
         budget.configure_output(thinking.clone(), None);
         let mut request = json!({"model":model,"messages":projected,"systemPrompt":system,"tools":definitions,
             "thinking":thinking,"maxTokens":budget.max_output_tokens(),"stream":true,"providerOptions":{"fallbackModelAvailable":false}});
+        if thinking.is_null() { request.as_object_mut().unwrap().remove("thinking"); }
         if let Some(temperature) = effort.temperature { request["temperature"] = json!(temperature); }
         if let Some(reasoning) = effort.reasoning { request["providerOptions"]["reasoning_effort"] = json!(reasoning); }
         if crate::js::truthy(&self.options["effort"]) { request["providerOptions"]["effort"] = self.options["effort"].clone(); }

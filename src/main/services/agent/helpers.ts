@@ -260,6 +260,33 @@ export async function getApiCredentialsForSelection(
   return getApiCredentials()
 }
 
+/** Resolve a delegated binding without the ordinary deleted-account fallback. */
+export async function getApiCredentialsForStrictSelection(selection: StoredModelSelection): Promise<ApiCredentials> {
+  const manager = getAISourceManager()
+  await manager.ensureInitialized()
+  const sourceId = selection.modelSourceId
+  if (!sourceId) throw new Error('The delegated model binding has no account identity.')
+  const generation = getCredentialsGeneration(sourceId)
+  const source = manager.getSourceConfig(sourceId)
+  if (source) {
+    const result = await resolveSourceCredentials(manager, sourceId, selection.modelId)
+    const current = manager.getSourceConfig(sourceId)
+    if (!current || current.createdAt !== source.createdAt || getCredentialsGeneration(sourceId) !== generation) {
+      console.warn(`[AgentService] Delegated binding refused: source=${sourceId} reason=changed-during-preparation`)
+      throw new Error('The delegated model account changed during preparation. Try again with the current settings.')
+    }
+    return result
+  }
+  const group = getGroup(sourceId)
+  if (group) return resolveGroupCredentials(group, {
+    readSource: id => manager.getSourceConfig(id),
+    capabilitiesOf: resolveCapabilitiesFromSource,
+    credentialsGeneration: id => getCredentialsGeneration(id),
+  })
+  console.warn(`[AgentService] Delegated binding refused: source=${sourceId} reason=removed`)
+  throw new Error('The delegated model account or group is unavailable. Restore that target before continuing.')
+}
+
 async function resolveSourceCredentials(
   manager: ReturnType<typeof getAISourceManager>,
   sourceId: string,

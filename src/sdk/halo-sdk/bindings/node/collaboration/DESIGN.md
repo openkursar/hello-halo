@@ -54,6 +54,44 @@ from dispatch; a finding is shared knowledge, not a directed message.
 local reads and remote serving use it. Conflicting producers remain ambiguous;
 neither a host nor a transport may silently choose one file with that name.
 
+## Optional model selection
+
+Hosts register model selection through the second argument of
+`createCollaborationServer(operations, { modelSelection: { policy, policyRevision } })`.
+Only registered endpoints expose the optional `spawn_agent.model_profile` and
+`reasoning_effort` fields and the supplied `list_model_profiles` operation. Existing
+one-argument calls retain their tool declarations, parser and guidance.
+`modelSelectionGuidance` returns the explicit capability's Harness guidance.
+
+`contracts/collaboration/model-selection.ts` declares the non-secret catalog,
+parent binding, choice plan, prepared capability metadata and versioned selection
+snapshot. Both `/collaboration` and browser-safe `/collaboration/protocol` export
+these types and `MODEL_SELECTION_LIMITS`. The limits have one JSON source shared
+with Rust. Provider connections and credentials are not part of these contracts.
+
+The `/collaboration` functions `queryModelProfiles`, `planModelSelection`,
+`finalizeModelSelection`, `validateModelSelectionRestore` and
+`validateEffectiveReasoning` delegate to Rust's
+`model_selection.rs` through the existing native value bridge. Querying performs
+bounded local matching and pagination over a host-authorized catalog. Planning
+checks opaque profile references and the endpoint's policy revision. Finalizing
+validates the prepared target and determines effective reasoning: explicit effort,
+profile default, then target default; unmodified inheritance retains the direct
+parent's effective reasoning. No function creates a provider or starts execution.
+The host must still authorize and prepare the exact binding before execution.
+Prepared reasoning capabilities may declare supported `modes` and a positive
+`maxBudgetTokens` bound. Budget reasoning must fit that bound when supplied and
+remain strictly below the target output limit. Finalization and restoration reject
+unsupported settings instead of clamping or adopting a new default; exact declared
+defaults and effort mappings remain supported without the optional mode list.
+
+For repeated operations, `ModelProfileCatalogView` validates and retains one
+bounded catalog in a native owner. Its `plan` and `query` methods accept only the
+changing input, direct parent and endpoint policy revision, avoiding catalog
+serialization and validation on every spawn. Replace the view when the authorized
+catalog revision changes and call `close` when its scope ends. Catalog updates
+never mutate an existing view or the choices already captured by a plan.
+
 ## Shared records and writes
 
 `bindings/node/collaboration/records.ts` defines Node's durable task, finding and activity shapes. Halo re-exports
@@ -100,6 +138,24 @@ A resumed standalone owner opens its existing collaboration journal lazily when
 compaction first needs it; that same owner serves subsequent team operations and
 releases its journal on session closure. No journal or runtime is created when
 there is no saved collaboration.
+
+With local `modelSelection` registered, `/collaboration/sdk` accepts a narrow
+`PreparedModelBinding`: target identity and capability metadata, optional
+`modelPricing`, and exactly one explicit standard `providerConfig` or local
+`provider` object. Preparation is cancellable and cannot return session options
+or alter inherited tools, permissions, hooks, workspace, system prompt or budget.
+The adapter routes child provider callbacks through that child's binding rather
+than mutating the parent's provider; nested inheritance uses the direct parent.
+Restoration prepares the saved logical binding and validates its reasoning
+against current capabilities, without reselecting by a profile's current name.
+Worker host callbacks transport standard provider configurations; custom provider
+objects must be constructed in Worker setup, not cloned across the boundary.
+
+Usage continues through shared execution accounting, once per contribution.
+Target pricing belongs to the prepared binding; a parent's unit price cannot
+price a different model's tokens. Missing usage or prices remain unknown for
+billing purposes, and model-string aggregation is not an account ledger. These
+contracts do not establish real-model task quality or billed savings.
 
 Borrowed MCP instances carry their structured source metadata and a catalog
 revision reader. A member refreshes its filtered execution pool when that revision

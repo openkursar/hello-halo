@@ -8,6 +8,7 @@ import { markCompactionContextReader } from '../../../services/agent/compaction-
 import { COLLABORATION_STATE_UNAVAILABLE, collaborationStateText } from './compaction-snapshot'
 import { createCollaborationServer, type CollaborationOperations, type CollaborationCallContext, type CollaborationResult } from '@hello-halo/agent-sdk/collaboration'
 import type { ParticipantService, ParticipantSource } from '../../team'
+import type { DelegatedModelEndpoint } from '../../../services/agent'
 import { tool, createSdkMcpServer } from '../../../services/agent/resolved-sdk'
 import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_NAMES, toActivitySubject } from '../../../../shared/apps/team-types'
 import { TeamBusError } from './message-bus'
@@ -102,6 +103,7 @@ export interface TeamMcpContext {
   servesGuest?: boolean
   participants?: ParticipantService
   spawnSource?: () => ParticipantSource
+  models?: DelegatedModelEndpoint
   canSpawn?: () => boolean
   privateAssistants?: {
     spawn: NonNullable<CollaborationOperations['spawn_agent']>
@@ -675,6 +677,7 @@ export function createCoordinationMcpServer(resolve: ResolveTeamMcpContext, opti
   spawn?: CollaborationOperations['spawn_agent']
   readMember?: boolean
   checks?: boolean
+  models?: DelegatedModelEndpoint
   resolveHandle?: (handle: string, all?: boolean) => TeamMcpContext | null
 } = {}): SdkMcpServer {
   const targetOperation = <T>(input: T, call: CollaborationCallContext, target: string,
@@ -685,6 +688,7 @@ export function createCoordinationMcpServer(resolve: ResolveTeamMcpContext, opti
   }
   const operations: CollaborationOperations = {
     ...(options.spawn ? { spawn_agent: options.spawn } : {}),
+    ...(options.models ? { list_model_profiles: (input, call) => options.models!.list(input, call) } : {}),
     team_send: (input, call) => targetOperation(input, call, input.to, buildSendOperation, true),
     team_post_task: guarded(resolve, buildPostTaskOperation, true),
     team_update_task: guarded(resolve, buildUpdateTaskOperation, true),
@@ -724,7 +728,7 @@ export function createCoordinationMcpServer(resolve: ResolveTeamMcpContext, opti
       return COLLABORATION_STATE_UNAVAILABLE
     }
   })
-  const shared = createCollaborationServer(operations)
+  const shared = createCollaborationServer(operations, options.models ? { modelSelection: options.models.capability } : undefined)
   if (!options.checks) return bindSnapshot(shared)
   const checks = createSdkMcpServer({ name: TEAM_MCP_SERVER_NAME, tools: [buildScheduleTool(resolve), buildUnscheduleTool(resolve)] })
   return bindSnapshot({
@@ -745,10 +749,11 @@ export function createTeamMcpServer(context: TeamMcpContext, resolve: ResolveTea
   ) => {
     const current = resolve()
     if (!current?.privateAssistants || current.canSpawn?.() === false) return textResult('Creating collaborators is not allowed in this context.', true)
-    return current.privateAssistants.spawn(input, call)
+    return context.privateAssistants!.spawn(input, call)
   } : undefined
   return createCoordinationMcpServer(resolve, {
     spawn,
+    models: context.models,
     resolveHandle: (handle, all) => resolve()?.privateAssistants?.resolveHandle(handle, all) ?? null,
     readMember: !!spawn || (!context.origin && context.selfIsLead),
     checks: !context.servesGuest && !!context.checks,

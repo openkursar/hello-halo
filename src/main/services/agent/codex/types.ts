@@ -14,6 +14,7 @@ export interface CodexSdkModule {
   createSdkMcpServer: (options: any) => any
   createSession: (options: Record<string, any>) => Promise<any>
   query: (params: any) => AsyncIterable<any>
+  close: () => Promise<void>
   /** Engine capability descriptor consumed by the IPC capabilities channel. */
   capabilities: EngineCapabilities
 }

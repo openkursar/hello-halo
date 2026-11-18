@@ -27,7 +27,11 @@ import {
   type ReasoningEffortLevel,
   type ReasoningEffortSetting,
 } from '../../../shared/constants/reasoning-effort'
+import { validateEffectiveReasoning, type EffectiveReasoning } from '@hello-halo/agent-sdk/collaboration'
+import type { EngineId } from '../../../shared/types/engine'
+import { forcedThinkingLevel, profileEffort, reasoningEffortProfileById } from '../../../shared/constants/reasoning-effort-profiles'
 import type { ResolvedModelCapabilities } from './types'
+import { resolveOpenAIReasoning, resolveAnthropicReasoning } from '../../openai-compat-router'
 
 /** Levels `@anthropic-ai/claude-agent-sdk` accepts for its `effort` option. */
 const ANTHROPIC_EFFORT_LEVELS: readonly ReasoningEffortLevel[] = ['low', 'medium', 'high', 'max']
@@ -174,4 +178,149 @@ export function applyReasoningEffort(
   if (budget !== null) sdkOptions.maxThinkingTokens = budget
 
   return budget
+}
+
+/** Capture resolved execution options, never a stored slider or current global setting. */
+export function captureEffectiveReasoning(
+  options: Record<string, any>,
+  engineId: EngineId = 'halo',
+  capabilities?: ResolvedModelCapabilities
+): EffectiveReasoning {
+  if (engineId === 'dsh' && options.inheritedReasoning) return validateEffectiveReasoning(options.inheritedReasoning)
+  const credentials = options.apiCredentials
+  if (credentials?.isGroup || options.isGroup) {
+    const effort = options.pickedReasoningEffort ?? capabilities?.reasoningEffort
+    return effort === 'off' ? { version: 1, mode: 'off' }
+      : effort ? { version: 1, mode: 'effort', effort } : { version: 1, mode: 'provider-default' }
+  }
+  const routedOpenAI = credentials && credentials.provider !== 'anthropic' && credentials.apiType !== 'anthropic_passthrough'
+    && credentials.oauthProvider !== 'claude' && !credentials.delegatedAuth
+  if (engineId === 'dsh' && credentials && !routedOpenAI) {
+    const request = resolveAnthropicReasoning({ model: options.model, max_tokens: capabilities?.maxOutputTokens ?? 8192,
+      messages: [], thinking: { type: 'enabled' }, output_config: { effort: 'high' } }, {
+      reasoningEffort: capabilities?.reasoningEffort ?? credentials.capabilities?.reasoningEffort,
+    }).request
+    if (!request.thinking || ['disabled', 'between_tools'].includes(request.thinking.type)) return { version: 1, mode: 'off' }
+    const effort = request.output_config?.effort
+    if (request.thinking.type === 'adaptive') return { version: 1, mode: 'adaptive', ...(effort ? { effort } : {}) }
+    throw new Error('This engine cannot preserve a target requiring a reasoning token budget')
+  }
+  if (engineId === 'codex' || engineId === 'dsh' || routedOpenAI) {
+    const budget = options.thinking?.budgetTokens ?? options.maxThinkingTokens
+    const thinking = engineId === 'codex' ? { type: 'enabled', budget_tokens: 1024 }
+      : engineId === 'dsh' ? { type: 'enabled' }
+        : options.thinking ? { ...options.thinking, ...(typeof budget === 'number' ? { budget_tokens: budget } : {}) }
+          : typeof budget === 'number' && budget > 0 ? { type: options.adaptiveThinking ? 'adaptive' : 'enabled', budget_tokens: budget }
+            : { type: engineId === 'anthropic' ? 'adaptive' : 'disabled' }
+    const resolved = resolveOpenAIReasoning(
+      thinking,
+      capabilities?.reasoningEffort ?? credentials?.capabilities?.reasoningEffort,
+      options.model,
+      engineId === 'dsh' ? undefined : options.pickedReasoningEffort,
+    )
+    if (resolved.disableThinking || resolved.effort === 'none' || resolved.effort === 'off') return { version: 1, mode: 'off' }
+    return resolved.effort ? { version: 1, mode: 'effort', effort: resolved.effort } : { version: 1, mode: 'provider-default' }
+  }
+  const profile = reasoningEffortProfileById(options.model)
+  const picked = options.pickedReasoningEffort
+  const configured = capabilities?.reasoningEffort
+  const routed = picked ?? configured ?? (engineId === 'anthropic' && options.reasoningEffort === 'off'
+    ? 'high' : options.reasoningEffort)
+  if (routed === 'off') {
+    const forced = forcedThinkingLevel(profile)
+    if (forced) return { version: 1, mode: 'effort', effort: forced }
+    const credentials = options.apiCredentials
+    if (credentials && credentials.provider !== 'anthropic' && credentials.apiType !== 'anthropic_passthrough'
+      && credentials.oauthProvider !== 'claude' && !credentials.delegatedAuth
+      && !profile.thinkingToggle && !profile.disableValue) return { version: 1, mode: 'provider-default' }
+    return { version: 1, mode: 'off' }
+  }
+  const effort = isReasoningEffortLevel(routed)
+    ? profileEffort(routed, profile)
+    : typeof routed === 'string' ? routed : options.effort
+  const thinking = options.thinking
+  if (thinking?.type === 'disabled') return { version: 1, mode: 'off' }
+  if (thinking?.type === 'adaptive' || (options.adaptiveThinking && options.maxThinkingTokens > 0)
+    || (profile.anthropic?.mode === 'adaptive' && routed !== undefined)) {
+    return { version: 1, mode: 'adaptive', ...(effort ? { effort } : {}) }
+  }
+  const budget = thinking?.budgetTokens ?? options.maxThinkingTokens
+  if (typeof budget === 'number' && budget > 0) {
+    return { version: 1, mode: 'budget', budgetTokens: budget, ...(effort ? { effort } : {}) }
+  }
+  if (effort) return { version: 1, mode: 'effort', effort }
+  return { version: 1, mode: 'provider-default' }
+}
+
+/** Restore a frozen decision without resolving defaults or reducing its strength. */
+export function applyEffectiveReasoning(
+  options: Record<string, any>,
+  candidate: EffectiveReasoning,
+  capabilities?: ResolvedModelCapabilities,
+  engineId: EngineId = 'halo'
+): number | null {
+  const reasoning = validateEffectiveReasoning(candidate)
+  const effort = 'effort' in reasoning ? reasoning.effort : undefined
+  const profile = reasoningEffortProfileById(options.model)
+  if (engineId !== 'codex' && effort && profile.levels && !profile.levels.includes(effort as ReasoningEffortLevel)) {
+    throw new Error('The target model cannot preserve the frozen reasoning effort')
+  }
+  if (reasoning.mode === 'off' && forcedThinkingLevel(profile)) {
+    throw new Error('The target model cannot disable reasoning')
+  }
+  if (reasoning.mode === 'budget' && capabilities?.maxOutputTokens
+    && reasoning.budgetTokens >= capabilities.maxOutputTokens) {
+    throw new Error('The frozen reasoning budget exceeds the target output capacity')
+  }
+  if (engineId === 'codex') {
+    const requested = reasoning.mode === 'effort' ? effort : 'off'
+    const actual = captureEffectiveReasoning({ ...options, reasoningEffort: requested, pickedReasoningEffort: requested }, engineId, capabilities)
+    if (!['effort', 'off', 'provider-default'].includes(reasoning.mode) || actual.mode !== reasoning.mode
+      || ('effort' in actual ? actual.effort : undefined) !== effort) {
+      throw new Error('Codex cannot preserve this frozen upstream reasoning mode')
+    }
+  }
+  if (engineId === 'dsh') {
+    const credentials = options.apiCredentials
+    const nativeAdaptive = reasoning.mode === 'adaptive' && !!effort && profile.anthropic?.mode === 'adaptive'
+      && credentials && (credentials.provider === 'anthropic' || credentials.apiType === 'anthropic_passthrough' || credentials.oauthProvider === 'claude')
+    if (!nativeAdaptive && !['provider-default', 'off', 'effort'].includes(reasoning.mode)) {
+      throw new Error('This engine cannot preserve the frozen upstream reasoning mode')
+    }
+  }
+  for (const key of ['thinking', 'adaptiveThinking', 'maxThinkingTokens', 'effort', 'reasoningEffort', 'pickedReasoningEffort', 'inheritedReasoning']) {
+    delete options[key]
+  }
+  if (engineId === 'dsh') options.inheritedReasoning = reasoning
+  if (reasoning.mode === 'provider-default') {
+    options.thinking = { type: 'disabled' }
+    options.maxThinkingTokens = 0
+    if (engineId === 'codex') {
+      options.reasoningEffort = 'off'
+      options.pickedReasoningEffort = 'off'
+    }
+  }
+  if (reasoning.mode === 'off') {
+    options.thinking = { type: 'disabled' }
+    options.maxThinkingTokens = 0
+    options.reasoningEffort = 'off'
+    options.pickedReasoningEffort = 'off'
+    return null
+  }
+  if (effort) {
+    options.reasoningEffort = effort
+    options.pickedReasoningEffort = effort
+    // The router owns provider effort; never feed an unsupported CLI launch value.
+    if (ANTHROPIC_EFFORT_LEVELS.includes(effort as ReasoningEffortLevel)) options.effort = effort
+  }
+  if (reasoning.mode === 'adaptive') {
+    options.thinking = { type: 'adaptive' }
+    options.adaptiveThinking = true
+  }
+  if (reasoning.mode === 'budget') {
+    options.thinking = { type: 'enabled', budgetTokens: reasoning.budgetTokens }
+    options.maxThinkingTokens = reasoning.budgetTokens
+    return reasoning.budgetTokens
+  }
+  return null
 }

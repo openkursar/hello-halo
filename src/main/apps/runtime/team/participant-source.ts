@@ -10,9 +10,11 @@ export function participantSourceOf(request: ExecutionWorkRequest): ParticipantS
   const { principal, requester } = request
   if (!request.modelSelection) throw new Error('The source model configuration is unavailable.')
   const fileAccess = requester?.files?.()
+  const model = request.modelContext?.()
   return {
     ...request.grants(),
-    modelSelection: request.modelSelection,
+    modelSelection: model?.selection ?? request.modelSelection,
+    ...(model ? { inheritedReasoning: model.reasoning, modelBinding: model.modelBinding } : {}),
     sourceAppId: principal.appId,
     environment: principal.environment,
     permissions: principal.permissions,

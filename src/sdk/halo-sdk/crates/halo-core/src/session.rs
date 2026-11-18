@@ -262,6 +262,9 @@ impl NativeSession {
         resources: Option<Arc<crate::resource_activity::ResourceActivity>>,
         services: HostServices,
     ) -> Result<Arc<Self>> {
+        if let Some(reasoning) = options.get("nativeEffectiveReasoning") {
+            crate::collaboration::model_selection::validate_effective_reasoning(reasoning)?;
+        }
         if options["nativeResolvedConfig"] != true {
             let resolved = crate::core::config::resolve(&options)?;
             for (key, value) in resolved.as_object().unwrap() {

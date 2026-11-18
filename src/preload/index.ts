@@ -50,6 +50,8 @@ import { browserRpc } from '../shared/rpc/contracts/browser.contract'
 import { codeReviewRpc } from '../shared/rpc/contracts/code-review.contract'
 import { configRpc } from '../shared/rpc/contracts/config.contract'
 import { aiGroupsRpc } from '../shared/rpc/contracts/ai-groups.contract'
+import { subagentModelsRpc } from '../shared/rpc/contracts/subagent-models.contract'
+import type { SubagentModelsChangedEvent } from '../shared/types/subagent-models'
 import { GROUP_ROUTE_EVENT, type GroupRouteInfo } from '../shared/types/ai-groups-runtime'
 import { agentRpc } from '../shared/rpc/contracts/agent.contract'
 import { terminalRpc } from '../shared/rpc/contracts/terminal.contract'
@@ -162,6 +164,14 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   aiSourcesAddSource: (source: unknown) => Promise<IpcResponse>
   aiSourcesUpdateSource: (sourceId: string, updates: unknown) => Promise<IpcResponse>
   aiSourcesDeleteSource: (sourceId: string) => Promise<IpcResponse>
+
+  listSubagentModels: RpcClient<typeof subagentModelsRpc>['listSubagentModels']
+  createSubagentModel: RpcClient<typeof subagentModelsRpc>['createSubagentModel']
+  updateSubagentModel: RpcClient<typeof subagentModelsRpc>['updateSubagentModel']
+  clearBuiltinSubagentModel: RpcClient<typeof subagentModelsRpc>['clearBuiltinSubagentModel']
+  deleteSubagentModel: RpcClient<typeof subagentModelsRpc>['deleteSubagentModel']
+  setSubagentModelSelectionMode: RpcClient<typeof subagentModelsRpc>['setSubagentModelSelectionMode']
+  onSubagentModelsChanged: (callback: (data: SubagentModelsChangedEvent) => void) => () => void
 
   // Load-balancing groups
   aiGroupsCreate: RpcClient<typeof aiGroupsRpc>['aiGroupsCreate']
@@ -931,6 +941,8 @@ const api: HaloAPI = {
   // Config + AI Sources CRUD (derived from configRpc contract)
   ...bindRpc(configRpc),
   ...bindRpc(aiGroupsRpc),
+  ...bindRpc(subagentModelsRpc),
+  onSubagentModelsChanged: (callback) => createEventListener('subagent-models:changed', callback),
   onAIGroupRoute: (callback) => createEventListener(GROUP_ROUTE_EVENT, callback),
   onCredentialDecryptFailed: (callback) => createEventListener('credential:decrypt-failed', callback),
   onModelCatalogChanged: (callback) => createEventListener('ai-sources:catalog-changed', callback),

@@ -7,6 +7,7 @@ mod board;
 mod callbacks;
 pub(crate) use callbacks::Callbacks;
 mod message_bus;
+mod model_catalog;
 mod runtime;
 mod sdk;
 mod store;
@@ -30,9 +31,23 @@ impl NativeCollaborationValue {
         let value = match name.as_str() {
             "guidance" => json!(collaboration::guidance(&halo_core::harness::baseline())),
             "definitions" => json!(tool_contract::definitions()),
-            "parseInput" => tool_contract::parse_input(
+            "modelSelectionGuidance" => json!(tool_contract::model_selection_guidance(&input).map_err(failure)?),
+            "planModelSelection" => collaboration::model_selection::plan_model_selection(&input).map_err(failure)?,
+            "finalizeModelSelection" => collaboration::model_selection::finalize_model_selection(&input).map_err(failure)?,
+            "queryModelProfiles" => collaboration::model_selection::query_model_profiles(&input).map_err(failure)?,
+            "validateEffectiveReasoning" => collaboration::model_selection::validate_effective_reasoning(&input).map_err(failure)?,
+            "validateModelSelectionRestore" => collaboration::model_selection::validate_model_selection_restore(&input).map_err(failure)?,
+            "describeTool" => {
+                let definitions = match input.get("modelSelection") {
+                    Some(capability) => tool_contract::definitions_with_model_selection(&halo_core::harness::baseline(), capability).map_err(failure)?,
+                    None => tool_contract::definitions(),
+                };
+                definitions.into_iter().find(|definition| definition["name"] == input["name"]).unwrap_or(Value::Null)
+            },
+            "parseInput" => tool_contract::parse_input_with_model_selection(
                 input["name"].as_str().unwrap_or(""),
                 input.get("input").unwrap_or(&Value::Null),
+                input.get("modelSelection"),
             )
             .map_err(|error| failure(error.with_details(json!({"name":"TypeError"}))))?,
             "text" => tool_contract::text(

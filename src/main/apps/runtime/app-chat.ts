@@ -45,7 +45,10 @@ import {
 } from '../../services/agent/helpers'
 import { emitAgentEvent } from '../../services/agent/events'
 import { addSdkHooks } from '../../services/agent/sdk-config'
-import { applyReasoningEffort, pickReasoningEffort } from '../../services/agent/reasoning-effort'
+import { applyReasoningEffort, applyEffectiveReasoning, pickReasoningEffort } from '../../services/agent/reasoning-effort'
+import { captureDelegatedModelContext } from '../../services/agent'
+import { validateModelSelectionRestore } from '@hello-halo/agent-sdk/collaboration'
+import { prepareSubagentModelMetadata } from '../../services/agent'
 import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import { createCanUseTool } from '../../services/agent/permission-handler'
 import { getImPermissionContext, type ImPermissionContext } from './im-permission-registry'
@@ -787,10 +790,19 @@ async function runAppChatTurn(
   const config = getConfig()
   // Its own account and model, or the global selection when it has none or
   // its account was removed.
-  const credentials = await getApiCredentialsForSelection(app.userOverrides)
+  const restoredModel = participant?.execution.modelBinding
+    ? await prepareSubagentModelMetadata(participant.execution.modelSelection, engineId) : undefined
+  if (restoredModel && participant?.execution.modelBinding) validateModelSelectionRestore({
+    snapshot: participant.execution.modelBinding, binding: restoredModel.metadata,
+  })
+  const credentials = restoredModel?.credentials ?? await getApiCredentialsForSelection(app.userOverrides)
   // The digital human's own level, on every entry (its Halo chat, IM, HTTP,
   // team turns, reminders), wins over one the send carries.
-  const pickedEffort = pickReasoningEffort(app.userOverrides?.chatReasoningEffort, reasoningEffort)
+  const inheritedReasoning = participant?.execution.inheritedReasoning
+  const pickedEffort = inheritedReasoning
+    ? pickReasoningEffort(inheritedReasoning.mode === 'off' ? 'off'
+      : 'effort' in inheritedReasoning ? inheritedReasoning.effort : undefined)
+    : pickReasoningEffort(app.userOverrides?.chatReasoningEffort, reasoningEffort)
   const resolvedCreds = await resolveCredentialsForSdk(credentials, pickedEffort, engineId)
   const electronPath = getHeadlessElectronPath()
   const workDir = environment.workDir
@@ -1020,6 +1032,8 @@ async function runAppChatTurn(
       },
       modelSelection: credentials.sourceId ? { modelSourceId: credentials.sourceId, modelId: credentials.model } : undefined,
       grants: () => captureToolsetExecutionOptions(sdkOptions, engineId, sdkOptions.mcpServers ?? mcpServers),
+      modelContext: () => captureDelegatedModelContext(
+        { modelSourceId: credentials.sourceId!, modelId: credentials.model }, engineId, sdkOptions, participant?.execution.modelBinding, credentials.capabilities),
       requester: {
         origin: servedOrigin, delegation: delegation ?? undefined,
         files: () => strictFiles ? turnFileAccess : undefined,
@@ -1142,9 +1156,9 @@ async function runAppChatTurn(
     memoryGuard: appMemoryGuard(memoryScope, `chat:${conversationId.slice(0, 8)}`, memorySettings),
   })
 
-  const thinkingBudget = applyReasoningEffort(
-    sdkOptions, thinkingEnabled, resolvedCreds.capabilities, pickedEffort
-  )
+  const thinkingBudget = participant?.execution.inheritedReasoning
+    ? applyEffectiveReasoning(sdkOptions, participant.execution.inheritedReasoning, resolvedCreds.capabilities, engineId)
+    : applyReasoningEffort(sdkOptions, thinkingEnabled, resolvedCreds.capabilities, pickedEffort)
   if (participant) {
     const inherited = participant.execution
     if (inherited.permissionMode) sdkOptions.permissionMode = inherited.permissionMode
@@ -1594,7 +1608,8 @@ async function runAppChatTurn(
     }
 
     // Set thinking tokens dynamically
-    if (typeof v2Session.setMaxThinkingTokens === 'function') {
+    if (typeof v2Session.setMaxThinkingTokens === 'function'
+      && (!inheritedReasoning || inheritedReasoning.mode === 'off' || inheritedReasoning.mode === 'budget')) {
       try {
         await v2Session.setMaxThinkingTokens(thinkingBudget)
       } catch (e) {

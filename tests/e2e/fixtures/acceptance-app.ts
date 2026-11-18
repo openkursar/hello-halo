@@ -88,11 +88,11 @@ function hasExited(owned: OwnedApplication): boolean {
   return !!owned.child && (owned.child.exitCode != null || owned.child.signalCode != null)
 }
 
-async function open(entry: string, profile: string, register: (app: ElectronApplication) => void, startupObserver?: string, isolatedPath = false) {
+async function open(entry: string, profile: string, register: (app: ElectronApplication) => void | Promise<void>, startupObserver?: string, isolatedPath = false) {
   const project = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
   const environment = isolatedPath ? { PATH: process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32') : '/usr/bin:/bin:/usr/sbin:/sbin' } : undefined
   const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project, bootstrapObserver: startupObserver, env: environment })
-  register(app)
+  await register(app)
   const window = await app.firstWindow()
   await window.waitForLoadState('domcontentloaded')
   await attachProbe(window)
@@ -211,7 +211,7 @@ export const test = base.extend<Fixtures>({
     const openOwned = async () => {
       let registered = false
       try {
-        const opened = await open(entry, profile, app => {
+        const opened = await open(entry, profile, async app => {
           const owned: OwnedApplication = { app, child: null, diagnosticErrors: [] }
           applications.push(owned)
           // The public Playwright facade may be disposed before final cleanup.
@@ -219,14 +219,12 @@ export const test = base.extend<Fixtures>({
           if (!owned.child) throw new Error('The launched acceptance application did not expose a process handle')
           registered = true
           if (diagnoseShutdown) {
-            try { owned.shutdown = observeAcceptanceShutdown(app, owned.child, profile) }
-            catch (error) { owned.diagnosticErrors.push(error) }
+            try {
+              owned.shutdown = observeAcceptanceShutdown(app, owned.child, profile)
+              await owned.shutdown.installMain()
+            } catch (error) { owned.diagnosticErrors.push(error) }
           }
         }, startupObserver, isolatedPath)
-        const owned = applications.find(owned => owned.app === opened.app)!
-        if (owned.shutdown) {
-          try { await owned.shutdown.installMain() } catch (error) { owned.diagnosticErrors.push(error) }
-        }
         return opened
       } catch (error) {
         if (!registered) launchWithoutHandle = true
@@ -262,6 +260,16 @@ export const test = base.extend<Fixtures>({
     } catch (error) {
       failures.push(error)
     } finally {
+      const primaryErrors = [...testInfo.errors]
+      if (primaryErrors.length > 0 || failures.length > 0) {
+        try {
+          await testInfo.attach('application-primary-errors', { body: JSON.stringify({
+            status: testInfo.status,
+            testErrors: primaryErrors.map(error => ({ message: error.message, stack: error.stack })),
+            fixtureErrors: failures.map(error => error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) }),
+          }, null, 2), contentType: 'application/json' })
+        } catch (error) { failures.push(error) }
+      }
       try {
         if (session && !session.window.isClosed()) await session.window.screenshot({ path: testInfo.outputPath('final-window.png') })
       } catch (error) { failures.push(error) }

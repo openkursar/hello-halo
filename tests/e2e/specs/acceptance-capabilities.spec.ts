@@ -59,7 +59,15 @@ function assertStableDiscovery(requests: ModelRequest[], service: string) {
   }
   const final = requests.at(-1)!
   const definitions = final.toolResults.flatMap(result => {
-    try { return JSON.parse(result.text).tools ?? [] } catch { return [] }
+    try {
+      const payload = JSON.parse(result.text)
+      if (payload.invoke_via === 'CallTool' && Array.isArray(payload.targets)) {
+        return payload.targets.map((target: Record<string, unknown>) => ({
+          ...target, name: target.tool, input_schema: target.arguments_schema,
+        }))
+      }
+      return payload.tools ?? []
+    } catch { return [] }
   }) as Array<{ name: string; version?: string; already_loaded?: boolean; description?: string; input_schema?: unknown; usage_guide?: string }>
   const discovered = definitions.filter(tool => tool.name.includes(`__${service}__`))
   expect(discovered.length).toBeGreaterThan(0)

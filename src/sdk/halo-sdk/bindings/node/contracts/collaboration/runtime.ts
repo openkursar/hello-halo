@@ -3,6 +3,7 @@ import type { BlackboardFinding,BlackboardTask,TeamActivity } from "../../collab
 import type { CollaborationServer } from "../../collaboration/types.js";
 import type { BlackboardWriteStore } from "./board-writes.js";
 import type { TeamDelivery,TurnCompletion } from "./message-bus.js";
+import type { EffectiveReasoning, ModelSelectionSnapshot } from "./model-selection.js";
 export interface CollaborationMember {
     id: string;
     name: string;
@@ -14,6 +15,8 @@ export interface CollaborationMember {
     createdAt: number;
     state?: 'idle' | 'queued' | 'running' | 'stopped' | 'error';
     model?: string;
+    inheritedReasoning?: EffectiveReasoning;
+    modelSelection?: ModelSelectionSnapshot;
     workingDirectory?: string;
     worktreePath?: string;
 }

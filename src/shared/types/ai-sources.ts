@@ -395,6 +395,7 @@ export interface AISourcesConfig {
   sources: AISource[]
   /** Load-balancing groups; absent until the user creates one */
   groups?: AIGroup[]
+  subagentModels?: import('./subagent-models').SubagentModelSettings
   /**
    * The group the user chose last. New conversations are pinned to it while it
    * exists; `currentId` stays a real account, which features that cannot use a

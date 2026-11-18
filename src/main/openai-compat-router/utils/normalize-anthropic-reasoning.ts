@@ -97,7 +97,7 @@ const loggedDecisions = new Set<string>()
  * Returns the request untouched (`modified: false`) when nothing changes, so
  * the caller can keep forwarding the raw body.
  */
-export function normalizeAnthropicReasoning(
+export function resolveAnthropicReasoning(
   request: AnthropicRequest,
   config: Pick<BackendConfig, 'reasoningEffort' | 'pickedReasoningEffort'>
 ): { request: AnthropicRequest; modified: boolean } {
@@ -125,17 +125,27 @@ export function normalizeAnthropicReasoning(
   if (nextOutputConfig) next.output_config = nextOutputConfig
   else delete next.output_config
 
-  // Once per distinct decision: the outcome is stable within a conversation,
-  // and this runs on every request.
+  return { request: next, modified: true }
+}
+
+export function normalizeAnthropicReasoning(
+  request: AnthropicRequest,
+  config: Pick<BackendConfig, 'reasoningEffort' | 'pickedReasoningEffort'>
+): { request: AnthropicRequest; modified: boolean } {
+  const result = resolveAnthropicReasoning(request, config)
+  if (!result.modified) return result
+  const thinking = result.request.thinking
+  const effort = result.request.output_config?.effort
+  // Once per distinct decision: the outcome is stable within a conversation.
   const decision = `${request.model}|${thinking?.type ?? '-'}|${effort ?? '-'}`
   if (!loggedDecisions.has(decision)) {
     loggedDecisions.add(decision)
     console.log(
       `[Router] Anthropic reasoning: model=${request.model} thinking=${thinking?.type ?? 'omitted'} ` +
-      `effort=${effort ?? 'omitted'} (was thinking=${original.type} ` +
+      `effort=${effort ?? 'omitted'} (was thinking=${request.thinking!.type} ` +
       `effort=${request.output_config?.effort ?? 'omitted'})`
     )
   }
 
-  return { request: next, modified: true }
+  return result
 }

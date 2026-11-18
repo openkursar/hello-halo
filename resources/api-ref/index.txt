@@ -9,6 +9,12 @@ DELETE /api/ai-sources/sources/<sourceId>                          [ai]       se
 POST   /api/model-capabilities/resolve                             [ai]       settings                Resolve a model id to its effective capabilities
 GET    /api/model-capabilities/preset/<modelId>                    [ai]       settings                Read the shipped capability preset for one model
 GET    /api/model-capabilities/all                                 [ai]       settings                List what every known model supports (vision, tools, context)
+GET    /api/subagent-models                                        [ai]       settings                Read model assignments for new subagents
+POST   /api/subagent-models/create                                 [ai]       settings                Create a custom model assignment when the owner requests it
+POST   /api/subagent-models/update                                 [ai]       settings                Update a model assignment when the owner requests it
+POST   /api/subagent-models/clear-builtin                          [ai]       settings                Clear a fixed model assignment target
+POST   /api/subagent-models/delete                                 [ai]       settings                Delete a custom model assignment
+POST   /api/subagent-models/set-selection-mode                     [ai]       settings                Change default subagent model selection only on explicit owner instruction
 GET    /api/spaces/halo                                            [ai]       workspace               Read the built-in temporary space
 GET    /api/spaces/default-path                                    [ai]       workspace               Read the directory new spaces are created under
 GET    /api/spaces                                                 [ai]       workspace               List all spaces

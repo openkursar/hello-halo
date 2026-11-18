@@ -214,6 +214,7 @@ pub(crate) async fn turn(
         if provider.capabilities["caching"]==true{projected=super::messages::cache_breakpoint(projected);}
         let mut request = json!({"model":model,"messages":projected,"systemPrompt":system,"tools":definitions,"maxTokens":budget.max_output_tokens(),"thinking":thinking,"stream":true,
             "providerOptions":{"fallbackModelAvailable":!recovery.used_fallback&&crate::js::truthy(&options["fallbackModel"])}});
+        if thinking.is_null() { request.as_object_mut().unwrap().remove("thinking"); }
         if crate::js::truthy(&options["effort"]){request["providerOptions"]["effort"]=options["effort"].clone();}else if options["nativeResolvedConfig"]!=true{request["providerOptions"]["effort"]=json!("high");}
         if let Some(temperature)=effort.temperature{request["temperature"]=json!(temperature);}
         if let Some(reasoning)=effort.reasoning{request["providerOptions"]["reasoning_effort"]=json!(reasoning);}

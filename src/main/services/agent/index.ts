@@ -209,6 +209,11 @@ export { assertEngineSourceSelection } from './source-compatibility'
 
 export { isCollaborationEnabled } from './user-agent-settings'
 export { captureToolsetExecutionOptions } from './sdk-config'
+export { captureDelegatedModelContext } from './delegated-model'
+export type { DelegatedModelContext } from './delegated-model'
+export { createDelegatedModelEndpoint } from './subagent-models'
+export { prepareSubagentModelMetadata } from './subagent-model-metadata'
+export type { DelegatedModelEndpoint } from './subagent-models'
 /** One agent execution for an entry: its delegated work, input, completion, stopping and usage (see execution/). */
 export { openAgentExecution, bindConversationLifecycle } from './execution'
 export type {

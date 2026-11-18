@@ -218,6 +218,20 @@ describe('settings snapshot stamps', () => {
   })
 })
 
+describe('managed subagent model settings', () => {
+  it('preserves live assignments and mode against stale full-config saves', () => {
+    const live = { version: 1, revision: 7, policyRevision: 3, selectionMode: 'task', profiles: [] }
+    const updates = { aiSources: { version: 2, sources: [], currentId: null, subagentModels: { revision: 1 } } }
+    preserveManagedSources(updates, { aiSources: { version: 2, sources: [], currentId: null, subagentModels: live } })
+    expect(updates.aiSources.subagentModels).toBe(live)
+  })
+  it('cannot inject assignments through a generic save before activation', () => {
+    const updates = { aiSources: { version: 2, sources: [], currentId: null, subagentModels: { revision: 1 } } }
+    preserveManagedSources(updates, { aiSources: { version: 2, sources: [], currentId: null } })
+    expect(updates.aiSources).not.toHaveProperty('subagentModels')
+  })
+})
+
 describe('config controller model fetching', () => {
   beforeEach(() => {
     fetchModelsFromApiMock.mockReset()

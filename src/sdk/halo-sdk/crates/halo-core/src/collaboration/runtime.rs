@@ -62,9 +62,25 @@ mod tests {
         accepts: std::sync::atomic::AtomicBool,
         validation: Mutex<Option<Arc<Notify>>>,
         validation_started: Notify,
+        preparation: Mutex<Option<Arc<Notify>>>,
+        preparation_started: Notify,
+        preparation_cancelled: std::sync::atomic::AtomicBool,
+        discarded: std::sync::atomic::AtomicUsize,
     }
     #[async_trait]
     impl SessionExecutor for Executor {
+        async fn prepare_spawn(&self, _caller: &str, _input: &Value, member: Value, cancel: &CancellationToken) -> Result<Value> {
+            let gate = self.preparation.lock().unwrap().clone();
+            self.preparation_started.notify_one();
+            if let Some(gate) = gate {
+                tokio::select! {
+                    _ = cancel.cancelled() => { self.preparation_cancelled.store(true,std::sync::atomic::Ordering::SeqCst); return Err(Error::cancelled()); },
+                    _ = gate.notified() => {},
+                }
+            }
+            Ok(member)
+        }
+        async fn discard_spawn(&self, _member: &Value) -> Result<()> { self.discarded.fetch_add(1,std::sync::atomic::Ordering::SeqCst); Ok(()) }
         async fn execute(&self, request: MemberExecutionRequest) -> Result<TurnCompletion> {
             (request.ready)();
             self.started
@@ -127,6 +143,10 @@ mod tests {
             accepts: std::sync::atomic::AtomicBool::new(true),
             validation: Mutex::new(None),
             validation_started: Notify::new(),
+            preparation: Mutex::new(None),
+            preparation_started: Notify::new(),
+            preparation_cancelled: std::sync::atomic::AtomicBool::new(false),
+            discarded: std::sync::atomic::AtomicUsize::new(0),
         });
         let source = Arc::new(Source(Mutex::new(Vec::new())));
         let store =
@@ -146,6 +166,29 @@ mod tests {
         )
         .unwrap();
         (runtime, executor, source, receiver)
+    }
+    #[tokio::test]
+    async fn stop_all_cancels_preparation_before_member_commit() {
+        let (runtime, executor, _, mut started) = runtime();
+        *executor.preparation.lock().unwrap() = Some(Arc::new(Notify::new()));
+        let pending = tokio::spawn({ let runtime = runtime.clone(); async move { runtime.spawn(&runtime.coordinator_id,json!({"name":"pending","prompt":"Prepare only"}),&CancellationToken::new()).await } });
+        executor.preparation_started.notified().await;
+        runtime.stop(&runtime.coordinator_id,"all").await.unwrap();
+        assert!(pending.await.unwrap().is_err());
+        assert!(executor.preparation_cancelled.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(runtime.store.rows("member").is_empty());
+        assert!(started.try_recv().is_err());
+        runtime.close().await.unwrap();
+    }
+    #[tokio::test]
+    async fn failed_member_commit_discards_prepared_execution() {
+        let (runtime, executor, _, mut started) = runtime();
+        let result = runtime.spawn(&runtime.coordinator_id,json!({"name":"pending","prompt":{"invalid":"structured prompt"}}),&CancellationToken::new()).await;
+        assert!(result.is_err());
+        assert_eq!(executor.discarded.load(std::sync::atomic::Ordering::SeqCst),1);
+        assert!(runtime.store.rows("member").is_empty());
+        assert!(started.try_recv().is_err());
+        runtime.close().await.unwrap();
     }
     #[tokio::test]
     async fn dispatch_live_messages_and_reports_keep_separate_ownership() {
@@ -380,6 +423,17 @@ pub struct MemberExecutionRequest {
 
 #[async_trait]
 pub trait SessionExecutor: Send + Sync {
+    fn model_selection_capability(&self) -> Option<Value> { None }
+    async fn prepare_spawn(
+        &self,
+        _caller: &str,
+        _input: &Value,
+        member: Value,
+        _cancellation: &CancellationToken,
+    ) -> Result<Value> {
+        Ok(member)
+    }
+    async fn discard_spawn(&self, _member: &Value) -> Result<()> { Ok(()) }
     async fn execute(&self, request: MemberExecutionRequest) -> Result<TurnCompletion>;
     fn inject(&self, member_id: &str, deliveries: &[TeamDelivery]) -> bool;
     fn try_inject(&self, member_id: &str, deliveries: &[TeamDelivery]) -> Result<bool> {
@@ -444,6 +498,7 @@ struct State {
     resident: HashSet<String>,
     retiring: HashMap<String, CancellationToken>,
     allocating: HashSet<String>,
+    preparing: Option<(String, CancellationToken)>,
     stop_versions: HashMap<String, u64>,
     stop_version: u64,
     closed: bool,
@@ -669,6 +724,7 @@ impl CollaborationRuntime {
                 resident: HashSet::new(),
                 retiring: HashMap::new(),
                 allocating: HashSet::new(),
+                preparing: None,
                 stop_versions: HashMap::new(),
                 stop_version: 0,
                 closed: false,
@@ -929,11 +985,28 @@ impl CollaborationRuntime {
         if let Some(origin) = self.origin(caller)? {
             member["origin"] = origin;
         }
+        let preparation = self.lifetime.child_token();
+        let _preparation_guard = preparation.clone().drop_guard();
+        self.state.lock().unwrap().preparing = Some((caller.into(), preparation.clone()));
+        let prepared = tokio::select! {
+            _ = cancel.cancelled() => Err(Error::cancelled()),
+            result = self.executor.prepare_spawn(caller, &input, member, &preparation) => result,
+        };
+        self.state.lock().unwrap().preparing = None;
+        member = prepared?;
+        if preparation.is_cancelled() {
+            self.executor.discard_spawn(&member).await?;
+            return Err(Error::cancelled());
+        }
+        if let Err(error) = self.check_admission(caller, admitted, cancel) {
+            self.executor.discard_spawn(&member).await?;
+            return Err(error);
+        }
         member["createdAt"] = protocol::now().into();
         member["state"] = "queued".into();
         self.state.lock().unwrap().allocating.insert(id.clone());
         let allocated = async {
-            store::add_member(self.store.as_ref(), member)?;
+            store::add_member(self.store.as_ref(), member.clone())?;
             self.store.flush().await?;
             self.check_admission(caller, admitted, cancel)?;
             self.state.lock().unwrap().created += 1;
@@ -941,6 +1014,9 @@ impl CollaborationRuntime {
         }
         .await;
         if let Err(error) = allocated {
+            if let Err(cleanup) = self.executor.discard_spawn(&member).await {
+                tracing::warn!(member=%id,code=%cleanup.code,"Collaboration prepared execution cleanup failed");
+            }
             if let Err(rollback) = self.store.record(json!({"kind":"remove_member","id":id})) {
                 tracing::warn!("[Collaboration] Member allocation rollback failed: {rollback}");
             }
@@ -1257,8 +1333,12 @@ impl CollaborationRuntime {
             return Err(Error::new("stop_forbidden", "")
                 .with_harness(TextId::CollaborationFeedbackStopForbidden, &[]));
         }
-        if to == "all" {
-            self.state.lock().unwrap().stop_version += 1;
+        {
+            let mut state = self.state.lock().unwrap();
+            if to == "all" { state.stop_version += 1; }
+            if let Some((caller, cancellation)) = &state.preparing {
+                if to == "all" || targets.iter().any(|member|member["id"] == *caller) { cancellation.cancel(); }
+            }
         }
         for member in &targets {
             let id = member["id"].as_str().unwrap();
@@ -1307,7 +1387,8 @@ impl CollaborationRuntime {
         cancel: &CancellationToken,
         harness: Arc<ResolvedHarness>,
     ) -> Result<Value> {
-        let input = match tool_contract::parse_input(name, &input) {
+        let capability = self.executor.model_selection_capability();
+        let input = match tool_contract::parse_input_with_model_selection(name, &input, capability.as_ref()) {
             Ok(input) => input,
             Err(error) => {
                 tracing::warn!("[Collaboration] Arguments rejected: tool={name}");

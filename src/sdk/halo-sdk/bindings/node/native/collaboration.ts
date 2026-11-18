@@ -6,6 +6,8 @@ export type {
   TurnGateHooks,
   TurnGateOptions,
 } from './turn-gate.js';
+export { ModelProfileCatalogView, planModelSelection, finalizeModelSelection, queryModelProfiles, validateEffectiveReasoning, validateModelSelectionRestore } from '../collaboration/model-selection.js';
+export { modelSelectionGuidance } from './collaboration-contract.js';
 export { COLLABORATION_GUIDANCE } from './collaboration-contract.js';
 export { CollaborationRuntime } from './collaboration-runtime.js';
 export type {

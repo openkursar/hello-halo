@@ -47,7 +47,7 @@ Halo lets AIs divide the work, hand it over, build up memory and stay on duty by
 - **Knowledge base and memory**: files, folders, PDFs and Office documents in a knowledge base are cited with sources while you chat; chats in the same space share memory, organized into current state, history and topics, so a new chat does not start from scratch.
 - **Connected conversations, AI that operates Halo**: open a new chat and ask "how are the other conversations going?" — it checks each one and sums them up; the AI can also manage spaces, Digital Humans and settings for you.
 - **Bring your tools**: connect MCP servers and Skills in one click, compatible with the Claude Code MCP and Skills ecosystem.
-- **Multiple models, multiple accounts**: any Anthropic / OpenAI-compatible API, or sign in to several ChatGPT, Claude and GitHub Copilot accounts at once; switch model and thinking effort per conversation.
+- **Multiple models, multiple accounts**: any Anthropic / OpenAI-compatible API, or sign in to several ChatGPT, Claude and GitHub Copilot accounts at once; switch model and thinking effort per conversation. [Model assignments](docs/model-assignments.md) optionally give new subagents configured targets.
 
 <p align="center">
   <img src="./docs/assets/composer-capabilities.png" alt="The + menu in a chat turns on web control, team collaboration, the AI terminal and more"><br>

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type AnimationEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type AnimationEvent, type ReactNode } from 'react'
 import { Loader2, Plus } from 'lucide-react'
 import type { AISource, AISourcesConfig, HaloConfig } from '../../types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
@@ -24,6 +24,8 @@ import { useGroupEditRequest } from '../../stores/ai-group-ui.store'
 import type { AIGroupChange } from '../../../shared/rpc/contracts/ai-groups.contract'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
 import { CLI_DELEGATED_PROVIDER_ID } from '../../../shared/constants/claude-models'
+
+const SubagentModelsManager = lazy(() => import('../subagent-models/SubagentModelsManager'))
 
 function getLocalizedText(value: LocalizedText): string {
   return resolveLocalizedText(value, getCurrentLanguage())
@@ -143,6 +145,8 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   const chosenGroupId = aiSources.currentGroupId && groups.some(group => group.id === aiSources.currentGroupId) ? aiSources.currentGroupId : null
   const [editor, setEditor] = useState<SourceEditor | null>(null)
   const [saving, setSaving] = useState(false)
+  const [modelAssignmentsOpen, setModelAssignmentsOpen] = useState(false)
+  const [modelAssignmentsSaved, setModelAssignmentsSaved] = useState(false)
   const [expandedSourceId, setExpandedSourceId] = useState<string | null>(null)
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null)
   const [highlighted, setHighlighted] = useState<Location | null>(null)
@@ -637,11 +641,13 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                 {t('Add AI Provider')}
               </button>
               <fieldset ref={element => { if (element) element.inert = saving }} disabled={saving} className="flex min-w-0 border-0 p-0">
-                <GroupCreateMenu onCreate={() => openEditor({ kind: 'group', groupId: null })} />
+                <GroupCreateMenu onCreate={() => openEditor({ kind: 'group', groupId: null })} onConfigureModels={() => setModelAssignmentsOpen(true)} />
               </fieldset>
             </div>
           )}
         </div>
+
+        {modelAssignmentsOpen ? <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">{t('Loading...')}</p>}><SubagentModelsManager config={aiSources} onSaved={() => setModelAssignmentsSaved(true)} onClose={() => { setModelAssignmentsOpen(false); sectionRef.current?.querySelector<HTMLElement>('[aria-label="' + CSS.escape(t('More ways to add')) + '"]')?.focus({ preventScroll: true }) }} /></Suspense> : (modelAssignmentsSaved || (aiSources.subagentModels?.revision ?? 0) > 0) && <button type="button" onClick={() => setModelAssignmentsOpen(true)} className="min-h-11 rounded-md px-2 text-sm text-muted-foreground hover:bg-secondary sm:min-h-9">{t('Model assignments')}</button>}
 
         {(availablePresetProviders.length > 0 || availableOAuthProviders.length > 0) && (
           <div className="space-y-4 border-t border-border pt-4">

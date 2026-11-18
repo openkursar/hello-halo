@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import type { EffectiveReasoning, ModelSelectionSnapshot } from '@hello-halo/agent-sdk/collaboration'
 import type { InstalledApp, ExecutionEnvironment } from '../../../shared/apps/app-types'
 import type { AgentModelSelection } from '../../../shared/types/ai-sources'
 import type { EngineId } from '../../../shared/types/engine'
@@ -11,6 +12,8 @@ import type { MemberWorkspace } from '@hello-halo/agent-sdk/collaboration/worksp
 export interface ParticipantExecution {
   sourceAppId?: string
   modelSelection: AgentModelSelection
+  inheritedReasoning?: EffectiveReasoning
+  modelBinding?: ModelSelectionSnapshot
   engineId: EngineId
   environment: ExecutionEnvironment
   prompt: string

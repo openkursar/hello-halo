@@ -90,6 +90,21 @@ describe('collaboration tool contract', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it('returns known model-selection refusals and logs no host error object', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const error = Object.assign(new Error('Profile changed; query the model catalog again.'), {
+      code: 'MODEL_SELECTION', privateDetail: 'synthetic-private-canary',
+    });
+    const server = createCollaborationServer({ spawn_agent: async () => { throw error; } });
+    expect(await server.instance.callTool('spawn_agent', { prompt: 'work' })).toEqual(
+      collaborationText(error.message, true),
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('[Collaboration] Model selection rejected: stage=operation tool=spawn_agent');
+    expect(errorLog).not.toHaveBeenCalled();
+  });
+
   it('does not promise rollback or replay after an uncertain host failure', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const server = createCollaborationServer({ spawn_agent: async () => { throw new Error('private host detail'); } });

@@ -236,6 +236,11 @@ export function createParticipantService(deps: {
     const chainKey = scopeKey(caller)
     const task = (creation.get(chainKey) ?? Promise.resolve()).then(async () => {
       check()
+      const overrides = (input.model_profile && input.model_profile !== 'inherit') || input.reasoning_effort !== undefined
+      if (overrides && (caller.origin || source.origin || !source.modelBinding)) {
+        fail('model_selection_unavailable', 'Model overrides are unavailable in this execution.', caller)
+      }
+      check()
       const parentRequest = requestId(caller)
       if (!store.requests.reserve(parentRequest, deps.maxMembersPerRequest ?? 128)) {
         fail('participant_limit', 'This source request has reached its collaborator creation limit. Continue an existing member with team_send.', caller)
