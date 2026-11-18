@@ -249,6 +249,10 @@ export async function startHttpServer(
 
   // Register API routes
   registerApiRoutes(expressApp)
+  expressApp.use('/api', (req: Request, res: Response) => {
+    console.warn(`[HTTP] Unmatched API request: ${req.method} ${req.baseUrl}${req.path}`)
+    res.status(404).json({ success: false, code: 'API_NOT_FOUND', error: 'API endpoint not found' })
+  })
 
   // Serve static files (frontend)
   if (is.dev) {

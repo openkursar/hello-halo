@@ -3342,6 +3342,7 @@
   "The same reach it has when you work with it yourself, including running commands. Operating Halo itself stays yours.": "Dieselben Möglichkeiten, die es hat, wenn Sie selbst damit arbeiten, einschließlich der Ausführung von Befehlen. Das Bedienen von Halo selbst bleibt Ihnen vorbehalten.",
   "The scan ended before every location could be checked. You can choose a file or enter its path directly.": "Die Suche wurde beendet, bevor alle Speicherorte geprüft werden konnten. Du kannst eine Datei auswählen oder ihren Pfad direkt eingeben.",
   "The security review could not be completed. Please try again later.": "Die Sicherheitsprüfung konnte nicht abgeschlossen werden. Bitte versuchen Sie es später erneut.",
+  "The server returned a non-JSON response (HTTP {{status}}). Check the server deployment and reverse proxy configuration.": "Der Server hat eine Antwort zurückgegeben, die kein JSON ist (HTTP {{status}}). Prüfen Sie die Serverbereitstellung und die Reverse-Proxy-Konfiguration.",
   "The session is still running, but its view could not be opened. Try again.": "Die Sitzung läuft noch, aber ihre Ansicht konnte nicht geöffnet werden. Versuchen Sie es erneut.",
   "The session may still be running. Try again.": "Die Sitzung läuft möglicherweise noch. Versuchen Sie es erneut.",
   "The skill file could not be found. Check its folder or import the skill again.": "Die Skill-Datei wurde nicht gefunden. Prüfen Sie ihren Ordner oder importieren Sie den Skill erneut.",
