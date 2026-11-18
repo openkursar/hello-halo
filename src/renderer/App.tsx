@@ -28,6 +28,7 @@ import { SearchPanel } from './components/search/SearchPanel'
 import { SearchHighlightBar } from './components/search/SearchHighlightBar'
 import { OnboardingOverlay } from './components/onboarding'
 import { UpdateNotification } from './components/updater/UpdateNotification'
+import { BrowserCredentialPrompt } from './components/tool/BrowserCredentialPrompt'
 import { NotificationToast } from './components/notification/NotificationToast'
 import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
 import { ConfigUnreadableBanner } from './components/settings/ConfigUnreadableBanner'
@@ -1129,6 +1130,8 @@ export default function App() {
       <UpdateNotification />
       {/* Unified in-app toast notifications */}
       <NotificationToast />
+      {/* A browser page waiting for a code the assistant must not hold */}
+      <BrowserCredentialPrompt />
       {/* At-rest credential decode failure alert (enterprise builds only).
           Offset below the reconnection bar when it is showing so they stack. */}
       <CredentialAlertBanner topOffset={showReconnectBanner ? 32 : 0} />

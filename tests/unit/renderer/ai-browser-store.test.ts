@@ -10,8 +10,12 @@ let activeHandler: ((e: unknown) => void) | null = null
 let goneHandler: ((e: unknown) => void) | null = null
 let releasedHandler: ((e: unknown) => void) | null = null
 let metadataHandler: ((e: unknown) => void) | null = null
-const unsub = { active: vi.fn(), gone: vi.fn(), released: vi.fn(), metadata: vi.fn() }
+let credentialHandler: ((e: unknown) => void) | null = null
+let credentialResolvedHandler: ((e: unknown) => void) | null = null
+let wsStateHandler: ((state: string) => void) | null = null
+const unsub = { active: vi.fn(), gone: vi.fn(), released: vi.fn(), metadata: vi.fn(), credential: vi.fn(), credentialResolved: vi.fn(), ws: vi.fn() }
 const listActive = vi.fn()
+const listCredentials = vi.fn()
 
 vi.mock('../../../src/renderer/api', () => ({
   api: {
@@ -19,7 +23,11 @@ vi.mock('../../../src/renderer/api', () => ({
     onAIBrowserViewGone: (cb: (e: unknown) => void) => { goneHandler = cb; return unsub.gone },
     onAIBrowserConversationReleased: (cb: (e: unknown) => void) => { releasedHandler = cb; return unsub.released },
     onBrowserStateChange: (cb: (e: unknown) => void) => { metadataHandler = cb; return unsub.metadata },
+    onAIBrowserCredentialRequest: (cb: (e: unknown) => void) => { credentialHandler = cb; return unsub.credential },
+    onAIBrowserCredentialResolved: (cb: (e: unknown) => void) => { credentialResolvedHandler = cb; return unsub.credentialResolved },
     listAIBrowserLivePages: (...args: unknown[]) => listActive(...args),
+    listAIBrowserCredentialRequests: (...args: unknown[]) => listCredentials(...args),
+    onWsStateChange: (cb: (state: string) => void) => { wsStateHandler = cb; return unsub.ws },
   },
 }))
 const closeTabsOfGoneView = vi.fn()
@@ -40,12 +48,25 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
 const view = (conversationId: string | null, viewId: string, url = `https://x.test/${viewId}`, owned = true) =>
   ({ conversationId, spaceId: 'space-1', viewId, owned, url, title: viewId })
 const page = (conversationId: string, viewId: string, active: boolean) => ({ ...view(conversationId, viewId), active })
+const credentialRequest = (requestId: string) => ({
+  requestId,
+  conversationId: 'conv-1',
+  spaceId: 'space-1',
+  viewId: 'v1',
+  origin: 'https://login.test',
+  title: 'Sign in',
+  fields: [{ uid: 'snap_1_2', label: 'Verification code' }],
+  purpose: 'the page is asking for the code from your authenticator',
+  expiresAt: Date.now() + 60_000,
+})
 
 describe('ai browser store', () => {
   beforeEach(() => {
-    useAIBrowserStore.setState({ views: {}, pages: {}, operating: {} })
+    useAIBrowserStore.setState({ views: {}, pages: {}, operating: {}, credentialRequests: {} })
     listActive.mockReset()
     listActive.mockResolvedValue([])
+    listCredentials.mockReset()
+    listCredentials.mockResolvedValue([])
   })
 
   it('keeps each conversation’s page separate', () => {
@@ -64,6 +85,26 @@ describe('ai browser store', () => {
     applyActiveView(view('app-chat:dh1', 'v3'))
 
     expect(useAIBrowserStore.getState().views['app-chat:dh1'].viewId).toBe('v3')
+  })
+
+  it('updates a re-announced page’s title without resetting when it was picked', () => {
+    vi.useFakeTimers()
+    try {
+      const { applyActiveView } = useAIBrowserStore.getState()
+      vi.setSystemTime(1_000)
+      applyActiveView({ ...view('conv-1', 'v1'), title: 'New Tab' })
+      vi.setSystemTime(60_000)
+      applyActiveView({ ...view('conv-1', 'v1'), title: 'Example Domain' })
+
+      const s = useAIBrowserStore.getState()
+      expect(s.views['conv-1']).toMatchObject({ title: 'Example Domain', lastActivityAt: 1_000 })
+      expect(s.pages['v1']).toMatchObject({ title: 'Example Domain', lastActivityAt: 1_000 })
+
+      applyActiveView(view('conv-1', 'v2'))
+      expect(useAIBrowserStore.getState().views['conv-1'].lastActivityAt).toBe(60_000)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('ignores the user’s own browser, which has no conversation', () => {
@@ -201,8 +242,10 @@ describe('ai browser store', () => {
 
 describe('store listeners', () => {
   beforeEach(() => {
-    useAIBrowserStore.setState({ views: {}, pages: {}, operating: {} })
+    useAIBrowserStore.setState({ views: {}, pages: {}, operating: {}, credentialRequests: {} })
     listActive.mockReset()
+    listCredentials.mockReset()
+    listCredentials.mockResolvedValue([])
   })
 
   it('applies live events and drops gone views', () => {
@@ -223,6 +266,41 @@ describe('store listeners', () => {
     expect(unsub.released).toHaveBeenCalled()
     expect(unsub.active).toHaveBeenCalled()
     expect(unsub.gone).toHaveBeenCalled()
+    expect(unsub.credential).toHaveBeenCalled()
+    expect(unsub.credentialResolved).toHaveBeenCalled()
+    expect(unsub.ws).toHaveBeenCalled()
+  })
+
+  it('catches up on pages opened while a remote client was disconnected', async () => {
+    listActive.mockResolvedValue([])
+    initAIBrowserStoreListeners()
+    await flush()
+    expect(useAIBrowserStore.getState().views).toEqual({})
+
+    listActive.mockResolvedValue([page('app-chat:dh1', 'v1', true)])
+    wsStateHandler!('reconnecting')
+    await flush()
+    expect(useAIBrowserStore.getState().views).toEqual({})
+
+    wsStateHandler!('connected')
+    await flush()
+    expect(useAIBrowserStore.getState().views['app-chat:dh1'].viewId).toBe('v1')
+    expect(Object.keys(useAIBrowserStore.getState().pages)).toEqual(['v1'])
+  })
+
+  it('holds a page’s request for a code until it is answered somewhere', async () => {
+    listActive.mockResolvedValue([])
+    // Already waiting when this client connected: the prompt must still appear.
+    listCredentials.mockResolvedValue([credentialRequest('req-old')])
+    initAIBrowserStoreListeners()
+    await flush()
+
+    credentialHandler!(credentialRequest('req-new'))
+    expect(Object.keys(useAIBrowserStore.getState().credentialRequests).sort()).toEqual(['req-new', 'req-old'])
+
+    // Answered on another client, or expired: this one stops asking.
+    credentialResolvedHandler!({ requestId: 'req-old', outcome: 'provided' })
+    expect(Object.keys(useAIBrowserStore.getState().credentialRequests)).toEqual(['req-new'])
   })
 
   it('learns pages opened before the renderer started, without overriding a newer live event', async () => {

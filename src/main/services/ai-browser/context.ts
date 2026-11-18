@@ -35,6 +35,7 @@ import {
   registerWebContentsForDownload,
   unregisterWebContentsForDownload
 } from './download-handler'
+import { abandonCredentialRequestsForConversation, abandonCredentialRequestsForView } from './credential-broker'
 import { emitBrowserActiveView, emitBrowserViewGone, emitBrowserConversationReleased } from './events'
 import { CROSS_ORIGIN_FRAME_REFUSED, FOCUS_REFUSED, READ_FILLED_VALUE, SELECT_IF_FOCUSED } from './fill-check'
 import type { AIBrowserLivePage, AIBrowserStopResult } from '../../../shared/types/ai-browser'
@@ -94,6 +95,7 @@ export function notifyViewDestroyed(viewId: string, webContentsId?: number): voi
   automationOwnedViewIds.delete(viewId)
   const reservedContexts = new Set([...liveContexts].filter(ctx => ctx.hasReservedView(viewId)))
   const wasAnnounced = !backgroundOnlyViewIds.delete(viewId) && reservedContexts.size === 0
+  abandonCredentialRequestsForView(viewId)
   let announce = false
   for (const ctx of liveContexts) {
     const held = ctx.handleViewDestroyed(viewId)
@@ -109,6 +111,14 @@ export function notifyViewDestroyed(viewId: string, webContentsId?: number): voi
 // teardown, a context ending) funnels through the manager, so reconciling here
 // is what keeps a long-lived context from pointing at a dead page.
 browserViewManager.onViewDestroyed(notifyViewDestroyed)
+browserViewManager.onViewStateChanged(viewId => {
+  for (const ctx of liveContexts) ctx.handleViewStateChanged(viewId)
+})
+browserViewManager.onUserInput(viewId => {
+  for (const ctx of liveContexts) ctx.handleUserInput(viewId)
+})
+
+const USER_INPUT_NOTICE = 'Note: the user operated this page themselves (clicked, typed or scrolled) since your previous browser action. Earlier snapshots and element UIDs may be stale; take a fresh browser_snapshot before acting on the page, and do not undo what the user did.'
 
 /**
  * Every page held by a context that has a UI — the one it acts on and every
@@ -238,7 +248,18 @@ export class BrowserContext implements BrowserContextInterface {
   workDir: string | undefined = undefined
 
   private activeViewId: string | null = null
+  /** Identity of the last active-view announcement, so a state change that alters nothing visible stays silent. */
+  private announcedView: string | null = null
   private lastSnapshot: AccessibilitySnapshot | null = null
+  private userInputPending = false
+
+  /**
+   * Fields the user typed into through the credential broker, whose values are
+   * withheld from every later snapshot. Scoped to the document they were filled
+   * in: a backendNodeId is meaningless once the page has navigated, and the next
+   * document would reuse the number for an unrelated field.
+   */
+  private redactedValues: { viewId: string; url: string; nodeIds: Set<number> } | null = null
 
   // Network monitoring state
   private networkRequests: Map<string, NetworkRequest> = new Map()
@@ -465,6 +486,7 @@ export class BrowserContext implements BrowserContextInterface {
     if (this.activeViewId && this.activeViewId !== viewId) {
       this.lastSnapshot = null
       this.snapshotContents = null
+      this.userInputPending = false
       this.disableMonitoring()
     }
 
@@ -485,14 +507,41 @@ export class BrowserContext implements BrowserContextInterface {
   private notifyActiveViewChange(viewId: string): void {
     if (!this.isWatchable(viewId)) return
     const state = browserViewManager.getState(viewId)
+    const url = state?.url || null
+    const title = state?.title || null
+    this.announcedView = `${viewId}\n${url}\n${title}`
     emitBrowserActiveView({
       conversationId: this.conversationId,
       spaceId: this.spaceId,
       viewId,
       owned: this.ownedViewIds.has(viewId),
-      url: state?.url || null,
-      title: state?.title || null,
+      url,
+      title,
     })
+  }
+
+  /**
+   * The page this context acts on loaded or navigated. It was announced when
+   * selected, usually still titled "New Tab", so clients learn its real title
+   * and address only from a fresh announcement.
+   */
+  handleViewStateChanged(viewId: string): void {
+    if (!this.hasUi || this.activeViewId !== viewId) return
+    const state = browserViewManager.getState(viewId)
+    if (`${viewId}\n${state?.url || null}\n${state?.title || null}` === this.announcedView) return
+    this.notifyActiveViewChange(viewId)
+  }
+
+  /** A person operated a page from outside its window; only the page this context acts on matters. */
+  handleUserInput(viewId: string): void {
+    if (this.activeViewId === viewId) this.userInputPending = true
+  }
+
+  /** Tells the AI, once, that the page changed under it since it last looked. */
+  takeUserInputNotice(): string | null {
+    if (!this.userInputPending) return null
+    this.userInputPending = false
+    return USER_INPUT_NOTICE
   }
 
   /**
@@ -675,7 +724,7 @@ export class BrowserContext implements BrowserContextInterface {
     const onNavigation = (_event: Electron.Event, _url: string, _inPlace: boolean, isMainFrame: boolean) => { if (isMainFrame) navigated = true }
     webContents.on('did-start-navigation', onNavigation)
     try {
-      const snapshot = await createAccessibilitySnapshot(webContents, this.sendSnapshotCommand, verbose)
+      const snapshot = await createAccessibilitySnapshot(webContents, this.sendSnapshotCommand, verbose, this.currentRedactions(webContents))
       if (navigated || this.released || webContents.isDestroyed()) throw new Error('Browser page changed while taking its snapshot')
       if (this.activeViewId && browserViewManager.getWebContents(this.activeViewId) === webContents) {
         this.lastSnapshot = snapshot
@@ -1316,6 +1365,39 @@ export class BrowserContext implements BrowserContextInterface {
    */
   async fillElement(uid: string, value: string): Promise<FieldReadBack> {
     return this.withPageFrames(() => this.fillElementWithFrames(uid, value))
+  }
+
+  /**
+   * Fill a field with text the user typed themselves (see credential-broker),
+   * and withhold what it holds from every later snapshot of this page.
+   *
+   * Marked before the text goes in, so a fill that fails half-way still leaves
+   * the field redacted.
+   */
+  async fillElementWithUserText(uid: string, value: string): Promise<FieldReadBack> {
+    const element = this.getElementByUid(uid)
+    if (!element) throw new Error(`Element not found: ${uid}`)
+    this.redactValue(element.backendNodeId)
+    return this.fillElement(uid, value)
+  }
+
+  private redactValue(backendNodeId: number): void {
+    const webContents = this.getWebContents()
+    if (!webContents || !this.activeViewId) return
+    const url = webContents.getURL()
+    if (this.redactedValues?.viewId !== this.activeViewId || this.redactedValues.url !== url) {
+      this.redactedValues = { viewId: this.activeViewId, url, nodeIds: new Set() }
+    }
+    this.redactedValues.nodeIds.add(backendNodeId)
+  }
+
+  private currentRedactions(webContents: Electron.WebContents): ReadonlySet<number> | undefined {
+    if (!this.redactedValues) return undefined
+    if (this.redactedValues.viewId !== this.activeViewId || this.redactedValues.url !== webContents.getURL()) {
+      this.redactedValues = null
+      return undefined
+    }
+    return this.redactedValues.nodeIds
   }
 
   private async fillElementWithFrames(uid: string, value: string): Promise<FieldReadBack> {
@@ -2258,6 +2340,8 @@ export class BrowserContext implements BrowserContextInterface {
    * conversation's page as "in use".
    */
   private announceReleased(): void {
+    // Not gated on hasUi: an offscreen context's prompt reached the user too.
+    abandonCredentialRequestsForConversation(this.conversationId)
     if (!this.hasUi || !this.conversationId) return
     emitBrowserConversationReleased({ conversationId: this.conversationId })
   }

@@ -16,6 +16,8 @@ vi.mock('../../../../src/main/services/browser-view.service', () => ({
     getAllStates: () => [],
     getState: () => null,
     getWebContents: () => null,
+    onViewStateChanged: () => () => {},
+    onUserInput: () => () => {},
     onViewDestroyed: () => () => {},
   },
 }))

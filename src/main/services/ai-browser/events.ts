@@ -15,11 +15,13 @@
  */
 
 import { EventEmitter } from 'events'
-import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserViewGone } from '../../../shared/types/ai-browser'
+import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserCredentialRequest, AIBrowserCredentialResolved, AIBrowserViewGone } from '../../../shared/types/ai-browser'
 
 export type BrowserActiveViewEvent = AIBrowserActiveView
 export type BrowserViewGoneEvent = AIBrowserViewGone
 export type BrowserConversationReleasedEvent = AIBrowserConversationReleased
+export type BrowserCredentialRequestEvent = AIBrowserCredentialRequest
+export type BrowserCredentialResolvedEvent = AIBrowserCredentialResolved
 
 class BrowserEventBus extends EventEmitter {}
 
@@ -52,4 +54,22 @@ export function emitBrowserConversationReleased(event: BrowserConversationReleas
 export function onBrowserConversationReleased(handler: (e: BrowserConversationReleasedEvent) => void): () => void {
   browserEventBus.on('released', handler)
   return () => browserEventBus.off('released', handler)
+}
+
+export function emitBrowserCredentialRequest(event: BrowserCredentialRequestEvent): void {
+  browserEventBus.emit('credential-request', event)
+}
+
+export function onBrowserCredentialRequest(handler: (e: BrowserCredentialRequestEvent) => void): () => void {
+  browserEventBus.on('credential-request', handler)
+  return () => browserEventBus.off('credential-request', handler)
+}
+
+export function emitBrowserCredentialResolved(event: BrowserCredentialResolvedEvent): void {
+  browserEventBus.emit('credential-resolved', event)
+}
+
+export function onBrowserCredentialResolved(handler: (e: BrowserCredentialResolvedEvent) => void): () => void {
+  browserEventBus.on('credential-resolved', handler)
+  return () => browserEventBus.off('credential-resolved', handler)
 }

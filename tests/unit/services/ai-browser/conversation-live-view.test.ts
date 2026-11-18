@@ -29,8 +29,18 @@ vi.mock('../../../../src/main/services/browser-view.service', () => ({
       destroyedListeners.add(listener)
       return () => destroyedListeners.delete(listener)
     },
+    onViewStateChanged: (listener: (viewId: string) => void) => {
+      stateListeners.add(listener)
+      return () => stateListeners.delete(listener)
+    },
+    onUserInput: (listener: (viewId: string) => void) => {
+      inputListeners.add(listener)
+      return () => inputListeners.delete(listener)
+    },
   },
 }))
+const stateListeners = new Set<(viewId: string) => void>()
+const inputListeners = new Set<(viewId: string) => void>()
 const revealed = new Set<string>()
 
 vi.mock('../../../../src/main/services/ai-browser/download-handler', () => ({
@@ -108,6 +118,24 @@ describe('conversation-tagged active-view events', () => {
     ctx.setActiveViewId('user-tab')
     expect(listLivePages().filter((p) => p.conversationId === 'space-chat').map((p) => [p.viewId, p.owned, p.active]).sort())
       .toEqual([['ai-tab', true, false], ['user-tab', false, true]])
+  })
+
+  it('re-announces the active page once it loads, and only when what it shows changed', () => {
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
+    states.set('view-1', { id: 'view-1', url: 'about:blank', title: 'New Tab' })
+    openTab('view-2')
+    ctx.trackView('view-1')
+    ctx.trackView('view-2')
+    ctx.setActiveViewId('view-1')
+
+    // A page is picked before it loads; without this the tray keeps "New Tab".
+    openTab('view-1')
+    for (const listener of stateListeners) listener('view-1')
+    for (const listener of stateListeners) listener('view-1')
+    for (const listener of stateListeners) listener('view-2')
+
+    expect(active.map((e) => [e.viewId, e.title])).toEqual([['view-1', 'New Tab'], ['view-1', 'Title view-1']])
+    ctx.destroy()
   })
 
   it('stays silent for an automation run, which nobody can watch', () => {
@@ -282,6 +310,39 @@ describe('being watched', () => {
     expect(dh.hasRevealedView()).toBe(false)
     revealed.add('dh-view')
     expect(dh.hasRevealedView()).toBe(true)
+    dh.destroy()
+  })
+})
+
+describe('the user operating the page', () => {
+  it('tells the AI once, and only the context acting on that page', () => {
+    states.clear()
+    const dh = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
+    const other = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh2', spaceId: 'space-1' } })
+    openTab('p')
+    openTab('q')
+    dh.setActiveViewId('p')
+    other.setActiveViewId('q')
+
+    for (const listener of inputListeners) listener('p')
+
+    expect(dh.takeUserInputNotice()).toContain('the user operated this page')
+    expect(dh.takeUserInputNotice()).toBeNull()
+    expect(other.takeUserInputNotice()).toBeNull()
+    dh.destroy()
+    other.destroy()
+  })
+
+  it('forgets the notice once the AI moves to another page', () => {
+    states.clear()
+    const dh = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
+    openTab('p')
+    openTab('q')
+    dh.setActiveViewId('p')
+    for (const listener of inputListeners) listener('p')
+    dh.setActiveViewId('q')
+
+    expect(dh.takeUserInputNotice()).toBeNull()
     dh.destroy()
   })
 })

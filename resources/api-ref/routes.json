@@ -332,6 +332,22 @@
   },
   {
     "method": "GET",
+    "path": "/api/browser/live-pages"
+  },
+  {
+    "method": "GET",
+    "path": "/api/browser/credential-requests"
+  },
+  {
+    "method": "POST",
+    "path": "/api/browser/credential-requests/submit"
+  },
+  {
+    "method": "POST",
+    "path": "/api/browser/credential-requests/decline"
+  },
+  {
+    "method": "GET",
     "path": "/api/spaces/:spaceId/artifacts",
     "group": "workspace"
   },
