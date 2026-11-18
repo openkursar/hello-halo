@@ -1310,6 +1310,10 @@
     "group": "knowledge-base"
   },
   {
+    "method": "PUT",
+    "path": "/api/tlon/:kbId/guest-read"
+  },
+  {
     "method": "DELETE",
     "path": "/api/tlon/:kbId",
     "group": "knowledge-base"

@@ -90,6 +90,7 @@ interface Canonical {
   readable: string[]
   attached: Set<string>
   skills: string[]
+  knowledge: string[]
   workspace: string[]
   closed: string[]
   engineConfig: string[]
@@ -105,6 +106,7 @@ function canonicalOf(access: TurnFileAccess): Canonical {
       readable: [...access.memoryWritable, ...access.memoryReadable].map(canonicalPath),
       attached: new Set(access.attachedFiles.map(canonicalPath)),
       skills: (access.skillFolders ?? []).map(canonicalPath),
+      knowledge: (access.knowledgeFolders ?? []).map(canonicalPath),
       workspace: access.workspaceRoots.map(canonicalPath),
       closed: access.closed.map(canonicalPath),
       engineConfig: (access.engineConfigDirs ?? []).map(canonicalPath),
@@ -228,6 +230,7 @@ function judgeTargets(
     if (withinAny(target, memory)) continue
     if (reading && c.attached.has(target)) continue
     if (reading && withinAny(target, c.skills) && !withinAny(target, c.closed)) continue
+    if (reading && withinAny(target, c.knowledge) && !withinAny(target, c.closed)) continue
     if (!granted) {
       return {
         allow: false,

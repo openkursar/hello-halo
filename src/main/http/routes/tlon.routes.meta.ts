@@ -51,6 +51,8 @@ export const MODULE: RouteModuleMeta = {
       impact: 'reversible',
       notes: 'All fields optional: name, icon, description, status ("active"|"paused"|"error").',
     },
+    // Internal: the model must not widen what a guest of a digital human can read.
+    'PUT /api/tlon/:kbId/guest-read': { expose: 'internal' },
     'DELETE /api/tlon/:kbId': {
       expose: 'ai',
       group: 'knowledge-base',

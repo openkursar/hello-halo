@@ -127,6 +127,11 @@ vi.mock('../../../../src/main/apps/runtime/delegation-gate', () => ({
   beginDelegatedTurn: vi.fn(), createDelegationAuditHooks: () => ({}), createSkillGateHooks: () => ({}),
   createTurnFileAccessHooks: () => ({}), turnFileExportRefusal: () => undefined,
 }))
+// The turn asks which bound knowledge bases its guests may read; none here.
+vi.mock('../../../../src/main/services/tlon', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/services/tlon')>()),
+  getKnowledgeReadDirsForApp: vi.fn(() => []),
+}))
 vi.mock('../../../../src/main/apps/runtime/prompt/identity', () => ({ buildIdentityFragments: () => [] }))
 vi.mock('../../../../src/main/apps/runtime/prompt/capabilities', () => ({ buildDisabledCapabilitiesGuidance: () => '', buildUnconfiguredCapabilitiesGuidance: () => '' }))
 vi.mock('../../../../src/main/apps/runtime/prompt/team-guidance', () => ({ buildTeamGuidance: () => null }))

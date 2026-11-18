@@ -284,6 +284,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   tlonListForSpace: (spaceId: string) => Promise<IpcResponse>
   tlonGet: (kbId: string) => Promise<IpcResponse>
   tlonUpdate: (kbId: string, updates: { name?: string; icon?: string; description?: string; status?: string }) => Promise<IpcResponse>
+  tlonSetGuestRead: (kbId: string, allow: boolean) => Promise<IpcResponse>
   tlonDelete: (kbId: string) => Promise<IpcResponse>
   tlonSetDefault: (kbId: string | null) => Promise<IpcResponse>
   tlonBindSpace: (kbId: string, spaceId: string) => Promise<IpcResponse>

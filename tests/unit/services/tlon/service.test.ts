@@ -75,6 +75,8 @@ import {
   seedAppKnowledgeBases,
   getKBReferenceById,
   getKBReferencesForApp,
+  getKnowledgeReadDirsForApp,
+  setKBGuestRead,
   getKBChatContext,
   collectIngestCandidates,
 } from '../../../../src/main/services/tlon/service'
@@ -948,6 +950,42 @@ describe('Tlon Service', () => {
       expect(refs.map(r => r.id)).toEqual([active.id])
       expect(refs.map(r => r.id)).not.toContain(paused.id)
       expect(refs.map(r => r.id)).not.toContain(unbound.id)
+    })
+  })
+
+  describe('getKnowledgeReadDirsForApp', () => {
+    it('opens no text folder until the owner allows guest reading', () => {
+      const kb = createKB({ name: 'Shared' })
+      bindToApp(kb.id, 'app-1')
+      expect(getKB(kb.id)?.allowGuestRead).toBeUndefined()
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
+
+      setKBGuestRead(kb.id, true)
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([getKBTextDir(kb.id)])
+      expect(getKnowledgeReadDirsForApp('app-2')).toEqual([])
+
+      setKBGuestRead(kb.id, false)
+      expect(getKB(kb.id)?.allowGuestRead).toBeUndefined()
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
+    })
+
+    it('leaves out a paused knowledge base even when allowed', () => {
+      const kb = createKB({ name: 'Paused' })
+      bindToApp(kb.id, 'app-1')
+      setKBGuestRead(kb.id, true)
+      updateKB(kb.id, { status: 'paused' })
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
+    })
+
+    it('is not changed through the general update', () => {
+      const kb = createKB({ name: 'Shared' })
+      bindToApp(kb.id, 'app-1')
+      updateKB(kb.id, { name: 'Renamed', allowGuestRead: true } as never)
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
+    })
+
+    it('reports an unknown knowledge base', () => {
+      expect(setKBGuestRead('missing', true)).toBeNull()
     })
   })
 

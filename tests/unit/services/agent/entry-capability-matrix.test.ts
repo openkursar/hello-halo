@@ -247,6 +247,7 @@ vi.mock('../../../../src/main/services/ai-terminal', () => ({
 vi.mock('../../../../src/main/services/tlon', () => ({
   getKBChatContext: vi.fn(() => null),
   getKBReferencesForApp: vi.fn(() => []),
+  getKnowledgeReadDirsForApp: vi.fn(() => []),
 }))
 vi.mock('../../../../src/main/services/health', () => ({
   onAgentError: vi.fn(),

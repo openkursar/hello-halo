@@ -60,6 +60,12 @@ export interface KnowledgeBaseEntry {
   stats: KBStats
   /** At most one KB is the default; new conversations auto-load it. */
   isDefault?: boolean
+  /**
+   * Whether a guest turn of a bound digital human may read this KB's extracted
+   * text. Off unless the owner turns it on (setKBGuestRead); binding alone only
+   * puts the document map in the prompt.
+   */
+  allowGuestRead?: boolean
 }
 
 /** Registry file persisted to ~/.halo/knowledge-bases-index.json */
