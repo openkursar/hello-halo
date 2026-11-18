@@ -8,7 +8,7 @@ import { Transform } from 'node:stream'
 import * as tar from 'tar-stream'
 import type { RuntimeArtifact, RuntimeComponent } from '../../provider'
 import { RuntimeError } from '../../errors'
-import { CODEX_PLATFORMS, requiredComponents, type CodexPlatform } from './policy'
+import { CODEX_PLATFORMS, optionalComponents, requiredComponents, type CodexPlatform } from './policy'
 
 export const MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
 export const MAX_ARCHIVE_FILES = 64
@@ -17,7 +17,8 @@ export function archiveEntryPath(name: string, platform: CodexPlatform): string 
   if (name.length > 512 || name.includes('\\') || name.includes(':') || name.includes('\0') || name.split('/').some(part => part === '.' || part === '..') || !name.startsWith('package/')) throw new RuntimeError('invalid-manifest')
   const path = name.slice(8).replace(/\/$/, '')
   const triple = CODEX_PLATFORMS[platform].triple
-  const allowed = new Set(['', 'vendor', `vendor/${triple}`, `vendor/${triple}/codex`, `vendor/${triple}/path`, 'package.json', 'README.md', 'LICENSE', 'LICENSE.md', 'NOTICE', 'THIRD-PARTY-NOTICES', ...requiredComponents(platform)])
+  const optional = optionalComponents(platform)
+  const allowed = new Set(['', 'vendor', `vendor/${triple}`, `vendor/${triple}/codex`, `vendor/${triple}/path`, 'package.json', 'README.md', 'LICENSE', 'LICENSE.md', 'NOTICE', 'THIRD-PARTY-NOTICES', ...requiredComponents(platform), ...optional, ...optional.map(dirname)])
   if (!allowed.has(path)) throw new RuntimeError('invalid-manifest')
   return path
 }
@@ -67,7 +68,7 @@ export async function materializeCodex(artifact: RuntimeArtifact, archivePath: s
           hash.update(chunk)
           size += chunk.byteLength
         })
-        await pipeline(stream, createWriteStream(destination, { flags: 'wx', mode: requiredComponents(platform).includes(path) ? 0o755 : 0o644 }), { signal: operationSignal })
+        await pipeline(stream, createWriteStream(destination, { flags: 'wx', mode: [...requiredComponents(platform), ...optionalComponents(platform)].includes(path) ? 0o755 : 0o644 }), { signal: operationSignal })
         if (size !== header.size) throw new RuntimeError('invalid-manifest')
         components.push({ path, checksum: hash.digest('hex'), size })
       }

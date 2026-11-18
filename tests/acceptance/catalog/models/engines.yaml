@@ -127,7 +127,7 @@ scenarios:
     automation: automated
     requirements: [halo-sdk, local-codex]
     preconditions:
-      - An isolated profile uses the explicitly supplied fixed Codex 0.128.0 artifact, separate runtime state and a local scripted model without personal credentials.
+      - An isolated profile uses the explicitly supplied fixed Codex 0.132.0 artifact, separate runtime state and a local scripted model without personal credentials.
     steps:
       - Complete a turn through the real external process and application MCP bridge, restart the isolated application, and continue the original conversation using its saved native history.
     expected:

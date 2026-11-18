@@ -52,7 +52,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   let result = {};
   if (request.method === 'initialize') result = { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'runtime-receipt', version: '1.0.0' } };
   if (request.method === 'tools/list') result = { tools: [{ name: 'record_receipt', description: 'Record a local test receipt', inputSchema: { type: 'object', properties: { reference: { type: 'string' } }, required: ['reference'], additionalProperties: false } }] };
-  if (request.method === 'tools/call') { fs.appendFileSync(process.argv[2], JSON.stringify(request.params) + '\\n'); result = { content: [{ type: 'text', text: 'Recorded receipt ' + request.params.arguments.reference }] }; }
+  if (request.method === 'tools/call') { fs.appendFileSync(process.argv[2], JSON.stringify({ name: request.params.name, arguments: request.params.arguments }) + '\\n'); result = { content: [{ type: 'text', text: 'Recorded receipt ' + request.params.arguments.reference }] }; }
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
 });`)
     const firstPage = await acceptanceApp.restart(async profile => {

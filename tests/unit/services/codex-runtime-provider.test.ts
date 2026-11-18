@@ -11,7 +11,7 @@ vi.mock('../../../src/main/services/external-runtime/transfer', () => ({
 }))
 import { fetchCodexRelease } from '../../../src/main/services/external-runtime/providers/codex/releases'
 import { archiveEntryPath, materializeCodex } from '../../../src/main/services/external-runtime/providers/codex/archive'
-import { RECOMMENDED_INTEGRITY, requiredComponents } from '../../../src/main/services/external-runtime/providers/codex/policy'
+import { RECOMMENDED_INTEGRITY, RECOMMENDED_VERSION, optionalComponents, requiredComponents } from '../../../src/main/services/external-runtime/providers/codex/policy'
 import { probeCodex } from '../../../src/main/services/external-runtime/providers/codex/protocol'
 import { resolveCodexCandidate } from '../../../src/main/services/external-runtime/providers/codex/local'
 import type { RuntimeArtifact, RuntimeProbeRunner } from '../../../src/main/services/external-runtime/provider'
@@ -20,7 +20,7 @@ const source = { id: 'test', name: 'Test', baseUrl: 'https://mirror.test/npm/pre
 const directories: string[] = []
 afterEach(async () => { vi.resetAllMocks(); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
 async function temporary() { const path = await mkdtemp(join(tmpdir(), 'halo-codex-test-')); directories.push(path); return path }
-function metadata(version = '0.128.0', integrity = RECOMMENDED_INTEGRITY['darwin-arm64']) {
+function metadata(version = RECOMMENDED_VERSION, integrity = RECOMMENDED_INTEGRITY['darwin-arm64']) {
   mocks.metadata.mockImplementation(async (url: string) => JSON.stringify(url.endsWith('darwin-arm64') ? { name: '@openai/codex', version: `${version}-darwin-arm64`, os: ['darwin'], cpu: ['arm64'], dist: { integrity, tarball: 'https://cdn.test/codex.tgz' } } : { name: '@openai/codex', version, optionalDependencies: { '@openai/codex-darwin-arm64': `npm:@openai/codex@${version}-darwin-arm64` } }))
 }
 async function archive(entries: Array<{ name: string; content?: string; type?: string; linkname?: string }>) {
@@ -42,10 +42,10 @@ const validEntries = () => [{ name: 'package/package.json', content: JSON.string
 describe('Codex registry contract', () => {
   it('uses actual package metadata, exact aliases, strong official pin and prefixed registry', async () => {
     metadata()
-    const result = await fetchCodexRelease(source, '0.128.0', 'darwin-arm64', new AbortController().signal)
+    const result = await fetchCodexRelease(source, RECOMMENDED_VERSION, 'darwin-arm64', new AbortController().signal)
     expect(result.integrity).toBe(RECOMMENDED_INTEGRITY['darwin-arm64'])
     expect(result.checksum).toHaveLength(128)
-    expect(mocks.metadata.mock.calls.map(call => call[0])).toEqual(['https://mirror.test/npm/prefix/@openai%2Fcodex/0.128.0', 'https://mirror.test/npm/prefix/@openai%2Fcodex/0.128.0-darwin-arm64'])
+    expect(mocks.metadata.mock.calls.map(call => call[0])).toEqual([`https://mirror.test/npm/prefix/@openai%2Fcodex/${RECOMMENDED_VERSION}`, `https://mirror.test/npm/prefix/@openai%2Fcodex/${RECOMMENDED_VERSION}-darwin-arm64`])
   })
   it('resolves a source tag, without inventing stable or enumerating packuments', async () => {
     metadata('0.129.0', `sha512-${Buffer.alloc(64, 3).toString('base64')}`)
@@ -53,14 +53,21 @@ describe('Codex registry contract', () => {
     expect(mocks.metadata.mock.calls[0][0]).toContain('/stable')
   })
   it('rejects a mirror changing recommended bytes', async () => {
-    metadata('0.128.0', `sha512-${Buffer.alloc(64, 3).toString('base64')}`)
-    await expect(fetchCodexRelease(source, '0.128.0', 'darwin-arm64', new AbortController().signal)).rejects.toMatchObject({ code: 'checksum-mismatch' })
+    metadata(RECOMMENDED_VERSION, `sha512-${Buffer.alloc(64, 3).toString('base64')}`)
+    await expect(fetchCodexRelease(source, RECOMMENDED_VERSION, 'darwin-arm64', new AbortController().signal)).rejects.toMatchObject({ code: 'checksum-mismatch' })
   })
 })
 
 describe('Codex strict archive materialization', () => {
   it.each(['package/../escape', '/package/package.json', 'package/vendor/../../escape', 'package\\vendor\\x', 'package/C:evil', 'package/package.json.map', 'package/vendor/wrong/codex/codex', 'package//package.json'])('rejects unsafe or unexpected path %s', path => {
     expect(() => archiveEntryPath(path, 'darwin-arm64')).toThrow()
+  })
+  it('accepts the bundled Linux sandbox helper only on Linux', () => {
+    const [helper] = optionalComponents('linux-x64')
+    expect(archiveEntryPath(`package/${helper}`, 'linux-x64')).toBe(helper)
+    expect(archiveEntryPath('package/vendor/x86_64-unknown-linux-musl/codex-resources/', 'linux-x64')).toBe('vendor/x86_64-unknown-linux-musl/codex-resources')
+    expect(() => archiveEntryPath('package/vendor/x86_64-unknown-linux-musl/codex-resources/other', 'linux-x64')).toThrow()
+    expect(() => archiveEntryPath('package/vendor/aarch64-apple-darwin/codex-resources/bwrap', 'darwin-arm64')).toThrow()
   })
   it('retains full helpers and hashes every retained component', async () => {
     const fixture = await archive(validEntries())

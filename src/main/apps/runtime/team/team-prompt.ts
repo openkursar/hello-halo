@@ -82,7 +82,7 @@ export interface TeamPromptContext {
 
 // ── Entry layer ──
 
-export function buildTeamEntry(ctx: TeamPromptContext): string {
+export function buildTeamEntry(ctx: TeamPromptContext, reportToUserAvailable = true): string {
   const lines: string[] = [
     '## Team work',
     '',
@@ -126,8 +126,10 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     '  permitted actions and required evidence.',
     '- Findings are reusable knowledge or artifacts, not requests, replies, acknowledgements or progress messages.',
     '  Publishing does not notify a teammate. With one collaborator, direct messages usually suffice.',
-    '- Only when you need a HUMAN decision, call',
-    '  `report_to_user({type:"escalation", message:"Your question", choices:["Option A", "Option B"]})`.',
+    ...(reportToUserAvailable ? [
+      '- Only when you need a HUMAN decision, call',
+      '  `report_to_user({type:"escalation", message:"Your question", choices:["Option A", "Option B"]})`.',
+    ] : []),
     '',
     '### Messages that arrive while you are working',
     '',
@@ -253,11 +255,11 @@ export function buildTeamImBridge(
 
 // ── Constraint layer ──
 
-export function buildTeamConstraints(ctx: TeamPromptContext): string[] {
-  return [buildTeamRules(ctx)]
+export function buildTeamConstraints(ctx: TeamPromptContext, reportToUserAvailable = true): string[] {
+  return [buildTeamRules(ctx, reportToUserAvailable)]
 }
 
-function buildTeamRules(ctx: TeamPromptContext): string {
+function buildTeamRules(ctx: TeamPromptContext, reportToUserAvailable: boolean): string {
   const lines: string[] = ['### Team', '']
 
   if (ctx.collabMode === 'structured') {
@@ -277,13 +279,13 @@ function buildTeamRules(ctx: TeamPromptContext): string {
     // A preference, not a gate: `report_to_user(type:"escalation")` always reaches the
     // human. Which door to try first is the model's call, so it is stated here
     // rather than enforced by intercepting the call.
-    ctx.escalationRouting === 'lead'
+    ...(reportToUserAvailable ? [ctx.escalationRouting === 'lead'
       ? '- Escalation preference: this office wants blockers taken to the team lead' +
           ' FIRST, with `team_send`. Call `report_to_user({type:"escalation", message:"Your question"})` only once' +
           ' the lead cannot resolve it, or when the decision is plainly the human’s' +
           ' to make. It always reaches the human, so use it sparingly.'
       : '- Escalation preference: take blockers straight to the human with' +
-          ' `report_to_user({type:"escalation", message:"Your question"})`; no need to try the lead first.',
+          ' `report_to_user({type:"escalation", message:"Your question"})`; no need to try the lead first.'] : []),
     '- No silent failure: send blockers or missing data to the requester with `team_send`; your own output is not delivery.',
     '- Claim completion only for results actually produced and verified; reference files and evidence.',
     '- No inference from silence: an open task or absent board entry does not prove work was not done. Ask the teammate.'

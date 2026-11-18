@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { materializeCodex } from '../../../src/main/services/external-runtime/providers/codex/archive'
-import { RECOMMENDED_INTEGRITY } from '../../../src/main/services/external-runtime/providers/codex/policy'
+import { RECOMMENDED_INTEGRITY, RECOMMENDED_VERSION } from '../../../src/main/services/external-runtime/providers/codex/policy'
 import { resolveCodexCandidate } from '../../../src/main/services/external-runtime/providers/codex/local'
 import { probeCodex } from '../../../src/main/services/external-runtime/providers/codex/protocol'
 import type { ProbeProcess, RuntimeArtifact, RuntimeProbeRunner } from '../../../src/main/services/external-runtime/provider'
@@ -15,9 +15,9 @@ const fixtureRoot = process.env.HALO_TEST_CODEX_FIXTURE_ROOT
 describe.skipIf(!fixtureRoot || process.platform !== 'darwin' || process.arch !== 'arm64')('actual official Codex distribution evidence', () => {
   it('verifies official archive, extracts strict layout, and completes isolated non-model protocol', async () => {
     const root = resolve(fixtureRoot!)
-    const archivePath = join(root, 'codex-0.128.0-darwin-arm64.tgz')
-    const output = await mkdtemp(join(root, 'codex-0.128.0-darwin-arm64-'))
-    const artifact = { platform: 'darwin-arm64', payloadVersion: '0.128.0-darwin-arm64', integrity: RECOMMENDED_INTEGRITY['darwin-arm64'] } as RuntimeArtifact
+    const archivePath = join(root, `codex-${RECOMMENDED_VERSION}-darwin-arm64.tgz`)
+    const output = await mkdtemp(join(root, `codex-${RECOMMENDED_VERSION}-darwin-arm64-`))
+    const artifact = { platform: 'darwin-arm64', payloadVersion: `${RECOMMENDED_VERSION}-darwin-arm64`, integrity: RECOMMENDED_INTEGRITY['darwin-arm64'] } as RuntimeArtifact
     const manifest = await materializeCodex(artifact, archivePath, output, new AbortController().signal)
     const executable = join(output, manifest.executable)
     const candidate = await resolveCodexCandidate(executable)
@@ -44,11 +44,11 @@ describe.skipIf(!fixtureRoot || process.platform !== 'darwin' || process.arch !=
       if (request.input) send(request.input); else child.stdin.end()
     }), { directory: isolated, reportVersion: () => {} }) as RuntimeProbeRunner
     try {
-      expect(await probeCodex(candidate, run)).toBe('0.128.0')
+      expect(await probeCodex(candidate, run)).toBe(RECOMMENDED_VERSION)
       const hash = createHash('sha256'); for await (const chunk of createReadStream(executable)) hash.update(chunk)
-      const receipt = { version: '0.128.0', platform: process.platform, arch: process.arch, executable, sha256: hash.digest('hex') }
+      const receipt = { version: RECOMMENDED_VERSION, platform: process.platform, arch: process.arch, executable, sha256: hash.digest('hex') }
       await writeFile(join(root, 'codex-provenance.json'), JSON.stringify(receipt, null, 2))
-      await writeFile(join(root, 'codex-official-evidence.json'), JSON.stringify({ ...receipt, archive: archivePath, registryMetadata: 'https://registry.npmjs.org/@openai%2Fcodex/0.128.0-darwin-arm64', integrity: artifact.integrity, components: manifest.components, probeMethods: methods, compatibility: 'compatible', verified: false }, null, 2))
+      await writeFile(join(root, 'codex-official-evidence.json'), JSON.stringify({ ...receipt, archive: archivePath, registryMetadata: `https://registry.npmjs.org/@openai%2Fcodex/${RECOMMENDED_VERSION}-darwin-arm64`, integrity: artifact.integrity, components: manifest.components, probeMethods: methods, compatibility: 'compatible', verified: false }, null, 2))
       expect(methods).toEqual(['initialize', 'initialized', 'config/read', 'thread/list'])
       expect(JSON.parse(await readFile(join(root, 'codex-provenance.json'), 'utf8')).sha256).toHaveLength(64)
     } finally { await rm(isolated, { recursive: true, force: true }) }

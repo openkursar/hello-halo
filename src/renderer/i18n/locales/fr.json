@@ -1414,7 +1414,7 @@
   "Enter a commit message": "Saisissez un message de commit",
   "Enter a commit message.": "Saisissez un message de commit.",
   "Enter a model ID for this endpoint": "Saisissez un ID de modèle pour ce point de terminaison",
-  "Enter a version number such as 0.128.0, or use stable or latest.": "Saisissez un numéro de version comme 0.128.0, ou utilisez stable ou latest.",
+  "Enter a version number such as 0.132.0, or use stable or latest.": "Saisissez un numéro de version tel que 0.132.0, ou utilisez stable ou latest.",
   "Enter a version number such as 2.1.310, or use stable or latest.": "Saisissez un numéro de version, par exemple 2.1.310, ou utilisez stable ou latest.",
   "Enter an absolute directory path on the computer hosting Halo.": "Saisissez un chemin de répertoire absolu sur l’ordinateur hébergeant Halo.",
   "Enter an API Key first.": "Saisissez d’abord une clé API.",

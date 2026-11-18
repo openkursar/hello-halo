@@ -51,6 +51,22 @@ function pdfjsAssets(): Plugin {
   }
 }
 
+function rendererDevPort(): Plugin {
+  return {
+    name: 'halo-renderer-dev-port',
+    apply: 'serve',
+    configureServer(server) {
+      server.httpServer?.once('listening', () => {
+        const address = server.httpServer?.address()
+        if (address && typeof address !== 'string') {
+          // electron-vite reads this after listen(), rather than the actual bound address.
+          server.config.server.port = address.port
+        }
+      })
+    },
+  }
+}
+
 function sandboxedPreloads(): Plugin {
   return {
     name: 'sandboxed-preloads',
@@ -165,8 +181,8 @@ export default defineConfig({
       // IPv4 → ERR_CONNECTION_REFUSED → blank window. Pinning to 127.0.0.1
       // matches Electron's resolution and stays loopback-only.
       host: '127.0.0.1',
-      port: 5173,
-      strictPort: true
+      port: Number(process.env.HALO_DEV_PORT) || 5173,
+      strictPort: false
     },
     build: {
       sourcemap: false,
@@ -195,7 +211,7 @@ export default defineConfig({
       entries: ['src/renderer/index.html', 'src/renderer/pages/*.tsx']
     },
     define: buildMetaDefine,
-    plugins: [react(), pdfjsAssets(), bootSplashScript(resolve(__dirname, 'src/renderer')), productionDistribution()],
+    plugins: [rendererDevPort(), react(), pdfjsAssets(), bootSplashScript(resolve(__dirname, 'src/renderer')), productionDistribution()],
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src/renderer')

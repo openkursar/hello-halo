@@ -107,12 +107,17 @@ const teamRuntimeReady = vi.hoisted(() => ({ current: true }))
 const teamAuthority = vi.hoisted(() => ({ ready: true,
   current: null as ReturnType<typeof import('./fixtures/participant-service').createScopedParticipantService> | null,
 }))
+const participantFixture = vi.hoisted(() => ({ current: null as import('../../../../src/main/apps/runtime/team/participant-execution').ResolvedParticipant | null }))
+vi.mock('../../../../src/main/apps/runtime/team/participant-execution', () => ({
+  resolveParticipantExecution: () => participantFixture.current,
+}))
 vi.mock('../../../../src/main/apps/team', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../../src/main/apps/team')>()
   const { createScopedParticipantService } = await import('./fixtures/participant-service')
   teamAuthority.current = createScopedParticipantService()
-  return { ...actual, getTeamService: () => teamAuthority.ready
-    ? { participants: teamAuthority.current!.service, getCollaborationScope: () => null, getCollabForConversation: () => null } : null }
+  return { ...actual, getTeamStore: () => participantFixture.current ? { getTeamById: () => ({ ephemeral: true }) } : null,
+    getTeamService: () => teamAuthority.ready
+      ? { participants: teamAuthority.current!.service, getCollaborationScope: () => null, getCollabForConversation: () => null } : null }
 })
 vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -312,11 +317,11 @@ const { app, environment, activityStore, listEffectiveMcpApps } = vi.hoisted(() 
       mcpBindings: {} as Record<string, string>,
     },
     listEffectiveMcpApps: vi.fn((): unknown[] => []),
-    activityStore: { getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn() },
+    activityStore: { getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn(), registerParticipantActor: vi.fn() },
   }
 })
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: () => ({ getApp: () => app, listEffectiveMcpApps }),
+  getAppManager: () => ({ getApp: (id: string) => participantFixture.current?.app.id === id ? null : app, listEffectiveMcpApps }),
 }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/apps/runtime/execution-environment')>()),
@@ -384,6 +389,7 @@ beforeEach(() => {
   registerExecutionHost(getActiveTeamRuntime as any)
   teamAuthority.ready = true
   teamAuthority.current!.reset()
+  participantFixture.current = null
   for (const epochId of ['epoch-1', 'epoch-context-window', 'policy-snapshot', 'restricted-live-input', 'epoch-outside', 'external-authority-missing', 'external-authority-message']) {
     teamAuthority.current!.allow('team-1', epochId, 'app-member')
   }
@@ -598,6 +604,34 @@ describe('a temporary collaboration member mounts no memory and no digital-human
     expect(Object.keys(servers)).toContain('halo-team')
     expect(Object.keys(servers)).toContain('web-search')
     expect(mountedSurfaces().systemPrompt).toContain('## Team work')
+  })
+})
+
+describe('reporting follows the collaborator source', () => {
+  it.each([undefined, 'source-digital-human'])('mounts reporting only with a digital-human source (%s)', async sourceAppId => {
+    disposableMemberContext()
+    participantFixture.current = {
+      app: { ...app, userOverrides: {} },
+      member: { teamId: TEAM_ID, epochId: EPOCH_ID, memberName: 'tester' },
+      execution: { sourceAppId, environment, mcpServerNames: ['web-search', 'ocr'] },
+    } as unknown as NonNullable<typeof participantFixture.current>
+    await sendAppChatMessage(memberTurn())
+    const { mcpServers, systemPrompt } = mountedSurfaces()
+    expect(Boolean(mcpServers['halo-report'])).toBe(Boolean(sourceAppId))
+    expect(systemPrompt.includes('report_to_user')).toBe(Boolean(sourceAppId))
+    expect(systemPrompt.includes('Escalation preference')).toBe(Boolean(sourceAppId))
+    expect(mcpServers).toHaveProperty('halo-team')
+    expect(systemPrompt).toContain('actual requester with `team_send(to, message)`')
+    expect(systemPrompt).toContain('send blockers or missing data to the requester with `team_send`')
+  })
+
+  it('keeps reporting and its existing guidance for an installed team member', async () => {
+    keptMemberContext()
+    await sendAppChatMessage(memberTurn())
+    const { mcpServers, systemPrompt } = mountedSurfaces()
+    expect(mcpServers).toHaveProperty('halo-report')
+    expect(systemPrompt).toContain('Only when you need a HUMAN decision, call')
+    expect(systemPrompt).toContain('report_to_user({type:"escalation", message:"Your question"')
   })
 })
 

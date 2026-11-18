@@ -46,7 +46,50 @@ promises:
   im-source:
     en: IM collaboration answers in the original chat under the original caller's permissions, after the digital human reviews the result. Stops, clearing and authorization changes invalidate old results.
     zh: IM 协作按原调用者权限，由数字人审阅结果后回复原聊天。停止、清空和权限变更会使旧结果失效。
+  reporting-boundary:
+    en: Space-conversation collaborators, including nested collaborators, return results and blockers to their requester without digital-human reporting tools or their instructions. Digital-human work retains its existing reporting and activity presentation.
+    zh: 空间对话的协作者及递归协作者把成果与阻塞回给请求方，不携带数字人汇报工具及其说明；数字人工作保留原有汇报和活动展示。
 scenarios:
+  - id: teams.collaboration.space-report-boundary
+    title:
+      en: Return space collaborator results and blockers without digital-human notifications
+      zh: 空间协作者回报成果和阻塞，不触发数字人通知
+    verifies: [reporting-boundary, addressing, delegation]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: An isolated application uses Halo and a local scripted model endpoint with real application handlers.
+        zh: 隔离应用使用 Halo 和本地脚本模型端点，保留真实应用处理器。
+    steps:
+      - en: In an ordinary space conversation, create a collaborator that creates its own collaborator. Return both a verified result and a blocker through the actual requesting collaborator.
+        zh: 普通空间对话创建协作者，协作者再创建子协作者；成果和阻塞经实际请求方逐级回报。
+    expected:
+      - en: Both collaborator depths receive no report_to_user tool or instructions, while the original result and blocker guidance remains. The source conversation receives the combined result and blocker, with no activity entry, escalation or notification.
+        zh: 两级协作者均不收到 report_to_user 工具和说明，原成果及阻塞回报指导保留；源对话收到汇总结果和阻塞，不产生数字人活动、人工决策或通知。
+  - id: teams.collaboration.digital-human-reporting
+    title:
+      en: Preserve digital-human and delegated-member reporting
+      zh: 保留数字人及其协作者的汇报能力
+    verifies: [reporting-boundary]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: An isolated installed digital human runs against a local scripted model endpoint.
+        zh: 隔离安装的数字人使用本地脚本模型端点执行任务。
+    steps:
+      - en: Start a digital-human run, delegate work, publish a collaborator milestone, then publish the source milestone and completion report.
+        zh: 启动数字人任务并委派工作；协作者发布里程碑，源数字人随后发布里程碑和完成汇报。
+    expected:
+      - en: The collaborator retains the original reporting instructions and can persist its milestone. The digital human completes with its original reporting tool and the source milestone remains visible in its activity interface.
+        zh: 协作者保留原汇报说明且能保存里程碑；数字人通过原汇报工具完成任务，源里程碑仍在活动界面可见。
   - id: teams.collaboration.engine-parity
     title:
       en: Use the same collaboration flow with each application engine

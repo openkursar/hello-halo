@@ -984,14 +984,17 @@ files here allowed to.
 
 ### Report routing (§5.3)
 
+`report_to_user` is mounted for digital-human team turns and their collaborators,
+not for collaborators originating in a space conversation, including descendants.
+The final mounted tool set determines whether the shared prompt includes its
+usage instructions; other prompt text is unchanged. Results and blockers return
+to the requester through `team_send` on either path.
+
 `report-tool.ts` reads `ReportToolContext.teamContext` (a `TeamTriggerContext`).
-On a team turn: a result is captured to the runtime (`captureReport(corr,
-{kind:'report_result', content, taskId?})`) with NO user-facing entry; an
-escalation writes a user entry tagged with `content.teamContext` (a `TeamContext`
-persisted inside the `content_json` blob — no migration) AND captures
-`{kind:'report_escalation'}`. Completion detection does NOT depend on this call —
-the orchestration detects turn end regardless (§5.6); a captured report only
-enriches the outcome.
+A team report writes an activity entry; an escalation also captures the human
+decision request in the runtime. Milestone, output and escalation notifications
+follow the digital human's notification level. The member's result remains its
+final message, captured independently at turn end (§5.6).
 
 ### An open question does not suspend a member
 

@@ -1,4 +1,5 @@
-export const RECOMMENDED_VERSION = '0.128.0'
+// Builds signed before 2026-05-12, including 0.128.0, carry a signing certificate revoked on 2026-06-30; macOS kills them at launch.
+export const RECOMMENDED_VERSION = '0.132.0'
 
 export const CODEX_PLATFORMS = {
   'darwin-arm64': { os: 'darwin', cpu: 'arm64', triple: 'aarch64-apple-darwin' },
@@ -9,12 +10,12 @@ export const CODEX_PLATFORMS = {
 
 export type CodexPlatform = keyof typeof CODEX_PLATFORMS
 
-// Official registry payload metadata checked on 2026-11-16; these pins do not assert behavioral verification.
+// Official registry payload metadata checked on 2026-11-17; these pins do not assert behavioral verification.
 export const RECOMMENDED_INTEGRITY: Record<CodexPlatform, string> = {
-  'darwin-arm64': 'sha512-w+6zohfHx/kHBdles/CyFKaY57u9I3nK8QI9+NrdwMliKA0b7xn13yblRNkMpe09j6vL1oAWoxYsMOQ/vjBGug==',
-  'darwin-x64': 'sha512-SDbn6fO22Puy8xmMIbZi4f2znMrUEPwABApke4mo+4ihaauwuVjeqzXvW5SPJz5ty/bG11/mSupQgReT7T8BBw==',
-  'linux-x64': 'sha512-2lnSPA05CRRuKAzFW8BCmmNCSieDcToLwfC2ALLbBYilGLgzhRibjlDglK9F1BkEzfohSSWJu4PBbRu/aG60lQ==',
-  'win32-x64': 'sha512-k3jmUAFrzkUtvjGTXvSKjQqJLLlzjxp/VoHJDYedgmXUn6j70HxK38IwapzmnYfiBiTuzETvGwjXHzZgzKjhoQ=='
+  'darwin-arm64': 'sha512-EVD6XaKSN4fD7Z9HrQIjOFFLbL6cu1PWA6a2hzFwMomAjHlZelGOLtS4faFWOmLUZnO7TYtnJJXk8VNfdGqefg==',
+  'darwin-x64': 'sha512-RGaiBLwM9UkuB0tOHXjhwTJzMi/FCk/TQaKai97WIodIrvmRzL+j43hqVsXMV8jjYxTFwdyYooGMmCI7cQbKXw==',
+  'linux-x64': 'sha512-aGJPB+QkgtYQNQMlRGmE7oZstULu7k4trpux5r3CCZGPun4Xtwx3swtZXm7cWOVeTUkNfGCqdtCQ0bv6SKRiLA==',
+  'win32-x64': 'sha512-TnAoOBWbFSCqR+4AkgwSKOVQJtGUdBCqROOEyAKylbIug55xzrLPLNQ7Mnd9l1yFIUnU2NqvPeHtIYqGImzCqA=='
 }
 
 export function requiredComponents(platform: CodexPlatform): string[] {
@@ -22,4 +23,9 @@ export function requiredComponents(platform: CodexPlatform): string[] {
   return platform === 'win32-x64'
     ? [`${prefix}/codex/codex.exe`, `${prefix}/codex/codex-windows-sandbox-setup.exe`, `${prefix}/codex/codex-command-runner.exe`, `${prefix}/path/rg.exe`]
     : [`${prefix}/codex/codex`, `${prefix}/path/rg`]
+}
+
+// Executables a release may ship beside the CLI; Linux builds since 0.129.0 bundle bubblewrap for the sandbox.
+export function optionalComponents(platform: CodexPlatform): string[] {
+  return platform === 'linux-x64' ? [`vendor/${CODEX_PLATFORMS[platform].triple}/codex-resources/bwrap`] : []
 }

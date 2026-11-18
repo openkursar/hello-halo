@@ -13,7 +13,7 @@ async function fixture(context) {
   const provenance = path.join(directory, 'provenance.json')
   const bytes = 'inert test fixture; never executed'
   await fs.writeFile(executable, bytes, { mode: 0o700 })
-  const receipt = { version: '0.128.0', platform: process.platform, arch: process.arch, executable, sha256: createHash('sha256').update(bytes).digest('hex') }
+  const receipt = { version: '0.132.0', platform: process.platform, arch: process.arch, executable, sha256: createHash('sha256').update(bytes).digest('hex') }
   await fs.writeFile(provenance, JSON.stringify(receipt))
   return { executable, provenance, receipt, environment: { HALO_ACCEPTANCE_CODEX_CLI: executable, HALO_ACCEPTANCE_CODEX_PROVENANCE: provenance } }
 }
@@ -36,9 +36,9 @@ test('Codex readiness binds fixed version, host and actual bytes without executi
 
 test('a wrong release or platform cannot supply Codex prerequisite evidence', async context => {
   const data = await fixture(context)
-  for (const change of [{ version: '0.129.0' }, { platform: 'other' }, { arch: 'other' }, { sha256: 'not-a-digest' }]) {
+  for (const change of [{ version: '0.128.0' }, { platform: 'other' }, { arch: 'other' }, { sha256: 'not-a-digest' }]) {
     await fs.writeFile(data.provenance, JSON.stringify({ ...data.receipt, ...change }))
-    assert.match(await externalRuntimeFailure('codex', data), /version 0.128.0.*platform.*SHA-256/)
+    assert.match(await externalRuntimeFailure('codex', data), /version 0\.132\.0.*platform.*SHA-256/)
   }
 })
 

@@ -1323,7 +1323,7 @@
   "Enter a commit message": "輸入提交訊息",
   "Enter a commit message.": "輸入提交訊息。",
   "Enter a model ID for this endpoint": "為此端點輸入模型 ID",
-  "Enter a version number such as 0.128.0, or use stable or latest.": "請輸入版本號，例如 0.128.0，或使用 stable 或 latest。",
+  "Enter a version number such as 0.132.0, or use stable or latest.": "請輸入版本號，例如 0.132.0，或使用 stable 或 latest。",
   "Enter a version number such as 2.1.310, or use stable or latest.": "請輸入版本號碼（例如 2.1.310），或使用 stable、latest。",
   "Enter an absolute directory path on the computer hosting Halo.": "請輸入執行 Halo 的電腦上的絕對目錄路徑。",
   "Enter an API Key first.": "請先輸入 API 金鑰。",

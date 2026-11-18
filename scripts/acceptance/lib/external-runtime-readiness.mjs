@@ -18,7 +18,7 @@ export async function externalRuntimeFailure(runtimeId, { environment = process.
     const receiptStat = await fs.stat(receiptPath)
     if (receiptStat.size > 65536) return 'The external Codex artifact identity receipt exceeds its size limit'
     const receipt = JSON.parse(await fs.readFile(receiptPath, 'utf8'))
-    if (receipt.version !== '0.128.0' || receipt.platform !== process.platform || receipt.arch !== process.arch || !/^[a-f0-9]{64}$/.test(receipt.sha256 ?? '')) return 'The external Codex receipt must identify version 0.128.0 and this platform with a SHA-256 digest'
+    if (receipt.version !== '0.132.0' || receipt.platform !== process.platform || receipt.arch !== process.arch || !/^[a-f0-9]{64}$/.test(receipt.sha256 ?? '')) return 'The external Codex receipt must identify version 0.132.0 and this platform with a SHA-256 digest'
     if (await fs.realpath(executable) !== await fs.realpath(receipt.executable)) return 'The external Codex receipt identifies a different executable'
     if (await digest(executable) !== receipt.sha256) return 'The external Codex bytes do not match the recorded SHA-256 identity'
     if (receipt.execution?.state === 'blocked') return 'The fixed external Codex artifact cannot execute on this host; its recorded OS execution prerequisite is blocked'

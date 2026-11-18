@@ -988,11 +988,7 @@ async function runAppChatTurn(
       quote: relayOrigin?.quote ?? buildQuoteFromMessage(message, senderIdentity?.name),
     },
   })
-  // report_to_user is injected ONLY for team turns (escalation routing to the
-  // lead / user). It is deliberately NOT injected in plain chat/IM: it writes to
-  // activity_entries whose run_id FKs automation_runs, which chat sessions lack,
-  // so a call there fails the FK constraint and the model retries in a loop
-  // (issue #200). Plain chat replies reach the user directly as text.
+  // Plain chats reply directly; space collaborators report to their requester.
   const reportContext: ReportToolContext = {
     appId: app.id,
     appName: app.spec.name,
@@ -1090,7 +1086,7 @@ async function runAppChatTurn(
     // A question to the user ends the turn that asked it — the sink is looked up
     // when the tool fires rather than captured here, because it is created later
     // in this same call and outlives the session underneath it.
-    ...(teamContext && activityStore
+    ...(teamContext && activityStore && (!participant || participant.execution.sourceAppId)
       ? {
           'halo-report': createReportToolServer(activityStore, reportContext, () => {
             peekAppChatSink(conversationId)?.noteAskedUser()
@@ -1271,6 +1267,7 @@ async function runAppChatTurn(
     appName: app.spec.name,
     appSpec: app.spec,
     includeAppId: permCtx?.isOwner !== false,
+    reportToUserAvailable: !!mounted['halo-report'],
     memoryInstructions,
     userConfig: mergedConfig,
     usesAIBrowser: usesAIBrowser && !!mounted['ai-browser'],

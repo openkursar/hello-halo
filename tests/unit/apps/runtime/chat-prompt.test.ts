@@ -33,7 +33,7 @@ const base: DigitalHumanChatPromptInput = {
   appId: 'app-scout', appName: 'Scout', appSpec: spec as DigitalHumanChatPromptInput['appSpec'],
   memoryInstructions: '## Memory\nMemory-instructions-marker', userConfig: { region: 'config-region-marker' },
   workDir: '/tmp/prompt-workspace', standingTeams: [], includeAppId: true,
-  usesAIBrowser: true, usesHaloApi: true,
+  usesAIBrowser: true, usesHaloApi: true, reportToUserAvailable: true,
 }
 const current = { teamId: membership.teamId, teamName: team.teamName, epochId: 'conversation-support', viaIm: false }
 
@@ -116,6 +116,20 @@ describe('digital-human context composition', () => {
     expect(prompt).toContain('a temporary collaborator in Halo')
     expect(prompt).toContain('## Team work')
     for (const marker of ['a digital human in Halo', '## Teams\n', 'Memory-instructions-marker', 'operate-halo-guide-marker']) expect(prompt).not.toContain(marker)
+  })
+
+  it.each(['lead', 'user'] as const)('only subtracts reporting instructions from a space collaborator prompt (%s routing)', escalationRouting => {
+    const input = { ...base, memoryInstructions: '', standingTeams: undefined, usesHaloApi: false,
+      team: { context: { ...team, escalationRouting, temporaryCollaboration: true, selfIsDisposable: true }, conversation: { ...current, temporary: true } } }
+    const existing = buildDigitalHumanChatPrompt({ ...input, reportToUserAvailable: true })
+    const withheld = buildDigitalHumanChatPrompt({ ...input, reportToUserAvailable: false })
+    expect(withheld).toBe(existing.split('\n').filter(line =>
+      line !== '- Only when you need a HUMAN decision, call' && !line.includes('report_to_user')
+    ).join('\n'))
+    expect(withheld).not.toContain('report_to_user')
+    expect(withheld).not.toContain('Escalation preference')
+    expect(withheld).toContain('Send teammate replies/results to the actual requester with `team_send(to, message)`')
+    expect(withheld).toContain('No silent failure: send blockers or missing data to the requester with `team_send`')
   })
 
   it('keeps scheduled work out of chat and standing-team context', () => {

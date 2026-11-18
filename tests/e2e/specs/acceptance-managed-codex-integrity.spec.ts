@@ -19,9 +19,9 @@ for (const record of ['no-integrity', 'no-version', 'missing-helper', 'wrong-pin
       mkdirSync(join(directory, 'vendor/aarch64-apple-darwin/path'), { recursive: true })
       writeFileSync(selectedPath, bytes, { mode: 0o700 })
       writeFileSync(join(directory, helper), bytes, { mode: 0o700 })
-      const installation = { path: selectedPath, version: record === 'no-version' ? undefined : '0.128.0', compatibility: 'verified', managed: true, recommended: true }
+      const installation = { path: selectedPath, version: record === 'no-version' ? undefined : '0.132.0', compatibility: 'verified', managed: true, recommended: true }
       const components = [{ path: component, checksum, size: bytes.length }, ...(record === 'missing-helper' ? [] : [{ path: helper, checksum, size: bytes.length }])]
-      const integrity = { platform: 'darwin-arm64', directory, artifactIntegrity: record === 'wrong-pin' ? `sha512-${Buffer.alloc(64).toString('base64')}` : 'sha512-w+6zohfHx/kHBdles/CyFKaY57u9I3nK8QI9+NrdwMliKA0b7xn13yblRNkMpe09j6vL1oAWoxYsMOQ/vjBGug==', components }
+      const integrity = { platform: 'darwin-arm64', directory, artifactIntegrity: record === 'wrong-pin' ? `sha512-${Buffer.alloc(64).toString('base64')}` : 'sha512-EVD6XaKSN4fD7Z9HrQIjOFFLbL6cu1PWA6a2hzFwMomAjHlZelGOLtS4faFWOmLUZnO7TYtnJJXk8VNfdGqefg==', components }
       writeFileSync(join(root, 'catalog.json'), JSON.stringify({ version: 1, truncated: false, entries: [{ installation, ...(record === 'no-integrity' ? {} : { integrity }) }] }))
     })
     expect(await acceptanceApp.app.evaluate(({ app }) => app.isPackaged)).toBe(true)

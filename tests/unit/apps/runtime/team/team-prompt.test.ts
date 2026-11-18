@@ -164,6 +164,21 @@ describe('buildTeamEntry roster — cross-machine awareness', () => {
 })
 
 describe('buildTeamConstraints — dispatch + side-effect discipline', () => {
+  it.each(['lead', 'user'] as const)('removes only reporting instructions when the tool is unavailable (%s routing)', escalationRouting => {
+    const context = makeCtx({ escalationRouting })
+    const entry = buildTeamEntry(context)
+    const constraints = buildTeamConstraints(context)
+    expect(buildTeamEntry(context, true)).toBe(entry)
+    expect(buildTeamConstraints(context, true)).toEqual(constraints)
+    expect(buildTeamEntry(context, false)).toBe(entry.split('\n').filter(line =>
+      line !== '- Only when you need a HUMAN decision, call' && !line.includes('report_to_user')
+    ).join('\n'))
+    expect(buildTeamConstraints(context, false)).toEqual(constraints.map(text =>
+      text.split('\n').filter(line => !line.includes('report_to_user')).join('\n')
+    ))
+    expect(buildTeamConstraints(context, false).join('\n')).toContain('send blockers or missing data to the requester with `team_send`')
+  })
+
   it.each(['lead', 'user'] as const)('names the actual escalation tool and message payload (%s routing)', (escalationRouting) => {
     const context = makeCtx({ escalationRouting })
     const prompt = [buildTeamEntry(context), ...buildTeamConstraints(context)].join('\n')

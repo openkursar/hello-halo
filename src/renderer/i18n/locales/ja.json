@@ -1323,7 +1323,7 @@
   "Enter a commit message": "コミットメッセージを入力",
   "Enter a commit message.": "コミットメッセージを入力してください。",
   "Enter a model ID for this endpoint": "このエンドポイントのモデル ID を入力してください",
-  "Enter a version number such as 0.128.0, or use stable or latest.": "0.128.0 などのバージョン番号を入力するか、stable または latest を使用してください。",
+  "Enter a version number such as 0.132.0, or use stable or latest.": "0.132.0 などのバージョン番号を入力するか、stable または latest を使用してください。",
   "Enter a version number such as 2.1.310, or use stable or latest.": "2.1.310 などのバージョン番号、または stable、latest を入力してください。",
   "Enter an absolute directory path on the computer hosting Halo.": "Halo をホストしているコンピューター上の絶対ディレクトリパスを入力してください。",
   "Enter an API Key first.": "先に API キーを入力してください。",
