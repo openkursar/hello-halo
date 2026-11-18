@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp } from '../../../../src/main/apps/team/collab-binding'
-import { buildLocalSessionKey, getAppChatConversationId } from '../../../../src/shared/apps/im-keys'
+import { collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp, releaseRunCollaboration } from '../../../../src/main/apps/team/collab-binding'
+import { buildLocalSessionKey, buildRunSenderKey, getAppChatConversationId } from '../../../../src/shared/apps/im-keys'
 
 const dhChat = buildLocalSessionKey('app-1', 'chat-a')
 const otherDhChat = buildLocalSessionKey('app-2', 'chat-a')
@@ -54,17 +54,30 @@ describe('releasing a collaboration with its conversation', () => {
     expect(store.setCoordinatorConversation).toHaveBeenCalledWith('saved', null)
   })
 
-  it('on uninstall releases only collaborations coordinated from that digital human\u2019s chats', () => {
+  it('a run\u2019s collaboration ends with the run record, which has no conversation to delete', () => {
+    const runKey = buildRunSenderKey('app-1', 'run-1')
+    const teams = [
+      { id: 'run-collab', coordinatorConversationId: runKey as string | null, ephemeral: true },
+      { id: 'other-run', coordinatorConversationId: buildRunSenderKey('app-1', 'run-2') as string | null, ephemeral: true },
+    ]
+    const service = { dissolveTeam: vi.fn(async (_teamId: string) => {}) }
+    releaseRunCollaboration(fakeStore(teams), service as never, 'app-1', 'run-1')
+    expect(service.dissolveTeam.mock.calls).toEqual([['run-collab']])
+  })
+
+  it('on uninstall releases only collaborations coordinated from that digital human\u2019s chats and runs', () => {
     const teams = [
       { id: 'mine-default', coordinatorConversationId: getAppChatConversationId('app-1') as string | null, ephemeral: true },
       { id: 'mine-local', coordinatorConversationId: dhChat as string | null, ephemeral: true },
+      { id: 'mine-run', coordinatorConversationId: buildRunSenderKey('app-1', 'run-1') as string | null, ephemeral: true },
+      { id: 'other-run', coordinatorConversationId: buildRunSenderKey('app-2', 'run-1') as string | null, ephemeral: true },
       { id: 'other-dh', coordinatorConversationId: otherDhChat as string | null, ephemeral: true },
       { id: 'space', coordinatorConversationId: spaceChat as string | null, ephemeral: true },
     ]
     const service = { dissolveTeam: vi.fn(async (_teamId: string) => {}) }
     releaseCollaborationsOfApp(fakeStore(teams), service as never, { id: 'app-1', spaceId: 'space-1' })
-    expect(service.dissolveTeam.mock.calls.map(([id]) => id).sort()).toEqual(['mine-default', 'mine-local'])
+    expect(service.dissolveTeam.mock.calls.map(([id]) => id).sort()).toEqual(['mine-default', 'mine-local', 'mine-run'])
     releaseCollaborationsOfApp(fakeStore(teams), service as never, { id: 'app-1', spaceId: null })
-    expect(service.dissolveTeam).toHaveBeenCalledTimes(2)
+    expect(service.dissolveTeam).toHaveBeenCalledTimes(3)
   })
 })

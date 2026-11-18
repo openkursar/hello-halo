@@ -6,7 +6,7 @@ The inference runner checks out each issue's base commit, runs the agent, and sa
 
 ## Prerequisites
 
-Use a source checkout with the SDK's dependencies installed, Node.js 20 or later, Git, Python 3.10 or later, and Docker for scoring. Install the harness's separate dependencies from this directory:
+Use a source checkout with the SDK built (`npm ci && npm run build` from its root), Node.js 20 or later, Git, Python 3.10 or later, and Docker for scoring. The harness consumes the SDK's public package entry and its Rust runtime. Install the harness's separate dependencies from this directory:
 
 ```sh
 npm ci

@@ -33,7 +33,7 @@ test('validation invokes the full SDK build entry and verifies the current nativ
   const native = await buildSdk(directory, source, log);
   assert.equal(native.buildId, 'a'.repeat(64));
   assert.equal(await fs.readFile(join(directory, 'target-path.txt'), 'utf8'),
-    resolve(source, 'native', process.env.CARGO_TARGET_DIR || 'target'));
+    resolve(source, process.env.CARGO_TARGET_DIR || 'target'));
   assert.match(await fs.readFile(log, 'utf8'), /fixture build completed/);
 });
 

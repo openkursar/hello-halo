@@ -17,6 +17,9 @@ references:
   - tests/e2e/specs/acceptance-load-balancing-groups.spec.ts
   - tests/unit/openai-compat-router/group-wire.test.ts
 promises:
+  editor-position:
+    en: Creating a group expands the add row, and editing expands the group's own card without moving the clicked container by more than one pixel when the body fits; otherwise the page scrolls up just enough to show it, never pushing the header above the top margin. Cancel restores entry focus; a new group is revealed, highlighted once and focused. Updates preserve members and selection; Escape never discards the inline draft. Entering from the model picker reveals the edited group.
+    zh: 创建组在添加行展开，编辑在组卡片内部展开，放得下时被点容器移动不超过一像素，放不下时页面上移刚好露出内容且不把头部推过顶部留白；取消恢复入口焦点，新建组展示、高亮一次并获得焦点；更新保留成员与选择，Esc 不丢弃原地草稿。从模型选择器进入时展示正在编辑的组。
   create:
     en: A group is made from my own accounts and models, reached from a small control beside "Add AI Provider", and making one changes nothing that is already in use.
     zh: 组由我自己的账户和模型组成，入口是“添加 AI 供应商”旁的小控件；创建组不会改变任何正在使用的设置。
@@ -48,6 +51,48 @@ promises:
     en: Someone who never makes a group sees no group in any list, menu or card.
     zh: 从未创建组的人，不会在任何列表、菜单或卡片中看到组。
 scenarios:
+  - id: models.groups.in-place
+    title: Create and edit a group without losing the scrolled account list
+    verifies: [editor-position, create]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      width: ['1280', '390']
+    preconditions:
+      - An isolated profile contains a long list of fictional accounts with usable model catalogs.
+    steps:
+      - At a nonzero settings scroll position open group creation and attempt to create an empty group.
+      - Correct the draft by adding the accounts' models, create the group, verify Escape keeps an edited draft open, cancel it and save another edit.
+    expected:
+      - The clicked container top stays within one pixel when the editor fits or rises only as far as needed to show it, its title and first field are visible, and no edit dialog appears.
+      - Validation failure remains in the editor without persisting a group; corrected creation reveals, highlights and focuses the new group without changing selection.
+      - Cancel restores entry focus and position without saving; a saved update retains identity, members, selection and visibility.
+  - id: models.groups.in-place-add-provider
+    title: Add a provider from an empty group without leaving the add row
+    verifies: [editor-position, create]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    expected:
+      - With no accounts available, Add AI Provider replaces group creation with the provider editor in the same DOM row and within one pixel of the group editor's top, without saving anything.
+  - id: models.groups.in-place-external
+    title: Open the group editor from the chat model card
+    verifies: [editor-position]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    expected:
+      - Edit this group navigates to settings with the named group header and inline editor in view, without changing selection.
   - id: models.groups.create-and-choose
     title:
       en: Make a group from my accounts, choose it, and chat through it

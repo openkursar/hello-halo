@@ -822,3 +822,33 @@ describe('retry headers on error replies', () => {
     expect(res.ended).toBe(JSON.stringify(body))
   })
 })
+
+describe('accounts that must not connect directly', () => {
+  const REFUSAL = 'A proxy is required for this account, but none is configured. [proxy-required:none]'
+
+  it.each(['chat_completions', 'responses', 'anthropic_passthrough'])(
+    '%s: marks the upstream request as guarded only for a guarded account',
+    async (apiType) => {
+      proxyFetch.mockResolvedValue(fakeResponse({ json: {}, text: '{}' }))
+      for (const proxyGuard of [true, undefined]) {
+        proxyFetch.mockClear()
+        await handleMessagesRequest(anthReq(), baseConfig({ apiType, proxyGuard }), makeRes() as unknown as ExpressResponse, {})
+        expect(proxyFetch).toHaveBeenCalled()
+        expect(proxyFetch.mock.calls[0][2]).toEqual({ guarded: proxyGuard === true })
+      }
+    },
+  )
+
+  it.each(['chat_completions', 'anthropic_passthrough'])(
+    '%s: answers a refusal with a service-unavailable error the client will not retry',
+    async (apiType) => {
+      proxyFetch.mockRejectedValue(new Error(REFUSAL))
+      const res = makeRes()
+      await handleMessagesRequest(anthReq(), baseConfig({ apiType, proxyGuard: true }), res as unknown as ExpressResponse, {})
+
+      expect(res.statusCode).toBe(503)
+      expect(res.headers['x-should-retry']).toBe('false')
+      expect((res.jsonBody as { error: { message: string } }).error.message).toBe(REFUSAL)
+    },
+  )
+})

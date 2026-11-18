@@ -15,6 +15,7 @@
  */
 
 import { deleteStoredSession } from '../../services/agent'
+import type { AutomationRun } from '../../../shared/apps/app-types'
 import type { ActivityStore } from './store'
 import { deleteRunTranscript } from './session-store'
 
@@ -27,9 +28,15 @@ export const RUN_TRANSCRIPTS_CLEARED_PER_PASS = 50
  *
  * @param currentSpacePath the person's space, where a run recorded before runs
  *   kept their environment wrote its transcript
+ * @param onCleared a run whose process is gone for good: its own resources go with it
  * @returns how many runs were cleared
  */
-export function clearOldRunTranscripts(store: ActivityStore, appId: string, currentSpacePath: string | null): number {
+export function clearOldRunTranscripts(
+  store: ActivityStore,
+  appId: string,
+  currentSpacePath: string | null,
+  onCleared?: (run: AutomationRun) => void,
+): number {
   let cleared = 0
   for (const run of store.listRunsPastTranscriptRetention(appId, RUN_TRANSCRIPTS_KEPT, RUN_TRANSCRIPTS_CLEARED_PER_PASS)) {
     const spacePath = run.environment?.spacePath ?? currentSpacePath
@@ -50,6 +57,8 @@ export function clearOldRunTranscripts(store: ActivityStore, appId: string, curr
       }
     }
     store.markTranscriptCleared(run.runId)
+    try { onCleared?.(run) }
+    catch (error) { console.warn(`[Runtime] Could not release the resources of run ${run.runId}:`, error) }
     cleared++
   }
   if (cleared > 0) console.log(`[Runtime] Cleared the process of ${cleared} old run(s): app=${appId}`)

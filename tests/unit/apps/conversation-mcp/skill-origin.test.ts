@@ -22,7 +22,8 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   tool: (name: string, description: string, schema: unknown, handler: Function) => ({ name, description, schema, handler }),
   createSdkMcpServer: (options: unknown) => options,
 }))
-vi.mock('../../../../src/main/services/agent', () => ({
+vi.mock('../../../../src/main/services/agent', async () => ({
+  ...(await import('../../../../src/main/services/agent/execution')),
   emitHumanRequest: vi.fn(), isCollaborationEnabled: () => false,
   acquireV2Session: acquireSession, getToolset: () => undefined,
   formatTurnAttachments: () => '', workingDirErrorDetail: () => ({}), engineErrorDetail: () => ({}),
@@ -140,6 +141,8 @@ vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({ createReportTo
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
 import { createHaloAppsMcpServer } from '../../../../src/main/apps/conversation-mcp'
 import { registerAppBridge } from '../../../../src/main/services/app-bridge'
+import { createExecutionWorkHost } from '../../../../src/main/apps/runtime/team/execution-work'
+import { getActiveTeamRuntime } from '../../../../src/main/apps/runtime/team'
 import { buildImSessionKey, buildTeamSessionKey } from '../../../../src/shared/apps/im-keys'
 
 beforeEach(() => {
@@ -149,7 +152,10 @@ beforeEach(() => {
   state.sessions = []
   state.policy = { allowedTools: ['Read'] }
   state.disposable = false
-  registerAppBridge({ getAppManager: () => null, createHaloAppsMcpServer, onMcpAppsChange: () => () => {} })
+  registerAppBridge({
+    getAppManager: () => null, createHaloAppsMcpServer, onMcpAppsChange: () => () => {},
+    executionWork: createExecutionWorkHost({ runtime: getActiveTeamRuntime as any }),
+  })
   acquireSession.mockImplementation(async (_space: string, _conversation: string, options: Record<string, unknown>) => {
     state.sessions.push(options)
     return { session: {}, isCurrent: true, isUsable: true, onRetired: () => () => {}, send: vi.fn(), release: vi.fn() }

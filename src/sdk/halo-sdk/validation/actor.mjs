@@ -39,6 +39,7 @@ async function turn(session, prompt, allowError = false) {
   let outcome;
   const calls = [];
   const toolErrors = [];
+  const toolResults = [];
   try {
   for await (const message of session.stream()) {
     if (message.type === 'system' && message.subtype === 'compact_boundary') compactions++;
@@ -53,7 +54,10 @@ async function turn(session, prompt, allowError = false) {
     }
     if (message.type === 'user' && Array.isArray(message.message.content)) {
       for (const block of message.message.content) {
-        if (block.type === 'tool_result' && block.is_error) toolErrors.push(String(block.content).slice(0, 4096));
+        if (block.type === 'tool_result') {
+          toolResults.push(String(block.content));
+          if (block.is_error) toolErrors.push(String(block.content).slice(0, 4096));
+        }
       }
     }
     if (message.type === 'result') { outcome = message; break; }
@@ -70,7 +74,7 @@ async function turn(session, prompt, allowError = false) {
   usage.cacheRead += outcome.usage?.cache_read_input_tokens ?? 0;
   usage.cacheCreation += outcome.usage?.cache_creation_input_tokens ?? 0;
   if (!allowError) assert.equal(outcome.is_error, false, `Turn failed: ${outcome.result}`);
-  return { text: outcome.result, calls, outcome, toolErrors };
+  return { text: outcome.result, calls, outcome, toolErrors, toolResults };
 }
 
 async function close(session) {
@@ -221,11 +225,14 @@ async function main(config) {
   const file = await fs.open(large, 'w');
   await file.truncate(1024 ** 3);
   await file.close();
-  const refused = await turn(boundarySession, prompt(
-    `Use Read with limit 1 to read ${large}. If it refuses the file size, report that refusal. Do not try a different tool or read the file with Bash.`,
-    [{ name: 'Read', input: { file_path: large, limit: 1 } }], 'REFUSED'));
-  assert.ok(refused.calls.includes('Read'));
-  assert.ok(refused.toolErrors.some(error => error.includes('limit')), 'Oversized file must be rejected by the real tool');
+  const bounded = await turn(boundarySession, prompt(
+    `Use Read with limit 1 to read ${large}. If it returns a bounded or truncated view, report that truncation. Do not try a different tool or read the file with Bash.`,
+    [{ name: 'Read', input: { file_path: large, limit: 1 } }], 'BOUNDED'));
+  assert.ok(bounded.calls.includes('Read'));
+  assert.equal(bounded.toolErrors.length, 0, 'Oversized text must return a bounded range');
+  const readResult = bounded.toolResults.join('\n');
+  assert.match(readResult, /alone exceeds the \d+ estimated-token output limit/);
+  assert.match(readResult, /only its beginning is shown/);
   await fs.rm(large);
   const flood = join(cwd, 'flood.mjs');
   await fs.writeFile(flood, "for(let i=0;i<512;i++)process.stdout.write('x'.repeat(65536));process.stdout.write('FINAL_MARKER');");
@@ -246,7 +253,7 @@ async function main(config) {
     const tail = Buffer.alloc(256);
     const read = await handle.read(tail, 0, tail.length, Math.max(0, size - tail.length));
     await handle.close();
-    assert.ok(tail.subarray(0, read.bytesRead).toString('utf8').includes('Output truncated'));
+    assert.ok(tail.subarray(0, read.bytesRead).toString('utf8').includes('Saved output reached the 8388608-byte file limit'));
   }
   await close(boundarySession);
   const helper = join(cwd, 'wait.mjs');
@@ -317,7 +324,7 @@ async function main(config) {
   if (expectNoThinking) assert.equal(thinkingBlocks, 0, 'The requested disabled thinking mode must be honored by the provider');
   if (config.requireCompaction) assert.ok(compactions > 0, 'The configured test must actually trigger model compaction');
   await sample('final');
-  send({ type: 'checks', passed: ['concurrent-file-work', 'session-isolation', 'cancel-recreate', 'collaborator-delegation', 'large-file-refusal', 'bounded-background-output'], rounds,
+  send({ type: 'checks', passed: ['concurrent-file-work', 'session-isolation', 'cancel-recreate', 'collaborator-delegation', 'large-file-bound', 'bounded-background-output'], rounds,
     requests: wire?.metrics().requests, results, toolCalls, usage, previewMemory, compactions, thinkingBlocks });
 }
 

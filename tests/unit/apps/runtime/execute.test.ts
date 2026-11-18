@@ -73,10 +73,14 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
     systemPrompt: '',
     mcpServers: opts.mcpServers ?? {},
   })),
+  captureToolsetExecutionOptions: vi.fn((_options: unknown, engineId: string, servers: object) => ({
+    engineId, collaborationEnabled: true, mcpServerNames: Object.keys(servers),
+  })),
 }))
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn().mockReturnValue({ agent: {}, notificationChannels: {} }),
+  onAgentConfigChange: vi.fn(),
   resolveClaudeConfigDir: vi.fn().mockReturnValue('/tmp/cc-config'),
 }))
 
@@ -148,6 +152,7 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   ...(await import('../../../../src/main/services/agent/sdk-config')),
   ...(await import('../../../../src/main/services/agent/resolved-sdk')),
   ...(await vi.importActual('../../../../src/main/services/agent/engine-handoff')),
+  ...(await import('../../../../src/main/services/agent/execution')),
   ensureEngineAvailable: vi.fn(async () => {}),
   getLegacyEngine: () => 'halo',
   resolveHistoricalEngine: (engine: string) => engine,
@@ -199,9 +204,14 @@ vi.mock('../../../../src/main/apps/runtime/memory-control', () => ({
 // Captures the escalation callback so a test can raise one mid-stream, the way
 // the real tool handler does from inside the turn.
 let raiseEscalation: ((entryId: string) => void) | undefined
+let reportSaved: (() => void) | undefined
+let reportContext: { canComplete?: () => boolean } | undefined
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
   createReportToolServer: vi.fn((_store: unknown, _ctx: unknown, onEscalation?: (id: string) => void) => {
-    raiseEscalation = onEscalation
+    reportContext = _ctx as { canComplete?: () => boolean }
+    const saved = (_ctx as { onReported?: () => void }).onReported
+    raiseEscalation = entryId => { saved?.(); onEscalation?.(entryId) }
+    reportSaved = saved
     return { name: 'halo-report', _isMcpServer: true }
   }),
 }))
@@ -261,7 +271,9 @@ vi.mock('../../../../src/main/apps/runtime/prompt', () => ({
 }))
 
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
-import { ENGINE_STOP_GRACE_MS } from '../../../../src/main/apps/runtime/engine-stop'
+import { registerAppBridge } from '../../../../src/main/services/app-bridge'
+import type { ExecutionWorkHost } from '../../../../src/main/services/agent'
+import { ENGINE_STOP_GRACE_MS } from '../../../../src/main/services/agent/execution'
 import { finalizeMemoryAfterTurn, prepareMemoryForTurn, loadSpaceTopicsForTurn, appMemorySettings } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { generatePromptInstructions } from '../../../../src/main/platform/memory'
 import { buildAppSystemPrompt, buildInitialMessage } from '../../../../src/main/apps/runtime/prompt'
@@ -320,6 +332,7 @@ class FakeSession {
       if (throwOnStream) throw throwOnStream
       for (const m of script) {
         yielded.push(m)
+        if (m.type === 'assistant' && JSON.stringify(m).includes('mcp__halo-report__report_to_user')) reportSaved?.()
         yield m
         onYield?.(m)
       }
@@ -373,6 +386,7 @@ function makeMemory() {
 }
 
 function assistantReport(): SdkMessage {
+  reportSaved?.()
   return {
     type: 'assistant',
     message: {
@@ -625,6 +639,140 @@ describe('executeRun — completion branches', () => {
     expect(nextSession.streamCalls).toBe(11)
     // A run_error activity entry is surfaced for the no-report case.
     expect(emitEntry).toHaveBeenCalled()
+  })
+})
+
+/** Registers a host for the work a run delegates; the run itself only ever sees its execution. */
+function useWorkHost(host: ExecutionWorkHost | undefined) {
+  registerAppBridge({
+    getAppManager: () => null, createHaloAppsMcpServer: () => null, onMcpAppsChange: () => () => {},
+    executionWork: host,
+  })
+}
+
+describe('executeRun — collaborator failure cleanup', () => {
+  afterEach(() => useWorkHost(undefined))
+
+  it('stops descendants and includes their usage before publishing a parent execution error', async () => {
+    let release!: () => void
+    const stopped = new Promise<void>(resolve => { release = resolve })
+    const close = vi.fn(async () => { await stopped })
+    const tokens = { inputTokens: 7, outputTokens: 3, cacheReadTokens: 11, cacheCreationTokens: 2 }
+    useWorkHost({
+      open: () => ({
+        tools: { 'halo-team': { name: 'halo-team' } }, guidance: 'Delegate carefully.',
+        hasPending: () => true, onChanged: () => ({ dispose() {} }),
+        end: close, takeUsage: vi.fn().mockReturnValueOnce(tokens),
+      }),
+    })
+    nextSession = new FakeSession({ throwOnStream: new Error('parent stream failed') })
+    const store = makeStore()
+    const finalize = vi.mocked(finalizeMemoryAfterTurn)
+    finalize.mockClear()
+    const pending = executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory() })
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce())
+    expect(store.completeRun).not.toHaveBeenCalled()
+    expect(finalize).not.toHaveBeenCalled()
+    release()
+    const result = await pending
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toContain('parent stream failed')
+    expect(result.tokensUsed).toBe(10)
+    expect(result.tokenUsage).toEqual(tokens)
+    expect(store.completeRun).toHaveBeenCalledWith(result.runId, expect.objectContaining({ tokensUsed: 10 }))
+    expect(finalize).toHaveBeenCalled()
+  })
+})
+
+describe('executeRun — work the run delegates', () => {
+  afterEach(() => useWorkHost(undefined))
+
+  function workHost(state: { pending: boolean; usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number } }) {
+    const changed = new Set<() => void>()
+    const requests: Parameters<ExecutionWorkHost['open']>[0][] = []
+    const end = vi.fn(async () => {})
+    useWorkHost({
+      open: request => {
+        requests.push(request)
+        return {
+          tools: { 'halo-team': { name: 'halo-team', _isMcpServer: true } }, guidance: 'Delegate carefully.',
+          hasPending: () => state.pending,
+          onChanged: listener => { changed.add(listener); return { dispose: () => { changed.delete(listener) } } },
+          end, takeUsage: () => { const value = state.usage; state.usage = undefined; return value },
+        }
+      },
+    })
+    return { requests, end, settle: () => { state.pending = false; for (const listener of [...changed]) listener() } }
+  }
+
+  it('mounts what the execution offers and tells the model about it; a run without delegation gets neither', async () => {
+    workHost({ pending: false })
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    const sdkOptions = vi.mocked(createSession).mock.calls.at(-1)![0] as { mcpServers: Record<string, unknown> }
+    expect(sdkOptions.mcpServers).toHaveProperty('halo-team')
+    expect(vi.mocked(buildAppSystemPrompt).mock.calls.at(-1)?.[0].collaborationGuide).toBe('Delegate carefully.')
+
+    useWorkHost(undefined)
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(vi.mocked(createSession).mock.calls.at(-1)![0]).not.toHaveProperty('mcpServers.halo-team')
+    expect(vi.mocked(buildAppSystemPrompt).mock.calls.at(-1)?.[0].collaborationGuide).toBeUndefined()
+  })
+
+  it('holds the run open while its work is unfinished and refuses a final report until it settles', async () => {
+    const state = { pending: true }
+    const host = workHost(state)
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const store = makeStore()
+    let done = false
+    const running = executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory() }).then(result => { done = true; return result })
+    await vi.waitFor(() => expect(nextSession.streamCalls).toBe(1))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(done).toBe(false)
+    expect(store.completeRun).not.toHaveBeenCalled()
+    expect(reportContext?.canComplete?.()).toBe(false)
+
+    host.settle()
+    const result = await running
+    expect(reportContext?.canComplete?.()).toBe(true)
+    expect(result.outcome).not.toBe('error')
+    expect(host.end).toHaveBeenCalledOnce()
+  })
+
+  it('adds the work’s usage to the run’s exactly once, whether it ends cleanly or is stopped', async () => {
+    const usage = { inputTokens: 40, outputTokens: 2, cacheReadTokens: 5, cacheCreationTokens: 1 }
+    workHost({ pending: false, usage })
+    nextSession = new FakeSession({
+      script: [assistantReport(), { type: 'result', usage: { input_tokens: 10, output_tokens: 3 } }],
+    })
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(result.tokensUsed).toBe(55)
+    expect(result.tokenUsage).toEqual({ inputTokens: 50, outputTokens: 5, cacheReadTokens: 5, cacheCreationTokens: 1 })
+  })
+
+  it('releases what it opened when the run fails before it has an engine session', async () => {
+    const host = workHost({ pending: false })
+    vi.mocked(buildUserSessionSdkOptions).mockImplementationOnce(() => { throw new Error('options unavailable') })
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toContain('options unavailable')
+    expect(host.requests).toHaveLength(1)
+    expect(host.end).toHaveBeenCalledOnce()
+  })
+
+  it('stops what the run owns when it is stopped, and delegates with the run’s own principal and model', async () => {
+    const host = workHost({ pending: true })
+    nextSession = new FakeSession()
+    vi.spyOn(nextSession, 'stream').mockImplementation(async function* () { yield systemInit() })
+    const controller = new AbortController()
+    const running = executeRun({ app: makeApp({ id: 'app-9' }), trigger: baseTrigger, store: makeStore(), memory: makeMemory(), abortSignal: controller.signal })
+    await vi.waitFor(() => expect(nextSession.send).toHaveBeenCalled())
+    controller.abort()
+    await running
+    expect(host.end).toHaveBeenCalledOnce()
+    expect(host.requests[0].principal).toMatchObject({ appId: 'app-9', environment: { spaceId: 'space-1', workDir: '/tmp/space-1' } })
+    expect(host.requests[0].modelSelection).toEqual({ modelSourceId: undefined, modelId: expect.any(String) })
   })
 })
 

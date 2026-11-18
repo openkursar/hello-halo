@@ -300,6 +300,37 @@ describe('report routing (§5.3)', () => {
     log.mockRestore()
   })
 
+  it('refuses a final run report while collaborators remain but still permits progress and escalation', async () => {
+    const { store, entries } = makeStore()
+    let ready = false
+    const onReported = vi.fn()
+    const handler = getReportHandler({
+      appId: 'app-solo', appName: 'Solo', runId: 'run', sessionKey: 'run-session',
+      canComplete: () => ready, onReported,
+    }, store)
+    expect((await handler({ type: 'run_complete', message: 'too early' })).isError).toBe(true)
+    expect((await handler({ type: 'run_skipped', message: 'too early' })).isError).toBe(true)
+    expect(entries).toHaveLength(0)
+    expect(onReported).not.toHaveBeenCalled()
+    await handler({ type: 'milestone', message: 'Checking evidence' })
+    await handler({ type: 'escalation', message: 'Approve the next step?' })
+    expect(entries.map(entry => entry.type)).toEqual(['milestone', 'escalation'])
+    ready = true
+    expect((await handler({ type: 'run_complete', message: 'reviewed' })).isError).not.toBe(true)
+    expect(entries.at(-1)?.content.summary).toBe('reviewed')
+    expect(onReported).toHaveBeenCalledTimes(3)
+  })
+
+  it('a failed report write never satisfies the run completion signal', async () => {
+    const { store } = makeStore()
+    const onReported = vi.fn()
+    const handler = getReportHandler({
+      appId: 'app-solo', appName: 'Solo', runId: 'run', sessionKey: 'run-session', onReported,
+    }, store, () => { throw new Error('write failed') })
+    expect((await handler({ type: 'run_complete', message: 'result' })).isError).toBe(true)
+    expect(onReported).not.toHaveBeenCalled()
+  })
+
   it('non-team turn → unchanged: a normal activity entry is written', async () => {
     const { store, entries } = makeStore()
     const ctx: ReportToolContext = {

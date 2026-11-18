@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { acquireBuildLock, createStagingDirectory, prepareBuildWorkspace, publishDistribution } from './build-distribution.mjs';
 
 const sdk = fileURLToPath(new URL('..', import.meta.url));
-const workspace = join(sdk, 'native');
+const workspace = sdk;
 const targets = {
   'darwin-arm64': ['aarch64-apple-darwin', 'libhalo_node.dylib'],
   'darwin-x64': ['x86_64-apple-darwin', 'libhalo_node.dylib'],
@@ -17,7 +18,7 @@ const targets = {
   'linux-arm64': ['aarch64-unknown-linux-gnu', 'libhalo_node.so'],
 };
 
-const { sourceIdentity } = createRequire(import.meta.url)('../native/source-identity.cjs');
+const { sourceIdentity } = createRequire(import.meta.url)('./source-identity.cjs');
 
 function cargo(args, options = {}) {
   const result = spawnSync(process.env.CARGO || 'cargo', args, { cwd: workspace, stdio: 'inherit', ...options });
@@ -55,9 +56,9 @@ async function notices(output, targetTriples) {
   await writeFile(join(output, 'THIRD-PARTY-NOTICES.txt'), `${sections.join('\n\n')}\n`);
 }
 
-export async function buildNative() {
+export async function buildNative({ outputDirectory = join(sdk, 'dist/native') } = {}) {
   const requested = (process.env.HALO_SDK_NATIVE_TARGETS || `${process.platform}-${process.arch}`).split(',');
-  const output = join(sdk, 'dist/native');
+  const output = resolve(outputDirectory);
   await mkdir(output, { recursive: true });
   if (!existsSync(join(workspace, 'Cargo.lock'))) cargo(['generate-lockfile']);
   const buildId = sourceIdentity(workspace);
@@ -93,6 +94,36 @@ export async function buildNative() {
   console.log(`[halo-sdk] Rust native library ${buildId.slice(0, 12)}: ${requested.join(', ')}`);
 }
 
+export async function buildNativeOnly({ sdkDirectory = sdk, compile = buildNative } = {}) {
+  const lock = await acquireBuildLock(sdkDirectory);
+  try {
+    await prepareBuildWorkspace(sdkDirectory);
+    const current = join(sdkDirectory, 'dist');
+    const staging = await createStagingDirectory(sdkDirectory);
+    try {
+      if (existsSync(current)) await cp(current, staging, { recursive: true });
+      await compile({ outputDirectory: join(staging, 'native') });
+      const nativeOnly = !existsSync(join(staging, 'runtime-manifest.json'));
+      if (!nativeOnly) {
+        const manifest = JSON.parse(await readFile(join(staging, 'runtime-manifest.json'), 'utf8'));
+        const native = JSON.parse(await readFile(join(staging, 'native/build-info.json'), 'utf8'));
+        manifest.assets = [...manifest.assets.filter(file => file !== 'dist/native/build-info.json' && file !== 'dist/native/THIRD-PARTY-NOTICES.txt' && !/^dist\/native\/halo-sdk\.[a-z0-9-]+\.node$/.test(file)),
+          'dist/native/build-info.json', 'dist/native/THIRD-PARTY-NOTICES.txt',
+          ...native.artifacts.map(artifact => `dist/native/${artifact.filename}`)].sort();
+        await writeFile(join(staging, 'runtime-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+      }
+      await publishDistribution(sdkDirectory, staging, { nativeOnly });
+    } catch (error) {
+      await rm(staging, { recursive: true, force: true }).catch(error => {
+        console.warn(`[halo-sdk] Could not remove failed native build staging ${staging}: ${error.message}`);
+      });
+      throw error;
+    }
+  } finally {
+    await lock.release();
+  }
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await buildNative();
+  await buildNativeOnly();
 }

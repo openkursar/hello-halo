@@ -10,7 +10,7 @@ const projectDirectory = fileURLToPath(new URL('..', import.meta.url));
 export async function buildWorker(outfile = fileURLToPath(new URL('../dist/worker/entry.js', import.meta.url))) {
   const result = await build({
     absWorkingDir: projectDirectory,
-    entryPoints: [fileURLToPath(new URL('../worker/entry.ts', import.meta.url))],
+    entryPoints: [fileURLToPath(new URL('../bindings/node/worker/entry.ts', import.meta.url))],
     outfile: resolve(outfile),
     bundle: true, platform: 'node', format: 'esm', target: 'node20', sourcemap: true,
     metafile: true, write: false,

@@ -55,7 +55,7 @@ import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable 
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
 import { opensWithSlashCommand } from '../../services/agent/opening-context'
-import { captureToolsetExecutionOptions, isCollaborationEnabled, emitHumanRequest, getToolset, acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, resolveHistoricalEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
+import { captureToolsetExecutionOptions, openAgentExecution, emitHumanRequest, getToolset, acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, resolveHistoricalEngine, getSessionEngineId, type AgentExecution, type ExecutionSource, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
@@ -99,8 +99,6 @@ import type { ImSessionContext } from './im-channels/im-prompt'
 import { buildRestrictionNotice } from './team/team-prompt'
 import { getActiveTeamRuntime } from './team'
 import { consumeIntentionalStop } from './intentional-stop'
-import { bindSourceToolSession, bindTeamToolSession } from './team/tool-session'
-import { bindImCollaborationSource } from './team/source-delivery'
 import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
 import {
   applyCapabilityPolicy,
@@ -972,82 +970,28 @@ async function runAppChatTurn(
   // IM guest keeps `halo-apps` here; the capability policy below decides
   // whether the guest may use it.
   const webSearch = withheldWebSearch(app)
-  const canCreateCollaborator = () => isCollaborationEnabled(app.userOverrides?.disabledTools)
-    && (!delegation || allowsCollaboration(delegation.policy, delegation.mode))
-  function participantSourceForTurn() {
-    if (!credentials.sourceId) throw new Error('The source model configuration is unavailable.')
-    if (!teamContext && imSession) {
-      if (!permCtx) throw new Error('The originating chat authority is unavailable.')
-      bindImCollaborationSource({ appId, conversationId, requestId: sourceRequestForTurn(), imSession, permission: permCtx })
-    }
-    return {
-      ...captureToolsetExecutionOptions(sdkOptions, engineId, sdkOptions.mcpServers ?? mcpServers),
-      modelSelection: { modelSourceId: credentials.sourceId, modelId: credentials.model },
-      sourceAppId: participant ? participant.execution.sourceAppId : app.id,
-      environment, permissions: app.permissions,
-      ...(delegation ? { delegatedPolicy: delegation.policy ?? {} } : {}),
-      ...(strictFiles ? { fileAccess: turnFileAccess } : {}),
-      ...(servedOrigin ? { origin: servedOrigin } : {}),
-    }
-  }
-
-  function teamServerForTurn() {
-    if (!teamContext || !teamPromptCtx) throw new Error('The team turn is unavailable.')
-    const binding = bindTeamToolSession(conversationId, {
-      teamId: teamContext.teamId,
-      epochId: teamContext.epochId,
-      callerAppId: app.id,
-      collabMode: teamPromptCtx.collabMode,
-      selfIsLead: teamPromptCtx.selfIsLead,
-      // The agent's own cwd: published refs are resolved against it, so it
-      // must be the very directory this turn runs in.
-      callerWorkDir: workDir,
-      // The same folder the Entry above points the member at.
-      callerTeamFolder: teamPromptCtx.teamFolder,
-      teamFolders: getActiveTeamRuntime()!.teamFolders,
-      bus: getActiveTeamRuntime()!.bus,
-      blackboard: getActiveTeamRuntime()!.blackboard,
-      // Location-transparent artifact read (wired by bootstrap); absent →
-      // the tool reports the capability is unavailable.
-      ...(getActiveTeamRuntime()!.readArtifact
-        ? { readArtifact: getActiveTeamRuntime()!.readArtifact }
-        : {}),
-      ...(getActiveTeamRuntime()!.readMemberRecord
-        ? { readMemberRecord: getActiveTeamRuntime()!.readMemberRecord }
-        : {}),
-      checks: !disposableMember && servedOrigin !== 'guest' ? getActiveTeamRuntime()!.checks : undefined,
-      digest: getActiveTeamRuntime()!.digest,
-      archive: getActiveTeamRuntime()!.archive,
-      // Stamped onto the messages this turn sends, so the circuit
-      // breaker's depth limit spans hops.
-      forwardDepth: teamContext.forwardDepth,
-      // Same reasoning, different property of the chain: whose request it serves.
-      ...(servedOrigin ? { origin: servedOrigin } : {}),
-      requestId: teamRequestId,
-      ...(permCtx?.isOwner === false ? { servesGuest: true } : {}),
-      participants: getTeamService()?.participants,
-      canSpawn: canCreateCollaborator,
-      publicationRefusal: absolutePath => turnFileExportRefusal(conversationId, absolutePath),
-      spawnSource: participantSourceForTurn,
-    })
-    turnContext.disposeTeamTools = binding.release
-    return markMcpServerSettings(binding.server, { origin: servedOrigin ?? null,
-      generation: binding.generation, canSpawn: canCreateCollaborator() })
-  }
-
-  function sourceRequestForTurn(): string {
-    const service = getTeamService()
-    if (!service) throw new Error('Collaboration services are unavailable.')
-    return teamRequestId?.split('/')[0] ?? service.participants.sourceRequestId(conversationId)
-  }
-  function sourceServerForTurn() {
-    const binding = bindSourceToolSession({ spaceId, conversationId, workDir,
+  // What the turn delegates is its execution's: this only says whose turn it is and who asked.
+  let execution: AgentExecution | undefined
+  const openExecution = (source: ExecutionSource) => {
+    execution = openAgentExecution({
+      key: conversationId,
+      principal: {
+        appId: participant ? participant.execution.sourceAppId : app.id,
+        permissions: app.permissions, environment, disabledTools: app.userOverrides?.disabledTools,
+      },
       modelSelection: credentials.sourceId ? { modelSourceId: credentials.sourceId, modelId: credentials.model } : undefined,
-      origin: servedOrigin, collaborationEnabled: canCreateCollaborator(),
-      publicationRefusal: absolutePath => turnFileExportRefusal(conversationId, absolutePath),
-    }, { source: participantSourceForTurn, requestId: sourceRequestForTurn, canSpawn: canCreateCollaborator })
-    turnContext.disposeTeamTools = binding.release
-    return markMcpServerSettings(binding.server, { origin: servedOrigin ?? null, generation: binding.generation, canSpawn: canCreateCollaborator() })
+      grants: () => captureToolsetExecutionOptions(sdkOptions, engineId, sdkOptions.mcpServers ?? mcpServers),
+      requester: {
+        origin: servedOrigin, delegation: delegation ?? undefined,
+        files: () => strictFiles ? turnFileAccess : undefined,
+        publicationRefusal: absolutePath => turnFileExportRefusal(conversationId, absolutePath),
+      },
+      source,
+    })
+    return execution.tools
+  }
+  turnContext.disposeTeamTools = () => {
+    void execution?.close().catch(error => console.error(`[AppChat][${appId}] Releasing the turn's collaboration failed:`, error))
   }
 
   const mcpServers: Record<string, any> = {
@@ -1111,17 +1055,23 @@ async function runAppChatTurn(
         }
       : {}),
     ...(teamToolset
-      ? {
-          [TEAM_MCP_SERVER_NAME]: sourceServerForTurn(),
-        }
+      ? openExecution({
+          kind: 'conversation', requestId: teamRequestId,
+          channel: !teamContext && imSession ? { session: imSession, permission: permCtx } : undefined,
+        })
       : {}),
     // Team coordination tools (team-channel turns only).
     // Marked with the origin it stamps: a session's tool servers serve every
     // later turn, so a turn handing on another origin needs a session of its own.
     ...(teamContext && teamPromptCtx && getActiveTeamRuntime()
-      ? {
-          [TEAM_MCP_SERVER_NAME]: teamServerForTurn(),
-        }
+      ? openExecution({
+          kind: 'member', requestId: teamRequestId,
+          member: {
+            appId: app.id, teamId: teamContext.teamId, epochId: teamContext.epochId, forwardDepth: teamContext.forwardDepth,
+            collabMode: teamPromptCtx.collabMode, selfIsLead: teamPromptCtx.selfIsLead, teamFolder: teamPromptCtx.teamFolder,
+            disposable: disposableMember, servesGuest: permCtx?.isOwner === false,
+          },
+        })
       : {}),
   }
   if (participant?.execution.mcpServerNames) {

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
@@ -143,14 +143,23 @@ async function sdkSnapshot(root) {
   } else {
     sourceFiles = await walk(directory, (file, entry) => {
       const relative = posix(path.relative(directory, file))
-      return relative === '.git' || relative === 'dist' || relative === 'node_modules' || relative === 'native/target' || relative === '.build-identity.json' || (entry.isDirectory() && ['docs', 'validation', 'swe-bench-eval'].includes(entry.name))
+      return relative === '.git' || relative === 'dist' || relative === 'node_modules' || relative === 'target' || relative === '.build-identity.json' || relative === '.build-lock' || relative.startsWith('.dist-staging-') || relative.startsWith('.dist-previous-') || (entry.isDirectory() && ['docs', 'validation', 'swe-bench-eval'].includes(entry.name))
     })
   }
   const source = await manifest(directory, sourceFiles, 'sdk-source')
+  const descriptorBytes = await fs.readFile(path.join(directory, 'package.json'))
   const distDirectory = path.join(directory, 'dist')
   const distFiles = await exists(distDirectory) ? await walk(distDirectory) : []
   const dist = distFiles.length ? await manifest(directory, distFiles, 'sdk-dist') : null
-  return { state: 'present', version: descriptor.version, revision, dirty, provenance: revision ? 'source-checkout' : 'distribution-without-revision', source: { count: source.count, rootSha256: source.rootSha256 }, dist: dist ? { count: dist.count, rootSha256: dist.rootSha256 } : null }
+  return { state: 'present', version: descriptor.version, revision, dirty, provenance: revision ? 'source-checkout' : 'distribution-without-revision',
+    descriptor: { bytes: descriptorBytes.length, sha256: createHash('sha256').update(descriptorBytes).digest('hex') },
+    source: { count: source.count, rootSha256: source.rootSha256 }, dist: dist ? { count: dist.count, rootSha256: dist.rootSha256 } : null }
+}
+
+/** App output depends on the compiled distribution and package resolution, not on uncommitted SDK source. */
+function sdkDistribution(sdk) {
+  if (sdk.state !== 'present') return sdk
+  return { state: sdk.state, descriptor: sdk.descriptor, dist: sdk.dist }
 }
 
 async function artifacts(root) {
@@ -250,12 +259,12 @@ async function buildOwnedApplication(root, timeoutMs) {
   const result = await execute(root, ['run', 'build'], { executable: process.platform === 'win32' ? 'npm.cmd' : 'npm', shell: process.platform === 'win32', timeoutMs, logFile })
   if (result.code !== 0 || result.timedOut || result.cleanupFailed) throw new Error(`Application build did not complete successfully; see tests/acceptance/output/builds/${id}.log`)
   const after = await snapshot(root)
-  if (before.inputs.rootSha256 !== after.inputs.rootSha256 || !same(before.sdk, after.sdk)) throw new Error('Product inputs or SDK changed during the build; no build provenance was recorded')
+  if (before.inputs.rootSha256 !== after.inputs.rootSha256 || !same(sdkDistribution(before.sdk), sdkDistribution(after.sdk))) throw new Error('Product inputs or the SDK distribution changed during the build; no build provenance was recorded')
   if (!await exists(path.join(root, 'out/main'))) throw new Error('The main output directory is missing after the build')
   await prepareProductConfig(root)
   const output = await artifacts(root)
   const finalInputs = await snapshot(root)
-  if (after.inputs.rootSha256 !== finalInputs.inputs.rootSha256 || !same(after.sdk, finalInputs.sdk)) throw new Error('Product inputs or SDK changed while recording the build')
+  if (after.inputs.rootSha256 !== finalInputs.inputs.rootSha256 || !same(sdkDistribution(after.sdk), sdkDistribution(finalInputs.sdk))) throw new Error('Product inputs or the SDK distribution changed while recording the build')
   const record = { version: 2, id, builtAt: new Date().toISOString(), command: ['npm', 'run', 'build'], cleanedOutputs: generatedOutputs, platform: process.platform, architecture: process.arch, node: process.versions.node, inputs: after.inputs, sdk: after.sdk, artifacts: output, configuration: 'out/main/product.json is prepared with the same relative-provider paths as the Electron test fixture' }
   atomicJson(file, record)
   return record
@@ -271,7 +280,7 @@ export async function verifyBuild(root) {
   if (record.platform !== process.platform || record.architecture !== process.arch) throw new Error('The application was built for a different platform or architecture')
   const current = await snapshot(root)
   if (current.inputs.rootSha256 !== record.inputs?.rootSha256) throw new Error('Product inputs changed after the controlled build; rebuild before testing')
-  if (!same(current.sdk, record.sdk)) throw new Error('SDK source, revision or compiled distribution changed after the controlled build')
+  if (!same(sdkDistribution(current.sdk), sdkDistribution(record.sdk))) throw new Error('SDK compiled distribution or package descriptor changed after the controlled build')
   const output = await artifacts(root)
   if (output.rootSha256 !== record.artifacts?.rootSha256) throw new Error('Application build output changed after the controlled build')
   return record

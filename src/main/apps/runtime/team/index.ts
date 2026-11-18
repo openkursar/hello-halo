@@ -26,7 +26,8 @@ import type { Blackboard, BlackboardWriteRecord } from './blackboard'
 import type { TeamPromptContext } from './team-prompt'
 import type { ReadTeamArtifact } from './artifact-read'
 import type { ReadTeamMemberRecord } from './member-record'
-import { getTeamService, type TeamStore } from '../../team'
+import { getTeamService, listWorkMembers, type TeamStore } from '../../team'
+import { Emitter, type Event } from '../../../platform/event'
 import type {
   TeamEpoch,
   EpochEndReason,
@@ -156,6 +157,9 @@ async function resolveImRoute(
 }
 
 export interface TeamRuntime {
+  /** Includes queued deliveries, pending reports and member-private descendants. */
+  hasPendingWork(teamId: string, epochId: string): boolean
+  onWorkChanged: Event<{ teamId: string; epochId: string }>
   getPendingRecordedInputIds(conversationId: string): readonly string[]
   bus: MessageBus
   blackboard: Blackboard
@@ -433,6 +437,7 @@ export interface CreateTeamRuntimeDeps {
 
 export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   const { store } = deps
+  const workChanged = new Emitter<{ teamId: string; epochId: string }>()
   const session = deps.session ?? createDefaultSessionDeps(store)
 
   // Late-bound: bus is created first, orchestration hooks are forwarded once wired.
@@ -507,6 +512,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     turnTimeoutMs: deps.turnTimeoutMs,
     maxConcurrentTurns: deps.maxConcurrentTurns,
     onRunStateChanged: deps.onRunStateChanged,
+    onWorkChanged: (teamId, epochId) => workChanged.fire({ teamId, epochId }),
     onMemberStatusChanged: deps.onMemberStatusChanged,
     onMemberWorkChanged: deps.onMemberWorkChanged,
     onMemberProfileChanged: deps.onMemberProfileChanged,
@@ -576,9 +582,28 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   }
   board = blackboard
 
+  function hasPendingWork(teamId: string, epochId: string): boolean {
+    const visited = new Set<string>()
+    const scopes = [{ teamId, epochId }]
+    while (scopes.length) {
+      const scope = scopes.pop()!
+      const key = `${scope.teamId}:${scope.epochId}`
+      if (visited.has(key)) continue
+      visited.add(key)
+      if (orchestration!.hasPendingWork(scope.teamId, scope.epochId)) return true
+      for (const member of listWorkMembers(store, scope.teamId, scope.epochId)) {
+        const child = getTeamService()?.getCollaborationScope(buildTeamSessionKey(member.appId, scope.teamId, scope.epochId))
+        if (child) scopes.push({ teamId: child.team.id, epochId: child.epochId })
+      }
+    }
+    return false
+  }
+
   console.log(`${LOG_TAG} created`)
 
   return {
+    hasPendingWork,
+    onWorkChanged: workChanged.event,
     bus,
     blackboard,
     checks,
@@ -611,6 +636,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     noteMemberTurnEnded: (params, options) => {
       orchestration!.noteMemberTurnEnded(params)
       if (options?.report !== false) turnReport.noteTurnEnded(params)
+      workChanged.fire({ teamId: params.teamId, epochId: params.epochId })
     },
     reconcileAwaitingDecision: (appId) => orchestration!.reconcileAwaitingDecision(appId),
     activeRunEpochId: (teamId) => orchestration!.activeRunEpochId(teamId),
@@ -876,7 +902,7 @@ export { renderBoardMarkdown } from './board-render'
 export { createCoordinationMcpServer } from './team-tools'
 export type { TeamMcpContext } from './team-tools'
 
-export { registerCollaborationLifecycle } from './collaboration-lifecycle'
+export { createConversationWorkHost } from './conversation-work'
 export { deliverOwnedCollaborationSource, deliverTeamCollaborationSource, observeOwnedCollaborationSources } from './source-delivery'
 
 export { disposeJoinedOfficeWork } from './office-disposal'

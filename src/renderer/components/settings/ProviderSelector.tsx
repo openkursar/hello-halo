@@ -54,6 +54,7 @@ interface ProviderSelectorProps {
    * Live model fetch (with race protection) goes through `usePresetModels`.
    */
   presetProvider?: AuthProviderConfig
+  variant?: 'panel' | 'inline'
 }
 
 export function ProviderSelector({
@@ -61,7 +62,8 @@ export function ProviderSelector({
   onSave,
   onCancel,
   editingSourceId,
-  presetProvider
+  presetProvider,
+  variant = 'panel'
 }: ProviderSelectorProps) {
   const { t } = useTranslation()
 
@@ -79,6 +81,10 @@ export function ProviderSelector({
   const isPresetEdit = editingSource?.isPreset === true
   // Adding a brand-new preset source (clicked from AISourcesSection list).
   const isPresetAdd = !editingSource && presetProvider !== undefined
+
+  const sourceIdRef = useRef(editingSource?.id || '')
+  if (!sourceIdRef.current) sourceIdRef.current = uuidv4()
+  const saveInFlightRef = useRef(false)
 
   // State — seeded from `editingSource` (edit mode), `presetProvider` (preset
   // add mode), or hardcoded defaults (generic add mode), in that priority.
@@ -121,6 +127,7 @@ export function ProviderSelector({
   )
   const [modelSearchQuery, setModelSearchQuery] = useState('')
   const [showModelDropdown, setShowModelDropdown] = useState(false)
+  const modelTriggerRef = useRef<HTMLButtonElement>(null)
 
   // Preset model fetcher — race-safe AbortController, fallback handling,
   // unmount cleanup. Inert when neither preset path is active. Initial
@@ -361,6 +368,7 @@ export function ProviderSelector({
 
   // Handle save (direct save without validation)
   const handleSave = async () => {
+    if (saveInFlightRef.current || isValidating) return
     if (!apiKey) {
       setValidationResult({ valid: false, message: t('Please enter API Key') })
       return
@@ -373,6 +381,7 @@ export function ProviderSelector({
       return
     }
 
+    saveInFlightRef.current = true
     setIsValidating(true)
     setValidationResult(null)
 
@@ -408,7 +417,7 @@ export function ProviderSelector({
       const resolvedProvider: ProviderId = presetProvider ? 'custom' : selectedProvider
 
       const source: AISource = {
-        id: editingSource?.id || uuidv4(),
+        id: sourceIdRef.current,
         name: sourceName || currentProvider?.name || selectedProvider,
         provider: resolvedProvider,
         authType: 'api-key',
@@ -429,10 +438,11 @@ export function ProviderSelector({
       await onSave(source)
 
       setValidationResult({ valid: true, message: t('Saved') })
-    } catch (error) {
-      console.error('[ProviderSelector] Save failed:', error)
+    } catch {
+      console.warn('[ProviderSelector] Account save failed; the draft remains open')
       setValidationResult({ valid: false, message: t('Save failed') })
     } finally {
+      saveInFlightRef.current = false
       setIsValidating(false)
     }
   }
@@ -528,17 +538,19 @@ export function ProviderSelector({
 
     return (
       <div className="space-y-4">
-        <div className="space-y-4 p-4 bg-secondary/30 rounded-lg border border-border">
-          <div className="flex items-center justify-between">
-            <h3 className="font-medium text-foreground">
-              {t('Configure')} {headerName}
-            </h3>
-          </div>
+        <div className={variant === 'inline' ? 'space-y-4' : 'space-y-4 p-4 bg-secondary/30 rounded-lg border border-border'}>
+          {variant === 'panel' && (
+            <div className="flex items-center justify-between">
+              <h3 className="font-medium text-foreground">
+                {t('Configure')} {headerName}
+              </h3>
+            </div>
+          )}
 
           {/* Preset description (ADD mode only — gives the user context for
               this gateway). EDIT mode shows the user-defined name, which is
               already meaningful. */}
-          {description && isPresetAdd && (
+          {variant === 'panel' && description && isPresetAdd && (
             <p className="text-sm text-muted-foreground">{description}</p>
           )}
 
@@ -597,7 +609,7 @@ export function ProviderSelector({
           {/* API URL (read-only — fixed by the preset entry) */}
           <div>
             <label className="block text-sm font-medium text-muted-foreground mb-1">
-              API URL
+              {t('API URL')}
             </label>
             <input
               type="text"
@@ -677,7 +689,7 @@ export function ProviderSelector({
             )}
 
             {presetModelsHook.warning && (
-              <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-500">
+              <p className={variant === 'inline' ? 'mt-2 text-xs text-halo-warning' : 'mt-2 text-xs text-yellow-600 dark:text-yellow-500'}>
                 {presetModelsHook.warning}
               </p>
             )}
@@ -686,6 +698,7 @@ export function ProviderSelector({
           {/* Model Configuration — context window, output tokens, vision, thinking */}
           {effectiveModelId && (
             <ModelConfigPanel
+              variant={variant}
               modelId={effectiveModelId}
               overrides={modelOverrides}
               onChange={setModelOverrides}
@@ -696,7 +709,7 @@ export function ProviderSelector({
 
           {/* Validation result */}
           {validationResult && (
-            <div className={`flex items-center gap-2 p-2 rounded-lg ${
+            <div role={validationResult.valid ? 'status' : 'alert'} className={`flex items-center gap-2 p-2 rounded-lg ${
               validationResult.valid
                 ? 'bg-green-500/10 text-green-600'
                 : 'bg-red-500/10 text-red-600'
@@ -707,18 +720,18 @@ export function ProviderSelector({
           )}
 
           {/* Actions */}
-          <div className="flex flex-col sm:flex-row gap-3 pt-2">
+          <div className={variant === 'inline' ? 'flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:items-center sm:justify-end' : 'flex flex-col sm:flex-row gap-3 pt-2'}>
             <button
               onClick={onCancel}
-              className="flex-1 px-4 py-2 bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground rounded-lg transition-colors"
+              disabled={variant === 'inline' && isValidating}
+              className={variant === 'inline' ? 'min-h-11 sm:min-h-9 rounded-lg bg-secondary px-4 text-sm text-foreground hover:bg-surface-hover disabled:opacity-50' : 'flex-1 px-4 py-2 bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground rounded-lg transition-colors'}
             >
               {t('Cancel')}
             </button>
             <button
               onClick={handleSave}
               disabled={isValidating || !apiKey}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg
-                       hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className={variant === 'inline' ? 'flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-50 sm:min-h-9' : 'flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors'}
             >
               {isValidating && <Loader2 size={16} className="animate-spin" />}
               {isPresetAdd ? t('Add') : t('Update')}
@@ -741,7 +754,7 @@ export function ProviderSelector({
 
       {/* Selected Provider Config */}
       {currentProvider && (
-        <div className="space-y-4 p-4 bg-secondary/30 rounded-lg border border-border">
+        <div className={variant === 'inline' ? 'space-y-4' : 'space-y-4 p-4 bg-secondary/30 rounded-lg border border-border'}>
           <div className="flex items-center justify-between">
             <h3 className="font-medium text-foreground">
               {t('Configure')} {t(currentProvider.name)}
@@ -801,7 +814,7 @@ export function ProviderSelector({
               endpoint and point it at a custom proxy / coding gateway. */}
           <div>
             <label className="block text-sm font-medium text-muted-foreground mb-1">
-              API URL
+              {t('API URL')}
             </label>
             <input
               type="text"
@@ -877,8 +890,17 @@ export function ProviderSelector({
                 </button>
               </div>
             ) : (
-              <div className="relative">
+              <div className="relative" onKeyDown={event => {
+                if (event.key !== 'Escape' || !showModelDropdown) return
+                event.preventDefault()
+                event.stopPropagation()
+                setShowModelDropdown(false)
+                modelTriggerRef.current?.focus({ preventScroll: true })
+              }}>
                 <button
+                  ref={modelTriggerRef}
+                  type="button"
+                  aria-expanded={showModelDropdown}
                   onClick={() => setShowModelDropdown(!showModelDropdown)}
                   className="w-full flex items-center justify-between px-3 py-2 bg-input
                            border border-border rounded-lg text-foreground
@@ -962,6 +984,7 @@ export function ProviderSelector({
           {/* Model Configuration — context window, output tokens, vision, thinking */}
           {effectiveModelId && (
             <ModelConfigPanel
+              variant={variant}
               modelId={effectiveModelId}
               overrides={modelOverrides}
               onChange={setModelOverrides}
@@ -979,7 +1002,7 @@ export function ProviderSelector({
 
           {/* Validation Result */}
           {validationResult && (
-            <div className={`flex items-center gap-2 p-2 rounded-lg ${
+            <div role={validationResult.valid ? 'status' : 'alert'} className={`flex items-center gap-2 p-2 rounded-lg ${
               validationResult.valid
                 ? 'bg-green-500/10 text-green-600'
                 : 'bg-red-500/10 text-red-600'
@@ -990,25 +1013,35 @@ export function ProviderSelector({
           )}
 
           {/* Actions */}
-          <div className="flex gap-3 pt-2">
+          <div className={variant === 'inline' ? 'flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:items-center sm:justify-end' : 'flex gap-3 pt-2'}>
+            {variant === 'inline' && (
+              <button
+                type="button"
+                onClick={handleTestConnection}
+                disabled={isValidating || !apiKey}
+                className="min-h-11 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 sm:mr-auto sm:min-h-9"
+              >
+                {t('Test connection')}
+              </button>
+            )}
             <button
               onClick={onCancel}
-              className="flex-1 px-4 py-2 bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground rounded-lg transition-colors"
+              disabled={variant === 'inline' && isValidating}
+              className={variant === 'inline' ? 'min-h-11 sm:min-h-9 rounded-lg bg-secondary px-4 text-sm text-foreground hover:bg-surface-hover disabled:opacity-50' : 'flex-1 px-4 py-2 bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground rounded-lg transition-colors'}
             >
               {t('Cancel')}
             </button>
             <button
               onClick={handleSave}
               disabled={isValidating || !apiKey}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg
-                       hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className={variant === 'inline' ? 'flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-50 sm:min-h-9' : 'flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors'}
             >
               {isValidating && <Loader2 size={16} className="animate-spin" />}
               {editingSource ? t('Update') : t('Save')}
             </button>
           </div>
           {/* Test connection link */}
-          <div className="flex justify-end pt-1">
+          {variant === 'panel' && <div className="flex justify-end pt-1">
             <button
               onClick={handleTestConnection}
               disabled={isValidating || !apiKey}
@@ -1016,7 +1049,7 @@ export function ProviderSelector({
             >
               {t('Test connection')}
             </button>
-          </div>
+          </div>}
         </div>
       )}
     </div>

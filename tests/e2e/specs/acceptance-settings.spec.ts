@@ -103,6 +103,89 @@ test('invalid proxy input reports the reason and preserves the last saved route 
   }
 })
 
+async function isolatedProxy() {
+  const sockets = new Set<Socket>()
+  const proxy = createServer((_request, response) => { response.writeHead(502).end('Isolated acceptance proxy') })
+  proxy.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) })
+  await new Promise<void>((resolve, reject) => { proxy.once('error', reject); proxy.listen(0, '127.0.0.1', resolve) })
+  const address = proxy.address()
+  if (!address || typeof address === 'string') throw new Error('The isolated proxy has no TCP address')
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    address: `127.0.0.1:${address.port}`,
+    async close() {
+      for (const socket of sockets) socket.destroy()
+      proxy.closeAllConnections()
+      await new Promise<void>((resolve, reject) => proxy.close(error => error ? reject(error) : resolve()))
+    },
+  }
+}
+
+test('the proxy-only switch for Claude and ChatGPT sits in the folded more-proxy-settings group, shows the route in use and survives restart', managementAcceptance('settings.proxy-guard.switch'), async ({ managementApp, window }) => {
+  const proxy = await isolatedProxy()
+  try {
+    await navigateToSettings(window)
+    const system = window.locator('#system')
+    await system.scrollIntoViewIfNeeded()
+    const proxyInput = system.getByPlaceholder('http://127.0.0.1:1087', { exact: true })
+    await proxyInput.fill(proxy.url)
+    await proxyInput.press('Enter')
+    await expect(system.getByRole('status').filter({ hasText: `Connecting through your proxy ${proxy.address}` })).toBeVisible()
+
+    const advanced = system.getByRole('button', { name: /^More proxy settings/ })
+    await expect(advanced).toHaveAttribute('aria-expanded', 'false')
+    await expect(system.getByRole('switch', { name: 'Block direct AI connections' })).toHaveCount(0)
+    await advanced.click()
+    const guard = system.getByRole('switch', { name: 'Block direct AI connections' })
+    await expect(guard).toHaveAttribute('aria-checked', 'false')
+    await guard.click()
+    await expect(guard).toHaveAttribute('aria-checked', 'true')
+    await expect.poll(async () => (await configuration(window)).network?.requireProxyForOAuth).toBe(true)
+    await advanced.click()
+    await expect(advanced).toHaveAttribute('aria-expanded', 'false')
+
+    const reopened = await managementApp.restart()
+    await navigateToSettings(reopened)
+    const restored = reopened.locator('#system')
+    await restored.scrollIntoViewIfNeeded()
+    await restored.getByRole('button', { name: /^More proxy settings/ }).click()
+    await expect(restored.getByRole('switch', { name: 'Block direct AI connections' })).toHaveAttribute('aria-checked', 'true')
+    expect((await configuration(reopened)).network?.requireProxyForOAuth).toBe(true)
+  } finally {
+    await proxy.close()
+  }
+})
+
+test('with the proxy-only switch on, signing in to Claude is refused without a usable proxy and proceeds with one', managementAcceptance('settings.proxy-guard.login'), async ({ managementApp, window }) => {
+  const proxy = await isolatedProxy()
+  try {
+    await navigateToSettings(window)
+    // "*" sends every address direct, which is deterministic whatever proxy the test machine itself uses.
+    await window.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.setConfig({ network: { noProxy: '*', requireProxyForOAuth: true } }))
+    await window.reload()
+    await navigateToSettings(window)
+    const aiModel = window.locator('#ai-model')
+    await aiModel.getByRole('button', { name: /^Claude Claude Pro/ }).click()
+    const refusal = aiModel.getByRole('alert').filter({ hasText: 'connect only through a proxy' })
+    await expect(refusal).toContainText('this address is on the list that skips the proxy')
+    await expect(aiModel.getByRole('button', { name: 'Open Login Window', exact: true })).toHaveCount(0)
+    expect(managementApp.app.windows()).toHaveLength(1)
+
+    await refusal.getByRole('button', { name: 'Open proxy settings', exact: true }).click()
+    const system = window.locator('#system')
+    await expect(system.getByRole('switch', { name: 'Block direct AI connections' })).toHaveAttribute('aria-checked', 'true')
+
+    await window.evaluate(proxyUrl => (window as unknown as { halo: HaloAPI }).halo.setConfig({ network: { proxy: proxyUrl, noProxy: undefined } }), proxy.url)
+    await expect.poll(async () => (await configuration(window)).network?.proxy).toBe(proxy.url)
+    await aiModel.scrollIntoViewIfNeeded()
+    await aiModel.locator('[data-ai-provider-row="claude"]').getByRole('button', { name: 'Try again', exact: true }).click()
+    await expect(aiModel.getByRole('button', { name: 'Open Login Window', exact: true })).toBeVisible()
+    await aiModel.getByRole('button', { name: 'Cancel', exact: true }).click()
+  } finally {
+    await proxy.close()
+  }
+})
+
 test('browser cleanup cancels safely and then clears shared login data while preserving other sessions and Halo work', managementAcceptance('settings.safety.clear-browser'), async ({ managementApp, window }) => {
   const conversation = await seedManagedConversation(window, 'halo-temp', 'Browser cleanup history', [
     { role: 'user', content: 'This saved Halo history is unrelated to website logins.' },

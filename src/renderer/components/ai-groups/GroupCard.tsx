@@ -3,7 +3,7 @@
  * how its models are doing shows only once it is opened.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type AnimationEvent, type ReactNode } from 'react'
 import { Check, ChevronRight, Edit2, Trash2 } from 'lucide-react'
 import { api } from '../../api'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
@@ -19,6 +19,10 @@ interface GroupCardProps {
   /** Chosen for new chats. */
   chosen: boolean
   expanded: boolean
+  editor?: ReactNode
+  busy?: boolean
+  highlighted?: boolean
+  onHighlightEnd?: (event: AnimationEvent<HTMLDivElement>) => void
   onToggle: () => void
   onChoose: () => void
   onEdit: () => void
@@ -46,7 +50,7 @@ function useGroupHealth(groupId: string, open: boolean): { health: GroupHealth |
   return { health, reload }
 }
 
-export function GroupCard({ group, sources, chosen, expanded, onToggle, onChoose, onEdit, onDelete }: GroupCardProps) {
+export function GroupCard({ group, sources, chosen, expanded, editor, busy, highlighted, onHighlightEnd, onToggle, onChoose, onEdit, onDelete }: GroupCardProps) {
   const { t } = useTranslation()
   const { health, reload } = useGroupHealth(group.id, expanded)
   const accountCount = new Set(group.members.map(member => member.sourceId)).size
@@ -63,12 +67,13 @@ export function GroupCard({ group, sources, chosen, expanded, onToggle, onChoose
   }
 
   return (
-    <div className={`rounded-lg border transition-colors ${chosen ? 'border-primary/50 bg-primary/[0.04] theme-dark:bg-primary/10' : 'border-border bg-card'}`}>
-      <div className="flex cursor-pointer items-center gap-3 p-3" onClick={onToggle}>
+    <div data-ai-group-id={group.id} tabIndex={-1} onAnimationEnd={onHighlightEnd} className={`scroll-mt-4 rounded-lg border transition-colors ${chosen ? 'border-primary/50 bg-primary/[0.04] theme-dark:bg-primary/10' : 'border-border bg-card'} ${editor ? 'shadow-soft' : ''} ${highlighted ? 'animate-[pulse-highlight_600ms_ease-in-out_1] motion-reduce:animate-none' : ''}`}>
+      <div data-ai-group-header className={`flex items-center gap-3 p-3 ${editor ? '' : 'cursor-pointer'}`} onClick={editor ? undefined : onToggle}>
         <button
           type="button"
           role="radio"
           aria-checked={chosen}
+          disabled={busy}
           aria-disabled={group.members.length === 0 || undefined}
           aria-label={t('Use {{name}} for new chats', { name: group.name })}
           onClick={event => {
@@ -88,18 +93,21 @@ export function GroupCard({ group, sources, chosen, expanded, onToggle, onChoose
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate font-medium text-foreground">{group.name}</span>
+            <span className={`${editor ? 'min-w-0 break-words sm:truncate' : 'truncate'} font-medium text-foreground`}>{group.name}</span>
             <AutoTag />
           </div>
           <div className="truncate text-xs text-muted-foreground">
             {t('{{count}} accounts', { count: accountCount })} · {t('{{count}} models', { count: group.members.length })}
           </div>
+          {editor && <span className="text-xs text-muted-foreground sm:hidden">{t('Editing')}</span>}
         </div>
 
-        <ChevronRight size={18} aria-hidden className={`shrink-0 text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        {editor ? <span className="hidden text-xs text-muted-foreground sm:inline">{t('Editing')}</span> : <ChevronRight size={18} aria-hidden className={`shrink-0 text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`} />}
       </div>
 
-      {expanded && (
+      {editor ? (
+        <div className="border-t border-border p-3 sm:p-4 animate-slide-down motion-reduce:animate-none">{editor}</div>
+      ) : expanded && (
         <div className="space-y-3 border-t border-border px-3 pb-3 pt-3">
           <div>
             <p className="mb-2 text-xs text-muted-foreground">{t('Models, in the order they are used')}</p>
@@ -137,6 +145,8 @@ export function GroupCard({ group, sources, chosen, expanded, onToggle, onChoose
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
+              data-ai-group-edit
+              disabled={busy}
               onClick={onEdit}
               className="flex min-h-11 items-center gap-1 rounded-md bg-secondary px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-surface-hover sm:min-h-0"
             >
@@ -145,8 +155,9 @@ export function GroupCard({ group, sources, chosen, expanded, onToggle, onChoose
             </button>
             <button
               type="button"
+              disabled={busy}
               onClick={onDelete}
-              className="flex min-h-11 items-center gap-1 rounded-md bg-red-500/10 px-3 py-1.5 text-sm text-red-500 transition-colors hover:bg-red-500/20 sm:min-h-0"
+              className="flex min-h-11 items-center gap-1 rounded-md bg-destructive/10 px-3 py-1.5 text-sm text-destructive transition-colors hover:bg-destructive/20 sm:min-h-0"
             >
               <Trash2 size={14} />
               {t('Delete')}

@@ -1,0 +1,46 @@
+name: SDK worker validation
+
+on:
+  pull_request:
+    paths:
+      - src/sdk/halo-sdk/**
+      - .github/workflows/sdk-worker-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  worker:
+    name: Worker lifecycle (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: src/sdk/halo-sdk
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: src/sdk/halo-sdk/package-lock.json
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.90.0 --profile minimal
+      - run: npm ci
+      - run: npm run build
+      - run: npm test -- worker tools/mcp tools/bash tools/file-access.test.ts utils/windows-process-tree.test.ts --maxWorkers=2 --minWorkers=1
+      - run: node scripts/benchmark-workers.mjs --sessions=10 > worker-benchmark.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: worker-benchmark-${{ matrix.os }}-${{ matrix.node }}
+          path: src/sdk/halo-sdk/worker-benchmark.json
+          retention-days: 14

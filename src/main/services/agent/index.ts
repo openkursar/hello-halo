@@ -207,4 +207,11 @@ export { assertEngineSourceSelection } from './source-compatibility'
 
 export { isCollaborationEnabled } from './user-agent-settings'
 export { captureToolsetExecutionOptions } from './sdk-config'
+/** One agent execution for an entry: its delegated work, input, completion, stopping and usage (see execution/). */
+export { openAgentExecution, bindConversationLifecycle } from './execution'
+export type {
+  AgentExecution, AgentExecutionOptions, AuthorizedInput, ChannelOrigin, ConversationWorkHost, ExecutionBinding, ExecutionEngineControl,
+  ExecutionInputPort, ExecutionPrincipal, ExecutionReader, ExecutionRequester, ExecutionSource, ExecutionWorkHost,
+  ExecutionWorkRequest, InputDisposition, MemberTurn, OwnedWork,
+} from './execution'
 export { requestSessionRebuild } from './session-manager'

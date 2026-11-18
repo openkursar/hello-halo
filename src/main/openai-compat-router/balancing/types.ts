@@ -38,6 +38,8 @@ export type FailureEvidence =
   | { kind: 'stream-error'; errorType?: string; message: string }
   /** The account could not supply a credential: removed, signed out, token unusable. */
   | { kind: 'credential'; message: string }
+  /** The request was refused locally, before it left: nothing happened to the member. */
+  | { kind: 'blocked'; message: string }
 
 export type RestReason = 'quota' | 'auth' | 'rate' | 'unavailable' | 'transient'
 
@@ -63,9 +65,9 @@ export interface FailureVerdict {
   /**
    * `request` when the failure looks like the request's own fault (a rejected
    * shape or size): nothing is held against the member unless another member
-   * answers the same request.
+   * answers the same request. `none` when the request never reached the member.
    */
-  blame: 'member' | 'request'
+  blame: 'member' | 'request' | 'none'
 }
 
 /** One try the run hands out. */

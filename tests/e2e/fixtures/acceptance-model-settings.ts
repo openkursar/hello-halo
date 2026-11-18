@@ -229,7 +229,9 @@ export function modelSettingsAcceptance(caseId: string, mode: 'scripted' | 'none
   return { annotation: { type: 'acceptance', description: JSON.stringify({ caseId, evidence: 'app-e2e', mode, variant }) } }
 }
 
-export function aiSection(page: Page): Locator { return page.locator('#ai-model') }
+export function aiSection(page: Page): Locator {
+  return page.locator('#ai-model')
+}
 
 export function providerField(page: Page, label: string): Locator {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -242,7 +244,8 @@ export function readProviderConfiguration(profile: string): AISourcesConfig {
 }
 
 export function sourceCard(page: Page, name: string): Locator {
-  return aiSection(page).getByText(name, { exact: true }).locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " border ") and contains(concat(" ", normalize-space(@class), " "), " rounded-lg ")][1]')
+  const header = page.locator('[data-ai-source-header], [data-ai-group-header]').filter({ has: page.getByText(name, { exact: true }) })
+  return page.locator('#ai-model [data-ai-source-id], #ai-model [data-ai-group-id]').filter({ has: header })
 }
 
 export { expect } from '@playwright/test'

@@ -3,7 +3,7 @@ import type { ElectronApplication, Page } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
 import {
   test, expect, acceptance, openAiBrowser, runBrowserChat, readGuest, parseBrowserState,
-  READ_BROWSER_STATE, revealFromReply, guestPoint, paintAiBrowser,
+  READ_BROWSER_STATE, revealFromReply, guestPoint, paintAiBrowser, snapshotUid,
 } from '../fixtures/acceptance-browser-work'
 import { guestIdentity } from '../fixtures/browser-site'
 import { navigateToChat } from '../fixtures/helpers'
@@ -57,6 +57,26 @@ async function scrollGuest(window: Page, app: ElectronApplication, guestId: numb
   await window.mouse.wheel(0, 500)
   await expect.poll(async () => (await readGuest(app, guestId)).scroll).toBeGreaterThan(200)
 }
+
+test('an AI-owned ordinary target-blank page remains in the same context and can be selected after it opens', acceptance('browser.work.tab-follow'), async ({ acceptanceApp, model, window, browserWorkSite }) => {
+  await navigateToChat(window)
+  const opened = await openAiBrowser(window, acceptanceApp.app, model, browserWorkSite, `AI follows ${randomUUID()}`)
+  const result = await runBrowserChat(window, model, 'Click the Open child page link on the current page, then list your browser tabs.', [
+    { name: 'browser_snapshot', input: {} },
+    { name: 'browser_click', input: results => ({ uid: results[0].match(/uid=(snap_\S+) link "Open child page"/)?.[1] ?? '' }) },
+    { name: 'browser_tab', input: { action: 'list' } },
+  ])
+  expect(result.results[2]).toContain('/next?role=target')
+  const follow = await runBrowserChat(window, model, 'Select the child page and read its current URL and page title.', [
+    { name: 'browser_tab', input: { action: 'list' } },
+    { name: 'browser_tab', input: results => { const line = results[0].split('\n').find(line => line.includes('/next?role=target')); return { action: 'select', pageIdx: Number(line?.match(/^\[(\d+)\]/)?.[1] ?? -1) } } },
+    { name: 'browser_evaluate', input: { function: '() => ({ url: location.href, title: document.title })' } },
+  ])
+  expect(follow.results[2]).toContain('/next?role=target')
+  expect(follow.results[2]).toContain('Owned browser')
+  expect(await guestIdentity(acceptanceApp.app, browserWorkSite.nextUrl)).toBeGreaterThan(0)
+  expect(follow.turn.conversationId).toBe(opened.turn.conversationId)
+})
 
 test('a real browser conversation reveals, hides and reopens its entered page before continuing navigation', acceptance('browser.work.reveal'), async ({ acceptanceApp, model, window, browserWorkSite }, info) => {
   await navigateToChat(window)

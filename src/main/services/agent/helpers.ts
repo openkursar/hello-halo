@@ -27,6 +27,7 @@ import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { assertDelegatedAuthReady } from './cli-auth'
 import { resolveGroupCredentials } from './group-credentials'
 import { markInstalledMcpContext } from './tool-discovery'
+import { parseProxyRequired } from '../../../shared/constants/proxy-required'
 
 // ============================================
 // Headless Electron Path Management
@@ -274,7 +275,10 @@ async function resolveSourceCredentials(
   if (source.authType === 'oauth') {
     const tokenResult = await manager.ensureValidToken(sourceId, effectiveModel)
     if (!tokenResult.success) {
-      throw new Error('OAuth token expired or invalid. Please login again.')
+      // A refresh the proxy requirement blocked says so; the account itself is fine.
+      throw new Error(tokenResult.error && parseProxyRequired(tokenResult.error)
+        ? tokenResult.error
+        : 'OAuth token expired or invalid. Please login again.')
     }
     // Refresh may replace the source record, its account metadata and catalog.
     source = manager.getSourceConfig(sourceId)
@@ -318,6 +322,7 @@ async function resolveSourceCredentials(
     adapterId: backendConfig.adapterId,
     visionOverride: backendConfig.visionOverride,
     delegatedAuth: backendConfig.delegatedAuth,
+    proxyGuard: backendConfig.proxyGuard,
     capabilities: resolveCapabilitiesFromSource(source, effectiveModelId),
     supportsVision: modelOption?.supportsVision,
   }
@@ -373,6 +378,7 @@ export function credentialsToBackendConfig(
     visionOverride: credentials.visionOverride,
     reasoningEffort: credentials.capabilities?.reasoningEffort,
     delegatedAuth: credentials.delegatedAuth,
+    proxyGuard: credentials.proxyGuard,
     ...overrides
   }
 }

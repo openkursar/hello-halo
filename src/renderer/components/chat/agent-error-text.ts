@@ -1,6 +1,7 @@
 import { COMMAND_ENVIRONMENT_NOT_INSTALLED_ERROR } from '../../../shared/constants/agent-errors'
+import { proxyRequiredText } from '../../utils/proxy-required-text'
 
-type Translate = (key: string) => string
+type Translate = (key: string, options?: Record<string, unknown>) => string
 
 /** What a failed turn's error looks like on a card: one readable reason, with the raw text kept behind a toggle. */
 export interface AgentErrorSummary {
@@ -56,6 +57,9 @@ function readableReason(text: string, depth = 0): string | null {
 export function describeAgentError(error: string, t: Translate): AgentErrorSummary {
   const known = agentErrorText(error, t)
   if (known !== error) return { text: known, expandable: false }
+
+  const proxyRequired = proxyRequiredText(error, t)
+  if (proxyRequired) return { text: proxyRequired, expandable: true }
 
   const payloadStart = error.search(JSON_START)
   const head = payloadStart >= 0 ? error.slice(0, payloadStart).replace(/[\s:]+$/, '') : ''

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const compiled = process.env.SDK_BEHAVIOR_TEST_ROOT ?? fileURLToPath(new URL('../dist', import.meta.url));
 const redaction = await import(pathToFileURL(join(compiled, process.env.SDK_REDACTION_ENTRY ?? 'index.js')).href);
 const { decodeWire } = await import(pathToFileURL(join(process.env.SDK_WIRE_TEST_ROOT ?? compiled, 'native/wire.js')).href);
-const cases = JSON.parse(await readFile(new URL('../native/crates/halo-core/src/redaction/fixtures/golden.json', import.meta.url), 'utf8'));
+const cases = JSON.parse(await readFile(new URL('../crates/halo-core/src/redaction/fixtures/golden.json', import.meta.url), 'utf8'));
 
 test('native redaction matches its golden fixtures, including non-finite limits and lone UTF-16 units', () => {
   for (const fixture of cases) {

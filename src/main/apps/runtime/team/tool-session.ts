@@ -82,7 +82,7 @@ export function bindSourceToolSession(scope: SpaceTeamMcpScope, callbacks: {
   sources.set(scope.conversationId, { generation, token, ...callbacks })
   const current = () => {
     const value = sources.get(scope.conversationId)
-    if (!value || value.generation !== generation) throw new CollaborationRefusal('turn_unavailable', 'This tool endpoint no longer belongs to an active source turn.')
+    if (!value || value.generation !== generation || (scope.executionScoped && value.token !== token)) throw new CollaborationRefusal('turn_unavailable', 'This tool endpoint no longer belongs to an active source turn.')
     return value
   }
   return {

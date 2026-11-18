@@ -513,6 +513,42 @@
       "thinking": true,
       "adaptiveThinking": true
     },
+    "claude-fable-5-2": {
+      "displayName": "Claude Fable 5.2",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true,
+      "adaptiveThinking": true
+    },
+    "claude-fable-5-2[1m]": {
+      "displayName": "Claude Fable 5.2 (1M)",
+      "provider": "anthropic",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true,
+      "adaptiveThinking": true
+    },
+    "claude-haiku-5-5": {
+      "displayName": "Claude Haiku 5.5",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true,
+      "adaptiveThinking": true
+    },
+    "claude-haiku-5-5[1m]": {
+      "displayName": "Claude Haiku 5.5 (1M)",
+      "provider": "anthropic",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true,
+      "adaptiveThinking": true
+    },
     "claude-sonnet-5": {
       "displayName": "Claude Sonnet 5",
       "provider": "anthropic",

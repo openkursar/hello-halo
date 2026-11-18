@@ -35,6 +35,7 @@
 | References and built-in tasks | `references.ts`, `prompt-text.ts` | A user message's `metadata.references` (places the user pointed at) and `metadata.task` (a code review started from the changes view) stay records in the transcript; the model reads them as the `<halo_references>` / `<halo_task>` blocks built here, between the canvas context and the image fallback. Every entry builds them through `formatTurnAttachments` / `formatReferencesBlock` (space chat, injection, digital-human chat and injection, run follow-ups), so a reference reads the same everywhere; a person's message to a team member crosses the team bus as text, so its block is written after the words before it leaves (`controllers/team-member-message.controller.ts`). A task's instructions are its owner's (`services/code-review` writes a review's and passes them as `AgentRequest.taskInstructions`, in-process only); the engine only frames them and knows nothing about what they ask. Text that is not the user's own (file names, terminal and conversation titles) passes `prompt-text.ts`, exported for those owners too, so it cannot end its line or block. No transport carries a task. |
 | Non-vision image fallback | `image-attachments.ts` | For models without vision: persists pasted images into the space's `attachments/` dir (content-addressed, mirrors the conversation-dir layout) and replaces the outbound image blocks with a `<halo_attachments>` path block for the `ocr_image` tool. Vision models bypass it entirely. Broker-free by design — ensuring ocr_image is present is the caller's concern: `send-message.ts` auto-opens the OCR toolset (opener `system`, before session creation so the rebuild seeds the same turn); app chat (`apps/runtime/app-chat.ts`) seeds the OCR MCP server unconditionally. |
 | Session consumption loop | `session-consumer.ts` | Persistent per-session loop over SDK turns; dispatches into stream-processor. Surface-agnostic — see §3.1. |
+| Agent execution | `execution/` | The one way an entry gives a session collaboration tools (automation runs, digital-human chat and team-member turns): the work the session delegates, the input that reaches it, when it may finish, how it is stopped and the usage of all of it. Engine-neutral; the application layer supplies delegated work through `app-bridge`. A person's space conversation mounts its team server from the capability broker instead. See §4. |
 | Model-request retries | `api-retry.ts` | Parses the engine's `system`/`api_retry` frame (same shape on Claude Code and the Halo SDK) into `shared/types/api-retry`, keeps the one pending retry on `SessionState.apiRetry`, and emits `agent:api-retry` (payload `retry`, `null` once a resent request answers or the turn ends). `stream-processor` drives it and voids the open blocks of an attempt the engine abandoned; `control.getSessionState` returns the pending retry with its remaining wait so a client arriving mid-wait shows the countdown. Never persisted. |
 | Turn destination | `turn-sink.ts`, `conversation-sink.ts` | `TurnSink` is where a consumed turn goes (persistence + delivery). `conversation-sink.ts` is the space-chat implementation; `apps/runtime/app-chat-sink.ts` is the digital-human one. |
 | Top-level orchestration | `agents.ts`, `index.ts` | Public surface; wires everything together. |
@@ -208,6 +209,7 @@ starting an empty session or changing the previous binding.
 - **Native guidance belongs to each engine; Halo product context is identical across engines.** `system-prompt.ts` owns one compact product context, without a copied Claude Code template, engine-specific tool policy or environment clone. `toEngineSystemPrompt` always expresses host context as a default-preset append. Adapters preserve native guidance and append that text; explicit raw strings remain replacement prompts for internal tasks. Knowledge bases, optional toolset guides and a digital human's instructions remain host-owned session bindings. `ownIdentity: 'app-instructions'` retains the exact runs-on-Halo identity line referencing App Instructions. `ownIdentity: 'runtime'` omits that reference when the caller supplies a runtime identity without an instruction section. Omission retains Halo's identity. Prompt composition adds no startup work, resident state or discovery.
 - **How big the model is, is Halo's answer.** Output cap and context window come from the resolved capabilities on the credential (preset merged with the user's per-model override in Settings), bounded by the hard limits in `shared/constants/model-runtime-limits.ts` — CC through `sdk-config.ts`, dsh through `clampModelRuntimeLimits` there, named as the `initialize` output cap plus `DSH_CONTEXT_WINDOW` (`dsh/options.ts`). An engine SDK's own model defaults must be suppressed rather than inherited: dsh shipped for a while on its SDK's DeepSeek numbers (256K output, 1M window), which only DeepSeek's endpoint accepts.
 - **No engine addresses a provider itself.** An AI source is not a URL and a key — it is also custom headers, a provider adapter, a wire format and a proxy policy, and `openai-compat-router` is the only code that turns that descriptor into an HTTP request. Every engine is therefore pointed at the loopback router and handed `encodeBackendConfig(credentialsToBackendConfig(...))` as its credential: CC and Codex as `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY` (`sdk-config.ts`), dsh as `DEEPSEEK_BASE_URL` + `DEEPSEEK_API_KEY` (`dsh/options.ts`), each reaching the route that matches the dialect its runtime speaks (`/v1/messages` for CC and dsh, `/v1/responses` for Codex). dsh's own transport identity (the harness `User-Agent` and `x-deepseek-harness-*` ids) is removed inside its runtime before a request reaches the router, so the router needs no dsh-specific rule. An engine given the provider's own URL loses every part of the descriptor it cannot express: dsh shipped that way and sent the DeepSeek harness's hardcoded `User-Agent` to a provider gateway that checks it, which answered `HTTP 500 request illegal` — with the source's OAuth headers, its adapter and its error body all missing from the request and from the logs. A runtime whose transport cannot be configured is exactly the case that makes this mandatory, not the exception to it.
+- **A guarded account never leaves directly.** Providers whose accounts are region-sensitive (Claude, ChatGPT) mark their backend config `proxyGuard`; the flag rides `ApiCredentials` → `credentialsToBackendConfig` into the encoded config, and the router and the provider's own requests call `proxyFetch(..., { guarded: true })`. Whether a proxy is *required* is `config.network.requireProxyForOAuth`, read live by `proxy-fetch` on every request, so toggling it needs no session rebuild. A guarded request that would be direct (no proxy, system answer DIRECT or a failed lookup, host on the bypass list, proxy unreachable) throws `ProxyRequiredError`; the router answers it 503 with `x-should-retry: false` and a `[proxy-required:<reason>]` marker the renderer localizes, and a load-balancing group treats it as `blocked` evidence (no rest, no blame). A new provider that needs the guard sets `proxyGuard` and sends its own requests guarded.
 - **BrowserWindow safety.** Always check `!mainWindow.isDestroyed()` before sending events in async callbacks. Stream processing is full of async callbacks; violations will crash on window close.
 
 - **Resident session limit.** Resident sessions retain engine resources (a child process for CC/Codex/dsh, shared Rust execution resources for Halo SDK), so their count is bounded by a number the budget policy owner pushes down: `setResidentSessionLimit(limit | null)` (set by `apps/runtime/session-budget.ts`; null = unlimited). Before a NEW session is created — never on reuse — the manager evicts least-recently-used idle sessions through `cleanupSession` until one more fits; busy, awaiting-init and in-creation sessions are never evicted, and if all are busy the new session is created over the limit (one warn per crossing, never refused). An evicted conversation resumes from its stored session id on its next turn, the same path as the 30-minute idle sweep. `listResidentSessions()` / `evictIdleSession(id, reason)` expose the same stats and safety check to callers that manage transient sessions (automation runs). The engine holds no memory logic; the limit is policy from above.
@@ -338,9 +340,9 @@ session-consumer (one loop per V2 session, surface-agnostic)
 
 A sink is supplied through `getOrCreateV2Session`'s `consumer` argument; its
 presence is what starts a consumer at all. Automation runs
-(`apps/runtime/execute.ts`) pass none and drive their own `processStream` — a
-headless batch execution has no turn gaps to lose, and two readers would fight
-over one stream. Manager-owned resumed runs register an active session for the
+(`apps/runtime/execute.ts`) pass none and read the stream through their agent
+execution (§4) — a headless batch execution has no turn gaps to lose, and two
+readers would fight over one stream. Manager-owned resumed runs register an active session for the
 whole execution, including auto-continue, so account invalidation cannot close a
 live stream. Their `finally` releases the manager-owned session and active state;
 fresh transient runs remain outside the resident-session registry.
@@ -373,13 +375,112 @@ cleanup cannot release a successor.
 about a surface; a branch on conversation kind inside this loop is the smell
 that the sink boundary is being bypassed.
 
-## 4) Collaboration ownership
+## 4) Collaboration ownership and the agent execution
 
 Collaboration belongs to the application runtime and reaches every engine as
 scoped MCP tools. This engine layer starts ordinary sessions and transports
 messages; it does not create a second member registry or native team lifecycle.
 Nested tool records and legacy transcript relationships remain readable through
 `tool-message-handler.ts` and the normal transcript renderer.
+
+What the engine layer does own is the lifecycle of delegated work around one
+execution, because it is the same for every engine and every entry. Three things
+are kept apart:
+
+| Level | Meaning |
+|---|---|
+| Session | The reusable, resumable context (`session-manager`). |
+| Engine turn | The engine processes input and ends with a `result` frame. |
+| An execution's work | Everything one request started: the session's turns, the work it delegated, the input accepted meanwhile. It can span many turns, and the main agent does not hold the engine while it waits. |
+
+A turn ending is not the work ending, and the work not having ended does not mean
+the engine is occupied. `agent:complete`, chat replies and team turn-end notices
+therefore keep marking engine turns; only an execution reads the whole.
+
+**One contract for every entry.** `execution/` (`openAgentExecution`) is the only
+way an entry gives a session collaboration tools. The entry describes its context
+in typed shared vocabulary and never touches the machinery:
+
+| Describes | Field | Examples |
+|---|---|---|
+| Who the work is for | `principal` | the digital human (app, permissions, environment, its own opt-outs) |
+| Who asked | `requester` | origin (guest / colleague), what the caller may make the principal do (`delegation`), the file boundary collaborators inherit, what may not be published |
+| Where results go | `source` | `run`: back into the execution's own session; `conversation`: the conversation is the inbox (an IM chat's sender authority travels with it); `member`: a team member's turn |
+| What the session holds | `grants()` | the tool grants collaborators inherit, read when work is first delegated |
+| Stop from outside | `signal` | aborting it stops the execution |
+
+Who opens one today: an automation run (`apps/runtime/execute.ts`, `source: run`)
+and a digital human's chat, IM and team-member turns (`apps/runtime/app-chat.ts`,
+`conversation` / `member`). What differs between them is `source` and what the
+entry does with the execution, not how it reaches the work:
+
+- **Headless entries** (a run has no consumer of its own) `bind` their engine
+  session and `submit` messages; the execution reads the engine until the turn has
+  ended and nothing is unfinished or unread, and the entry's own completion rule
+  (a report tool) gets the same facts through `canComplete()` / `inputRevision`.
+- **Conversation entries** never `submit`: the session consumer already reads the
+  engine (§3.1), a turn needs no waiting, and a collaborator's report resumes the
+  conversation through its mailbox. What they hold differs by entry: a digital
+  human's chat, IM or team-member turn mounts `tools` and `close()`s that turn's
+  execution when the turn ends, which releases only the endpoint the turn mounted;
+  a person's space conversation is not an execution at all: the capability broker
+  mounts the same server for it, and that server's lifetime is the engine
+  session's toolset (it is rebuilt with the session). Neither stops a conversation's
+  collaborators — that is the conversation's own stop (below). Nothing about the
+  turn's reply, its permission mailbox or its end event changes.
+
+The execution does the following; no entry does any of it:
+
+- **Finishing** (headless). Unread live input continues reading at once, owned work
+  still running is waited for event-driven (no polling; a change notice is a
+  reason to re-read, never a completion claim), and an engine failure stops the
+  waiting. A reader that returns `'stop'` ends the execution: nothing more is
+  admitted.
+- **Input.** Results the host authorized arrive on `ExecutionInputPort`, are
+  serialized, join the running turn or continue the session, are recorded once,
+  and are re-authorized when they reach the front of the queue. Input an entry's
+  own users send in goes through the execution's session handle, so every
+  accepted input is counted; after the execution has ended the handle takes none.
+- **Stopping.** `stop()` (what aborting `signal` does) closes admission, interrupts
+  the engine turn being read — through the `engine` control the entry bound, with
+  the grace period before the session is closed — and ends what the execution owns;
+  it resolves once the read has ended and everything is stopped ("stop requested"
+  and "stopped" are different moments). `close()` is for an execution that is
+  over: it retires what the execution holds, awaits in-flight input and settles
+  usage, without interrupting the engine or waiting for a read. Both are
+  idempotent, begin synchronously, and a stop after `close()` does nothing.
+- **Policy.** `mayDelegate()` is the one place the user's opt-out, the digital
+  human's own opt-out and the requester's grant are combined; the default is on
+  and an explicit refusal is never overridden.
+- **Usage.** One ledger of every turn's `result` usage and the owned work's.
+
+The application layer supplies what delegated work means as an `ExecutionWorkHost`
+registered on `app-bridge` (the seam exists because the team runtime lives above
+this layer): `open(request)` returns `OwnedWork` — the tools to mount, their
+guidance, whether anything is pending, a change subscription, `end()` and the
+usage. `end()` is the host's meaning of "this execution is over": a run's
+collaborators belong to the run and are stopped, a conversation's belong to the
+conversation and keep running. The team runtime implements the host
+(`apps/runtime/team/execution-work.ts`) and keeps members, request identity,
+sender authority and descendants; this layer never imports it. Nothing is created
+for an execution that never delegates.
+
+**A conversation's collaborators are stopped by the conversation, and that boundary
+is this layer's.** A conversation can be stopped while no turn is running — a member
+may still be thinking — so the per-turn execution (`source: conversation`, the tools
+that turn mounted) is not its owner. `execution/conversation-lifecycle.ts` binds the
+agent service's own `onUserStop` and `onHumanRequest` to a `ConversationWorkHost`
+(implemented by `apps/runtime/team/conversation-work.ts`, passed in when bootstrap
+binds the lifecycle):
+a user's stop asks the host what stopping that conversation's work means — cancel
+its request, its queued deliveries and its collaborators, descendants included —
+and rebuilds a reused engine session at its next turn so the endpoint it still
+holds is retired with the request; a person's request starts the request the work
+will belong to. What a turn does remains its own: mounting the tools and calling
+`close()` releases the turn's endpoint (`OwnedWork.end()`), which never stops a
+conversation's collaborators. No application module listens to these events itself,
+and no new object, queue or registry is introduced: the host is the team runtime's
+existing participant service.
 
 ## 5) External Injection (Mid-Turn Delivery)
 
@@ -516,6 +617,7 @@ that may be safely rebuilt.
 | Change how the SDK is invoked or configured | `sdk-config.ts` / `resolved-sdk.ts` |
 | Add or change a user-level AI setting every session must obey | `user-agent-settings.ts` (read it in the layer that consumes it, never thread it through entries) — see §11 |
 | Add a server every user-facing session should have | `toolsets/base.ts` — see §11 |
+| Change when an execution may finish, what input it accepts, how it stops, who may delegate, or what its delegated work costs | `execution/` — see §4 (never in an entry) |
 | Change what identity the host puts on outgoing requests | `request-identity-factory.ts` (see §10) |
 | Change how hard a model thinks | `reasoning-effort.ts` (never set `effort` / `maxThinkingTokens` at a call site) |
 | Add an engine, or change engine selection / fallback | `capabilities.ts` (`EngineId`), `resolved-sdk.ts` (loader, `ENGINE_LABELS`, `FALLBACK_ORDER`), `engine-availability.ts`, `scripts/engine-runtimes.cjs` |

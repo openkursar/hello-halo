@@ -14,6 +14,9 @@ paths:
   - src/main/controllers/ai-groups.controller.ts
   - src/main/http/routes/ai-groups.routes.ts
   - src/renderer/components/settings/AISourcesSection.tsx
+  - src/renderer/components/settings/AISourceCard.tsx
+  - src/renderer/components/settings/AISourceInlinePanel.tsx
+  - src/renderer/components/settings/OAuthAccountEditor.tsx
   - src/renderer/components/settings/ModelConfigPanel.tsx
   - src/main/services/ai-sources/**
   - src/main/openai-compat-router/**

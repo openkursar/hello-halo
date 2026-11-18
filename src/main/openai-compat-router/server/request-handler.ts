@@ -91,7 +91,8 @@ async function fetchUpstream(
   body: unknown,
   timeoutMs: number,
   signal?: AbortSignal,
-  customHeaders?: Record<string, string>
+  customHeaders?: Record<string, string>,
+  guarded = false
 ): Promise<globalThis.Response> {
   const controller = new AbortController()
   // The timeout guards connect + response headers only (cleared when fetch
@@ -128,7 +129,7 @@ async function fetchUpstream(
       headers,
       body: JSON.stringify(body),
       signal: controller.signal
-    })
+    }, { guarded })
   } finally {
     clearTimeout(timeout)
   }
@@ -151,7 +152,8 @@ async function fetchAnthropicUpstream(
   timeoutMs: number,
   sdkHeaders?: Record<string, string>,
   customHeaders?: Record<string, string>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  guarded = false
 ): Promise<globalThis.Response> {
   const controller = new AbortController()
   const timeout = setTimeout(() => {
@@ -219,7 +221,7 @@ async function fetchAnthropicUpstream(
       headers,
       body: (Buffer.isBuffer(bodyOrBuffer) ? bodyOrBuffer : JSON.stringify(bodyOrBuffer)) as BodyInit,
       signal: controller.signal
-    })
+    }, { guarded })
   } finally {
     clearTimeout(timeout)
   }
@@ -366,7 +368,7 @@ async function handleAnthropicPassthrough(
   const anthUpstreamStartTs = Date.now()
   try {
     const upstreamResp = await fetchAnthropicUpstream(
-      targetUrl, apiKey, fetchBody, Math.min(timeoutMs, options.headersTimeoutMs ?? timeoutMs), sdkHeaders, customHeaders, clientAbort.signal
+      targetUrl, apiKey, fetchBody, Math.min(timeoutMs, options.headersTimeoutMs ?? timeoutMs), sdkHeaders, customHeaders, clientAbort.signal, config.proxyGuard === true
     )
     console.log(`[RequestHandler] upstream_ok wire=anthropic status=${upstreamResp.status} duration_ms=${Date.now() - anthUpstreamStartTs} stream=${anthropicRequest.stream ?? false} tools=${toolCount} url=${targetUrl}`)
 
@@ -520,7 +522,7 @@ async function handleOpenAIConversion(
       adapterContext
     )
     // Make upstream request - URL is used directly, no modification
-    let upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, clientAbort.signal, requestHeaders)
+    let upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, clientAbort.signal, requestHeaders, config.proxyGuard === true)
     console.log(`[RequestHandler] upstream_ok wire=openai api_type=${apiType} status=${upstreamResp.status} duration_ms=${Date.now() - oaiUpstreamStartTs} model=${anthropicRequest.model} stream=${wantStream ?? false} tools=${toolCount} adapter=${adapter?.name ?? adapterId ?? 'none'} url=${backendUrl}`)
 
     // Handle errors - use upstream error type if available, else map from status
@@ -545,7 +547,7 @@ async function handleOpenAIConversion(
           console.warn(`[RequestHandler] Upstream rejected $ref, retrying with ${rewritten} tool schema(s) inlined — consider a provider adapter for ${backendUrl}`)
 
           const oaiRetryStartTs = Date.now()
-          upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, clientAbort.signal, requestHeaders)
+          upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, clientAbort.signal, requestHeaders, config.proxyGuard === true)
           console.log(`[RequestHandler] upstream_ok wire=openai api_type=${apiType} retry=inline_schema_refs status=${upstreamResp.status} duration_ms=${Date.now() - oaiRetryStartTs} url=${backendUrl}`)
 
           if (!upstreamResp.ok) {
@@ -570,7 +572,7 @@ async function handleOpenAIConversion(
         applyProviderAdapter(backendUrl, retryRequest as unknown as Record<string, unknown>, requestHeaders, adapterId, adapterContext)
 
         const oaiRetryStartTs = Date.now()
-        upstreamResp = await fetchUpstream(backendUrl, apiKey, retryRequest, timeoutMs, clientAbort.signal, requestHeaders)
+        upstreamResp = await fetchUpstream(backendUrl, apiKey, retryRequest, timeoutMs, clientAbort.signal, requestHeaders, config.proxyGuard === true)
         console.log(`[RequestHandler] upstream_ok wire=openai api_type=${apiType} retry=true status=${upstreamResp.status} duration_ms=${Date.now() - oaiRetryStartTs} url=${backendUrl}`)
 
         if (!upstreamResp.ok) {

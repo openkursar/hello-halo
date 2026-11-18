@@ -17,7 +17,7 @@ import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { getAppManager, type InstalledApp } from '../manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
-import { addRunTokenUsage, resolvePermission, type RunTokenUsage } from '../../../shared/apps/app-types'
+import { resolvePermission } from '../../../shared/apps/app-types'
 import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
 import type { ActivityStore } from './store'
 import type {
@@ -47,10 +47,13 @@ import {
   unregisterActiveSession,
   explainEngineError,
   createSession,
+  openAgentExecution,
+  captureToolsetExecutionOptions,
   getEngineCapabilities,
   resolveCredentialsForSdk,
   buildUserSessionSdkOptions,
   toEngineSystemPrompt,
+  type AgentExecution,
   type V2SessionLease,
 } from '../../services/agent'
 import { applyReasoningEffort, pickReasoningEffort } from '../../services/agent/reasoning-effort'
@@ -79,7 +82,6 @@ import {
 import { appConsolidationInputs } from './memory-control'
 import { registerActiveRun, unregisterActiveRun, notifyActiveRunReady, type RunSupplement } from './active-runs'
 import { describeSelfInstance, formatInstanceTag } from './live-instances'
-import { stopEngineOnAbort } from './engine-stop'
 import { renderTriggerContext } from './event-input'
 import type { EngineId } from '../../../shared/types/engine'
 
@@ -134,15 +136,11 @@ export interface ExecuteRunOptions {
 interface StreamResult {
   /** Final text content from the AI */
   finalText: string
-  /** Total input + output tokens consumed */
-  totalTokens: number
-  /** The same turns' usage with cache reads and writes, for showing what a run processed */
-  usage?: RunTokenUsage
   /** Whether the AI reported an error via report_to_user */
   aiReportedError: boolean
   /** Error text from the SDK result message when aiReportedError was set */
   aiReportedErrorDetail?: string
-  /** Whether the AI called report_to_user during this stream cycle */
+  /** Whether a report was saved after the last input the run accepted */
   reportToolCalled: boolean
   /** V2 session ID captured from the system init message (for escalation recovery) */
   sessionId?: string
@@ -282,7 +280,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   let session: any = null
   let sessionLease: V2SessionLease | undefined
   let managedSessionActive = false
-  let releaseEngineStop: (() => void) | undefined
+  let execution: AgentExecution | undefined
   // Closed once, through its lease when it has one: by a stop the engine did
   // not answer in time, or when the run ends.
   let sessionClosed = false
@@ -298,10 +296,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
   // Scoped browser context for this run (created in try, cleaned up in finally)
   let scopedBrowserCtx: ReturnType<typeof createScopedBrowserContext> | undefined
-
-  // The turns finished so far, kept in reach of catch: a run that fails with an
-  // exception still records the tokens they used.
-  let streamResult: StreamResult | undefined
 
   // ── Build memory scope (before try so it's available in catch) ─────
   const memoryScope: MemoryCallerScope = {
@@ -379,6 +373,29 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       runSenderKey = openRunSender({ appId: app.id, runId, spaceId: app.spaceId!, name: app.spec.name, startedAt })
     }
 
+    // Create an abort controller that respects the external signal
+    const abortController = new AbortController()
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        abortController.abort()
+      } else {
+        abortSignal.addEventListener('abort', () => abortController.abort(), { once: true })
+      }
+    }
+
+    // What the run delegates, what reaches it meanwhile, how a stop reaches it and what it all costs belong to the execution.
+    const agentExecution = openAgentExecution({
+      key: runSender,
+      principal: { appId: app.id, permissions: app.permissions, environment, disabledTools: app.userOverrides?.disabledTools },
+      modelSelection: { modelSourceId: credentials.sourceId!, modelId: credentials.model },
+      grants: () => captureToolsetExecutionOptions(sdkOptions, engineId, sdkOptions.mcpServers ?? {}),
+      // A stop from outside the run (stop, task closed, person removed, quit) is the execution's to carry out.
+      signal: abortSignal,
+    })
+    execution = agentExecution
+    // A report counts only while no input has arrived since it was saved.
+    let reportedAt = -1
+
     // ── Merge config_schema defaults into userConfig ─────
     //    Ensures defaults are available even if the user never opened the config panel.
     const mergedConfig = mergeConfigWithDefaults(app.userConfig, app.spec.config_schema)
@@ -411,6 +428,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       userConfig: mergedConfig,
       usesAIBrowser,
       usesHaloApi,
+      collaborationGuide: agentExecution.mayDelegate() ? agentExecution.guidance : undefined,
       workDir,
       modelInfo: resolvedCreds.displayModel,
       autoSyncSessions,
@@ -484,6 +502,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       sessionKey,
       notificationLevel: app.userOverrides.notificationLevel,
       plansDir,
+      canComplete: () => agentExecution.canComplete(),
+      onReported: () => { reportedAt = agentExecution.inputRevision },
     }
 
     const reportMcpServer = createReportToolServer(
@@ -522,16 +542,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // ── 5. Create V2 session ───────────────────────────────
     //    (credentials, electronPath, workDir resolved in step 1)
-
-    // Create an abort controller that respects the external signal
-    const abortController = new AbortController()
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        abortController.abort()
-      } else {
-        abortSignal.addEventListener('abort', () => abortController.abort(), { once: true })
-      }
-    }
 
     // Resolve MCPs declared in requires.mcps from the installed apps database.
     // Only injects explicitly declared MCPs (least-privilege: automation gets only what it declares).
@@ -581,6 +591,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
           : {}),
       },
     })
+
+    Object.assign(sdkOptions.mcpServers, agentExecution.tools)
 
     // Override SDK options for automation context
     sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt, engineId)
@@ -642,15 +654,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       session = await createSession(sdkOptions)
     }
     if (sessionLease) session = sessionLease.session
-    // A stop from outside the run (stop, task closed, person removed, quit)
-    // must reach the engine, or a silent run never notices it.
-    if (abortSignal) {
-      releaseEngineStop = stopEngineOnAbort(
-        abortSignal,
-        { interrupt: session.interrupt?.bind(session), close: closeSession },
-        { canInterrupt: getEngineCapabilities(engineId)?.features.interrupt ?? false, runTag },
-      )
-    }
     if (isResuming) {
       registerActiveSession(sessionKey, createSessionState(app.spaceId!, sessionKey, abortController))
       managedSessionActive = true
@@ -677,13 +680,24 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    inject a mid-run supplement (active-runs.ts): it writes the supplement to
     //    the run JSONL and pushes it into the live SDK session. The run itself is
     //    headless — it emits no renderer events; the run-detail view reads the JSONL.
+    agentExecution.bind(session, {
+      send: sessionLease ? message => sessionLease!.send(message) : undefined,
+      record: sessionWriter
+        ? input => { sessionWriter!.writeTrigger(input.content, undefined, undefined, input.provenance) }
+        : undefined,
+      engine: {
+        interrupt: session.interrupt?.bind(session),
+        close: closeSession,
+        canInterrupt: getEngineCapabilities(engineId)?.features.interrupt ?? false,
+      },
+    })
     const activeRunHandle = {
       runId,
       appId: app.id,
       spaceId: app.spaceId!,
       triggerType: trigger.type,
       startedAt,
-      session,
+      session: agentExecution.session,
       writer: sessionWriter,
     }
     registerActiveRun(activeRunHandle)
@@ -705,16 +719,21 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         store.updateRunSessionId(runId, sessionId)
       }
     }
-    streamResult = await processStream(
-      session,
-      formatReferencesBlock(followupReferences, workDir) + initialMessage,
+    const turnContext = {
+      execution: agentExecution,
       abortController,
       runTag,
-      sessionWriter,
-      hasUnansweredEscalation,
+      writer: sessionWriter,
+      turnAskedUser: hasUnansweredEscalation,
       runId,
-      options.onPendingInputAbandoned,
-      { engineId, onSessionId: persistEngineSession, send: sessionLease ? message => sessionLease!.send(message) : undefined }
+      onPendingInputAbandoned: options.onPendingInputAbandoned,
+      engineId,
+      onSessionId: persistEngineSession,
+      reportSaved: () => reportedAt === agentExecution.inputRevision,
+    }
+    let streamResult = await processStream(
+      formatReferencesBlock(followupReferences, workDir) + initialMessage,
+      turnContext
     )
 
     // A free-text follow-up to an already-completed run (continue.interactive) is
@@ -746,23 +765,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       }
 
       registerActiveRun(activeRunHandle)
-      const nextResult = await processStream(
-        session,
-        AUTO_CONTINUE_FULL,
-        abortController,
-        runTag,
-        sessionWriter,
-        hasUnansweredEscalation,
-        runId,
-        options.onPendingInputAbandoned,
-        { engineId, onSessionId: persistEngineSession, send: sessionLease ? message => sessionLease!.send(message) : undefined }
-      )
+      const nextResult = await processStream(AUTO_CONTINUE_FULL, turnContext)
 
-      // Merge results: accumulate text and tokens, take latest flags
+      // Merge results: accumulate text, take latest flags
       streamResult = {
         finalText: streamResult.finalText + nextResult.finalText,
-        totalTokens: streamResult.totalTokens + nextResult.totalTokens,
-        usage: addRunTokenUsage(streamResult.usage, nextResult.usage),
         aiReportedError: nextResult.aiReportedError,
         aiReportedErrorDetail: nextResult.aiReportedErrorDetail,
         reportToolCalled: nextResult.reportToolCalled,
@@ -777,8 +784,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         `error=${streamResult.aiReportedError}`
       )
     }
-    // The engine's part is over: a stop arriving from here on has nothing to end.
-    releaseEngineStop?.()
+    // Everything the run owns is stopped before its cost is read.
+    await agentExecution.close()
+    const usage = agentExecution.usage()
+    const totalTokens = usage ? usage.inputTokens + usage.outputTokens : 0
 
     // ── 7. Record completion ───────────────────────────────
     const finishedAt = Date.now()
@@ -824,7 +833,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       status: finalStatus,
       finishedAt,
       durationMs,
-      tokensUsed: streamResult.totalTokens || undefined,
+      tokensUsed: totalTokens || undefined,
       errorMessage: finalErrorMessage,
     })
 
@@ -878,7 +887,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     console.log(
       `[Runtime][${runTag}] ✓ Run completed: outcome=${outcome}, status=${finalStatus}, ` +
-      `duration=${durationMs}ms, tokens=${streamResult.totalTokens}, ` +
+      `duration=${durationMs}ms, tokens=${totalTokens}, ` +
       `textLen=${streamResult.finalText.length}, ` +
       `escalation=${escalationEntryId ? 'yes' : 'no'}`
     )
@@ -905,7 +914,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       trigger,
       outcome,
       durationMs,
-      tokensUsed: streamResult.totalTokens,
+      tokensUsed: totalTokens,
       finalText: streamResult.finalText,
       escalation: !!escalationEntryId,
       runTag,
@@ -919,12 +928,16 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       startedAt,
       finishedAt,
       durationMs,
-      tokensUsed: streamResult.totalTokens || undefined,
-      tokenUsage: streamResult.usage,
+      tokensUsed: totalTokens || undefined,
+      tokenUsage: usage,
       finalText: streamResult.finalText || undefined,
       errorMessage: finalErrorMessage,
     }
   } catch (err) {
+    try { await execution?.close() }
+    catch (error) { console.error(`[Runtime][run=${runId}] Execution cleanup failed after execution error`, error) }
+    const usage = execution?.usage()
+    const totalTokens = usage ? usage.inputTokens + usage.outputTokens : 0
     const finishedAt = Date.now()
     const durationMs = finishedAt - startedAt
     const errorMessage = err instanceof Error ? err.message : String(err)
@@ -938,7 +951,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       status: 'error',
       finishedAt,
       durationMs,
-      tokensUsed: streamResult?.totalTokens || undefined,
+      tokensUsed: totalTokens || undefined,
       errorMessage,
     })
 
@@ -973,7 +986,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       trigger,
       outcome: 'error',
       durationMs,
-      tokensUsed: streamResult?.totalTokens ?? 0,
+      tokensUsed: totalTokens,
       finalText: `Error: ${errorMessage}`,
       escalation: false,
       runTag,
@@ -987,8 +1000,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       startedAt,
       finishedAt,
       durationMs,
-      tokensUsed: streamResult?.totalTokens || undefined,
-      tokenUsage: streamResult?.usage,
+      tokensUsed: totalTokens || undefined,
+      tokenUsage: usage,
       errorMessage,
     }
   } finally {
@@ -998,7 +1011,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    The run-detail view detects completion from the app runtime status
     //    (broadcast separately by the service) and reloads the JSONL transcript.
     unregisterActiveRun(runId)
-    releaseEngineStop?.()
+    try { await execution?.close() }
+    catch (error) { console.error(`[Runtime][${runTag}] Execution cleanup failed`, error) }
     if (runSenderKey) closeRunSender(runSenderKey)
 
     // ── 9. Close session ────────────────────────────────────
@@ -1028,59 +1042,44 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 // Stream Processing
 // ============================================
 
-/** Take a turn's token usage from its result message. */
-function noteResultUsage(result: StreamResult, m: any): void {
-  // On the halo engine `usage` already includes sub-agents' tokens.
-  if (m.usage) {
-    result.totalTokens = (m.usage.input_tokens || 0) + (m.usage.output_tokens || 0)
-  }
-  if (m.cumulative_usage) {
-    result.totalTokens =
-      (m.cumulative_usage.input_tokens || 0) + (m.cumulative_usage.output_tokens || 0)
-  }
-  const usage = m.cumulative_usage ?? m.usage
-  if (usage) {
-    result.usage = {
-      inputTokens: usage.input_tokens || 0,
-      outputTokens: usage.output_tokens || 0,
-      cacheReadTokens: usage.cache_read_input_tokens || 0,
-      cacheCreationTokens: usage.cache_creation_input_tokens || 0,
-    }
-  }
+/** What one stream cycle of a run needs from its entry. */
+interface RunTurnContext {
+  execution: AgentExecution
+  abortController: AbortController
+  runTag: string
+  writer?: SessionWriter
+  /** Whether this turn has raised an escalation; when it has, the run ends at the next safe point (see escalation-cut.ts). */
+  turnAskedUser?: () => boolean
+  runId?: string
+  onPendingInputAbandoned?: () => void
+  engineId: EngineId
+  onSessionId: (sessionId: string) => void
+  /** A report was saved and no input has arrived since. */
+  reportSaved: () => boolean
 }
 
 /**
- * Process the V2 session stream for a headless automation run.
+ * Process one message of a headless automation run.
  *
- * Runs are headless: this loop consumes the SDK stream to (a) persist each
+ * Runs are headless: this reads the execution's engine messages to (a) persist each
  * assistant/user message to the run JSONL (the run-detail view reads it back via
- * app:get-session), (b) detect the `report_to_user` completion signal, and
- * (c) collect the final text, token usage, and CC session id. It deliberately
- * emits NO `agent:*` renderer events — watching a run is a read over its JSONL
- * transcript (SessionDetailView polls), not a live event subscription. This keeps
- * the unwatched majority of runs (up to maxConcurrent at once) off the renderer
+ * app:get-session), (b) collect the final text and the CC session id, and (c) end
+ * the run when it asks the user something. It deliberately emits NO `agent:*`
+ * renderer events — watching a run is a read over its JSONL transcript
+ * (SessionDetailView polls), not a live event subscription. This keeps the
+ * unwatched majority of runs (up to maxConcurrent at once) off the renderer
  * event path entirely. `includePartialMessages` is false, so only aggregate
  * block-level messages arrive — one JSONL append per completed block.
  *
- * Returns the StreamResult shape the completion logic in executeRun expects.
+ * When the engine stops, the execution keeps the run reading while work it owns
+ * is unfinished or input is unread, and counts every turn's usage.
  *
- * @param turnAskedUser whether this turn has raised an escalation; when it has,
- *   the run is ended at the next safe point (see escalation-cut.ts).
+ * Returns the StreamResult shape the completion logic in executeRun expects.
  */
-async function processStream(
-  session: any,
-  message: string,
-  abortController: AbortController,
-  runTag: string,
-  writer?: SessionWriter,
-  turnAskedUser?: () => boolean,
-  runId?: string,
-  onPendingInputAbandoned?: () => void,
-  engine?: { engineId: EngineId; onSessionId: (sessionId: string) => void; send?: (message: string) => unknown }
-): Promise<StreamResult> {
+async function processStream(message: string, turn: RunTurnContext): Promise<StreamResult> {
+  const { execution, abortController, runTag, writer, turnAskedUser, runId, onPendingInputAbandoned, engineId } = turn
   const result: StreamResult = {
     finalText: '',
-    totalTokens: 0,
     aiReportedError: false,
     reportToolCalled: false,
   }
@@ -1092,88 +1091,79 @@ async function processStream(
     return result
   }
 
-  await (engine?.send ? engine.send(message) : session.send(message))
-  if (runId) notifyActiveRunReady(runId)
-
   let messageCount = 0
   let toolUseCount = 0
   const cutPoint = new TurnCutPoint()
-
   let stopNoticed = false
-  try {
-    do {
-      for await (const sdkMessage of session.stream()) {
-        if (!sdkMessage || typeof sdkMessage !== 'object') continue
-        const msgType = (sdkMessage as { type?: string }).type
 
-        // Stopped: nothing more is handled, but the interrupted turn still reports
-        // its tokens in the result that ends the stream (a stop that is not
-        // answered closes the engine, which ends it too — see engine-stop.ts).
-        if (abortController.signal.aborted) {
-          if (!stopNoticed) {
-            stopNoticed = true
-            console.log(`[Runtime][${runTag}] Run aborted during stream processing`)
+  const readMessage = (sdkMessage: unknown): 'stop' | void => {
+    if (!sdkMessage || typeof sdkMessage !== 'object') return
+    const msgType = (sdkMessage as { type?: string }).type
+
+    // Stopped: nothing more is handled, but the interrupted turn still reports
+    // its tokens in the result that ends the stream, which the execution counts
+    // (a stop that is not answered closes the engine, which ends it too — see engine-stop.ts).
+    if (abortController.signal.aborted) {
+      if (!stopNoticed) {
+        stopNoticed = true
+        console.log(`[Runtime][${runTag}] Run aborted during stream processing`)
+      }
+      return
+    }
+
+    messageCount++
+
+    // Persist assistant/user messages to the run JSONL for "View process" reload.
+    // (No stream_event frames arrive — partials are off.)
+    if (writer && (msgType === 'assistant' || msgType === 'user')) {
+      writer.writeEvent(sdkMessage as Record<string, unknown>)
+    }
+
+    // A failed model request told as an assistant message carrying `error`
+    // is the run's error, which its result reports — never its output.
+    if (msgType === 'assistant' && !(sdkMessage as { error?: unknown }).error) {
+      const content = (sdkMessage as any).message?.content
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === 'text' && typeof block.text === 'string') {
+            result.finalText += block.text
           }
-          if (msgType === 'result') noteResultUsage(result, sdkMessage)
-          continue
-        }
-
-        messageCount++
-
-        // Persist assistant/user messages to the run JSONL for "View process" reload.
-        // (No stream_event frames arrive — partials are off.)
-        if (writer && (msgType === 'assistant' || msgType === 'user')) {
-          writer.writeEvent(sdkMessage as Record<string, unknown>)
-        }
-
-        // A failed model request told as an assistant message carrying `error`
-        // is the run's error, which its result reports — never its output.
-        if (msgType === 'assistant' && !(sdkMessage as { error?: unknown }).error) {
-          const content = (sdkMessage as any).message?.content
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (block.type === 'text' && typeof block.text === 'string') {
-                result.finalText += block.text
-              }
-              if (block.type === 'tool_use') {
-                toolUseCount++
-                // report_to_user (MCP name: mcp__halo-report__report_to_user) is the
-                // definitive completion signal for automation runs.
-                if (typeof block.name === 'string' && block.name.includes('report_to_user')) {
-                  result.reportToolCalled = true
-                }
-              }
-            }
-          }
-        }
-
-        if (msgType === 'result') {
-          const m = sdkMessage as any
-          noteResultUsage(result, m)
-          if (m.is_error || m.error_during_execution) {
-            result.aiReportedError = true
-            if (typeof m.result === 'string' && m.result.length > 0) {
-              result.aiReportedErrorDetail = explainEngineError(m.result, engine?.engineId)
-            }
-            console.warn(`[Runtime][${runTag}] AI reported error in result message`)
-          }
-        }
-
-        // Capture the CC session id so a user can later resume / continue this run.
-        if (msgType === 'system' && (sdkMessage as any).subtype === 'init' && (sdkMessage as any).session_id) {
-          result.sessionId = (sdkMessage as any).session_id
-          engine?.onSessionId(result.sessionId!)
-        }
-
-        // The run asked the user something: it is over, and the transcript the
-        // answer will resume against is now complete.
-        if (cutPoint.observe(sdkMessage) && turnAskedUser?.()) {
-          console.log(`[Runtime][${runTag}] Escalation raised — ending the run here; the answer resumes it`)
-          abortController.abort()
-          break
+          if (block.type === 'tool_use') toolUseCount++
         }
       }
-    } while (!abortController.signal.aborted && session.hasPendingInput?.())
+    }
+
+    if (msgType === 'result') {
+      const m = sdkMessage as any
+      if (m.is_error || m.error_during_execution) {
+        result.aiReportedError = true
+        if (typeof m.result === 'string' && m.result.length > 0) {
+          result.aiReportedErrorDetail = explainEngineError(m.result, engineId)
+        }
+        console.warn(`[Runtime][${runTag}] AI reported error in result message`)
+      }
+    }
+
+    // Capture the CC session id so a user can later resume / continue this run.
+    if (msgType === 'system' && (sdkMessage as any).subtype === 'init' && (sdkMessage as any).session_id) {
+      result.sessionId = (sdkMessage as any).session_id
+      turn.onSessionId(result.sessionId!)
+    }
+
+    // The run asked the user something: it is over, and the transcript the
+    // answer will resume against is now complete.
+    if (cutPoint.observe(sdkMessage) && turnAskedUser?.()) {
+      console.log(`[Runtime][${runTag}] Escalation raised — ending the run here; the answer resumes it`)
+      abortController.abort()
+      return 'stop'
+    }
+  }
+
+  try {
+    await execution.submit(message, {
+      onSent: () => { if (runId) notifyActiveRunReady(runId) },
+      onMessage: readMessage,
+    })
   } catch (streamErr) {
     if (abortController.signal.aborted) {
       console.log(`[Runtime][${runTag}] Stream aborted (expected)`)
@@ -1188,8 +1178,9 @@ async function processStream(
   } finally {
     // Close acceptance before any asynchronous run finalization can receive a late message.
     if (runId) unregisterActiveRun(runId)
-    if (abortController.signal.aborted && session.hasPendingInput?.()) onPendingInputAbandoned?.()
+    if (abortController.signal.aborted && execution.session.hasPendingInput?.()) onPendingInputAbandoned?.()
   }
+  result.reportToolCalled = turn.reportSaved()
 
   console.log(
     `[Runtime][${runTag}] Stream cycle finished: messages=${messageCount}, ` +

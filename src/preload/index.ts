@@ -5,7 +5,7 @@ import type { EngineId } from '../shared/types/engine'
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { browserHostBridge } from './browser-host-bridge'
-import type { BrowserHostBridge, BrowserPageGone } from '../shared/types/browser-host'
+import type { BrowserHostBridge, BrowserPageGone, BrowserTabOpened } from '../shared/types/browser-host'
 import type { RpcContract, RpcClient } from '../shared/rpc/define'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../shared/types/model-capabilities'
 import type { ReasoningEffortLevel } from '../shared/constants/reasoning-effort'
@@ -22,6 +22,7 @@ import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLiveP
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
 import type { PickedLocalEntry } from '../shared/attached-paths'
+import type { ProxyRouteInfo } from '../shared/rpc/contracts/system.contract'
 import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../shared/types/im-channel'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { ccRuntimeRpc } from '../shared/rpc/contracts/cc-runtime.contract'
@@ -370,6 +371,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   // System Settings
   getAutoLaunch: () => Promise<IpcResponse>
   setAutoLaunch: (enabled: boolean) => Promise<IpcResponse>
+  getProxyRoute: () => Promise<IpcResponse<ProxyRouteInfo>>
   openLogFolder: () => Promise<IpcResponse>
   openCrashReportsFolder: () => Promise<IpcResponse<{ path: string; pending: number }>>
   relaunch: () => Promise<IpcResponse>
@@ -416,6 +418,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   getBrowserHomepage: () => Promise<IpcResponse>
   createBrowserView: (viewId: string, url?: string) => Promise<IpcResponse>
   onBrowserPageGone: (callback: (data: BrowserPageGone) => void) => () => void
+  onBrowserTabOpened: (callback: (data: BrowserTabOpened) => void) => () => void
   destroyBrowserView: (viewId: string) => Promise<IpcResponse>
   showBrowserView: (viewId: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<IpcResponse>
   hideBrowserView: (viewId: string) => Promise<IpcResponse>
@@ -1029,6 +1032,7 @@ const api: HaloAPI = {
   getBrowserHomepage: () => ipcRenderer.invoke('browser:get-homepage'),
   createBrowserView: (viewId, url) => ipcRenderer.invoke('browser:create', { viewId, url }),
   onBrowserPageGone: (callback) => createEventListener('browser:page-gone', callback),
+  onBrowserTabOpened: (callback) => createEventListener('browser:tab-opened', callback),
   destroyBrowserView: (viewId) => ipcRenderer.invoke('browser:destroy', { viewId }),
   showBrowserView: (viewId, bounds) => ipcRenderer.invoke('browser:show', { viewId, bounds }),
   hideBrowserView: (viewId) => ipcRenderer.invoke('browser:hide', { viewId }),

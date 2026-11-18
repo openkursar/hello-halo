@@ -19,6 +19,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { BUILTIN_MCP_SERVER_IDS } from '../../../src/shared/apps/builtin-mcp'
 import { BASE_SERVER_IDS } from '../../../src/main/services/agent/toolsets/base'
+import { TEAM_MCP_SERVER_NAME } from '../../../src/shared/apps/team-types'
 import { findMatches, listSourceFiles } from '../architecture/lib/source-scan'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -37,7 +38,11 @@ describe('BUILTIN_MCP_SERVER_IDS', () => {
   const executeIds = extractInjectedServerIds('src/main/apps/runtime/execute.ts')
   const chatIds = extractInjectedServerIds('src/main/apps/runtime/app-chat.ts')
   // The base toolset is assembled once and spread into each entry's record.
-  const runtimeIds = new Set([...executeIds, ...chatIds, ...BASE_SERVER_IDS])
+  // The collaboration server is not named by an entry: a run's execution mounts it
+  // (run-work.ts) and a chat turn's work does (chat-work.ts).
+  const hostMounted = readFileSync(join(repoRoot, 'src/main/apps/runtime/team/run-work.ts'), 'utf-8')
+    .includes('[TEAM_MCP_SERVER_NAME]') ? [TEAM_MCP_SERVER_NAME] : []
+  const runtimeIds = new Set([...executeIds, ...chatIds, ...BASE_SERVER_IDS, ...hostMounted])
 
   it('extraction finds the runtime injection sites (guards the regex itself)', () => {
     expect(runtimeIds.size).toBeGreaterThanOrEqual(5)

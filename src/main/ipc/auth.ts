@@ -27,6 +27,8 @@ import { buildLoginLoadingPage, buildLoginErrorPage, loginPageBg } from '../serv
 import { readCliAuthState } from '../services/agent/cli-auth'
 import { buildCliLoginCommand } from '../services/agent/sdk-config'
 import type { OAuthCompleteResult, ProviderId } from '../../shared/types'
+import type { OAuthProvider } from '../../shared/interfaces'
+import { parseProxyRequired } from '../../shared/constants/proxy-required'
 import type { RpcHandlers, RpcResponse } from '../../shared/rpc/define'
 import * as authController from '../controllers/auth.controller'
 import { authRpc } from '../../shared/rpc/contracts/auth.contract'
@@ -93,6 +95,17 @@ export function registerAuthHandlers(): void {
           return { success: false, error: 'Invalid login URL' }
         }
 
+        // Resolved before the window exists: a refusal must not leave one open.
+        let loginProxy: string | null = null
+        try {
+          loginProxy = await (manager.getProvider(providerType) as Partial<OAuthProvider> | undefined)?.loginProxy?.() ?? null
+        } catch (error) {
+          const message = error instanceof Error ? error.message : ''
+          if (!parseProxyRequired(message)) throw error
+          console.warn(`[Auth IPC] Login window not opened for ${providerType}: proxy required`)
+          return { success: false, error: message }
+        }
+
         const result = new Promise<RpcResponse<OAuthCompleteResult>>((resolve) => {
           const mainWindow = BrowserWindow.getAllWindows().find(window => !window.isDestroyed())
           const isDark = nativeTheme.shouldUseDarkColors
@@ -114,6 +127,10 @@ export function registerAuthHandlers(): void {
           })
 
           const loginSession = loginWindow.webContents.session
+          // The page loads only once the session carries the proxy; if that fails the window closes rather than connect directly.
+          const proxyApplied = loginProxy
+            ? loginSession.setProxy({ proxyRules: loginProxy, proxyBypassRules: '<local>' }).then(() => true, () => false)
+            : Promise.resolve(true)
           let settled = false
           let completing = false
           let cancelling = false
@@ -198,13 +215,21 @@ export function registerAuthHandlers(): void {
           loginWindow.once('ready-to-show', () => {
             if (settled || completing || loginWindow.isDestroyed()) return
             loginWindow.show()
-            void loginWindow.loadURL(context.loginUrl).catch(() => {
+            void proxyApplied.then(applied => {
               if (settled || completing || loginWindow.isDestroyed()) return
-              console.warn(`[Auth IPC] Failed to load login page for ${providerType}`)
-              void loginWindow.loadURL(buildLoginErrorPage(context.loginUrl, 'Unable to load login page', isDark)).catch(() => {
-                if (settled || completing) return
-                console.error(`[Auth IPC] Failed to load login error page for ${providerType}`)
-                void cancel('Unable to load login page')
+              if (!applied) {
+                console.warn(`[Auth IPC] Could not apply the proxy to the login window for ${providerType}`)
+                void cancel('Unable to apply the proxy to the login window')
+                return
+              }
+              void loginWindow.loadURL(context.loginUrl).catch(() => {
+                if (settled || completing || loginWindow.isDestroyed()) return
+                console.warn(`[Auth IPC] Failed to load login page for ${providerType}`)
+                void loginWindow.loadURL(buildLoginErrorPage(context.loginUrl, 'Unable to load login page', isDark)).catch(() => {
+                  if (settled || completing) return
+                  console.error(`[Auth IPC] Failed to load login error page for ${providerType}`)
+                  void cancel('Unable to load login page')
+                })
               })
             })
           })

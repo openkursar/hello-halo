@@ -376,8 +376,11 @@ import { fullCapabilityPolicy } from '../../../../src/shared/apps/capability-pol
 import { registerToolset } from '../../../../src/main/services/agent/toolsets'
 import { buildLocalSessionKey, getAppChatConversationId } from '../../../../src/shared/apps/im-keys'
 import * as conversationMcp from '../../../../src/main/apps/conversation-mcp'
+import { registerExecutionHost } from './fixtures/execution-host'
+import { getActiveTeamRuntime } from '../../../../src/main/apps/runtime/team'
 
 beforeEach(() => {
+  registerExecutionHost(getActiveTeamRuntime as any)
   teamAuthority.ready = true
   teamAuthority.current!.reset()
   for (const epochId of ['epoch-1', 'epoch-context-window', 'policy-snapshot', 'restricted-live-input', 'epoch-outside', 'external-authority-missing', 'external-authority-message']) {

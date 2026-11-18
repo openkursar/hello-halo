@@ -7,14 +7,7 @@ import { describe, it, expect } from 'vitest'
 import { createMemoryWriteHooks } from '../../../../src/main/platform/memory/guard'
 import { resolveMemoryLayout } from '../../../../src/main/platform/memory/paths'
 import { acquireMemoryLock } from '../../../../src/main/platform/memory/file-ops'
-import { existsSync } from 'fs'
-import { fileURLToPath } from 'url'
-
-// The Halo engine's own hook matching, from its build output. That output is
-// not committed, so these cases are skipped where the SDK has not been built.
-const HALO_HOOKS_PATH = '../../../../src/sdk/halo-sdk/dist/core/hooks.js'
-const haloHooks: typeof import('../../../../src/sdk/halo-sdk/dist/core/hooks.js') | null =
-  existsSync(fileURLToPath(new URL(HALO_HOOKS_PATH, import.meta.url))) ? await import(HALO_HOOKS_PATH) : null
+import { runPreToolUseHooks } from '@hello-halo/agent-sdk'
 
 const appLayout = resolveMemoryLayout({ type: 'app', spaceId: 's', spacePath: '/sp', appId: 'dh' }, 'app')
 const spaceLayout = resolveMemoryLayout({ type: 'user', spaceId: 's', spacePath: '/sp' }, 'space')
@@ -39,8 +32,7 @@ function denied(out: Record<string, unknown>): boolean {
 }
 
 describe('memory write guard', () => {
-  it.skipIf(!haloHooks)('reaches every file-writing tool through the Halo engine\'s own matching', async () => {
-    const { runPreToolUseHooks } = haloHooks!
+  it('reaches every file-writing tool through the Halo engine\'s own matching', async () => {
     // Exact names or `prefix*` only there — an `A|B` matcher silently matched nothing.
     const set = createMemoryWriteHooks({ writable: [appLayout], readOnly: [spaceLayout], label: 't' })
     for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']) {

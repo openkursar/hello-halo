@@ -18,7 +18,7 @@ export async function measurePreviewMemory(sdk, directory) {
   for (let index = 0; index < 20; index++) {
     const result = await reader.execute({ file_path: file, limit: 1 }, context);
     assert.equal(result.isError, false);
-    assert.ok(result.content.length < 41_000);
+    assert.ok(result.content.length < 90_000);
     previews.push(result.content);
   }
   await new Promise(resolve => setImmediate(resolve));

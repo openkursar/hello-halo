@@ -3,9 +3,7 @@ import { createRequire } from 'node:module'
 import { mkdtemp, mkdir, cp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { spawn, execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { pathToFileURL } from 'node:url'
+import { spawn } from 'node:child_process'
 
 const require = createRequire(import.meta.url)
 const enabled = process.env.HALO_WORKER_ELECTRON_E2E === '1'
@@ -18,17 +16,12 @@ describe.skipIf(!enabled)('packaged SDK worker in real Electron', () => {
     try {
       const sdk = join(source, 'node_modules/@hello-halo/agent-sdk')
       await mkdir(sdk, { recursive: true })
-      await promisify(execFile)(process.execPath, [require.resolve('typescript/bin/tsc'),
-        '--project', join(root, 'src/sdk/halo-sdk/tsconfig.json'), '--outDir', join(sdk, 'dist')], {
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, timeout: 30_000,
-      })
-      const { buildWorker } = await import(/* @vite-ignore */ pathToFileURL(join(root, 'src/sdk/halo-sdk/scripts/build-worker.mjs')).href)
-      await buildWorker(join(sdk, 'dist/worker/entry.js'))
+      await cp(join(root, 'src/sdk/halo-sdk/dist'), join(sdk, 'dist'), { recursive: true })
       await cp(join(root, 'src/sdk/halo-sdk/package.json'), join(sdk, 'package.json'))
       await mkdir(join(source, 'out/main/worker'), { recursive: true })
       await require('esbuild').build({ entryPoints: [join(root, 'src/main/services/agent/halo/worker-setup.ts')],
         outfile: join(source, 'out/main/worker/halo-setup.cjs'), bundle: true, platform: 'node', format: 'cjs' })
-      await cp(join(root, 'src/sdk/halo-sdk/worker/fixtures/setup.mjs'), join(source, 'fixture-setup.mjs'))
+      await cp(join(root, 'src/sdk/halo-sdk/bindings/node/worker/fixtures/setup.mjs'), join(source, 'fixture-setup.mjs'))
       await writeFile(join(source, 'package.json'), JSON.stringify({ name: 'worker-smoke', version: '1.0.0', main: 'main.cjs' }))
       await writeFile(join(source, 'main.cjs'), `
 const { app } = require('electron');

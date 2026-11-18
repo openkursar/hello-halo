@@ -315,6 +315,7 @@ export interface NetworkConfig {
   browserUseProxy?: boolean;  // When true, AI Browser also uses the Settings proxy. Default false = system proxy.
   imUseProxy?: boolean;  // When false, IM channels (WeCom, Feishu, WeChat) connect directly. Default true.
   noProxy?: string;  // Hosts reached directly, NO_PROXY style ("a.com, .b.com"); local addresses always are.
+  requireProxyForOAuth?: boolean;  // When true, Claude and ChatGPT accounts never connect directly. Default false.
 }
 
 // Browser configuration

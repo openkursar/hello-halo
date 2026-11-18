@@ -124,6 +124,7 @@ describe('ProviderSelector wiring', () => {
     for (const panel of panels) {
       expect(panel[0]).toContain('modelId={effectiveModelId}')
       expect(panel[0]).toContain('catalogCapability={catalogCapability}')
+      expect(panel[0]).toContain('variant={variant}')
       expect(panel[0]).not.toContain('modelId={selectedModel}')
     }
     expect(source).toContain('resolveModelSelection({')

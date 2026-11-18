@@ -63,6 +63,13 @@
     }
   },
   "models": {
+    "claude-fable-5-2": {
+      "source": "anthropic",
+      "inputPerMtk": 8,
+      "outputPerMtk": 40,
+      "cacheCreationPerMtk": 10,
+      "cacheReadPerMtk": 0.2
+    },
     "claude-fable-5-1": {
       "source": "anthropic",
       "inputPerMtk": 10,
@@ -145,7 +152,7 @@
       "inputPerMtk": 2,
       "outputPerMtk": 10,
       "cacheCreationPerMtk": 2.5,
-      "cacheReadPerMtk": 0.2
+      "cacheReadPerMtk": 0.1
     },
     "claude-sonnet-5": {
       "source": "anthropic",
@@ -181,6 +188,13 @@
       "outputPerMtk": 15,
       "cacheCreationPerMtk": 3.75,
       "cacheReadPerMtk": 0.3
+    },
+    "claude-haiku-5-5": {
+      "source": "anthropic",
+      "inputPerMtk": 0.1,
+      "outputPerMtk": 0.5,
+      "cacheCreationPerMtk": 0.125,
+      "cacheReadPerMtk": 0.01
     },
     "claude-haiku-4-5": {
       "source": "anthropic",

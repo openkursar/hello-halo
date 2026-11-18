@@ -4,6 +4,7 @@
  * final error when no member could answer.
  */
 
+import { parseProxyRequired } from '../../../shared/constants/proxy-required'
 import type { FailureEvidence } from '../balancing'
 import { getUpstreamError, statusForErrorType } from './error-response'
 import type { HeldFailure, HeldReply } from './held-response'
@@ -22,6 +23,7 @@ function errorTypeOf(body: string): string | undefined {
 export function toFailureEvidence(failure: HeldFailure, reply: HeldReply): FailureEvidence {
   switch (failure.cause) {
     case 'http':
+      if (parseProxyRequired(reply.body)) return { kind: 'blocked', message: reply.body.slice(0, EVIDENCE_BODY_CAP) }
       if (errorTypeOf(reply.body) === 'timeout_error') return { kind: 'timeout', phase: 'headers' }
       return { kind: 'http', status: failure.status, headers: reply.headers, body: reply.body.slice(0, EVIDENCE_BODY_CAP) }
     case 'stream-error': {
@@ -64,6 +66,8 @@ export function failureReason(evidence: FailureEvidence): string {
       return 'could not be reached'
     case 'credential':
       return 'is not signed in'
+    case 'blocked':
+      return 'needs a proxy that is not available'
   }
 }
 

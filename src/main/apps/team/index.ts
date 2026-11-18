@@ -49,7 +49,7 @@ export type { WorkMember } from './work-members'
 export type { TeamArtifactGroup, TeamArtifact } from '../../../shared/apps/team-types'
 
 export { MIGRATION_NAMESPACE, migrations } from './migrations'
-export { collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp } from './collab-binding'
+export { collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp, releaseRunCollaboration } from './collab-binding'
 
 // ── Module State ──
 

@@ -405,7 +405,8 @@ while the view is open AND the run is live, so unwatched and finished runs incur
 zero cost.
 
 **Mid-run injection**: while a run is live it registers an `ActiveRunHandle` in
-`active-runs.ts` (keyed by `runId`, holding the session + JSONL writer). The
+`active-runs.ts` (keyed by `runId`, holding its execution's session handle + JSONL
+writer; input accepted through that handle is counted by the execution). The
 run-detail input box sends a supplement through `app:inject-run` →
 `service.injectIntoRun` → `injectIntoActiveRun`, which persists it to the run
 JSONL and pushes it into the live SDK session (absorbed at the next tool
@@ -429,6 +430,50 @@ turn shows up on the next JSONL poll.
   not token-level typewriter. Sufficient for observing a run's progress. If
   sub-second smoothness for the rare watcher is ever wanted, push JSONL diffs via
   a file-watch while the view is open — still no events for unwatched runs.
+
+### Automation-run collaboration
+
+Automation uses the same host-owned collaboration tools and participant executor
+as chat, across engines. A run is the source of its temporary collaborators, not
+a new chat or an installed team member. Its source address is the full run sender
+key; engine session keys and other runs cannot receive its reports. The temporary
+collaboration outlives the run's turn so a continue or escalation follow-up can
+reuse it; it is dissolved when the run record is retired by transcript retention
+(§2.23) or the digital human is uninstalled.
+
+**The run does not manage collaborators or its engine's stop; its agent execution
+does.** `executeRun` opens an `AgentExecution` (`services/agent/execution`, see its
+DESIGN section) with the run's principal, model and the external abort signal,
+mounts `execution.tools`, binds the engine session (with the engine's interrupt and
+close, which only the run owns), `submit`s each message and `close`s it once. What
+delegation means — when the run may finish, how reports re-enter the session, the
+stop order (admission, the engine turn, the members), the members' usage — lives
+there and in the team runtime's host (`team/run-work.ts`);
+`execute.ts` imports nothing of the team runtime (guarded by
+`tests/unit/architecture/agent-execution-boundary.guard.test.ts`). What stays here
+is the automation's own business: the JSONL transcript, `report_to_user`, the
+escalation cut, auto-continue and the Activity entries.
+
+Normal completion is still the run's decision, made from two facts the execution
+provides. `report_to_user` refuses a final report while `canComplete()` is false
+(owned work unfinished or input unread), and a report counts only while no input
+has been accepted since it was saved (`reportedAt === execution.inputRevision`),
+so an answer to earlier input never stands for later input. Reports retain
+teammate provenance in the run transcript, join the next model step while the
+source is running, or continue the same session between turns; they never become
+human authorization. The ordinary cross-conversation run source remains one-way.
+Global and digital-human tool denials still gate creation. A run that never
+delegates creates no member, request, subscription or model call.
+
+An external stop is the execution's `stop()`: it closes admission, interrupts the
+engine turn being read (the session is closed if it does not end within the grace
+period) and cancels the run's descendants. A failure or an escalation closes the
+execution without interrupting the engine — an escalation ends the run at a
+complete transcript point, and the answer resumes it from there. The run's tokens
+(its turns plus its members') are read only after that, so the last usage of a
+stopped member is not lost and is never counted twice. Old reports cannot enter a later execution or
+continuation. Participants retain their ordinary isolated identity, memory
+protection and inherited tool/permission floor.
 
 ### 2.11 Auto-Continue on Missing report_to_user
 
@@ -1463,10 +1508,11 @@ not installable connections. Chat keeps inheriting its workspace's connections.
 
 `tokens_used` on a run is each turn's `input + output`, without cache reads and
 writes — on cached runs a fraction of what the model processed, which is what a
-usage quota usually counts. `processStream` therefore also keeps each turn's
-four parts (from the same `cumulative_usage ?? usage` frame), `executeRun` sums
-them over auto-continue cycles into `AppRunResult.tokenUsage`, and at the end of
-the execution the runtime adds them to the run's latest entry as
+usage quota usually counts. The run's execution keeps one ledger: every turn's
+`result` frame (its `cumulative_usage ?? usage`), plus a collaborator's own turn
+from the same `resultUsage` a member's `agent:complete` carries — never the
+per-call context gauge. `executeRun` reports the ledger as
+`AppRunResult.tokenUsage`, and the runtime adds it to the run's latest entry as
 `content.tokenUsage` (§2.22's moment). The card shows the total beside the
 duration, View process the run's total over its entries; the split is on hover.
 `tokens_used` keeps its meaning for analytics and memory summaries. No history

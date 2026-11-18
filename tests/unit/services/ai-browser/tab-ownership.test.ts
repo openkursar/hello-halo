@@ -13,6 +13,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 const states = new Map<string, { id: string; url: string; title: string }>()
+type PageOwner = { isActive: () => boolean; reserve: (id: string, background: boolean) => void; ready: (id: string) => void; release: (id: string) => void }
+const capturedOwners = new Map<string, PageOwner>()
 
 /**
  * WebContents ids handed out per view, so download routing can be asserted.
@@ -42,6 +44,14 @@ function makeWebContents() {
 
 vi.mock('../../../../src/main/services/browser-view.service', () => ({
   browserViewManager: {
+    releaseOwner: (id: string) => { capturedOwners.delete(id) },
+    create: async (id: string, _url: string, options: { owner: PageOwner; offscreen: boolean }) => {
+      capturedOwners.set(id, options.owner)
+      options.owner.reserve(id, options.offscreen)
+      openTab(id)
+      options.owner.ready(id)
+      return states.get(id)!
+    },
     getAllStates: () => [...states.values()],
     getState: (id: string) => states.get(id) ?? null,
     getWebContents: (id: string) => webContentsOf.get(id) ?? null,
@@ -92,6 +102,50 @@ const idsOf = (ctx: { visibleViewStates: () => Array<{ id: string }> }): string[
 describe('browser tab ownership', () => {
   beforeEach(() => {
     states.clear()
+  })
+
+  it('reserves root and child scope before readiness and keeps descendants selectable only by their owner', async () => {
+    const agent = createScopedBrowserContext()
+    const other = createScopedBrowserContext()
+    const { viewId } = await agent.openPage('https://example.com/root', 'pc')
+    const owner = capturedOwners.get(viewId)!
+    expect(owner.isActive()).toBe(true)
+    owner.reserve('scoped-child', true)
+    openTab('scoped-child')
+    expect(idsOf(agent)).toEqual([viewId, 'scoped-child'].sort())
+    expect(browserContext.canReachView('scoped-child')).toBe(false)
+    expect(other.canReachView('scoped-child')).toBe(false)
+    expect(idsOf(browserContext)).not.toContain('scoped-child')
+    owner.ready('scoped-child')
+    owner.ready('scoped-child')
+    agent.setActiveViewId('scoped-child')
+    expect(agent.getActiveViewId()).toBe('scoped-child')
+    owner.reserve('in-flight-child', true)
+    openTab('in-flight-child')
+    openTab('canvas-page')
+    agent.destroy()
+    expect(owner.isActive()).toBe(false)
+    expect(states.has('scoped-child')).toBe(false)
+    expect(states.has('in-flight-child')).toBe(false)
+    expect(states.has('canvas-page')).toBe(true)
+    expect(() => owner.ready('in-flight-child')).toThrow('released')
+    expect(agent.getActiveViewId()).toBeNull()
+    other.destroy()
+  })
+
+  it('releases a hidden root and its hidden child without destroying canvas pages', async () => {
+    const agent = createScopedBrowserContext()
+    const { viewId } = await agent.openPage('https://example.com/root', 'pc')
+    const owner = capturedOwners.get(viewId)!
+    owner.reserve('hidden-child', true)
+    openTab('hidden-child')
+    owner.ready('hidden-child')
+    openTab('canvas-page')
+    agent.release()
+    expect(owner.isActive()).toBe(false)
+    expect(states.has(viewId)).toBe(false)
+    expect(states.has('hidden-child')).toBe(false)
+    expect(states.has('canvas-page')).toBe(true)
   })
 
   it('shows an automation only the tabs it opened itself', () => {

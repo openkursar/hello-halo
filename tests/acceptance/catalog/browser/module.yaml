@@ -10,6 +10,12 @@ paths:
   - src/main/services/ai-browser/**
   - src/main/services/browser-host/**
   - src/main/services/browser-input/**
+  - src/main/services/browser-view.service.ts
+  - src/main/services/browser-popup.ts
+  - src/main/services/browser-compatibility/**
+  - src/main/services/user-agent-resolver.ts
+  - src/main/foundation/chromium-user-agent.ts
+  - src/main/ipc/browser.ts
   - src/renderer/browser-host/**
   - src/renderer/components/canvas/viewers/BrowserViewer.tsx
   - src/renderer/stores/ai-browser.store.ts

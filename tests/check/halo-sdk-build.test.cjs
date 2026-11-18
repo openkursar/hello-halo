@@ -259,3 +259,101 @@ test('requires the requested native architecture instead of accepting the build 
     } }), /Native SDK build lacks/);
   } finally { cleanup(); }
 });
+
+async function installFixture() {
+  const { root, sdkDir, cleanup } = fixture({ sdkModules: false });
+  for (const file of ['scripts/build-sdk.mjs', ...['build.mjs', 'build-distribution.mjs', 'build-lock.mjs'].map(name => `src/sdk/halo-sdk/scripts/${name}`)]) {
+    const destination = path.join(root, file);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, '../..', file), destination);
+  }
+  fs.writeFileSync(path.join(sdkDir, 'package.json'), JSON.stringify({ name: '@hello-halo/agent-sdk', type: 'module',
+    main: './dist/index.js', types: './dist/index.d.ts', scripts: { 'build:if-missing': 'node rebuild.cjs', build: 'node rebuild.cjs' } }));
+  emitDist(sdkDir);
+  const files = ['dist/index.js', 'dist/index.d.ts', 'dist/native/runtime.js', 'dist/worker/entry.js', 'dist/native/THIRD-PARTY-NOTICES.txt'];
+  for (const file of files) {
+    fs.mkdirSync(path.dirname(path.join(sdkDir, file)), { recursive: true });
+    fs.writeFileSync(path.join(sdkDir, file), 'export {};');
+  }
+  const record = file => ({ path: file, bytes: fs.statSync(path.join(sdkDir, file)).size });
+  fs.writeFileSync(path.join(sdkDir, 'dist/runtime-manifest.json'), JSON.stringify({ version: 1,
+    entryPoints: ['dist/index.js'], runtime: files.filter(file => file.endsWith('.js')).map(record),
+    declarations: [record('dist/index.d.ts')], assets: ['dist/native/THIRD-PARTY-NOTICES.txt'] }));
+  fs.writeFileSync(path.join(sdkDir, 'rebuild.cjs'), "require('node:fs').writeFileSync('rebuild-ran','true');");
+  return { root, sdkDir, cleanup };
+}
+
+test('postinstall reuses a complete SDK without installing its build toolchain', async () => {
+  const { root, sdkDir, cleanup } = await installFixture();
+  try {
+    const result = spawnSync(process.execPath, ['scripts/build-sdk.mjs'], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /build reused/);
+    assert.equal(fs.existsSync(path.join(sdkDir, 'node_modules')), false);
+    assert.equal(fs.existsSync(path.join(sdkDir, 'rebuild-ran')), false);
+  } finally { cleanup(); }
+});
+
+test('postinstall rebuilds when a retained internal SDK dependency is missing', async () => {
+  const { root, sdkDir, cleanup } = await installFixture();
+  try {
+    fs.mkdirSync(path.join(sdkDir, 'node_modules/typescript'), { recursive: true });
+    fs.rmSync(path.join(sdkDir, 'dist/native/runtime.js'));
+    const result = spawnSync(process.execPath, ['scripts/build-sdk.mjs'], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /native\/runtime.js/);
+    assert.equal(fs.readFileSync(path.join(sdkDir, 'rebuild-ran'), 'utf8'), 'true');
+    assert.doesNotMatch(result.stdout, /build reused/);
+  } finally { cleanup(); }
+});
+
+test('postinstall rebuilds an explicitly forced complete SDK', async () => {
+  const { root, sdkDir, cleanup } = await installFixture();
+  try {
+    fs.mkdirSync(path.join(sdkDir, 'node_modules/typescript'), { recursive: true });
+    const result = spawnSync(process.execPath, ['scripts/build-sdk.mjs', '--force'], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.readFileSync(path.join(sdkDir, 'rebuild-ran'), 'utf8'), 'true');
+  } finally { cleanup(); }
+});
+
+test('packaging excludes Rust sources and compiler output while retaining the SDK runtime', async () => {
+  const { getNodeModuleFileMatcher, excludedExts } = require('app-builder-lib/out/fileMatcher.js');
+  const { NodeModuleCopyHelper } = require('app-builder-lib/out/util/NodeModuleCopyHelper.js');
+  const config = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8')).build;
+  const { root, sdkDir, cleanup } = fixture();
+  try {
+    const retained = [
+      'package.json', 'dist/index.js', ...ENGINE_RUNTIMES.halo.requiredFiles,
+      'dist/worker/entry.js', 'dist/native/THIRD-PARTY-NOTICES.txt',
+      'dist/worker/THIRD-PARTY-NOTICES.txt', nativeRuntimeFile(),
+    ];
+    const excluded = [
+      'target/release/deps/libhalo_core.rlib', 'target/release/libhalo_node.dylib',
+      'target/release/halo_node.dll', 'target/debug/.fingerprint/halo-core/build.json',
+      'native/target/release/deps/libhalo_core.rlib',
+      'crates/halo-core/src/lib.rs', 'bindings/node/crate/src/lib.rs',
+      'bindings/node/native/index.ts', 'scripts/build.mjs',
+      '.dist-staging-test/index.js', '.dist-previous-test/native/old.node',
+      '.build-lock/held/owner-test.json',
+    ];
+    for (const file of [...retained, ...excluded]) {
+      const destination = path.join(sdkDir, file);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, file);
+    }
+    const packager = {
+      config, appInfo: { type: 'module' }, getWorkspaceRoot: async () => root,
+      debugLogger: { isEnabled: false },
+    };
+    const matcher = getNodeModuleFileMatcher(root, path.join(root, 'app'), value => value, {}, packager);
+    const copier = new NodeModuleCopyHelper(matcher, packager);
+    const files = await copier.collectNodeModules(
+      { name: '@hello-halo/agent-sdk', dir: sdkDir },
+      excludedExts.split(',').map(extension => `.${extension}`),
+      'node_modules/@hello-halo/agent-sdk',
+    );
+    const collected = files.map(file => path.relative(sdkDir, file).split(path.sep).join('/'));
+    assert.deepEqual(collected.sort(), retained.sort());
+  } finally { cleanup(); }
+});

@@ -31,7 +31,8 @@ Services Layer (src/main/services)
   - domain services: agent, ai-browser, ai-sources, space, conversation,
     artifact, analytics, remote, git, etc.
   - skills         : bounded file discovery, canonical identities, per-file preferences and safe package operations
-  - app-bridge.ts   : DI seam so services reach Apps data and the effective skill catalog without importing up
+  - app-bridge.ts   : DI seam so services reach Apps data, the effective skill catalog and the host of an
+                      agent execution's delegated work without importing up
   - memory-consolidation: background agent that reorganises an oversized memory
                     (digital human or space) into topics; space turns reach it
                     via the onAgentEvent turn-end signal, never from services/agent
@@ -89,7 +90,8 @@ Foundation Layer (src/main/foundation)  ← bedrock, zero upward deps
 - **Dependency inversion seams** keep the direction clean where a lower tier needs
   a higher tier's behavior at runtime:
   - `services/app-bridge.ts` — the agent engine and space service reach the App
-    manager / `halo-apps` MCP server / MCP-change events through this seam;
+    manager / `halo-apps` MCP server / MCP-change events, and the host that runs
+    the work an agent execution delegates (`agent/execution`), through this seam;
     `apps/runtime` registers the concrete impls at startup (`registerAppBridge`).
   - `services/conversation-interop/source.ts` — the conversation directory behind
     `conversation_read`/`conversation_send` is a set of registered
@@ -196,6 +198,7 @@ src/
 │                                      #     server→client push that is not version-coupled),
 │                                      #   protocol, api-validator, model-capabilities,
 │                                      #   secure-storage, browser-view, browser-policy,
+│                                      #   browser-popup, browser-compatibility,
 │                                      #   watcher-host
 │                                      #   (+ utilities: browser-login-pages, proxy-fetch,
 │                                      #    proxy-policy — the one place proxy and NO_PROXY
@@ -658,7 +661,7 @@ thing the cap exists to prevent.
 ## 10) AI Browser Module
 
 AI-controlled embedded browser for web automation. Uses Electron webview guests + main-process CDP. The browser manager owns policy,
-identity and page state; `services/browser-host` owns fixed guest attachment.
+identity, page state and ordinary website-child tab creation; `services/browser-host` owns fixed guest attachment. `services/browser-compatibility` supplies bounded, best-effort page-world Chrome API compatibility before website scripts and coordinates descendant targets; `services/browser-popup` preserves native POST/opener/sandbox relationships and delegates only proven independent ordinary GETs to Canvas. AI page owners propagate access and lifecycle to child tabs, while Canvas only borrows their presentation.
 Interactive and watchable AI pages share a permanent main-renderer host; pure
 automation and search use a minimal hidden host. Viewers only borrow presentation
 and may unmount without destroying pages. See `services/browser-host/DESIGN.md`.

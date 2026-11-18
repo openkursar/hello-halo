@@ -74,6 +74,8 @@ export interface ApiCredentials {
    * credential resolution away from every key-bearing path.
    */
   delegatedAuth?: boolean
+  /** The account must not connect directly when Settings requires a proxy (see BackendRequestConfig.proxyGuard). */
+  proxyGuard?: boolean
   /**
    * The source's effective vision capability for this model (per-model override
    * → provider declaration → id heuristic), resolved by AISourceManager and

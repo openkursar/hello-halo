@@ -1,4 +1,4 @@
-import { parseAppChatKey, parseNativeChatKey, parseTeamSessionKey } from '../../../../../src/shared/apps/im-keys'
+import { parseAppChatKey, parseNativeChatKey, parseRunSenderKey, parseTeamSessionKey } from '../../../../../src/shared/apps/im-keys'
 import type { CollaborationCaller } from '../../../../../src/main/apps/team'
 
 /** Admission double for app-chat tests; only explicitly registered work exists. */
@@ -18,7 +18,7 @@ export function createScopedParticipantService() {
   const validSource = (conversationId: string) => {
     const team = parseTeamSessionKey(conversationId)
     if (team) return valid(team)
-    const appId = parseNativeChatKey(conversationId)?.appId ?? parseAppChatKey(conversationId)?.appId
+    const appId = parseNativeChatKey(conversationId)?.appId ?? parseAppChatKey(conversationId)?.appId ?? parseRunSenderKey(conversationId)?.appId
     return !!appId && actors.has(appId)
   }
   const requestId = (caller: CollaborationCaller) => {
@@ -35,6 +35,20 @@ export function createScopedParticipantService() {
     allow(teamId: string, epochId: string, appId: string) { scopes.add(key(teamId, epochId, appId)); actors.add(appId) },
     reset() { revision++; scopes.clear(); actors.clear(); requests.clear(); assigned.clear(); sourceRequests.clear() },
     service: {
+      beginRequest(conversationId: string, id: string) {
+        if (!validSource(conversationId)) throw new Error('Unknown fixture source.')
+        const previous = sourceRequests.get(conversationId)
+        if (previous) requests.delete(previous)
+        sourceRequests.set(conversationId, id)
+        requests.add(id)
+      },
+      sourceState(conversationId: string) { return { requestId: sourceRequests.get(conversationId), stopped: false } },
+      releaseRunSource(conversationId: string, id: string) { if (sourceRequests.get(conversationId) === id) sourceRequests.delete(conversationId) },
+      async stopSource(conversationId: string) {
+        const id = sourceRequests.get(conversationId)
+        if (id) requests.delete(id)
+        sourceRequests.delete(conversationId)
+      },
       registerSource(conversationId: string) { if (!validSource(conversationId)) throw new Error('Unknown fixture source.') },
       sourceGeneration(conversationId: string) { if (!validSource(conversationId)) throw new Error('Unknown fixture source.'); return revision },
       sourceRequestId(conversationId: string) {

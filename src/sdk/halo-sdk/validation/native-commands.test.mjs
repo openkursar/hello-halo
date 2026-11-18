@@ -70,7 +70,7 @@ test('native session commands skip work requests and leave empty history unchang
   } finally { await session?.[Symbol.asyncDispose](); await f.close(); }
 });
 
-test('native custom local commands await clearMessages and preserve read-before-write after clearing', { timeout: 15000 }, async () => {
+test('native custom local commands await clearMessages and allow whole-file replacement after clearing', { timeout: 15000 }, async () => {
   const f = await fixture(); let session;
   const file = join(f.cwd, 'effect.txt');
   const model = fixtureProvider(async (_request, step) => {
@@ -96,10 +96,10 @@ test('native custom local commands await clearMessages and preserve read-before-
     assert.equal(result(events).is_error, false);
     assert.equal(model.requests[2].model, 'after-clear');
     assert.ok(!JSON.stringify(model.requests[2].messages).includes('seed turn'));
-    const failedWrite = model.requests[3].messages.flatMap(message => Array.isArray(message.content) ? message.content : []).find(block => block.tool_use_id === 'replace');
-    assert.equal(failedWrite.is_error, true);
-    assert.match(failedWrite.content, /complete Read/);
-    assert.equal(await readFile(file, 'utf8'), 'before');
+    const replacement = model.requests[3].messages.flatMap(message => Array.isArray(message.content) ? message.content : []).find(block => block.tool_use_id === 'replace');
+    assert.ok(replacement);
+    assert.equal(Boolean(replacement.is_error), false);
+    assert.equal(await readFile(file, 'utf8'), 'after');
     const usage = await send(session, '/usage');
     assert.match(result(usage).result, /\*\*Turns:\*\* 2/);
     assert.match(result(usage).result, /\*\*Total tokens:\*\* 48/);

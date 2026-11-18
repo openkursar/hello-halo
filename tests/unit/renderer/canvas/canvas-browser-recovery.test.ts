@@ -6,6 +6,7 @@ const showBrowserView = vi.fn(async (_id: string, _bounds: unknown) => ({ succes
 const destroyBrowserView = vi.fn(async (id: string) => { emitGone({ viewId: id, reason: 'closed' }); return { success: true } })
 
 vi.mock('../../../../src/renderer/api', () => ({ api: {
+  onBrowserTabOpened: () => () => {},
   onBrowserStateChange: () => () => {},
   onBrowserPageGone: (callback: typeof emitGone) => { emitGone = callback; return () => {} },
   onArtifactChangedBatch: () => () => {},

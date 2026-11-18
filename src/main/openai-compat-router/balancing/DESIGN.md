@@ -90,6 +90,7 @@ returns the rest it started (or `null`) and whether the member is blamed.
 | http 404 | `unavailable` | member | unavailable backoff |
 | http 408, 5xx (other than 529), network, timeout, empty, stream-error | `transient` | member | none until `transientFailuresBeforeRest` within the window; then transient backoff |
 | http 400, 413, 422 | — | — | provisional **request** blame (below) |
+| blocked (the router refused the request before it left, e.g. a required proxy is missing) | — | — | no judgment: nothing happened to the member, so no rest, count or provisional blame; the run just moves on |
 | any other status | `transient` | member | as 5xx |
 
 ¹ Quota wording: `quota`, `usage limit`, `billing`, `insufficient balance|credit|

@@ -17,6 +17,8 @@ const QUOTA_WORDING =
 
 export type Judgment =
   | { blame: 'request' }
+  /** The member was never asked, so its record stays as it was. */
+  | { blame: 'none' }
   | {
       blame: 'member'
       reason: RestReason
@@ -33,6 +35,8 @@ function member(reason: RestReason, scope: RestScope, announcedUntil: number | n
 
 export function judgeFailure(evidence: FailureEvidence, now: number): Judgment {
   switch (evidence.kind) {
+    case 'blocked':
+      return { blame: 'none' }
     case 'credential':
       return member('auth', 'account', null, true)
     case 'network':

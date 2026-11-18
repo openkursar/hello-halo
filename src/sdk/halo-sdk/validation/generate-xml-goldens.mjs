@@ -6,7 +6,7 @@ const referencePath = process.argv[2], wirePath = process.argv[3];
 if (!referencePath || !wirePath) throw new Error('Pass the compiled reference SDK entry and typed wire module.');
 const { parseXmlToolCalls } = await import(pathToFileURL(resolve(referencePath)).href);
 const { encodeWire } = await import(pathToFileURL(resolve(wirePath)).href);
-const output = process.argv[4] ?? fileURLToPath(new URL('../native/crates/halo-core/src/llm/tool_calling/fixtures/xml-parameters.json', import.meta.url));
+const output = process.argv[4] ?? fileURLToPath(new URL('../crates/halo-core/src/llm/tool_calling/fixtures/xml-parameters.json', import.meta.url));
 const cases = [];
 function observe(result) {
   return {
@@ -28,7 +28,7 @@ function observe(result) {
 function add(name, text, names = ['T']) {
   cases.push({ name, input: encodeWire([text, names]), expected: encodeWire(observe(parseXmlToolCalls(text, names))) });
 }
-const existing = JSON.parse(await readFile(new URL('../native/crates/halo-core/src/llm/tool_calling/fixtures/reference.json', import.meta.url), 'utf8'));
+const existing = JSON.parse(await readFile(new URL('../crates/halo-core/src/llm/tool_calling/fixtures/reference.json', import.meta.url), 'utf8'));
 for (const [index, fixture] of existing.parsers.entries()) if (fixture.format === 'xml') add(`existing-${index}`, fixture.text, fixture.names);
 
 const tools = ['Bash', 'Read', 'Write', 'Edit', 'TodoWrite', 'Agent'];

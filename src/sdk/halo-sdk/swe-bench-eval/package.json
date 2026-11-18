@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hello-halo/agent-sdk": "file:..",
     "better-sqlite3": "^9.6.0",
     "commander": "^12.1.0",
     "p-limit": "^5.0.0",

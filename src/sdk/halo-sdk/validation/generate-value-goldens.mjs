@@ -51,5 +51,5 @@ const values = [
   ['float64_values', numbers],
 ];
 const fixture={node:process.versions.node,texts,sorted:samples.map(text).sort().map(units),concat:{parts:[[0xd83d],[0xde00]],units:units(text([0xd83d])+text([0xde00])),quote:JSON.stringify(text([0xd83d])+text([0xde00]))},values:values.map(([name,value])=>({name,wire:encode(value),json:JSON.stringify(value)??null,truthy:Boolean(value)}))};
-await writeFile(new URL('../native/crates/halo-core/src/js/fixtures/node-values.json',import.meta.url),JSON.stringify(fixture,null,2)+'\n');
+await writeFile(new URL('../crates/halo-core/src/js/fixtures/node-values.json',import.meta.url),JSON.stringify(fixture,null,2)+'\n');
 console.log(`Generated ${texts.length} text cases and ${values.length} value cases from Node ${process.versions.node}.`);

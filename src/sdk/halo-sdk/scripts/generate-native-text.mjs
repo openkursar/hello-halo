@@ -3,7 +3,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const sdk = fileURLToPath(new URL('..', import.meta.url));
-const harness = join(sdk, 'native/crates/halo-core/src/harness');
+const node = join(sdk, 'bindings/node');
+const harness = join(sdk, 'crates/halo-core/src/harness');
 const catalog = new Map();
 async function readCatalogs(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -35,7 +36,7 @@ function materialize(value) {
   return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, materialize(child)]));
 }
 async function output(name, content) {
-  const path = join(sdk, name);
+  const path = join(node, name);
   await mkdir(dirname(path), { recursive: true });
   let previous;
   try { previous = await readFile(path, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }

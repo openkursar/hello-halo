@@ -14,6 +14,7 @@ import * as fs from 'fs'
 import { BrowserWindow, session, app, type WebContents } from 'electron'
 import { extractPartition } from './partition'
 import { sanitizeFilename, resolveUniquePath } from '../../foundation/file-naming'
+import { configureChromiumIdentity } from '../../foundation/chromium-user-agent'
 
 /**
  * Anti-detection stealth injection is browser-domain behavior (lives in
@@ -27,13 +28,6 @@ let stealthInjector: StealthInjector | null = null
 export function setDaemonStealthInjector(injector: StealthInjector): void {
   stealthInjector = injector
 }
-
-/**
- * Default user agent matching a real Chrome browser.
- * This is used to avoid detection as an Electron app.
- */
-const CHROME_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 /**
  * Maximum time (ms) a caller can hold the daemon browser before auto-release.
@@ -222,8 +216,7 @@ export class DaemonBrowserManager {
     // Ensure the partition session exists
     const sess = session.fromPartition(partition, { cache: true })
 
-    // Set a realistic user agent on the session
-    sess.setUserAgent(CHROME_USER_AGENT)
+    sess.setUserAgent(configureChromiumIdentity())
 
     // Silent download handler: daemon browser is always automation,
     // so all downloads are saved without prompting the user.

@@ -1,0 +1,96 @@
+version: 1
+id: settings.proxy-guard
+module: settings
+title:
+  en: Keep Claude and ChatGPT accounts off direct connections
+  zh: 让 Claude 与 ChatGPT 账号不直接连接
+story:
+  en: I can require Claude and ChatGPT accounts to connect only through my proxy, so a dropped proxy never exposes my network, and other models keep working as before.
+  zh: 我能要求 Claude 与 ChatGPT 账号仅通过我的代理连接，代理失效时不会暴露我的网络，其他模型照常使用。
+basis: observed
+references:
+  - src/renderer/components/settings/ProxySettings.tsx
+  - src/main/services/proxy-fetch.ts
+  - src/main/openai-compat-router/server/error-response.ts
+  - tests/e2e/specs/acceptance-settings.spec.ts
+  - tests/unit/services/proxy-fetch-guard.test.ts
+promises:
+  switch:
+    en: The option lives in the folded More proxy settings group of the proxy settings, shows the route currently in use, and persists across restarts. It is off by default.
+    zh: 该选项位于代理设置中折叠的“更多代理设置”内，设置页显示当前使用的路由，重启后保持，默认关闭。
+  login:
+    en: With the option on and no usable proxy, signing in to Claude or ChatGPT is refused with the reason and a way to the proxy settings; with a proxy it proceeds.
+    zh: 选项开启且无可用代理时，登录 Claude 或 ChatGPT 会被拒绝并说明原因及指向代理设置；有代理时正常进行。
+  requests:
+    en: With the option on, requests of these accounts never leave directly, whether no proxy exists, the system answers direct, the address is on the skip list or the proxy cannot be reached; the chat says why and offers the proxy settings, and a load-balancing group moves on to its next member without resting this one. Other models are unaffected.
+    zh: 选项开启时，这些账号的请求绝不直连——无代理、系统返回直连、地址在跳过列表或代理无法连接均如此；对话中说明原因并提供代理设置入口，负载均衡组切到下一成员且不使该成员休息；其他模型不受影响。
+scenarios:
+  - id: settings.proxy-guard.switch
+    title:
+      en: Turn the proxy-only option on and keep it
+      zh: 开启并保留仅代理选项
+    verifies:
+      - switch
+    platforms: &p1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A proxy is saved in the proxy settings.
+        zh: 代理设置中已保存代理。
+    steps:
+      - en: Open System settings, expand More proxy settings and switch on the option to block direct AI connections, then restart.
+        zh: 打开系统设置，展开“更多代理设置”并开启“阻止 AI 直连”，然后重启。
+    expected:
+      - en: The route in use is shown, the option is hidden while folded, and it is still on after the restart.
+        zh: 显示当前路由，折叠时选项不可见，重启后仍开启。
+  - id: settings.proxy-guard.login
+    title:
+      en: Refuse a Claude sign-in without a proxy
+      zh: 无代理时拒绝 Claude 登录
+    verifies:
+      - login
+    platforms: *p1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: The proxy-only option is on and every address is set to skip the proxy.
+        zh: 仅代理选项已开启，且所有地址均设为跳过代理。
+    steps:
+      - en: Choose Claude under OAuth login, follow the proxy settings link, then save a proxy and choose Claude again.
+        zh: 在 OAuth 登录下选择 Claude，按提示进入代理设置，然后保存代理并再次选择 Claude。
+    expected:
+      - en: The first attempt shows the reason, opens no login page and the link lands on the opened switch; the second reaches the login panel.
+        zh: 第一次显示原因且不打开登录页，链接落在已展开的开关上；第二次进入登录面板。
+  - id: settings.proxy-guard.requests
+    title:
+      en: Refuse requests that would leave directly
+      zh: 拒绝会直连的请求
+    verifies:
+      - requests
+    platforms: *p1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A signed-in Claude or ChatGPT account, a counting proxy and a controlled model endpoint.
+        zh: 已登录的 Claude 或 ChatGPT 账号、计数代理及受控模型端点。
+    steps:
+      - en: Send messages with the option on while the proxy is missing, bypassed or stopped, then with it running, and exercise a group holding the account and an API-key model.
+        zh: 开启选项后，在代理缺失、被跳过或已停止时发送消息，再在其运行时发送，并测试包含该账号与 API Key 模型的组。
+    expected:
+      - en: Nothing leaves directly, each refusal names its reason with a way to the settings, the group serves from the other member without resting this one, and the API-key model works throughout.
+        zh: 无任何直连请求，每次拒绝都说明原因并提供入口，组由另一成员服务且不使该成员休息，API Key 模型始终可用。
+    notes:
+      en: The routing, refusal and group behavior are covered by unit tests against real loopback connections (tests/unit/services/proxy-fetch-guard.test.ts, tests/unit/openai-compat-router); a signed-in account journey through the full engine path is not yet automated.
+      zh: 路由、拒绝及分组行为由针对真实回环连接的单元测试覆盖（tests/unit/services/proxy-fetch-guard.test.ts、tests/unit/openai-compat-router）；经完整引擎链路的登录账号流程尚未自动化。

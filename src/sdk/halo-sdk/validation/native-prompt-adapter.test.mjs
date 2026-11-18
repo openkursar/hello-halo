@@ -12,7 +12,7 @@ const { decodeWire } = await import(pathToFileURL(join(compiled, 'native/wire.js
 const capabilities = () => ({ streaming: true, toolCalling: false, imageInput: true, thinking: false, pdfInput: false, audioInput: false, videoInput: false, caching: false, systemPromptStyle: 'top_level' });
 
 test('native XML parsing preserves recorded values, UTF-16 names and parameter prototypes', async () => {
-  const fixture = JSON.parse(await readFile(new URL('../native/crates/halo-core/src/llm/tool_calling/fixtures/xml-parameters.json', import.meta.url), 'utf8'));
+  const fixture = JSON.parse(await readFile(new URL('../crates/halo-core/src/llm/tool_calling/fixtures/xml-parameters.json', import.meta.url), 'utf8'));
   for (const entry of fixture.cases) {
     const [text, names] = decodeWire(entry.input);
     const result = parseXmlToolCalls(text, names);

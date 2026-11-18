@@ -1,0 +1,170 @@
+version: 1
+id: browser.login
+module: browser
+title:
+  en: Sign in through the embedded browser
+  zh: 通过内嵌浏览器登录网站
+story:
+  en: I can sign in through a separate login window or a website popup and continue using the original browser page.
+  zh: 我能通过独立登录窗口或网站弹窗登录，并继续使用原来的浏览页面。
+basis: documented
+references:
+  - src/main/services/browser-popup.ts
+  - src/main/services/user-agent-resolver.ts
+  - src/main/ipc/browser.ts
+  - tests/e2e/specs/browser-login.spec.ts
+promises:
+  identity:
+    en: Default desktop pages, their workers and login windows use the running browser identity and share website login without exposing desktop privileges.
+    zh: 默认桌面网页、其工作线程及登录窗口使用实际运行的浏览器身份，共享网站登录但不暴露桌面权限。
+  popup:
+    en: Permitted website popups preserve native requests and opener communication without replacing the original page; closing the owning page releases its native popup descendants.
+    zh: 获准的网站弹窗保留原生请求及父子窗口通信，不替换原网页；关闭所属页面会释放原生弹窗后代。
+  tabs:
+    en: Ordinary new-tab links from a visible page open independent Halo tabs, preserve referrer policy and leave the original document unchanged; authentication and named-window requests retain native relationships.
+    zh: 可见页面上的普通新标签链接打开独立 Halo 标签页，保留引用来源策略且不改变原网页；认证及命名窗口请求保留原生关系。
+  compatibility:
+    en: Website documents and dynamic cross-site frames receive the same browser API compatibility before their scripts run, without Node or Halo access; reattaching after debugger loss restores later navigation.
+    zh: 网页和动态跨站框架在脚本运行前获得一致的浏览器 API 兼容能力，不暴露 Node 或 Halo；调试连接丢失后重接可恢复后续导航。
+scenarios:
+  - id: browser.login.identity
+    title:
+      en: Keep native identity and shared login across browser surfaces
+      zh: 浏览界面之间保持原生身份及共享登录
+    verifies: [identity]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - An isolated Halo application uses only a synthetic loopback website and no personal credentials.
+    steps:
+      - Open a real embedded page, inspect its first request and script identity, and start a dedicated worker.
+      - Open the production standalone login window and observe its request, script identity, session and privileges.
+      - Set an explicit custom user agent through the configuration API, then clear it.
+    expected:
+      - HTTP and JavaScript user agents agree with the actual Chromium major version, and native client hints retain that version.
+      - The synthetic login cookie is shared while Node and Halo desktop APIs remain absent from website content.
+      - Custom identity changes reach existing pages, login windows and worker requests; clearing the override restores the native identity without deleting login state.
+    notes:
+      en: This exercises production browser APIs in an actual isolated application without a model, including an explicit custom user agent and reset. It does not prove external-provider acceptance, persistent login after restart or mobile emulation. Native popup first requests use the application default rather than a custom page override.
+      zh: 本测试在真实隔离应用中调用生产浏览 API，不使用模型，并检查显式自定义 UA 与重置；不证明外部服务接受登录、重启后持久化或移动模拟。原生弹窗首请求使用应用默认身份而非页面自定义覆盖。
+  - id: browser.login.popup
+    title:
+      en: Complete a local popup authentication exchange
+      zh: 完成本地弹窗认证交换
+    verifies: [popup, identity]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - An isolated Halo application uses only a synthetic loopback website and no personal credentials.
+    steps:
+      - Submit a POST form into a popup with an explicit opener relationship, exchange a synthetic message and close the popup.
+      - Retarget an initially blank popup, open a nested popup and open a separate noopener window.
+      - Destroy the original browser page.
+    expected:
+      - The first popup request retains method, body, content type, referrer and native browser identity.
+      - Opener communication succeeds where requested, noopener stays detached, and the original document and history remain unchanged.
+      - Closing the original page releases its popup descendants.
+    notes:
+      en: Synthetic local OAuth-shaped traffic verifies browser semantics, not Google account login or a provider's anti-abuse decisions. Restricted-domain redirect and named-window retarget enforcement retain separate regression obligations.
+      zh: 本地模拟 OAuth 流量验证浏览器语义，不代表 Google 账号登录或服务商风控结果；受限域重定向及命名窗口重定向仍需独立回归验证。
+  - id: browser.login.google
+    title:
+      en: Complete a Google login on an authorized test account
+      zh: 使用获准测试账号完成 Google 登录
+    verifies: [identity, popup]
+    platforms: [darwin, win32, linux]
+    profiles: [external]
+    evidence: manual
+    mode: none
+    automation: manual
+    reason:
+      en: Requires an explicitly authorized test account, external network access and human completion of credentials or verification challenges. Local fixtures do not establish this result.
+      zh: 需要明确授权的测试账号、外部网络及人工完成凭据或验证挑战；本地测试不能证明此结果。
+  - id: browser.login.policy
+    title:
+      en: Enforce website restrictions throughout native popup navigation
+      zh: 原生弹窗导航始终遵守网站限制
+    verifies: [popup]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - The production browser-module fixture allows one synthetic loopback host and denies another reachable loopback host.
+    steps:
+      - Open allowed popups that immediately redirect or navigate through script to the denied host.
+      - Retarget a named popup and an initially blank popup to the denied host, then activate a native target-blank link to an allowed page.
+    expected:
+      - Denied destinations receive no HTTP request; the allowed native link loads in its own window.
+      - The original page retains its document, URL and history.
+    notes:
+      en: Uses real browser modules in a dedicated Electron fixture, without a model, personal credentials or external website.
+      zh: 在专用 Electron 测试壳中使用真实浏览模块，不涉及模型、个人凭据或外部网站。
+  - id: browser.login.hidden
+    title:
+      en: Keep unattended popup work hidden and bounded by its owner lifetime
+      zh: 无人值守弹窗保持隐藏并随所属页面结束
+    verifies: [popup]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - An unattended production browser context owns a synthetic loopback page in an isolated Electron fixture.
+    steps:
+      - Open a popup and a nested popup from the unattended page, then destroy the owning page.
+    expected:
+      - Both popups load without becoming visible or changing window focus.
+      - Destroying the owning page closes both descendants.
+    notes:
+      en: Lifetime cleanup is verified independently from any simultaneous-popup resource budget.
+      zh: 生命周期清理与同时打开弹窗的资源预算分别验证。
+  - id: browser.login.compatibility
+    title:
+      en: Install browser capabilities before document scripts and recover after detach
+      zh: 在网页脚本前安装浏览器能力并在调试断开后恢复
+    verifies: [compatibility]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: none
+    automation: automated
+    steps:
+      - Open a real embedded document and replace a dynamic cross-site frame twice.
+      - Detach its debugger, navigate through the production browser API and open a native popup.
+      - Close the owning page.
+    expected:
+      - Every first document script sees the app and timing APIs without Node or Halo privileges.
+      - Later navigation reinstalls the capabilities and no child remains paused.
+      - Closing the owner releases the guest and native popup.
+    notes:
+      en: Uses local synthetic documents. It does not establish native-equivalent legacy timing semantics, external-provider acceptance or renderer-crash recovery.
+      zh: 使用本地合成网页，不证明旧计时接口完全等同原生、外部服务接受或渲染崩溃恢复。
+  - id: browser.login.tabs
+    title:
+      en: Open ordinary links in independent Halo tabs
+      zh: 普通新开链接进入独立 Halo 标签页
+    verifies: [tabs, compatibility]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    steps:
+      - Open the built-in browser through the chat header and enter a local website address.
+      - Click a target-blank link and a noreferrer link through the rendered guest, including a narrow window.
+      - Close the original tab.
+    expected:
+      - Independent Canvas tabs appear without an additional native window; ordinary GET requests retain referrer policy and occur once.
+      - The original document stays unchanged; the new tabs remain usable after closing it and expose no desktop bridge.
+    notes:
+      en: Native guest, POST, named-window and explicit popup requests keep native windows so their browser relationships are not replayed. Background selection and resource-budget cases also have deterministic unit coverage.
+      zh: 原生 guest、POST、命名窗口及显式弹窗保留原生窗口，避免重放破坏浏览器关系；后台选择及资源预算另有确定性单元覆盖。

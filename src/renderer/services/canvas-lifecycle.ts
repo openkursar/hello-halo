@@ -19,6 +19,7 @@ import { holdArtifactSpace } from './artifact-space-holds'
 import { gitDiscovery } from './git-discovery'
 import type { ChangesViewMemory } from '../types/changes-view'
 import type { ReferenceLineRange } from '../../shared/types/content-reference'
+import type { BrowserTabOpened } from '../../shared/types/browser-host'
 
 // ============================================
 // Types
@@ -67,6 +68,8 @@ export interface BrowserState {
   blockedByPolicy?: boolean
   /** Exact URL that was blocked by browser policy — target of "allow and retry". */
   blockedUrl?: string
+  blockedPopupHost?: string
+  blockedPopupSequence?: number
 }
 
 /**
@@ -488,6 +491,7 @@ class CanvasLifecycle {
   // IPC listener cleanup
   private browserStateUnsubscribe: (() => void) | null = null
   private browserPageGoneUnsubscribe: (() => void) | null = null
+  private browserTabOpenedUnsubscribe: (() => void) | null = null
   private artifactChangedUnsubscribe: (() => void) | null = null
   private memoryPressureUnsubscribe: (() => void) | null = null
 
@@ -583,6 +587,8 @@ class CanvasLifecycle {
         error: event.state.error,
         blockedByPolicy: event.state.blockedByPolicy,
         blockedUrl: event.state.blockedUrl,
+        blockedPopupHost: event.state.blockedPopupHost,
+        blockedPopupSequence: event.state.blockedPopupSequence,
       }
       const changes = (tab: TabState) => ({
         browserState,
@@ -608,6 +614,12 @@ class CanvasLifecycle {
     })
 
     this.browserPageGoneUnsubscribe = api.onBrowserPageGone(({ viewId, reason }) => this.handleBrowserPageGone(viewId, reason))
+    this.browserTabOpenedUnsubscribe = api.onBrowserTabOpened(event => {
+      void this.attachWebsiteTab(event).catch(error => {
+        console.error('[CanvasLifecycle] Website tab attachment failed', { viewId: event.viewId }, error)
+        if (!event.borrowed) void api.destroyBrowserView(event.viewId)
+      })
+    })
     this.artifactChangedUnsubscribe = api.onArtifactChangedBatch((batch) => this.handleArtifactChanges(batch))
 
     this.memoryPressureUnsubscribe = api.onMemoryPressure(({ level }) => this.setMemoryPressure(level))
@@ -631,6 +643,8 @@ class CanvasLifecycle {
 
     this.browserPageGoneUnsubscribe?.()
     this.browserPageGoneUnsubscribe = null
+    this.browserTabOpenedUnsubscribe?.()
+    this.browserTabOpenedUnsubscribe = null
 
     if (this.artifactChangedUnsubscribe) {
       this.artifactChangedUnsubscribe()
@@ -904,6 +918,34 @@ class CanvasLifecycle {
     const current = this.tabs.get(tabId)
     if (!current?.browserViewId) return
     await api.navigateBrowserView(current.browserViewId, url)
+  }
+
+  private async attachWebsiteTab(event: BrowserTabOpened): Promise<void> {
+    const opener = [...this.tabs.values()].find(tab => tab.browserViewId === event.openerViewId)
+    if (!opener) {
+      console.warn('[CanvasLifecycle] Website tab discarded because its opener left this canvas', { viewId: event.viewId })
+      if (!event.borrowed) await api.destroyBrowserView(event.viewId)
+      return
+    }
+    if ([...this.tabs.values()].some(tab => tab.browserViewId === event.viewId)) return
+    const foreground = !event.background && this.activeTabId === opener.id && this.isOpen
+    const tabId = generateTabId()
+    this.addTab({
+      id: tabId,
+      type: 'browser',
+      title: event.title,
+      url: event.url,
+      isDirty: false,
+      isLoading: true,
+      browserViewId: event.viewId,
+      browserViewOwned: !event.borrowed,
+      browserState: { isLoading: true, canGoBack: false, canGoForward: false },
+    }, false)
+    if (foreground) {
+      await this.switchTab(tabId)
+    } else {
+      await this.applyBudgets()
+    }
   }
 
   /** Borrows an AI page without changing its owner or guest identity. */
@@ -2069,10 +2111,10 @@ class CanvasLifecycle {
   // Tab State Updates
   // ============================================
 
-  private addTab(tab: NewTab): void {
+  private addTab(tab: NewTab, openCanvas = true): void {
     this.tabs.set(tab.id, { ...tab, view: {} })
     this.tabsSnapshot = null
-    this.setOpen(true)
+    if (openCanvas) this.setOpen(true)
     this.notifyTabListChange()
   }
 

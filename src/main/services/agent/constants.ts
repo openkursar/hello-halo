@@ -15,6 +15,7 @@ import {
 /** Built-in tools that carry no user-visible output — pure bookkeeping. */
 const TRANSPARENT_BUILTIN_TOOLS = new Set<string>([
   'TodoWrite',
+  'Goal',
   'TaskCreate',
   'TaskUpdate',
   'TaskList',

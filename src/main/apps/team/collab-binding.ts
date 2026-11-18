@@ -4,7 +4,7 @@
  * what happens to the collaboration when the conversation goes away.
  */
 
-import { nativeChatAppId } from '../../../shared/apps/im-keys'
+import { buildRunSenderKey, nativeChatAppId, parseRunSenderKey } from '../../../shared/apps/im-keys'
 import type { TeamStore } from './store'
 import type { TeamService } from './service'
 
@@ -46,7 +46,17 @@ export function releaseCollaboration(
   }
 }
 
-/** Collaborations coordinated from any chat of an uninstalled digital human end with it. */
+/** A run's collaboration has no conversation to delete: it ends when the run's record is retired. */
+export function releaseRunCollaboration(
+  store: Pick<TeamStore, 'getCollabTeamByConversation' | 'setCoordinatorConversation'>,
+  service: Pick<TeamService, 'dissolveTeam'>,
+  appId: string,
+  runId: string,
+): void {
+  releaseCollaboration(store, service, buildRunSenderKey(appId, runId))
+}
+
+/** Collaborations coordinated from any chat or run of an uninstalled digital human end with it. */
 export function releaseCollaborationsOfApp(
   store: Pick<TeamStore, 'listTeamsBySpace' | 'getCollabTeamByConversation' | 'setCoordinatorConversation'>,
   service: Pick<TeamService, 'dissolveTeam'>,
@@ -55,6 +65,9 @@ export function releaseCollaborationsOfApp(
   if (!app.spaceId) return
   for (const team of store.listTeamsBySpace(app.spaceId)) {
     const coordinator = team.coordinatorConversationId
-    if (coordinator && nativeChatAppId(coordinator) === app.id) releaseCollaboration(store, service, coordinator)
+    if (!coordinator) continue
+    if (nativeChatAppId(coordinator) === app.id || parseRunSenderKey(coordinator)?.appId === app.id) {
+      releaseCollaboration(store, service, coordinator)
+    }
   }
 }

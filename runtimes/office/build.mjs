@@ -29,6 +29,9 @@ const STAGING_DIR = __dirname
 const OUTPUT_DIR = path.join(PROJECT_ROOT, 'resources', 'office-runtime')
 const STAMP_FILE = path.join(OUTPUT_DIR, '.stamp')
 const FONTS_DIR = path.join(OUTPUT_DIR, 'fonts')
+// Survives clean builds that wipe OUTPUT_DIR, so fonts download only once.
+const FONT_CACHE_DIR = path.join(STAGING_DIR, '.font-cache')
+const FONT_DOWNLOAD_TIMEOUT_MS = 30_000
 
 /**
  * Bundled fonts, pinned by release tag + sha256. Noto Sans SC ships so PDF
@@ -215,7 +218,9 @@ function sha256File(file) {
 /**
  * Download each pinned font unless it is already present with the right hash.
  * Independent of the npm lockfile stamp, so it runs on every invocation and
- * heals a deleted or corrupted fonts dir.
+ * heals a deleted or corrupted fonts dir. Failures only warn: fonts are
+ * optional for development, and packaging (scripts/beforePack.cjs) refuses to
+ * ship without them.
  */
 async function ensureFonts() {
   fs.mkdirSync(FONTS_DIR, { recursive: true })
@@ -223,21 +228,28 @@ async function ensureFonts() {
     const dest = path.join(FONTS_DIR, file)
     if (fs.existsSync(dest) && sha256File(dest) === sha256) continue
 
+    const cached = path.join(FONT_CACHE_DIR, file)
+    if (fs.existsSync(cached) && sha256File(cached) === sha256) {
+      fs.copyFileSync(cached, dest)
+      log(`Restored ${file} from cache`)
+      continue
+    }
+
     log(`Downloading font asset ${file}...`)
-    let res
     try {
-      res = await fetch(url)
+      const res = await fetch(url, { signal: AbortSignal.timeout(FONT_DOWNLOAD_TIMEOUT_MS) })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const bytes = Buffer.from(await res.arrayBuffer())
+      const actual = createHash('sha256').update(bytes).digest('hex')
+      if (actual !== sha256) throw new Error(`checksum mismatch (got ${actual})`)
+      fs.mkdirSync(FONT_CACHE_DIR, { recursive: true })
+      fs.writeFileSync(path.join(FONT_CACHE_DIR, file), bytes)
+      fs.writeFileSync(dest, bytes)
+      log(`Fetched ${file} (${(bytes.length / 1024 / 1024).toFixed(1)} MB)`)
     } catch (err) {
-      fail(`Font download failed for ${url}: ${err?.cause?.code ?? err.message}`)
+      const reason = err?.cause?.code ?? err?.message ?? err
+      log(`WARNING: skipped ${file} (${reason}). CJK text in generated PDFs will fall back; packaging requires it.`)
     }
-    if (!res.ok) fail(`Font download failed (${res.status}) for ${url}`)
-    const bytes = Buffer.from(await res.arrayBuffer())
-    const actual = createHash('sha256').update(bytes).digest('hex')
-    if (actual !== sha256) {
-      fail(`Font checksum mismatch for ${file}:\n  expected ${sha256}\n  got      ${actual}`)
-    }
-    fs.writeFileSync(dest, bytes)
-    log(`Fetched ${file} (${(bytes.length / 1024 / 1024).toFixed(1)} MB)`)
   }
 }
 

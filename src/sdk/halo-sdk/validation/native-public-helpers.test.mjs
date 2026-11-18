@@ -13,7 +13,7 @@ const values = await import(pathToFileURL(join(compiled, 'native/values.js')).hr
 const signal = () => new AbortController().signal;
 
 test('native scalar text helpers preserve recorded UTF-16 values and numeric budget errors', async () => {
-  const fixtures = JSON.parse(await readFile(new URL('../native/crates/halo-core/src/core/fixtures/text-helpers.json', import.meta.url), 'utf8'));
+  const fixtures = JSON.parse(await readFile(new URL('../crates/halo-core/src/core/fixtures/text-helpers.json', import.meta.url), 'utf8'));
   const text = units => String.fromCharCode(...units);
   const texts = fixtures.texts.map(text);
   for (const [index, input] of texts.entries()) assert.equal(values.estimateTokens(input), fixtures.estimates[index], `estimate ${index}`);

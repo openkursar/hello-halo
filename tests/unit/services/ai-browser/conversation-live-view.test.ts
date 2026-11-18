@@ -16,6 +16,7 @@ const destroyedListeners = new Set<(viewId: string) => void>()
 
 vi.mock('../../../../src/main/services/browser-view.service', () => ({
   browserViewManager: {
+    releaseOwner: () => {},
     getAllStates: () => [...states.values()],
     getState: (id: string) => states.get(id) ?? null,
     getWebContents: () => null,

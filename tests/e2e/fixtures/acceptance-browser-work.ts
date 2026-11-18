@@ -32,7 +32,7 @@ export function browserWorkHtml(title: string, frame = false) {
 <label style="display:block;margin:8px">Paste destination <input id="paste" aria-label="${frame ? 'Frame paste' : 'Paste destination'}" style="width:230px"></label>
 <label style="display:block;margin:8px">Protected input <input id="cancel" aria-label="${frame ? 'Frame protected input' : 'Protected input'}" value="Protected original" style="width:240px"></label>
 <label style="display:block;margin:8px">Control <input id="control" value="Unchanged page control" readonly></label>
-<button id="action" style="margin:8px">Page action</button>
+<button id="action" style="margin:8px">Page action</button><a id="target-blank" href="/next?role=target" target="_blank" aria-label="Open child page">Open child page</a>
 ${frame ? '' : '<iframe id="editing-frame" title="Owned editing frame" src="/frame" style="display:block;margin:8px;border:0;width:min(440px,calc(100vw - 16px));height:240px"></iframe>'}
 <script>${PAGE_SCRIPT}</script></body></html>`
 }

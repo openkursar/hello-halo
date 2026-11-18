@@ -510,6 +510,7 @@ export function getSdkApiCredentials(sdkOptions: Record<string, any>): Readonly<
         codexModelCapabilities: backend.codexModelCapabilities,
         visionOverride: backend.visionOverride,
         delegatedAuth: backend.delegatedAuth,
+        proxyGuard: backend.proxyGuard,
       }
     } else if (rawKey && env.ANTHROPIC_BASE_URL && !env.ANTHROPIC_CUSTOM_HEADERS && !env.HALO_AI_SOURCE_ID) {
       credentials = {

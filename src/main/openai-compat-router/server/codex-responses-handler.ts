@@ -16,6 +16,7 @@ import {
 } from '../converters'
 import { streamOpenAIChatToAnthropic } from '../stream'
 import { proxyFetch } from '../../services/proxy-fetch'
+import { parseProxyRequired } from '../../../shared/constants/proxy-required'
 import { getEndpointUrlError, isValidEndpointUrl } from './api-type'
 import { applyProviderAdapter, type AdapterContext } from './provider-adapters'
 import { deferInputTokensEstimate, fillResponseUsageFallback } from '../utils/usage-estimator'
@@ -52,7 +53,8 @@ async function fetchUpstream(
   body: unknown,
   timeoutMs: number,
   signal?: AbortSignal,
-  customHeaders?: Record<string, string>
+  customHeaders?: Record<string, string>,
+  guarded = false
 ): Promise<globalThis.Response> {
   const controller = new AbortController()
   const timeout = setTimeout(() => {
@@ -77,7 +79,7 @@ async function fetchUpstream(
       headers,
       body: JSON.stringify(body),
       signal: signal ?? controller.signal
-    })
+    }, { guarded })
   } finally {
     clearTimeout(timeout)
   }
@@ -791,7 +793,7 @@ export async function handleResponsesRequest(
   }
 
   try {
-    const upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, undefined, requestHeaders)
+    const upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, undefined, requestHeaders, config.proxyGuard === true)
     if (!upstreamResp.ok) {
       const errorText = await upstreamResp.text().catch(() => '')
       const { type, message } = getUpstreamError(upstreamResp.status, errorText)
@@ -824,7 +826,10 @@ export async function handleResponsesRequest(
     fillResponseUsageFallback(anthropicResponse, anthropicRequest)
     res.json(anthropicToCodexResponse(anthropicResponse, anthropicRequest.model, toolNamespaceMap))
   } catch (error: any) {
-    return sendResponsesError(res, 500, 'api_error', error?.message || String(error))
+    const message = error?.message || String(error)
+    // A client-error status, so the engine does not retry a refusal only the user can lift.
+    if (parseProxyRequired(message)) return sendResponsesError(res, 403, 'proxy_required_error', message)
+    return sendResponsesError(res, 500, 'api_error', message)
   }
 }
 

@@ -1,6 +1,6 @@
 import type { RpcClient } from '../../shared/rpc/define'
 import type { browserRpc } from '../../shared/rpc/contracts/browser.contract'
-import type { BrowserPageGone } from '../../shared/types/browser-host'
+import type { BrowserPageGone, BrowserTabOpened } from '../../shared/types/browser-host'
 import { ensureExtendedServicesReady } from './bootstrap-ready'
 /**
  * browserApi — browser domain slice of the unified api object.
@@ -162,6 +162,9 @@ export const browserApi = {
 
   onBrowserPageGone: (callback: (data: BrowserPageGone) => void) =>
     onEvent('browser:page-gone', callback as (data: unknown) => void),
+
+  onBrowserTabOpened: (callback: (data: BrowserTabOpened) => void) =>
+    onEvent('browser:tab-opened', callback as (data: unknown) => void),
 
   onBrowserZoomChanged: (callback: (data: { viewId: string; zoomLevel: number }) => void) =>
     onEvent('browser:zoom-changed', callback as (data: unknown) => void),

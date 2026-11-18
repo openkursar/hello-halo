@@ -193,22 +193,16 @@ import { homedir } from 'os'
 import { applyCapabilityPolicy } from '../../../../src/main/apps/runtime/capability-policy'
 import { appTurnFileAccess } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { closedFolderDenyRules, filterSearchOutput, searchPathRewrite, type TurnFileAccess } from '../../../../src/main/apps/runtime/turn-file-access'
-import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 
-// The Halo engine's own hook matching, from its build output. That output is
-// not committed, so these cases are skipped where the SDK has not been built.
-const HALO_HOOKS_PATH = '../../../../src/sdk/halo-sdk/dist/core/hooks.js'
-const haloHooks: typeof import('../../../../src/sdk/halo-sdk/dist/core/hooks.js') | null =
-  existsSync(fileURLToPath(new URL(HALO_HOOKS_PATH, import.meta.url))) ? await import(HALO_HOOKS_PATH) : null
+import { getAllTools, queryLoop, resolveQueryConfig, runPreToolUseHooks, runPostToolUseHooks } from '@hello-halo/agent-sdk'
+import type { LlmProvider, Tool } from '@hello-halo/agent-sdk'
 
-// The ripgrep both engines run, as installed with the Claude engine.
 const RG_DIR = fileURLToPath(new URL(
-  `../../../../node_modules/@anthropic-ai/claude-code/vendor/ripgrep/${process.arch}-${process.platform}`,
+  `../../../../node_modules/@vscode/ripgrep-${process.platform}-${process.arch}/bin`,
   import.meta.url
 ))
 const RG = join(RG_DIR, process.platform === 'win32' ? 'rg.exe' : 'rg')
-const hasRg = process.platform !== 'win32' && existsSync(RG)
 
 describe('a restricted turn is held to its file boundary', () => {
   const conv = 'conv-files'
@@ -373,8 +367,7 @@ describe('a restricted turn is held to its file boundary', () => {
     expect(allow('Read', { file_path: join(space, '.halo/apps/dh/memory/topics/escape/passwd') })).toBe(false)
   })
 
-  it.skipIf(!haloHooks)('refuses through the Halo engine\'s own hook matching, and lets memory through', async () => {
-    const { runPreToolUseHooks } = haloHooks!
+  it('refuses through the Halo engine\'s own hook matching, and lets memory through', async () => {
     withAccess({ allowedTools: ['Read', 'Glob', 'Grep'] })
     const hooks = createTurnFileAccessHooks(conv) as never
     const run = (tool: string, input: Record<string, unknown>) =>
@@ -394,8 +387,7 @@ describe('a restricted turn is held to its file boundary', () => {
     expect(matches('Bash')).toBe(false)
   })
 
-  it.skipIf(!haloHooks)('removes closed paths from a Glob listing on the Halo engine', async () => {
-    const { runPostToolUseHooks } = haloHooks!
+  it('removes closed paths from a Glob listing on the Halo engine', async () => {
     withAccess({ allowedTools: ['Glob'] })
     const hooks = createTurnFileAccessHooks(conv) as never
     const listing = [
@@ -466,7 +458,6 @@ describe('a restricted turn is held to its file boundary', () => {
     input: Record<string, unknown>,
     opts: { skipPre?: boolean; withoutRules?: boolean } = {}
   ) {
-    const { runPreToolUseHooks, runPostToolUseHooks } = haloHooks!
     const hooks = createTurnFileAccessHooks(conv) as never
     const call = { ...input }
     if (!opts.skipPre) {
@@ -474,19 +465,52 @@ describe('a restricted turn is held to its file boundary', () => {
       if (pre.decision === 'deny') return { text: 'denied', raw: 'denied' }
       if (pre.updatedInput) Object.assign(call, pre.updatedInput)
     }
-    const { GrepTool } = await import('../../../../src/sdk/halo-sdk/tools/grep/index')
-    const { GlobTool } = await import('../../../../src/sdk/halo-sdk/tools/glob/index')
-    const { resolveReadDenyRoots } = await import('../../../../src/sdk/halo-sdk/utils/read-deny')
-    // The rules the session is given, resolved as the engine resolves them.
-    const readDenyRoots = opts.withoutRules ? [] : resolveReadDenyRoots(closedFolderDenyRules(access), space)
-    const ctx = { cwd: space, abortSignal: signal, readDenyRoots }
-    const result = await (tool === 'Grep' ? new GrepTool() : new GlobTool()).execute(call as never, ctx as never)
-    const raw = String((result as { content?: unknown }).content ?? result)
-    const post = await runPostToolUseHooks(hooks, tool, call, raw, 'tu-post', 'session', space, signal)
-    return { text: post.updatedToolOutput === undefined ? raw : String(post.updatedToolOutput), raw }
+    const builtin = getAllTools().find(candidate => candidate.name === tool)
+    expect(builtin, `${tool} is available from the SDK public entry`).toBeDefined()
+    let raw: string | undefined
+    const probe: Tool = {
+      name: 'SearchProbe', description: 'Run the requested search.',
+      inputSchema: { type: 'object', properties: {} }, permissionLevel: 'none',
+      async execute(_input, context) {
+        const result = await builtin!.execute(call, context)
+        expect(result.isError, result.content).not.toBe(true)
+        raw = String(result.content)
+        return result
+      },
+    }
+    let requests = 0
+    const provider: LlmProvider = {
+      id: 'search-probe', name: 'Search probe',
+      capabilities: () => ({ streaming: true, toolCalling: true, thinking: false, imageInput: false,
+        pdfInput: false, audioInput: false, videoInput: false, caching: false, systemPromptStyle: 'top_level' }),
+      async createMessage() { throw new Error('Streaming provider required') },
+      async *createMessageStream() {
+        const search = requests++ === 0
+        yield { type: 'message_start', id: `search-${requests}`, model: 'search-probe', usage: { input_tokens: 1, output_tokens: 1 } }
+        yield { type: 'content_block_start', index: 0, content_block: search
+          ? { type: 'tool_use', id: 'search-call', name: probe.name, input: {} }
+          : { type: 'text', text: 'Done' } }
+        yield { type: 'content_block_stop', index: 0 }
+        yield { type: 'message_delta', stopReason: search ? 'tool_use' : 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }
+        yield { type: 'message_stop' }
+      },
+    }
+    const config = resolveQueryConfig({
+      model: 'search-probe', maxOutputTokens: 64, contextWindow: 200_000, maxTurns: 2,
+      cwd: space, env: { ...process.env }, permissionMode: 'bypassPermissions',
+      systemPrompt: 'Run the search.', thinking: { type: 'disabled' },
+      disallowedTools: opts.withoutRules ? [] : closedFolderDenyRules(access),
+    })
+    for await (const message of queryLoop(config, provider, [probe], 'Search')) {
+      if (message.type === 'result') expect(message.is_error, JSON.stringify(message)).toBe(false)
+    }
+    expect(raw, 'the real native search executed').toBeDefined()
+    const output = raw!
+    const post = await runPostToolUseHooks(hooks, tool, call, output, 'tu-post', 'session', space, signal)
+    return { text: post.updatedToolOutput === undefined ? output : String(post.updatedToolOutput), raw: output }
   }
 
-  describe.skipIf(!haloHooks || !hasRg)('Halo engine searches, with the real rg', () => {
+  describe('Halo engine searches, with the real rg', () => {
     let bin = ''
     let pathEnv: string | undefined
     beforeEach(() => {
@@ -614,6 +638,21 @@ describe('a restricted turn is held to its file boundary', () => {
       expect(glob.text.replace('alice', '<p>')).toBe(noGlob.text.replace('bobby', '<p>'))
     })
 
+    it.each([{}, { glob: '*' }, { type: 'json' }, { glob: '*', type: 'json' }])(
+      'keeps hidden matches indistinguishable with search filters %j', async filters => {
+        writeFileSync(join(space, '.halo/conversations/alice.json'), 'SECRET-ALICE\n')
+        for (const output_mode of ['content', 'files_with_matches', 'count']) {
+          const probe = (pattern: string) => haloSearch('Grep', {
+            pattern, ...filters, output_mode, path: join(space, '.halo/conversations'),
+          }, { withoutRules: true, skipPre: true })
+          const hidden = await probe('SECRET-ALI')
+          const none = await probe('SECRET-ALX')
+          expect(hidden.raw).toContain('alice')
+          expect(hidden.text.replace('SECRET-ALI', '<p>')).toBe(none.text.replace('SECRET-ALX', '<p>'))
+        }
+      }
+    )
+
     it('a window sized by the caller tells a hidden match from none in no mode', async () => {
       // One visible line (memory), then a window one line larger: had the closed
       // file been collected, the guess that hits it would fill the window and
@@ -715,8 +754,7 @@ describe('a restricted turn is held to its file boundary', () => {
     expect(turnFileExportRefusal(conv, record)).toBeNull()
   })
 
-  it.skipIf(!haloHooks)('stays out of the way of a turn that is not restricted', async () => {
-    const { runPreToolUseHooks } = haloHooks!
+  it('stays out of the way of a turn that is not restricted', async () => {
     beginDelegatedTurn(conv, { policy: undefined, mode: 'permissive' })
     const hooks = createTurnFileAccessHooks(conv) as never
     const result = await runPreToolUseHooks(hooks, 'Read', { file_path: '/etc/passwd' }, 'tu', 'session', space, signal)
@@ -845,8 +883,7 @@ describe('a restricted turn holds the AI browser to the same file boundary', () 
     expect(matches(`${B}browser_click`)).toBe(false)
   })
 
-  it.skipIf(!haloHooks)('refuses through the Halo engine\'s own hook matching', async () => {
-    const { runPreToolUseHooks } = haloHooks!
+  it('refuses through the Halo engine\'s own hook matching', async () => {
     restrict()
     const hooks = createTurnFileAccessHooks(conv) as never
     const run = (tool: string, input: Record<string, unknown>) =>
