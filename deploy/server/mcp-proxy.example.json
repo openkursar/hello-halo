@@ -1,0 +1,9 @@
+{
+  "path": "/mcp/knowledge",
+  "upstream": "http://127.0.0.1:8787/mcp",
+  "allowedHosts": ["localhost:8080", "127.0.0.1:8080"],
+  "allowedOrigins": [],
+  "timeoutMs": 60000,
+  "maxConcurrent": 16,
+  "maxRequestBytes": 1048576
+}

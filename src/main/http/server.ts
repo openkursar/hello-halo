@@ -29,6 +29,7 @@ import { serveRendererAssets } from './renderer-assets'
 import { getTeamStore } from '../apps/team'
 import { getLocalIdentity } from './identity/index'
 import { getMainWindow as getMainWindowFromService } from '../foundation/window.service'
+import { isServerMode } from '../foundation/runtime-mode'
 
 // Vite dev server URL. Pinned to 127.0.0.1, not 'localhost': electron.vite.config.ts
 // binds Vite to 127.0.0.1 only (see its comment), but Node 17+ on macOS resolves
@@ -42,6 +43,7 @@ const VITE_DEV_PORT = 5173
 let httpServer: Server | null = null
 let expressApp: Express | null = null
 let serverPort: number = 0
+let disposeMcpProxy: (() => void) | null = null
 
 // Default port
 const DEFAULT_PORT = 3847
@@ -144,6 +146,8 @@ async function findAvailablePort(startPort: number): Promise<number> {
 }
 
 function cleanupServerOnError(): void {
+  disposeMcpProxy?.()
+  disposeMcpProxy = null
   shutdownWebSocket()
   if (httpServer) {
     try {
@@ -182,6 +186,22 @@ export async function startHttpServer(
   // Create Express app
   expressApp = express()
 
+  // MCP ingress is a server deployment feature. A desktop sharing Remote Access
+  // must not open a forwarding path just because the variable is set in its
+  // environment.
+  if (process.env.HALO_MCP_PROXY_CONFIG && !isServerMode()) {
+    console.warn('[HTTP] HALO_MCP_PROXY_CONFIG is ignored outside server mode')
+  } else if (process.env.HALO_MCP_PROXY_CONFIG) {
+    try {
+      const { loadMcpProxyConfig, attachMcpProxy } = await import('./mcp-proxy')
+      const config = loadMcpProxyConfig()
+      if (config) disposeMcpProxy = attachMcpProxy(expressApp, config)
+    } catch {
+      console.error('[HTTP] MCP proxy configuration rejected; refusing to expose a misconfigured ingress')
+      cleanupServerOnError()
+      throw new Error('MCP proxy configuration rejected')
+    }
+  }
   attachWebhookIngress(expressApp)
 
   // Middleware
@@ -448,6 +468,8 @@ export async function startHttpServer(
  * Stop the HTTP server
  */
 export function stopHttpServer(): void {
+  disposeMcpProxy?.()
+  disposeMcpProxy = null
   if (httpServer) {
     shutdownWebSocket()
     httpServer.close()

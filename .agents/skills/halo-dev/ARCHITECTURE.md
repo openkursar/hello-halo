@@ -1061,6 +1061,10 @@ event once, and releases all concurrent reads when registration is complete.
 It does not start domain services or poll for readiness.
 Remote mode: renderer -> HTTP/WS -> main.
 
+### MCP HTTP ingress (server mode)
+
+`http/mcp-proxy.ts` optionally forwards one exact `/mcp/<name>` path to a deployment-configured literal loopback HTTP endpoint. `HALO_MCP_PROXY_CONFIG` names a bounded, credential-free JSON file. It is read in server mode only; a desktop sharing Remote Access logs that it is ignored. Absent means no middleware, listener or timer. Invalid configuration refuses HTTP startup. The ingress is attached before body parsers, management authentication and frontend fallbacks; it forwards raw bounded streams, not Agent calls. Host and browser Origin are explicit allowlists, while the upstream validates the caller's Bearer and owns MCP sessions and tool permissions. Halo management credentials are never substituted. HTTP shutdown disposes active forwarding and its state timer. This does not launch or supervise the upstream. Deployment example: `deploy/server/mcp-proxy.example.json`.
+
 ### 17.1 Self-API (the agent operating Halo)
 
 A third consumer of the same routes: the agent itself, over a loopback-only
