@@ -1296,6 +1296,19 @@ impl SdkCollaboration {
         }
         Ok(())
     }
+    async fn compact_state(&self, caller: Option<&str>, cancel: &CancellationToken) -> Result<Value> {
+        if cancel.is_cancelled() || self.lifetime.is_cancelled() { return Err(Error::cancelled()); }
+        let existing = self.runtime_view.lock().unwrap().upgrade();
+        let runtime = if let Some(runtime) = existing { runtime } else {
+            let options = self.options()?;
+            if options["persistSession"] == false { return Ok(Value::Null); }
+            let path = crate::history::transcript_path(self.owner.session_id(), &options).parent().unwrap()
+                .join("collaboration").join(hex::encode(Sha256::digest(self.owner.session_id().as_bytes()))).join("events.jsonl");
+            if !fs::try_exists(path).await? { return Ok(Value::Null); }
+            self.ensure().await?
+        };
+        runtime.compact_state(caller.unwrap_or(&runtime.coordinator_id))
+    }
     pub async fn call_server(
         &self,
         name: &str,
@@ -1490,6 +1503,9 @@ fn record_line(role: &str, text: &str, harness: &ResolvedHarness) -> String {
 
 #[async_trait]
 impl CollaborationTools for SdkCollaboration {
+    async fn compact_state(&self, cancel: &CancellationToken) -> Result<Value> {
+        self.compact_state(None, cancel).await
+    }
     fn definitions(&self) -> Vec<Value> {
         definitions(&baseline())
     }
@@ -1516,6 +1532,9 @@ impl CollaborationTools for SdkCollaboration {
 }
 #[async_trait]
 impl CollaborationTools for MemberTools {
+    async fn compact_state(&self, cancel: &CancellationToken) -> Result<Value> {
+        weak_owner(&self.owner)?.compact_state(Some(&self.caller), cancel).await
+    }
     fn inherited(&self) -> bool {
         true
     }

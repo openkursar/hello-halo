@@ -103,17 +103,22 @@ independently. Todo reminders apply with or without a Goal.
 
 ## Failure and cancellation
 
-Completed end-turn responses containing only whitespace or thinking retry the
-retained request at most twice, without adding instructions or empty assistant
-messages to model history. Each response's reported usage and elapsed turn still
-count toward the ordinary budgets. Exhaustion reports an error instead of empty
-success. An empty completion-check response retains the preceding usable answer.
+Completed end-turn responses may contain no blocks, only whitespace or only
+thinking. They retain normal output, history and accounting behavior and run the
+ordinary Stop hooks, checks and pending-input handling without retrying solely
+because no answer text was produced. A content-free provider iterator must still
+report a stop reason or message-stop event; an iterator with neither content nor
+completion is an incomplete response, not an empty success. Legacy custom providers
+with content retain their successful-iterator completion behavior.
+An empty completion-check response retains the preceding usable answer. A tool-use
+finish without an actual call still retries
+the retained request at most twice, then reports an error. Each response's reported
+usage and elapsed turn count toward the ordinary budgets.
 Usage already reported by an interrupted attempt is accounted and finalized once
 before retry reset, even when no tool was admitted. Transport retries check the
 execution budget before another request; missing usage is never estimated as billing.
 Discarded responses retain private accounting metadata without invoking the public
 completed-assistant callback or adding failed content to model history.
-The same bounded recovery applies when a tool-use finish contains no actual call.
 An empty refusal, stop-sequence or other terminal response reports its stop reason
 without resubmission. Empty output after the existing truncation or unreadable-call
 recovery budget is exhausted is an error, never empty success. Explicit refusal
@@ -283,6 +288,26 @@ permits one distinct recovery even immediately after a proactive summary. Repeat
 rejection stops safely rather than looping or invoking `apiCompact`.
 Goal, todos, active skill references, tool ownership and arrivals survive replacement.
 Recovery reads the original transcript rather than repeating recorded side effects.
+
+Compaction context travels with one compacted history. Two sources supply it,
+both read when compaction starts: local collaboration state, and the
+`additionalContext` returned by `PreCompact` hooks (joined in registration order;
+a failed, timed-out or blank hook adds nothing). Each becomes a `<system-reminder>`
+after the summary, is checkpointed with the candidate history, is replaced by the
+next compaction and is never sent to the summarizer. Failed compaction installs
+none of it and leaves live history unchanged. Normal request prompts, tool
+definitions and execution ownership are unaffected.
+
+Local collaboration state is plain language, not structured data: every other
+member by name and status, every unfinished task with owner, note and result
+reference, then the newest finished tasks, findings and activity. Names are shown
+exactly as recorded because the model passes them back to team tools, and a
+rejected task says so with its reason rather than reading like a completed one.
+The SDK sets no size limit on compaction context, its own or a hook's; a host that
+needs one applies it to the text it supplies. The read is cancellable, has a five-second
+deadline and performs no model or tool call. No collaboration adds nothing; a
+failed read adds a recovery notice, never an empty-board claim. Hosts that own
+collaboration supply their own text through `PreCompact`.
 
 ## Client tool context
 

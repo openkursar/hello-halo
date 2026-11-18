@@ -691,6 +691,54 @@ impl CollaborationRuntime {
         }));
         Ok(runtime)
     }
+    pub fn compact_state(&self, caller: &str) -> Result<Value> {
+        self.caller(caller)?;
+        let records = self.store.try_rows("member")?;
+        if records.is_empty() { return Ok(Value::Null); }
+        let names: HashMap<_, _> = records.iter().map(|member| {
+            let id = member["id"].as_str().unwrap_or("");
+            let name = member["name"].as_str().unwrap_or("");
+            (id.to_owned(), if name == "lead" { id.to_owned() } else { name.to_owned() })
+        }).collect();
+        let address = |value: &Value| -> String {
+            let id = value.as_str().unwrap_or("");
+            if id == caller { "you".into() }
+            else if id == self.coordinator_id { "lead".into() }
+            else { names.get(id).cloned().unwrap_or_else(|| id.to_owned()) }
+        };
+        let members = {
+            let state = self.state.lock().unwrap();
+            records.iter().filter(|member| {
+                let id = member["id"].as_str().unwrap_or("");
+                id != caller && !state.allocating.contains(id)
+            }).map(|member| {
+                let id = member["id"].as_str().unwrap_or("");
+                let status = if let Some(active) = state.active.get(id) {
+                    if active.ready { "running" } else { "queued" }
+                } else if matches!(member["state"].as_str(), Some("running" | "queued")) { "interrupted" }
+                else { member["state"].as_str().unwrap_or("idle") };
+                json!({"name":address(&member["id"]),"status":status})
+            }).collect::<Vec<_>>()
+        };
+        let tasks = self.store.try_rows("task")?.iter().map(|task| {
+            let mut row = json!({"id":task["id"],"title":task["title"],"assignee":address(&task["assigneeAppId"]),"status":task["status"],"updatedAt":task["updatedAt"]});
+            for key in ["resultRef", "note"] { if let Some(value) = task.get(key).filter(|value| value.is_string()) { row[key] = value.clone(); } }
+            row
+        }).collect::<Vec<_>>();
+        let findings = self.store.try_rows("finding")?.iter().map(|finding| {
+            let mut row = json!({"author":address(&finding["authorAppId"]),"createdAt":finding["createdAt"]});
+            if let Some(body) = finding["body"].as_str() { row["content"] = body.into(); }
+            if let Some(reference) = finding["ref"].as_str() { row["ref"] = reference.into(); }
+            row
+        }).collect::<Vec<_>>();
+        let activities = self.store.try_rows("activity")?.iter().map(|activity| {
+            let mut row = json!({"actor":address(&activity["actorAppId"]),"kind":activity["kind"],"subject":activity["subject"],"createdAt":activity["createdAt"]});
+            if activity["targetAppId"].is_string() { row["target"] = address(&activity["targetAppId"]).into(); }
+            if let Some(status) = activity["status"].as_str() { row["status"] = status.into(); }
+            row
+        }).collect::<Vec<_>>();
+        Ok(json!({"members":members,"tasks":tasks,"findings":findings,"activities":activities}))
+    }
     pub fn active_count(&self) -> usize {
         self.state.lock().unwrap().executions
     }

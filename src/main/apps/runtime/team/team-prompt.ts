@@ -95,8 +95,6 @@ export function buildTeamEntry(ctx: TeamPromptContext, reportToUserAvailable = t
       : []),
     'Each message identifies its sender;',
     'follow the current instruction and its permission boundaries.',
-    'Use collaborators for independent parallel work, a separate context or review, not a simple read or search.',
-    'Add one with spawn_agent. No team setup or fixed goal is required.',
     'End your turn when your work is done. No team-completion tool call is required.',
     'These runtime facts apply even if an older stored role prompt describes a different workflow.',
     '',

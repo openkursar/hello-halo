@@ -112,7 +112,7 @@ describe('buildTeamEntry — no per-turn content', () => {
   it('omits absent and temporary goals while describing the available collaboration protocol', () => {
     const noGoal = buildTeamEntry(makeCtx({ goal: '' }))
     expect(noGoal).not.toContain('### Standing Team Goal')
-    expect(noGoal).toContain('spawn_agent')
+    expect(noGoal).not.toContain('spawn_agent')
     expect(noGoal).toContain('No team-completion tool call is required')
     expect(noGoal).toContain('Temporary collaborators')
     expect(noGoal).toContain('With one collaborator')

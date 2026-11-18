@@ -4,6 +4,8 @@
  */
 
 import { z } from 'zod'
+import { markCompactionContextReader } from '../../../services/agent/compaction-context'
+import { COLLABORATION_STATE_UNAVAILABLE, collaborationStateText } from './compaction-snapshot'
 import { createCollaborationServer, type CollaborationOperations, type CollaborationCallContext, type CollaborationResult } from '@hello-halo/agent-sdk/collaboration'
 import type { ParticipantService, ParticipantSource } from '../../team'
 import { tool, createSdkMcpServer } from '../../../services/agent/resolved-sdk'
@@ -104,6 +106,7 @@ export interface TeamMcpContext {
   privateAssistants?: {
     spawn: NonNullable<CollaborationOperations['spawn_agent']>
     resolveHandle(handle: string, all?: boolean): TeamMcpContext | null
+    readContext(): TeamMcpContext | null
   }
   publicationRefusal?: (absolutePath: string) => string | null
 }
@@ -118,7 +121,7 @@ export interface TeamMcpContext {
 export type ResolveTeamMcpContext = () => TeamMcpContext | null
 
 const NO_TEAM_CONTEXT =
-  'No collaborators have been created in this conversation. Use spawn_agent when independent work would help.'
+  'No collaborators have been created in this conversation; spawn_agent creates one.'
 
 function textResult(text: string, isError = false) {
   return {
@@ -700,10 +703,31 @@ export function createCoordinationMcpServer(resolve: ResolveTeamMcpContext, opti
       }
     },
   }
+  const bindSnapshot = <T extends object>(server: T): T => markCompactionContextReader(server, (signal) => {
+    signal.throwIfAborted()
+    const context = resolve()
+    if (!context) return null
+    try {
+      context.participants?.capture(context, signal)()
+      const privateContext = context.privateAssistants?.readContext() ?? null
+      const contexts = [context, ...(privateContext ? [privateContext] : [])]
+      const text = collaborationStateText(contexts.map((current, index) => ({
+        label: index === 0 ? 'Current collaboration' : 'Your private collaborators',
+        board: current.blackboard.readBoard(current.teamId, current.epochId, current.callerAppId),
+        callerAppId: current.callerAppId,
+      })))
+      signal.throwIfAborted()
+      return text
+    } catch (error) {
+      if (signal.aborted) throw error
+      console.warn(`${LOG_TAG} Collaboration state unavailable at compaction: team=${context.teamId} epoch=${context.epochId}`, error)
+      return COLLABORATION_STATE_UNAVAILABLE
+    }
+  })
   const shared = createCollaborationServer(operations)
-  if (!options.checks) return shared
+  if (!options.checks) return bindSnapshot(shared)
   const checks = createSdkMcpServer({ name: TEAM_MCP_SERVER_NAME, tools: [buildScheduleTool(resolve), buildUnscheduleTool(resolve)] })
-  return {
+  return bindSnapshot({
     type: 'sdk', name: TEAM_MCP_SERVER_NAME,
     instance: {
       name: TEAM_MCP_SERVER_NAME, version: shared.instance.version,
@@ -711,7 +735,7 @@ export function createCoordinationMcpServer(resolve: ResolveTeamMcpContext, opti
       callTool: async (name, input, context) => await shared.instance.callTool(name, input, context)
         ?? checks.instance.callTool(name, input, context),
     },
-  }
+  })
 }
 
 export function createTeamMcpServer(context: TeamMcpContext, resolve: ResolveTeamMcpContext = () => context): SdkMcpServer {

@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const state = vi.hoisted(() => ({ generation: 1 }))
+const state = vi.hoisted(() => ({ generation: 1, work: null as any, bindSource: vi.fn() }))
 vi.mock('../../../../../src/main/apps/conversation-mcp', () => ({
   createSpaceTeamMcpServer: (scope: object, source: () => unknown, requestId: () => string) => ({ scope, source, requestId }),
 }))
 vi.mock('../../../../../src/main/apps/team', () => ({
-  getTeamService: () => ({ participants: { sourceGeneration: () => state.generation } }),
+  getTeamService: () => ({ participants: { sourceGeneration: () => state.generation }, getCollaborationScope: () => state.work }),
   getTeamStore: () => null,
 }))
-vi.mock('../../../../../src/main/apps/runtime/team/team-tools', () => ({ createTeamMcpServer: () => ({}) }))
-vi.mock('../../../../../src/main/apps/runtime/team/source-delivery', () => ({ bindTeamCollaborationSource: () => {} }))
+vi.mock('../../../../../src/main/apps/runtime/team/team-tools', () => ({ createTeamMcpServer: (context: unknown) => ({ context }) }))
+vi.mock('../../../../../src/main/apps/runtime/team/source-delivery', () => ({ bindTeamCollaborationSource: state.bindSource }))
 
-import { bindSourceToolSession } from '../../../../../src/main/apps/runtime/team/tool-session'
+import { bindTeamToolSession, bindSourceToolSession } from '../../../../../src/main/apps/runtime/team/tool-session'
 
 const scope = (executionScoped: boolean) => ({
   spaceId: 'space', conversationId: 'conversation', workDir: '/work', executionScoped,
@@ -22,7 +22,19 @@ const callbacks = (label: string) => ({
 const endpoint = (binding: { server: unknown }) =>
   binding.server as unknown as { source(): { label: string }; requestId(): string }
 
-beforeEach(() => { state.generation = 1 })
+beforeEach(() => { state.generation = 1; state.work = null; state.bindSource.mockClear() })
+
+it('reads only an existing private collaboration without registering delivery and rejects a released endpoint', () => {
+  const context = { participants: { registerSource: vi.fn(), generation: () => '1', capture: () => () => {}, requestId: () => 'request' } } as any
+  const binding = bindTeamToolSession('private-parent', context)
+  expect(context.privateAssistants.readContext()).toBeNull()
+  state.work = { team: { id: 'private-team' }, epochId: 'private-epoch' }
+  expect(context.privateAssistants.readContext()).toMatchObject({ teamId: 'private-team', epochId: 'private-epoch', selfIsLead: true })
+  expect(state.bindSource).not.toHaveBeenCalled()
+  expect(context.participants.registerSource).toHaveBeenCalledTimes(1)
+  binding.release()
+  expect(() => context.privateAssistants.readContext()).toThrow(/no longer belongs/)
+})
 
 describe('source tool endpoints', () => {
   it('an execution-scoped endpoint stops working once a newer execution binds the same source', () => {

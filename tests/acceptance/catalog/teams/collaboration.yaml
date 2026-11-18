@@ -17,8 +17,12 @@ references:
   - tests/e2e/specs/acceptance-digital-human-collaboration.spec.ts
   - tests/e2e/specs/acceptance-im-collaboration.spec.ts
   - tests/e2e/specs/acceptance-collaboration-engines.spec.ts
+  - tests/e2e/specs/acceptance-collaboration-compaction.spec.ts
   - tests/e2e/specs/acceptance-live-collaboration.spec.ts
 promises:
+  compaction-recovery:
+    en: After context compaction, the assistant can recover the existing collaborators and shared work from a short plain-language reminder, contact them by name and receive their reports without creating replacement collaborators.
+    zh: 上下文压缩后，助手能从简短的自然语言提醒恢复现有协作者与共享工作，按名字联系并接收回报，无需重新创建协作者。
   addressing:
     en: Collaborators address the lead as lead and reply to the actual requesting teammate without guessing a role name.
     zh: 协作者使用 lead 联系负责人，并回复实际请求工作的队友，无需猜测角色地址。
@@ -90,6 +94,33 @@ scenarios:
     expected:
       - en: The collaborator retains the original reporting instructions and can persist its milestone. The digital human completes with its original reporting tool and the source milestone remains visible in its activity interface.
         zh: 协作者保留原汇报说明且能保存里程碑；数字人通过原汇报工具完成任务，源里程碑仍在活动界面可见。
+  - id: teams.collaboration.compaction-recovery
+    title:
+      en: Recover every original collaborator after manual or automatic context compaction
+      zh: 手动或自动压缩后恢复每位原协作者
+    verifies: [compaction-recovery, room, addressing]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      trigger: [manual, auto]
+    preconditions:
+      - en: An isolated application uses Halo and only a local scripted model endpoint. Two real collaborators retain independent private assignments; shared tasks, findings and activity exist before compaction.
+        zh: 隔离应用使用 Halo 与唯一本地脚本模型端点；两位真实协作者各自保留私有任务，压缩前已有共享任务、发现与活动。
+    steps:
+      - en: Compact the source through its actual manual command or a deliberate provider context overflow. Return a summary containing no collaborator names.
+        zh: 通过真实手动命令或刻意的提供商上下文溢出压缩源聊天；返回不含协作者名字的摘要。
+      - en: Read the reminder in the next provider request, read each original member record and send follow-up work using only the member names listed there.
+        zh: 读取下一模型请求中的提醒，仅使用其中列出的成员名逐一读取原成员记录并派发后续工作。
+    expected:
+      - en: The reminder is plain language without structured data, fits within 12000 characters, lists both original members by name without the source itself, and names the unfinished task, the shared finding reference and recent activity. Both original members retain their assignments and report to the source; membership and collaboration identity stay unchanged, with exactly two creation calls overall.
+        zh: 提醒为不含结构化数据的自然语言，不超过 12000 字符，按名字列出两位原成员且不含源聊天自身，并写明未完成任务、共享结论引用和最近活动；两人保留原任务并回报源聊天，成员和协作身份不变，全程仅两次创建调用。
+    notes:
+      en: Only the model endpoint is scripted; application handlers and collaboration routing remain real. This does not establish live-model reasoning, application restart recovery or cross-device delivery.
+      zh: 仅模型端点由脚本替代，应用处理器与协作路由保持真实；不证明真实模型推理、应用重启恢复或跨设备投递。
   - id: teams.collaboration.engine-parity
     title:
       en: Use the same collaboration flow with each application engine

@@ -37,6 +37,12 @@ export function bindTeamToolSession(conversationId: string, context: TeamMcpCont
     return `${parent}/assistant-${createHash('sha256').update(conversationId).digest('hex').slice(0, 24)}`
   }
   context.privateAssistants = {
+    readContext() {
+      const current = resolve()
+      current.participants?.capture(current)()
+      const work = getTeamService()?.getCollaborationScope(conversationId)
+      return work ? privateContext(current, work) : null
+    },
     async spawn(input, call) {
       const current = resolve()
       if (!current.participants || !current.spawnSource || current.canSpawn?.() === false) {

@@ -242,6 +242,17 @@ Bootstrap owns cross-module subscriptions and disposes them before their stores.
   Only a row this machine wrote is trusted for its origin and its words; a row
   written elsewhere serves at least a colleague whatever creator it names, and
   an update of one written here only advances its rounds.
+- `compaction-snapshot.ts` — writes the plain-language collaboration record carried
+  into a compacted conversation, from authorized board fields only, with the same
+  wording as the SDK's local text: other members by name, unfinished tasks, then the
+  newest finished tasks, findings and activity. The 12000-character budget is this
+  host's own choice, not the SDK's: members and unfinished tasks are listed first,
+  and a section that does not fit is still named with its count.
+  The mounted server carries its reader through `services/agent/compaction-context`,
+  which the Halo adapter exposes as a `PreCompact` hook; no model tool is executed
+  and no archive or digest state changes. Current work and the caller's private
+  collaborators are labelled separately; a failed read returns a recovery notice.
+  Ordinary turns and external engines are unchanged.
 - `team-tools.ts` — `createTeamMcpServer(context)` building the `halo-team` MCP
   server with the team tools. Topology/unknown-member violations surface as
   error tool_results so the LLM sees them. A ref reaching `team_post_finding` or

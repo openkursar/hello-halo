@@ -29,7 +29,33 @@ promises:
   unusable-tool-image:
     en: Reading an empty image reports that no image was attached and leaves the same conversation usable.
     zh: 读取空图片时会说明没有附上图片，并且同一对话可以继续使用。
+  image-history-budget:
+    en: Long conversations containing tool images remain usable; outgoing requests retain recent images within the application image budget without destroying original image history.
+    zh: 含工具图片的长对话可以继续；发送请求会在应用图片预算内保留近期图片，同时不破坏原始图片历史。
 scenarios:
+  - id: chat.attachments.image-history-budget
+    title:
+      en: Continue after multi-turn tool images exceed the former SDK image limit
+      zh: 多轮工具图片超过原 SDK 图片限制后继续对话
+    verifies: [image-history-budget]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: Prepare twelve deterministic valid 768 by 640 PNGs in an isolated profile, each below the Read single-image limit and with base64 content above 1.8 MiB; use only a local scripted model endpoint.
+        zh: 在隔离配置目录准备十二张确定性有效的 768×640 PNG，每张低于 Read 单图限制且 base64 大于 1.8 MiB；只使用本地脚本模型端点。
+    steps:
+      - en: Through the real Halo SDK, ask Read to load six files in each of two successive user turns, then send a follow-up in the same conversation.
+        zh: 通过真实 Halo SDK，在连续两条用户消息中分别让 Read 读取六个文件，然后在同一对话发送后续消息。
+    expected:
+      - en: Accumulated original image base64 exceeds 20 MiB. The real router sends no more than 3.5 MiB of image base64, retains the newest image and replaces older images with explicit placeholders. All twelve original images remain in actual persisted execution history, and the follow-up completes in the same conversation.
+        zh: 累计原图 base64 超过 20 MiB；真实路由发送的图片 base64 不超过 3.5 MiB，保留最新图片并将较早图片替换为明确占位文本；实际持久化执行历史仍保留全部十二张原图，后续消息在同一对话完成。
+    notes:
+      en: Exercises real Read image tool results, SDK execution and the router with a replaced model endpoint only. It does not exercise an external MCP server or establish vendor image-understanding quality.
+      zh: 覆盖真实 Read 图片工具结果、SDK 执行和路由，仅替换模型端点；不覆盖外部 MCP 服务，也不证明厂商图片理解质量。
   - id: chat.attachments.empty-tool-image
     title:
       en: Continue after reading an empty image

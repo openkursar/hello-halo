@@ -168,6 +168,8 @@ starting an empty session or changing the previous binding.
 
 - **Windows process visibility.** Halo-owned launches set `windowsHide: true`. CC is external and never patched; visibility of programs that it launches internally belongs to that CC version. Compatibility validation must not assume a host spawn flag propagates into nested launches.
 
+- **Compaction collaboration context.** `compaction-context.ts` associates a scoped, read-only text provider with a trusted mounted team server through a WeakMap. The Halo adapter appends a `PreCompact` hook (five-second timeout) that returns the provider's text as `additionalContext`, keeping any existing hooks; it never reads state during preparation, changes another engine's tools, or imports Apps internals. Apps writes the text from the same authorized board fields as team tools, separating the current board from the caller's private collaborators. Compaction performs no archive export, digest advancement, message read or new collaborator creation.
+
 - **SDK protocol boundary.** Halo SDK is the default engine; the host owns its internal stream/session contract. `@hello-halo/agent-sdk`, the Codex adapter, `@deepseek-ai/dsh`, and future engines must expose the same `tool` / `createSdkMcpServer` / `createSession` / `query` surface through `resolved-sdk.ts`. Native engine events must be normalized before they reach `session-consumer.ts` or `stream-processor.ts`.
 
   | Engine (`config.agent.sdkEngine`) | Runtime | Adapter |

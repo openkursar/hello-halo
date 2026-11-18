@@ -78,6 +78,15 @@ impl PreResult {
     }
 }
 
+/// Joins the `additionalContext` of successful hooks in registration order.
+pub fn additional_context(run: &HookOutputs, event: &str) -> Option<String> {
+    let mut context = None;
+    for output in run.outputs.iter().filter(|output| output.get("hookError").is_none()) {
+        append_context(&mut context, output_field(output, event, "additionalContext"));
+    }
+    context.filter(|text| !text.trim().is_empty())
+}
+
 pub fn input(options: &Value, event: &str, session_id: &str) -> Value {
     json!({"hook_event_name":event,"session_id":session_id,"transcript_path":transcript_path(session_id, options),"cwd":options["cwd"]})
 }

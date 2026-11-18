@@ -89,6 +89,18 @@ shared usage accounting; each member has its own conversation history. External
 MCP tools and search are borrowed from the source without duplicating their
 connection or service ownership.
 
+Successful context compaction restores a short plain-language record of existing
+collaborators, unfinished tasks, recent findings, result references and recent
+board activity, so the model does not have to rediscover its collaborators first.
+It is not a completion claim or a live feed; ordinary team tools retrieve current
+detail. Local collaboration does this automatically. Hosted consumers own their
+collaboration state and supply equivalent text as `additionalContext` from a
+`PreCompact` hook; there is no collaboration-specific compaction option.
+A resumed standalone owner opens its existing collaboration journal lazily when
+compaction first needs it; that same owner serves subsequent team operations and
+releases its journal on session closure. No journal or runtime is created when
+there is no saved collaboration.
+
 Borrowed MCP instances carry their structured source metadata and a catalog
 revision reader. A member refreshes its filtered execution pool when that revision
 changes, while keeping its own discovery state and history. Tool discovery policy

@@ -236,6 +236,12 @@ impl ToolRuntime {
     ) {
         self.collaboration = Some(binding);
     }
+    pub async fn collaboration_compact_state(&self, cancellation: &CancellationToken) -> Result<Value> {
+        match &self.collaboration {
+            Some(binding) => binding.compact_state(cancellation).await,
+            None => Ok(Value::Null),
+        }
+    }
     pub fn set_harness(&self, harness: Arc<ResolvedHarness>) {
         let mut text = self.text.write().unwrap_or_else(|error| error.into_inner());
         if text

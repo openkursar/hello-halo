@@ -226,7 +226,8 @@ pub(crate) async fn turn(
         let must_recover=overflow_pending||estimate>=budget.available_input_tokens();
         if must_recover||(budget.should_compact_request(&request)&&new_work){
             if (overflow_pending&&reactive_compactions>=1)||(!overflow_pending&&must_recover&&capacity_recovery){return Err(super::compact::compact_error_template("capacity",TextId::ContextExecutionCapacityAfterRecovery,&[]));}
-            let attachments=working_attachments(session,tools,discovery,messages,&mut active_skills,&context.harness).await?;
+            let mut attachments=working_attachments(session,tools,discovery,messages,&mut active_skills,&context.harness).await?;
+            if let Some(state)=super::compact::collaboration::attachment(session,tools,&cancellation,&context.harness).await?{attachments.push(state);}
             let snapshot=discovery.as_ref().map(|state|state.lock().unwrap().snapshot());
             match super::compact::session::compact_request(session,options,provider,messages,budget,&request,&injected,&attachments,snapshot,allowance.clone(),&cancellation,super::compact::session::CompactTrigger::Automatic { reactive: must_recover }).await {
                 Ok(result)=>{own_replies=result.retained_indices(&own_replies);transient.clear();turns_since_goal=0;context.compaction.deferred_history_tokens=None;context.compaction.compacted_history_tokens=Some(budget.estimate_request(&json!({"messages":messages})));if overflow_pending{reactive_compactions+=1;}else if must_recover{capacity_recovery=true;}overflow_pending=false;turn_index-=1;continue;},
@@ -348,7 +349,7 @@ pub(crate) async fn turn(
                     retry_response = accumulated.needs_response_recovery()
                         && (answer_before_check.is_empty() || accumulated.stop.as_deref() == Some("tool_use"));
                     discard_response = retry_response || (answer_before_check.is_empty()
-                        && accumulated.has_no_answer_or_call() && accumulated.stop.as_deref() != Some("max_tokens"));
+                        && accumulated.has_no_answer_or_call() && !matches!(accumulated.stop.as_deref(), Some("end_turn" | "max_tokens")));
                     for frame in frames {
                         if options["includePartialMessages"] == true {
                             for event in accumulated.deferred_events(&frame) {
@@ -591,7 +592,7 @@ pub(crate) async fn turn(
                 return Err(Error::template("TOOL_FORMAT_RECOVERY", TextId::ContextExecutionUnreadableExhausted, &[]));
             }
             if stop.as_deref()==Some("max_tokens")&&max_tokens_recovery<crate::prompt::constants()["MAX_TOKENS_RECOVERY_LIMIT"].as_u64().unwrap_or(3){max_tokens_recovery+=1;push_transient(messages,&mut transient,json!({"role":"user","content":context.harness.text(crate::harness::TextId::ContextRecoveryMaxTokens),"isMeta":true}));continue;}
-            if no_answer && answer_before_check.is_empty() {
+            if no_answer && answer_before_check.is_empty() && stop.as_deref() != Some("end_turn") {
                 tracing::warn!(session_id=%session.session_id,model,unreadable_retries,max_tokens_recovery,"Model stopped without a usable answer or tool call");
                 let reason: String = stop.as_deref().unwrap_or("unknown").chars().take(64).collect();
                 return Err(Error::template("MODEL_RESPONSE_STOPPED", TextId::ContextExecutionStoppedWithoutAnswer, &[("reason", reason.into())]));

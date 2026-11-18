@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { markInstalledMcpContext } from '../../../../../src/main/services/agent/tool-discovery'
+import { markCompactionContextReader } from '../../../../../src/main/services/agent/compaction-context'
 import type { InstalledApp } from '../../../../../src/shared/apps/app-types'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/application' } }))
@@ -28,6 +29,33 @@ function fixture() {
 }
 
 describe('Halo host native adapter', () => {
+  it('registers the trusted team text as a PreCompact hook without reading it or changing prompts, tools and other hooks', async () => {
+    const { module, runtime } = fixture()
+    const reader = vi.fn((_signal: AbortSignal): string | null => 'Members (1): reviewer (idle).')
+    const server = markCompactionContextReader({ type: 'sdk', instance: {} }, reader)
+    const existing = { hooks: [vi.fn()] }
+    const options = { mcpServers: { 'halo-team': server }, systemPrompt: 'Stable prompt', tools: ['Read'], hooks: { PreCompact: [existing] } }
+    await module.createSession(options)
+    for await (const _frame of module.query({ prompt: 'task', options })) { /* drain */ }
+    expect(reader).not.toHaveBeenCalled()
+    const prepared = runtime.createSession.mock.calls[0][0] as any
+    expect(prepared).toMatchObject({ systemPrompt: 'Stable prompt', tools: ['Read'] })
+    expect(prepared.collaboration).toEqual({ mode: 'hosted' })
+    expect(prepared.hooks.PreCompact).toHaveLength(2)
+    expect(prepared.hooks.PreCompact[0]).toBe(existing)
+    expect(prepared.hooks.PreCompact[1].timeout).toBe(5)
+    expect(options.hooks.PreCompact).toEqual([existing])
+    const signal = new AbortController().signal
+    await expect(prepared.hooks.PreCompact[1].hooks[0]({}, undefined, { signal })).resolves.toEqual({ additionalContext: 'Members (1): reviewer (idle).' })
+    expect(reader).toHaveBeenCalledWith(signal)
+    reader.mockReturnValueOnce(null)
+    await expect(prepared.hooks.PreCompact[1].hooks[0]({}, undefined, { signal })).resolves.toEqual({})
+    expect((runtime.query.mock.calls[0] as any[])[0].options.hooks.PreCompact).toHaveLength(2)
+    await module.createSession({ mcpServers: { unrelated: server, 'halo-team': { type: 'sdk', instance: {} } } })
+    expect((runtime.createSession.mock.calls[1][0] as any).collaboration).toEqual({ mode: 'hosted' })
+    expect((runtime.createSession.mock.calls[1][0] as any).hooks).toBeUndefined()
+  })
+
   it('inspects context on the same owned native runtime and maps strict history errors', async () => {
     const { module, runtime } = fixture()
     const signal = new AbortController().signal

@@ -29,6 +29,7 @@ pub struct Accumulator {
     pub unreadable_tool_call: Option<String>,
     initial_stop: Option<String>,
     message_started: bool,
+    response_completed: bool,
     highest: Option<u64>,
     session: String,
     initial_model: String,
@@ -57,6 +58,7 @@ impl Accumulator {
             unreadable_tool_call: None,
             initial_stop: None,
             message_started: false,
+            response_completed: false,
             highest: None,
             session: session.into(),
             initial_model: model.into(),
@@ -217,6 +219,7 @@ impl Accumulator {
             "message_delta" => {
                 if let Some(reason) = event["stopReason"].as_str().filter(|s| !s.is_empty()) {
                     self.stop = Some(reason.into());
+                    self.response_completed = true;
                 }
                 if let Some(usage) = event["usage"].as_object() {
                     for key in [
@@ -232,6 +235,7 @@ impl Accumulator {
                 }
             }
             "message_stop" => {
+                self.response_completed = true;
                 self.unreadable_tool_call = event["unreadableToolCall"].as_str().map(str::to_owned)
             }
             "error" => {
@@ -372,6 +376,10 @@ impl Accumulator {
         Ok(Some(frame))
     }
     pub fn finish(&mut self) -> Result<Vec<Value>> {
+        if self.blocks.is_empty() && !self.response_completed {
+            tracing::warn!(session_id=%self.session,model=%self.model,"Model response ended without content or a completion signal");
+            return Err(Error::template("PROVIDER_ERROR", TextId::ProvidersStreamMissingAnthropicEnd, &[]));
+        }
         let mut frames = Vec::new();
         for index in self.blocks.keys().copied().collect::<Vec<_>>() {
             if let Some(frame) = self.finish_block(index)? {
@@ -390,7 +398,6 @@ impl Accumulator {
     pub fn needs_response_recovery(&self) -> bool {
         self.unreadable_tool_call.is_none() && match self.stop.as_deref() {
             Some("tool_use") => !self.blocks.values().any(|block| block.content["type"] == "tool_use"),
-            Some("end_turn") => self.has_no_answer_or_call(),
             _ => false,
         }
     }
@@ -485,6 +492,60 @@ mod tests {
         next.accept(&json!({"type":"message_start","id":"reused-provider-id","model":"fixture"})).unwrap();
         assert_eq!(stream.id,next.id);
         assert_ne!(stream.response_id,next.response_id);
+    }
+
+    #[test]
+    fn completed_end_turn_does_not_require_answer_text() {
+        for content in [
+            vec![],
+            vec![json!({"type":"text","text":" \t\n\u{00a0}"})],
+            vec![json!({"type":"thinking","thinking":"Considering the fixture."})],
+        ] {
+            let mut stream = Accumulator::new("session", "fixture");
+            stream.accept(&json!({"type":"message_start","id":"complete","model":"fixture"})).unwrap();
+            for (index, block) in content.iter().enumerate() {
+                stream.accept(&json!({"type":"content_block_start","index":index,"content_block":block})).unwrap();
+                stream.accept(&json!({"type":"content_block_stop","index":index})).unwrap();
+            }
+            stream.accept(&json!({"type":"message_delta","stopReason":"end_turn"})).unwrap();
+            stream.finish().unwrap();
+            assert!(stream.has_no_answer_or_call());
+            assert!(!stream.needs_response_recovery());
+            assert_eq!(stream.content(), content);
+        }
+    }
+
+    #[test]
+    fn content_free_responses_require_a_completion_signal() {
+        for events in [
+            vec![],
+            vec![json!({"type":"message_start","id":"unfinished"})],
+            vec![json!({"type":"message_delta","usage":{"output_tokens":1}})],
+        ] {
+            let mut stream = Accumulator::new("session", "fixture");
+            for event in events { stream.accept(&event).unwrap(); }
+            assert_eq!(stream.finish().unwrap_err().code, "PROVIDER_ERROR");
+        }
+        for event in [json!({"type":"message_delta","stopReason":"end_turn"}), json!({"type":"message_stop"})] {
+            let mut stream = Accumulator::new("session", "fixture");
+            stream.accept(&event).unwrap();
+            assert!(stream.finish().unwrap().is_empty());
+            stream.reset().unwrap();
+            assert!(stream.finish().is_err());
+        }
+        let mut stream = Accumulator::new("session", "fixture");
+        stream.accept(&json!({"type":"text_delta","index":0,"text":"Legacy response."})).unwrap();
+        assert_eq!(stream.finish().unwrap()[0]["message"]["content"][0]["text"], "Legacy response.");
+    }
+
+    #[test]
+    fn tool_use_without_a_call_still_requires_recovery() {
+        let mut stream = Accumulator::new("session", "fixture");
+        stream.accept(&json!({"type":"message_delta","stopReason":"tool_use"})).unwrap();
+        assert!(stream.needs_response_recovery());
+        stream.accept(&json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"read","name":"Read","input":{}}})).unwrap();
+        stream.accept(&json!({"type":"content_block_stop","index":0})).unwrap();
+        assert!(!stream.needs_response_recovery());
     }
 
     #[test]

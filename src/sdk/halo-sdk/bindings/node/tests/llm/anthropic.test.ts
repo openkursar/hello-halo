@@ -141,13 +141,53 @@ describe('createMessage()', () => {
     expect(result.usage.output_tokens).toBeGreaterThan(0);
   });
 
-  it('rejects oversized aggregate image payload before network dispatch', async () => {
-    const messages: Message[] = [{ role: 'user', content: Array.from({ length: 5 }, () => ({
-      type: 'image' as const,
-      source: { type: 'base64' as const, media_type: 'image/png', data: 'A'.repeat(5 * 1024 * 1024) },
-    })) }];
-    await expect(makeProvider().createMessage(baseRequest({ messages }))).rejects.toThrow(/Image request exceeds/);
-    expect(fetchMock).not.toHaveBeenCalled();
+  it.each(['aggregate images', 'serialized body'] as const)('dispatches %s beyond the former SDK payload limits without removing content', async (kind) => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(makeAnthropicSseResponse(textSseEvents('ok'))),
+    );
+    const data = kind === 'aggregate images' ? 'A'.repeat(410 * 1024) : 'aGk=';
+    const image: ContentBlock = { type: 'image', source: { type: 'base64', media_type: 'image/png', data } };
+    const messages: Message[] = kind === 'aggregate images'
+      ? Array.from({ length: 26 }, (_, index) => [
+        { role: 'user' as const, content: [image] },
+        { role: 'assistant' as const, content: [{ type: 'tool_use' as const, id: `image_${index}`, name: 'screenshot', input: {} }] },
+        { role: 'user' as const, content: [{ type: 'tool_result' as const, tool_use_id: `image_${index}`, content: [image] }] },
+      ]).flat()
+      : [{ role: 'user', content: [image, { type: 'text', text: 'x'.repeat(25 * 1024 * 1024) }] }];
+
+    const result = await makeProvider().createMessage(baseRequest({ messages }));
+
+    expect(result.content).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.messages).toHaveLength(messages.length);
+    if (kind === 'aggregate images') {
+      expect(52 * data.length).toBeGreaterThan(20 * 1024 * 1024);
+      for (let index = 0; index < 26; index++) {
+        expect(body.messages[index * 3].content[0].source.data === data).toBe(true);
+        expect(body.messages[index * 3 + 2].content[0].content[0].source.data === data).toBe(true);
+      }
+    } else {
+      expect(Buffer.byteLength(fetchMock.mock.calls[0][1].body as string)).toBeGreaterThan(24 * 1024 * 1024);
+      expect(body.messages[0].content[0].source.data).toBe(data);
+      expect(body.messages[0].content[1].text.length).toBe(25 * 1024 * 1024);
+    }
+  });
+
+  it('preserves the endpoint status and explanation when the endpoint rejects a large image request', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response(
+      JSON.stringify({ error: { message: 'Image request rejected by fixture endpoint' } }),
+      { status: 413, headers: { 'Content-Type': 'application/json' } },
+    )));
+    const messages: Message[] = [{ role: 'user', content: [{
+      type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(21 * 1024 * 1024) },
+    }] }];
+
+    await expect(makeProvider().createMessage(baseRequest({ messages }))).rejects.toMatchObject({
+      statusCode: 413,
+      message: expect.stringContaining('Image request rejected by fixture endpoint'),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('sends correct headers and request body', async () => {

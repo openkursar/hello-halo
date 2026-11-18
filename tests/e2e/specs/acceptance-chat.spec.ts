@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto'
-import { existsSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { deflateSync } from 'node:zlib'
 import { join } from 'node:path'
 import { test, expect, acceptance, sendAcceptanceMessage, waitForAcceptanceIdle, readAcceptanceConversation } from '../fixtures/acceptance-app'
 import { createModelGate, modelTool } from '../fixtures/acceptance-model'
@@ -153,6 +154,104 @@ test('reading an empty image leaves the conversation usable for a follow-up', ac
   const history = await readAcceptanceConversation(window, next.spaceId, next.conversationId)
   expect(history.messages.filter(message => message.role === 'user')).toHaveLength(2)
   expect(history.messages.at(-1)?.content).toContain('The follow-up completed.')
+})
+
+function imageBudgetPng(seed: number): Buffer {
+  const chunk = (name: string, data: Buffer) => {
+    const type = Buffer.from(name)
+    const body = Buffer.concat([type, data])
+    let crc = 0xffffffff
+    for (const byte of body) {
+      crc ^= byte
+      for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0)
+    }
+    const header = Buffer.alloc(4)
+    header.writeUInt32BE(data.length)
+    const checksum = Buffer.alloc(4)
+    checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0)
+    return Buffer.concat([header, body, checksum])
+  }
+  const width = 768
+  const height = 640
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0)
+  header.writeUInt32BE(height, 4)
+  header[8] = 8
+  header[9] = 2
+  const pixels = Buffer.alloc((width * 3 + 1) * height)
+  for (let offset = 0; offset < pixels.length; offset += 32) {
+    const block = createHash('sha256').update(`image-budget-${seed}-${offset}`).digest()
+    block.copy(pixels, offset, 0, Math.min(block.length, pixels.length - offset))
+  }
+  for (let row = 0; row < height; row++) pixels[row * (width * 3 + 1)] = 0
+  return Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', header), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))])
+}
+
+function storedImageData(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return []
+  const part = value as Record<string, any>
+  if (part.type === 'image' && part.source?.type === 'base64') return [part.source.data]
+  if (part.type === 'image_url' && typeof part.image_url?.url === 'string') return [part.image_url.url.split(';base64,')[1]].filter(Boolean)
+  return Object.values(part).flatMap(storedImageData)
+}
+
+test('large multi-turn Read image history reaches the router without blocking the conversation', acceptance('chat.attachments.image-history-budget'), async ({ acceptanceApp, model, window }, info) => {
+  const images = Array.from({ length: 12 }, (_, index) => {
+    const file = join(acceptanceApp.profile, '.halo/temp/artifacts', `budget-${index}.png`)
+    const png = imageBudgetPng(index)
+    expect(png.length).toBeLessThan(5 * 1024 * 1024)
+    expect(png.toString('base64').length).toBeGreaterThan(1.8 * 1024 * 1024)
+    writeFileSync(file, png)
+    return { file, data: png.toString('base64') }
+  })
+  const decoded = await acceptanceApp.app.evaluate(({ nativeImage }, files) => files.map(file => {
+    const image = nativeImage.createFromPath(file)
+    return { empty: image.isEmpty(), ...image.getSize() }
+  }), images.map(image => image.file))
+  expect(decoded).toEqual(images.map(() => ({ empty: false, width: 768, height: 640 })))
+  const total = images.reduce((sum, image) => sum + image.data.length, 0)
+  expect(total).toBeGreaterThan(20 * 1024 * 1024)
+  expect(images.every(image => image.data.length < 3.5 * 1024 * 1024)).toBe(true)
+  const observations: Array<{ batch: number; images: string[]; placeholders: number }> = []
+  model.respond(request => {
+    if (request.lastUserText.includes('Continue after the large image history.')) return { text: 'The same conversation is still usable.' }
+    const batch = request.text.includes('Read image batch two.') ? 1 : 0
+    const lastId = `budget-read-${batch * 6 + 5}`
+    if (request.toolResults.some(result => result.id === lastId)) {
+      const received = storedImageData(request.messages)
+      observations.push({ batch, images: received, placeholders: request.text.split('[Screenshot removed — exceeded image budget for API request]').length - 1 })
+      return { text: `Image batch ${batch + 1} completed.` }
+    }
+    return { tools: images.slice(batch * 6, batch * 6 + 6).map((image, offset) => modelTool(request, 'Read', { file_path: image.file }, `budget-read-${batch * 6 + offset}`)) }
+  })
+  await navigateToChat(window)
+  const first = await sendAcceptanceMessage(window, 'Read image batch one.')
+  await expect(window.locator('.message-assistant').last()).toContainText('Image batch 1 completed.', { timeout: 30000 })
+  await waitForAcceptanceIdle(window, first.conversationId)
+  const second = await sendAcceptanceMessage(window, 'Read image batch two.')
+  expect(second.conversationId).toBe(first.conversationId)
+  await expect(window.locator('.message-assistant').last()).toContainText('Image batch 2 completed.', { timeout: 30000 })
+  await waitForAcceptanceIdle(window, first.conversationId)
+  expect(observations).toHaveLength(2)
+  for (const observation of observations) {
+    expect(observation.images).toEqual([images[observation.batch * 6 + 5].data])
+    expect(observation.images.reduce((sum, data) => sum + data.length, 0)).toBeLessThanOrEqual(3.5 * 1024 * 1024)
+    expect(observation.placeholders).toBe((observation.batch + 1) * 6 - 1)
+  }
+  const next = await sendAcceptanceMessage(window, 'Continue after the large image history.')
+  expect(next.conversationId).toBe(first.conversationId)
+  await expect(window.locator('.message-assistant').last()).toContainText('The same conversation is still usable.')
+  await waitForAcceptanceIdle(window, next.conversationId)
+  const history = await readAcceptanceConversation(window, next.spaceId, next.conversationId)
+  expect(history.messages.filter(message => message.role === 'user')).toHaveLength(3)
+  const files = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(join(directory, entry.name)) : [join(directory, entry.name)])
+  const histories = files(acceptanceApp.profile).filter(file => file.endsWith('.jsonl') && !file.includes('/artifacts/'))
+  const retained = new Set(histories.flatMap(file => {
+    const contents = readFileSync(file, 'utf8')
+    return images.filter(image => contents.includes(image.data)).map(image => image.file)
+  }))
+  expect(retained.size, 'Actual persisted execution history must retain every original tool image').toBe(images.length)
+  await info.attach('image-history-budget', { body: JSON.stringify({ originalBase64Bytes: total, retainedOriginalImages: retained.size, requests: model.exchanges.length, observations: observations.map(observation => ({ batch: observation.batch, retainedImages: observation.images.length, base64Bytes: observation.images.reduce((sum, data) => sum + data.length, 0), placeholders: observation.placeholders })) }), contentType: 'application/json' })
 })
 
 test('stopping a streaming answer cancels its request and permits another turn', acceptance('chat.execution.stop-resume'), async ({ model, window }) => {

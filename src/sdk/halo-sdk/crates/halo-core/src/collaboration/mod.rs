@@ -6,6 +6,7 @@ pub mod journal;
 pub mod message_bus;
 pub mod protocol;
 pub mod runtime;
+pub mod snapshot;
 pub mod store;
 pub mod tool_contract;
 pub mod turn_gate;
@@ -137,6 +138,9 @@ pub trait CollaborationTools: Send + Sync {
         self.call(name, input, cancellation).await
     }
     fn is_readonly(&self, name: &str) -> bool;
+    async fn compact_state(&self, _cancellation: &tokio_util::sync::CancellationToken) -> crate::error::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
 }
 
 #[cfg(test)]

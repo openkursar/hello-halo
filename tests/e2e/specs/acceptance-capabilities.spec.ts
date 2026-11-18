@@ -96,7 +96,7 @@ test('ordinary conversation omits browser and terminal definitions and long guid
   await waitForAcceptanceIdle(window, turn.conversationId)
   expect(requests).toHaveLength(1)
   assertDeferredCapabilities(requests[0])
-  expect(requests[0].text.split('Use collaborators when work can progress independently, benefits from a separate context, or needs independent review.').length - 1).toBe(1)
+  expect(requests[0].text.split('Collaborators are separate agents that work in their own context.').length - 1).toBe(1)
   expect(model.exchanges.flatMap(exchange => exchange.reply?.tools ?? [])).toEqual([])
   await info.attach('ordinary-capability-request', { body: JSON.stringify(requests, null, 2), contentType: 'application/json' })
 })

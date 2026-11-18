@@ -1,7 +1,6 @@
 use super::cache::{
     add_cache_breakpoints, add_system_prompt_cache_breakpoint, limit_cache_breakpoints,
 };
-use super::image_budget::{assert_image_body_budget, assert_image_request_budget};
 use crate::bridge::HostBridge;
 use crate::error::{Error, Result};
 use crate::js::truthy;
@@ -18,7 +17,6 @@ pub async fn build_body(
     bridge: &dyn HostBridge,
     cancellation: &CancellationToken,
 ) -> Result<Value> {
-    assert_image_request_budget(array(&request["messages"]))?;
     let model = request["model"].as_str().filter(|model| !model.is_empty()).or(config["defaultModel"].as_str()).filter(|model| !model.is_empty())
         .ok_or_else(|| Error::new("INVALID_MODEL", "No model specified: set ProviderRequest.model or AnthropicProviderConfig.defaultModel."))?;
     let model = regex::Regex::new(r"(?i)\[(1|2)m\]")
@@ -143,7 +141,6 @@ pub async fn build_body(
         body["output_config"] = Value::Object(output);
     }
     limit_cache_breakpoints(&mut body);
-    assert_image_body_budget(&body)?;
     Ok(body)
 }
 
@@ -343,6 +340,27 @@ mod tests {
             ))
         }
     }
+    #[tokio::test]
+    async fn large_user_and_tool_image_payloads_are_preserved() {
+        let data = "A".repeat(512 * 1024);
+        let image = json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":data}});
+        let mut messages = Vec::new();
+        for index in 0..26 {
+            let id = format!("image_{index}");
+            messages.push(json!({"role":"user","content":[image]}));
+            messages.push(json!({"role":"assistant","content":[{"type":"tool_use","id":id,"name":"screenshot","input":{}}]}));
+            messages.push(json!({"role":"user","content":[{"type":"tool_result","tool_use_id":id,"content":[image]}]}));
+        }
+        let request = json!({"model":"fixture","messages":messages});
+        let body = build_body(&request, &json!({}), &NoCallbacks, &CancellationToken::new()).await.unwrap();
+        assert!(52 * data.len() > 24 * 1024 * 1024);
+        assert_eq!(body["messages"].as_array().unwrap().len(), 78);
+        for index in 0..26 {
+            assert!(body["messages"][index * 3]["content"][0]["source"]["data"] == data);
+            assert!(body["messages"][index * 3 + 2]["content"][0]["content"][0]["source"]["data"] == data);
+        }
+    }
+
     #[tokio::test]
     async fn beta_selection_requires_active_features_and_deduplicates_caller_strings() {
         let cancellation = CancellationToken::new();

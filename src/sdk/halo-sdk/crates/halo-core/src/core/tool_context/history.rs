@@ -532,7 +532,7 @@ pub fn read_snapshot(messages: &[Value]) -> Result<Option<Value>> {
 
 pub fn project(messages: &[Value]) -> Vec<Value> {
     messages.iter().map(|message|{
-    if message.get("toolContext").is_none(){return message.clone();}let mut content=message["content"].clone();
+    if message.get("toolContext").is_none(){let mut projected=message.clone();crate::core::compact::context::strip(&mut projected);return projected;}let mut content=message["content"].clone();
     if let Some(blocks)=content.as_array_mut(){for block in blocks{if block["type"]!="tool_use"{continue;}if let Some(origin)=message["toolContext"]["calls"].as_array().into_iter().flatten().find(|origin|origin["id"]==block["id"]){*block=json!({"type":"tool_use","id":block["id"],"name":"CallTool","input":origin["input"]});}}}
     let mut projected=json!({"role":message["role"],"content":content});if message["isMeta"]==true{projected["isMeta"]=json!(true);}projected
 }).collect()

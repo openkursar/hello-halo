@@ -67,6 +67,10 @@ session, timestamp, sidechain and parent UUID fields remain present. The checkpo
 annotates the preceding conversation record without advancing its UUID chain.
 Original messages are never removed or rewritten. Public transcript pages, even
 with system messages enabled, do not expose checkpoints or count them as chat.
+Compaction context (local collaboration state and `PreCompact` hook text) carries
+private `compactionContext: 1` metadata alongside `isMeta: true`. It survives the
+checkpoint for replacement at the next compaction but is removed from provider
+requests. Text that merely resembles a reminder is not treated as compaction context.
 
 Tool-discovery history uses `checkpointVersion: 2`. Its messages include a
 self-contained, versioned tool-context baseline followed by any retained discovery
