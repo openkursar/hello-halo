@@ -495,7 +495,6 @@ function preparePlatform(platform) {
     const arch = platform === 'mac-arm64' ? 'arm64' : 'x64'
     const nativePaths = [
       `node_modules/${WATCHER_PACKAGES[platform]}`,
-      `node_modules/${CODEX_PACKAGES[platform].pkg}`,
       `node_modules/${ripgrep.ripgrepBinaryPath(ripgrep.PREPARE_PLATFORM_KEYS[platform])}`,
       `node_modules/node-pty/prebuilds/darwin-${arch}`,
     ]
