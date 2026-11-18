@@ -23,6 +23,7 @@ export const MODULE: RouteModuleMeta = {
       group: 'store',
       summary: 'Get full detail for one store listing by slug',
       returns: '{success:true,data:{entry:{slug,name,version,...},spec:<AppSpec>,registryId}} or {success:false,error}',
+      notes: 'A scoped slug goes in the path as-is: GET /api/store/apps/owner/repo.',
     },
     'GET /api/store/app-document': {
       expose: 'ai',
@@ -59,6 +60,7 @@ export const MODULE: RouteModuleMeta = {
         'Pass "spaceId":null only when the user explicitly asked for a global install (mcp/skill types only).',
         'Optional field: userConfig (object).',
         'Identical behavior to POST /api/store/install (slug in path instead of body), including the 403 MCP_COMMAND_BLOCKED case.',
+        'A scoped slug goes in the path as-is: POST /api/store/apps/owner/repo/install.',
       ].join('\n'),
     },
     'POST /api/store/refresh': {

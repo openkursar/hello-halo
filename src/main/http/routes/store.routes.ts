@@ -22,6 +22,15 @@ import {
 import type { AppType } from '../../../shared/apps/spec-types'
 import type { AppSpec } from '../../apps/spec'
 
+/**
+ * Read a slug carried by a wildcard path segment. Scoped slugs ("owner/repo")
+ * contain "/", so the routes below match one or more segments and Express hands
+ * them over already split and percent-decoded.
+ */
+export function slugFromPath(raw: unknown): string {
+  return Array.isArray(raw) ? raw.join('/') : typeof raw === 'string' ? raw : ''
+}
+
 export function registerStoreRoutes(app: Express): void {
   // ===== Store (App Registry) Routes =====
 
@@ -66,10 +75,10 @@ export function registerStoreRoutes(app: Express): void {
     }
   })
 
-  // GET /api/store/apps/:slug — get store app detail
-  app.get('/api/store/apps/:slug', async (req: Request, res: Response) => {
+  // GET /api/store/apps/:slug — get store app detail (scoped slugs included)
+  app.get('/api/store/apps/*slug', async (req: Request, res: Response) => {
     try {
-      const result = await storeController.getStoreAppDetail(req.params.slug as string)
+      const result = await storeController.getStoreAppDetail(slugFromPath(req.params.slug))
       res.json(result)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -120,15 +129,15 @@ export function registerStoreRoutes(app: Express): void {
     }
   })
 
-  // POST /api/store/apps/:slug/install — REST-style install route
-  app.post('/api/store/apps/:slug/install', async (req: Request, res: Response) => {
+  // POST /api/store/apps/:slug/install — REST-style install route (scoped slugs included)
+  app.post('/api/store/apps/*slug/install', async (req: Request, res: Response) => {
     try {
-      const slug = req.params.slug
+      const slug = slugFromPath(req.params.slug)
       const { spaceId, userConfig } = req.body as {
         spaceId?: string | null
         userConfig?: Record<string, unknown>
       }
-      if (!slug || typeof slug !== 'string') {
+      if (!slug) {
         res.status(400).json({ success: false, error: 'Missing required param: slug' })
         return
       }

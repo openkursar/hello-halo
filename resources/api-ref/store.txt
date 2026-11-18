@@ -197,6 +197,7 @@ GET    /api/store/apps                                             List store li
 GET    /api/store/apps/<slug>                                      Get full detail for one store listing by slug
      curl -s "$HALO_API_URL/api/store/apps/<slug>" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true,data:{entry:{slug,name,version,...},spec:<AppSpec>,registryId}} or {success:false,error}
+     # note: A scoped slug goes in the path as-is: GET /api/store/apps/owner/repo.
 
 POST   /api/store/apps/<slug>/install                              Install an app from the store by slug (REST-style path variant)
      # note: reversible — can be undone or corrected afterward.
@@ -210,6 +211,7 @@ POST   /api/store/apps/<slug>/install                              Install an ap
      # note: Pass "spaceId":null only when the user explicitly asked for a global install (mcp/skill types only).
      # note: Optional field: userConfig (object).
      # note: Identical behavior to POST /api/store/install (slug in path instead of body), including the 403 MCP_COMMAND_BLOCKED case.
+     # note: A scoped slug goes in the path as-is: POST /api/store/apps/owner/repo/install.
 
 GET    /api/store/capabilities                                     Get which store features this build supports (publish, reviews, install counts)
      curl -s "$HALO_API_URL/api/store/capabilities" -H "Authorization: Bearer $HALO_API_TOKEN"
