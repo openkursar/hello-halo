@@ -1,0 +1,360 @@
+{
+  "schema": "halo.cli.vectors/1",
+  "contract": "halo.cli/1",
+  "host": {
+    "platform": "any",
+    "note": "vectors avoid host checks; platforms is [\"any\"] and minNode is unset"
+  },
+  "vectors": [
+    {
+      "file": "ok-minimal.hcli",
+      "sha256": "332e92d27ca03213c051f3eef63fbf4301febee3ba9511ec4bfe74e656ade671",
+      "note": "required fields only",
+      "expect": {
+        "ok": true,
+        "id": "com.example.vector",
+        "version": "1.0.0",
+        "integrity": "sha256-D+8a2Pu+QYNE7zQMri1hs08t/xZb9pgCDF1RCvfdiLA="
+      }
+    },
+    {
+      "file": "ok-full.hcli",
+      "sha256": "8c43c57346b0df6bf16550651d06f83684ae5051bad9ad32cc5252fdb5b3d072",
+      "note": "all optional fields, directory entries, extensionless entry, UTF-16 ordering trap, benign package.json files",
+      "expect": {
+        "ok": true,
+        "id": "com.example.vector",
+        "version": "2.1.0-rc.1+build.7",
+        "integrity": "sha256-MRPKA6ol846kOMjN0GOty0Uth6JN1+EiM2i9SxTrk/E="
+      }
+    },
+    {
+      "file": "package-not-zip.hcli",
+      "sha256": "306dd75289584f36ed2491b76f151702d5535c722337074d638f62a0a63b572e",
+      "note": "not a zip file",
+      "expect": {
+        "error": "PACKAGE_INVALID"
+      }
+    },
+    {
+      "file": "package-extra-root.hcli",
+      "sha256": "113ffb02b210f543a4477e218b579db789241ce8997a3e88b48f2136ee99ccef",
+      "note": "top-level entry outside the layout",
+      "expect": {
+        "error": "PACKAGE_INVALID"
+      }
+    },
+    {
+      "file": "package-no-payload.hcli",
+      "sha256": "f3ac9d1a561d3f02acdc1f2fd5f99c00122fe3ddc7100b901e749085c5799d26",
+      "note": "no payload directory",
+      "expect": {
+        "error": "PACKAGE_INVALID"
+      }
+    },
+    {
+      "file": "path-dotdot.hcli",
+      "sha256": "0ffcfeab5a21f5930e5ce44f468ceda13a3bdc599876c83aa0634ae8c5781e70",
+      "note": ".. segment",
+      "expect": {
+        "error": "PATH_UNSAFE"
+      }
+    },
+    {
+      "file": "path-absolute.hcli",
+      "sha256": "f06ec7bbe2fab31f85aea6e2d449821aae550707471e20c05906e60e9cd99814",
+      "note": "absolute entry name",
+      "expect": {
+        "error": "PATH_UNSAFE"
+      }
+    },
+    {
+      "file": "path-backslash.hcli",
+      "sha256": "815a5aac2b6a0d3d8ab1fd8c0d9f8dcb5c93fb6d14ea0788460f9eb0cdc65c13",
+      "note": "backslash in entry name",
+      "expect": {
+        "error": "PATH_UNSAFE"
+      }
+    },
+    {
+      "file": "path-drive.hcli",
+      "sha256": "b2f00a25e7318605d8a3cfc09fbb68e65ac66566b2b3540583963bcd594bd503",
+      "note": "drive letter",
+      "expect": {
+        "error": "PATH_UNSAFE"
+      }
+    },
+    {
+      "file": "path-case-collision.hcli",
+      "sha256": "656b17b151616309b7b412c3af4c2003dc58fe597983858b9e5e11f3e9b921c8",
+      "note": "case-insensitive collision",
+      "expect": {
+        "error": "PATH_UNSAFE"
+      }
+    },
+    {
+      "file": "manifest-missing.hcli",
+      "sha256": "e08b448362643fe244632db096e6426eeee3a34b0597bde1101449f858e4eb98",
+      "note": "no manifest.json",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-not-json.hcli",
+      "sha256": "50192bca625c3f9800ca852e85d1e4b88fa5a4a5e889e2444909f0f1e82e7be4",
+      "note": "manifest is not JSON",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-schema-wrong.hcli",
+      "sha256": "33d5c1c5b22defb9fbb0e860eb43b8fad468b0e219bd52ed6e337022181fc7b7",
+      "note": "unknown schema id",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-unknown-key.hcli",
+      "sha256": "56dba7a159175e48d9775d184d1d538ce5db13850258702dba33016284387a9f",
+      "note": "unknown top-level key",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-bad-id.hcli",
+      "sha256": "22852063e0b7a9b640ae4326b86a9390e9d039ab907b1201556b19c124d632fb",
+      "note": "id is not lowercase reverse-DNS",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-bad-version.hcli",
+      "sha256": "e025d5edff012d4bc03387a0dd94be9cb05b0d095b2c1922fa0a68da1d65c7c6",
+      "note": "version is not semver",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-no-commands.hcli",
+      "sha256": "423edadda8220b3d4ea1527daf40601081b2c43a6887bc741dd4993535be5ddf",
+      "note": "empty commands",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-command-halo-prefix.hcli",
+      "sha256": "d2b25eaed0733b52be1c8f816fec84277e2a733f48d94eec6ae4d6710041a1b8",
+      "note": "reserved halo- prefix",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-command-unknown-key.hcli",
+      "sha256": "b974d87e52511a8215db2b684d4b911bf96af6a7743bc067264e3d3f11d67dc6",
+      "note": "unknown command key",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-command-duplicate.hcli",
+      "sha256": "f6bf2d70f655be2b610960cd345d1510df02ad36dac2c596556bc724a3b80452",
+      "note": "duplicate command name",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-entry-extension.hcli",
+      "sha256": "d5de66b32bcedabb522a2bbe792b9c3a3e5aa01fdcb09b722c36a548732486f4",
+      "note": "entry is not a JS file",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-entry-traversal.hcli",
+      "sha256": "af4ec1220e1b2054a8fed57a9f729bdbf6def5f55e4d0a9103583db65f798f83",
+      "note": "entry escapes payload",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-entry-missing.hcli",
+      "sha256": "a6e0541b7c996e2f0c25a3de2f1bc09730c3f2e6d7b8d96bcc8db9f74e1fd338",
+      "note": "entry is not a packaged file",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-entry-directory.hcli",
+      "sha256": "6743237e538408fc0de63ff2a424056b7c91deff4bdf107a90f528eb240a7951",
+      "note": "entry names a directory",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-runtime-unknown.hcli",
+      "sha256": "36aa657f6dcf1029c796cd9ca3c39a59bce6d5878604956f08147dd883296ed4",
+      "note": "runtime kind outside the reserved enum",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-platform-bad.hcli",
+      "sha256": "693cad51c24e19a7c13ac490cc0372ffe50bba4e4d5349f3b4a2ba6bdabcfca7",
+      "note": "platform outside the enum",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-integrity-format.hcli",
+      "sha256": "0f11515f9d03ccb8234ff6f0ac8b73f4c1406c38d05018ce5f71f59bc8f4945d",
+      "note": "integrity is not SRI sha256",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-auth-bad.hcli",
+      "sha256": "cec95a235ca3ce57290d923dba3a51bcec42effb2d0e131e372e4b994d254c97",
+      "note": "auth method outside the enum",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-side-effects-bad.hcli",
+      "sha256": "4f096271f19f287f3833a460db09496164e0408ce67f408376846dc39d0cc461",
+      "note": "sideEffects outside the enum",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-guide-outside.hcli",
+      "sha256": "0c8234f5bf0061176e475eca97fc958562fbb14b1690deb1e6e329daefae8120",
+      "note": "guide not under guide/",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "manifest-guide-missing.hcli",
+      "sha256": "65734d1b1be7148f57a9866c656eb48550a128cbc9531a3817fc6a6f4be5651c",
+      "note": "guide is not a packaged file",
+      "expect": {
+        "error": "MANIFEST_INVALID"
+      }
+    },
+    {
+      "file": "runtime-binary.hcli",
+      "sha256": "f83220acc3b407b459d10b8f43122bb247f47e61810966d242626eff44586fdc",
+      "note": "reserved binary runtime",
+      "expect": {
+        "error": "RUNTIME_KIND_UNSUPPORTED"
+      }
+    },
+    {
+      "file": "digest-mismatch.hcli",
+      "sha256": "0de2eadfdf8181cbbb2d36dba4f5c0980d871ea792638ab69884d30076750846",
+      "note": "payload differs from integrity",
+      "expect": {
+        "error": "DIGEST_MISMATCH"
+      }
+    },
+    {
+      "file": "native-node-addon.hcli",
+      "sha256": "014b333de4c1014248ff7d9971d28b9fe9e89f0b0784c5062e75e87c3ce4f892",
+      "note": ".node file",
+      "expect": {
+        "error": "NATIVE_NOT_ALLOWED"
+      }
+    },
+    {
+      "file": "native-binding-gyp.hcli",
+      "sha256": "9d33356e0f20d2051a979a436fa5ac72677963b5f6df1d773dd00a7af402dca0",
+      "note": "binding.gyp",
+      "expect": {
+        "error": "NATIVE_NOT_ALLOWED"
+      }
+    },
+    {
+      "file": "native-elf.hcli",
+      "sha256": "8fd26d9251a8010c2b386188d713d77222c729041d179df1a566be11af841f7d",
+      "note": "ELF image",
+      "expect": {
+        "error": "NATIVE_NOT_ALLOWED"
+      }
+    },
+    {
+      "file": "native-macho.hcli",
+      "sha256": "1fcf3e49130cefaec9f5f43869e2820c6304155b0b81b0738eb0b32fec35ade1",
+      "note": "Mach-O 64 image",
+      "expect": {
+        "error": "NATIVE_NOT_ALLOWED"
+      }
+    },
+    {
+      "file": "native-pe.hcli",
+      "sha256": "2cdae0b5193bf76059e529c413babeabd65c96465c54e84bb69f1eff7c108b59",
+      "note": "PE image with .exe name",
+      "expect": {
+        "error": "NATIVE_NOT_ALLOWED"
+      }
+    },
+    {
+      "file": "native-java-class.hcli",
+      "sha256": "687ec122177b25f567af6fa5be8951e459c87621c44b7d2e61c375f351254c50",
+      "note": "0xcafebabe image",
+      "expect": {
+        "error": "NATIVE_NOT_ALLOWED"
+      }
+    },
+    {
+      "file": "native-install-script.hcli",
+      "sha256": "70f6d54db85ecf411a340593bad1465e147bf454f973ac4f147e5faa7e4f0ca3",
+      "note": "install script",
+      "expect": {
+        "error": "NATIVE_NOT_ALLOWED"
+      }
+    },
+    {
+      "file": "native-gypfile.hcli",
+      "sha256": "a72fd62205747c96ee8db5a8b5cbd7235daaf52febbeb387f05367fa291dbedc",
+      "note": "gypfile",
+      "expect": {
+        "error": "NATIVE_NOT_ALLOWED"
+      }
+    },
+    {
+      "file": "native-os-cpu.hcli",
+      "sha256": "92cac55ff336918629fcb77a0606e5138df9640af601bbba7620bd395fd2749b",
+      "note": "os-pinned package",
+      "expect": {
+        "error": "NATIVE_NOT_ALLOWED"
+      }
+    },
+    {
+      "file": "native-platform-optional.hcli",
+      "sha256": "3f5204b6ef9851910f75e27837d01f31c29c6193682d36d0c245d613ee3e7fe8",
+      "note": "per-platform optional dependency",
+      "expect": {
+        "error": "NATIVE_NOT_ALLOWED"
+      }
+    }
+  ]
+}

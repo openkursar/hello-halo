@@ -84,6 +84,71 @@ These checks are static heuristics, and nothing in the package is executed
 during import. Native code is out of scope: it would have to be built for
 Electron's ABI or shipped with its own runtime.
 
+### Frozen rules and shared vectors
+
+`halo.cli/1` is frozen. A registry that validates uploads must reach the same
+verdict and error code as the client for every package. The vectors in
+`tests/unit/services/cli-tools/vectors/` are the reference: each `.hcli` file
+breaks at most one rule, and `expected.json` gives its sha256 and either the
+expected `{id, version, integrity}` or the error code. Changing a rule means
+regenerating the vectors with `generate.mjs` and copying the directory to every
+consumer, so a server and the client cannot drift apart.
+
+Package checks run in this order, and the first failure decides the code:
+
+1. Archive larger than 128 MiB: `PACKAGE_INVALID`.
+2. For each zip entry, after stripping one trailing `/`:
+   - The path must be 1 to 512 characters, with no `\`, no NUL, no leading `/`,
+     no drive letter, and no empty, `.` or `..` segment. Otherwise
+     `PATH_UNSAFE`.
+   - The path must be exactly `manifest.json` or start with `payload`, `guide`
+     or `LICENSES`. Otherwise `PACKAGE_INVALID`.
+   - Two entries that are equal after lowercasing: `PATH_UNSAFE`.
+   - More than 50,000 entries, more than 512 MiB declared or expanded, or an
+     unreadable archive: `PACKAGE_INVALID`.
+3. No `manifest.json`: `MANIFEST_INVALID`.
+4. Archive sha256 differs from an expected value: `DIGEST_MISMATCH`.
+5. Manifest is not JSON or fails the strict schema: `MANIFEST_INVALID`.
+6. `runtime.kind` is `binary`: `RUNTIME_KIND_UNSUPPORTED`.
+7. Host checks, client only: `RUNTIME_VERSION_UNSUPPORTED`, then
+   `PLATFORM_UNSUPPORTED`. A registry does not apply them, because the
+   uploading machine is not the installing machine.
+8. No `payload/` entry: `PACKAGE_INVALID`.
+9. Pure-JS rule: `NATIVE_NOT_ALLOWED`. Then integrity: `DIGEST_MISMATCH`.
+10. A command entry that is not a file under `payload/`: `MANIFEST_INVALID`.
+11. A `guide` that is not a file: `MANIFEST_INVALID`.
+
+Details another implementation must match:
+
+- Integrity sorts paths by UTF-16 code units, which is JavaScript's default
+  string order, not UTF-8 byte order. Paths are not Unicode-normalized.
+- Zip symlink modes are ignored. Every entry is extracted as a regular file or
+  directory, and a directory entry is one whose name ends in `/`.
+- The collision check lowercases with JavaScript `toLowerCase`. Another
+  language's lowercasing may differ for a few non-ASCII characters; the
+  vectors cover only ASCII collisions.
+- The pure-JS rule looks at each file's name and first four bytes, and at every
+  file named `package.json` that parses as a JSON object. An unparsable
+  `package.json` is ignored. The magic numbers are ELF `7f454c46` and
+  `feedface`, `feedfacf`, `cefaedfe`, `cffaedfe`, `cafebabe`. An `MZ` header
+  counts only in a file named `.exe` or `.dll`.
+- A per-platform optional dependency is a key matching
+  `(^|[-/@])(darwin|linux|win32|windows|android|freebsd|sunos|aix)([-_]|$)`,
+  case-insensitive.
+
+A registry may be stricter than the client where the client accepts a package
+by accident of its runtime or fails without a typed code. The client must
+never accept less than a registry, so these cases only ever move a package
+from accepted to rejected:
+
+- A CRC mismatch, an entry used both as a file and as a directory, `payload`
+  as a file, or a UTF-8-flagged entry name that is not valid UTF-8:
+  `PACKAGE_INVALID`.
+- Command entries and the guide are matched exactly. The client checks them on
+  disk, which is case-insensitive on macOS and Windows.
+- Lowercasing and the case-insensitive platform regex may fold a few
+  non-ASCII characters differently (for example `ſ` or the Kelvin sign).
+
 ## Import transaction
 
 An import runs in this order:
