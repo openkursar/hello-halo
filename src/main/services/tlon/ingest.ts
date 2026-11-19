@@ -47,6 +47,7 @@ import {
   getKBRetainedDir,
 } from './paths'
 import { publishRelease } from './release-publication'
+import { VERSION_FILE } from './version'
 import {
   getKB,
   listKBs,
@@ -607,15 +608,25 @@ function commitRelease(kbId: string, batch: IngestBatch, scan: ReleaseScan): voi
   for (const entry of batch.records.values()) {
     if (!entry.staged || sourceChangedDuringExtraction(entry.job, entry.read)) throw new Error('Replacement text is not ready')
   }
-  for (const dir of hashes.replacements ?? []) {
-    const hasNewText = [...batch.records.keys()].some(key => isWithinDir(dir, key))
-    const hasExistingText = !hasNewText && Object.entries(hashes.files).some(([key, doc]) =>
-      doc.textPath && !latest.unseen.has(key) && isWithinDir(dir, key) && ownedTextPath(getKBTextDir(kbId), doc.textPath))
-    if (!hasNewText && !hasExistingText) throw new Error('Replacement folder has no learned text; the previous release was kept')
+  const textDir = getKBTextDir(kbId)
+  const published = Object.entries(hashes.files)
+  const staged = [...batch.records.keys()]
+  const isDocument = (dir: string, key: string) => isAbsolute(key) && key !== join(dir, VERSION_FILE) && isWithinDir(dir, key)
+  const replacingFolders = new Set(hashes.replacements)
+  for (const { path } of kb.linkedDirs) {
+    if (hashes.versions?.[path] !== undefined && hashes.versions[path] !== current[path] &&
+        published.some(([key, record]) => record.textPath && isDocument(path, key))) {
+      replacingFolders.add(path)
+    }
+  }
+  for (const dir of replacingFolders) {
+    const hasNewText = staged.some(key => isDocument(dir, key))
+    const hasExistingText = !hasNewText && published.some(([key, doc]) =>
+      doc.textPath && !latest.unseen.has(key) && isDocument(dir, key) && ownedTextPath(textDir, doc.textPath))
+    if (!hasNewText && !hasExistingText) throw new Error('Replacement folder has no learned documents; the previous release was kept')
   }
   const retiring = releaseRetirements(kb, hashes, latest.unseen)
   const names = [...batch.records.values()].map(item => item.record.textPath!)
-  const textDir = getKBTextDir(kbId)
   const retained = new Map<string, string>()
   for (const item of retiring) {
     if (!item.name) continue

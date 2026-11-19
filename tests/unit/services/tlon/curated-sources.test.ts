@@ -213,6 +213,31 @@ describe('Tlon curated sources', () => {
       expect(hasPendingCommit(kb.id)).toBe(false)
     })
 
+    it('preserves the previous release when the new version file arrives before its documents', async () => {
+      const kb = createKB({ name: 'Handbook' })
+      const dir = scratch()
+      put(dir, 'VERSION.md', 'v1')
+      const old = put(dir, 'previous.md', 'PREVIOUS-RELEASE')
+      linkOk(kb.id, dir)
+      await triggerFullIngest(kb.id)
+      const previous = indexMd(kb.id)
+
+      fs.unlinkSync(old)
+      put(dir, 'VERSION.md', 'v2')
+      await triggerFullIngest(kb.id)
+      expect(getIngestProgress(kb.id).phase).toBe('error')
+      expect(indexMd(kb.id)).toBe(previous)
+      expect(readHashes(kb.id).versions?.[dir]).toBe('v1')
+      expect(corpusContains(kb.id, 'PREVIOUS-RELEASE')).toBe(true)
+
+      put(dir, 'replacement.md', 'NEXT-RELEASE')
+      await triggerFullIngest(kb.id)
+      expect(getIngestProgress(kb.id).phase).toBe('done')
+      expect(readHashes(kb.id).versions?.[dir]).toBe('v2')
+      expect(corpusContains(kb.id, 'PREVIOUS-RELEASE')).toBe(false)
+      expect(corpusContains(kb.id, 'NEXT-RELEASE')).toBe(true)
+    })
+
     it('keeps removed and changed documents on the published version when replacement extraction fails', async () => {
       const kb = createKB({ name: 'Handbook' })
       const dir = scratch()

@@ -11,7 +11,7 @@
 import { closeSync, fstatSync, openSync, readSync, realpathSync, statSync } from 'fs'
 import { dirname, isAbsolute, join, resolve } from 'path'
 
-const VERSION_FILE = 'VERSION.md'
+export const VERSION_FILE = 'VERSION.md'
 const VERSION_MAX_LEN = 80
 const SHORT_SHA_LEN = 12
 
