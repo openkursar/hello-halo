@@ -7,17 +7,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 let activeHandler: ((e: unknown) => void) | null = null
+let openedHandler: ((e: unknown) => void) | null = null
+let reconnect: ((current: () => boolean) => void) | null = null
+const mode = vi.hoisted(() => ({ electron: true }))
+vi.mock('../../../src/renderer/api/transport', () => ({
+  isElectron: () => mode.electron,
+  onWsAuthenticated: (callback: typeof reconnect) => { reconnect = callback; return () => { reconnect = null } },
+}))
 let goneHandler: ((e: unknown) => void) | null = null
 let releasedHandler: ((e: unknown) => void) | null = null
 let metadataHandler: ((e: unknown) => void) | null = null
-const unsub = { active: vi.fn(), gone: vi.fn(), released: vi.fn(), metadata: vi.fn() }
+let operatingHandler: ((e: unknown) => void) | null = null
+const unsub = { active: vi.fn(), opened: vi.fn(), gone: vi.fn(), released: vi.fn(), metadata: vi.fn(), operating: vi.fn() }
 const listActive = vi.fn()
 
 vi.mock('../../../src/renderer/api', () => ({
   api: {
     onAIBrowserActiveViewChanged: (cb: (e: unknown) => void) => { activeHandler = cb; return unsub.active },
+    onAIBrowserPageOpened: (cb: (e: unknown) => void) => { openedHandler = cb; return unsub.opened },
     onAIBrowserViewGone: (cb: (e: unknown) => void) => { goneHandler = cb; return unsub.gone },
     onAIBrowserConversationReleased: (cb: (e: unknown) => void) => { releasedHandler = cb; return unsub.released },
+    onAIBrowserOperating: (cb: (e: unknown) => void) => { operatingHandler = cb; return unsub.operating },
     onBrowserStateChange: (cb: (e: unknown) => void) => { metadataHandler = cb; return unsub.metadata },
     listAIBrowserLivePages: (...args: unknown[]) => listActive(...args),
   },
@@ -25,15 +35,17 @@ vi.mock('../../../src/renderer/api', () => ({
 const closeTabsOfGoneView = vi.fn()
 const attachBrowserView = vi.fn()
 const setCanvasOpen = vi.fn()
+const adoptPages = vi.fn()
 vi.mock('../../../src/renderer/services/canvas-lifecycle', () => ({ canvasLifecycle: {
   closeTabsOfGoneView: (...a: unknown[]) => closeTabsOfGoneView(...a),
+  adoptPages: (...a: unknown[]) => adoptPages(...a),
   attachAIBrowserView: (...a: unknown[]) => attachBrowserView(...a),
   setOpen: (...a: unknown[]) => setCanvasOpen(...a),
 } }))
 vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: vi.fn() }))
 vi.mock('../../../src/renderer/stores/chat/active', () => ({ selectActiveConversationId: vi.fn() }))
 
-const { useAIBrowserStore, selectViewOwner, isPageInUseByOthers, initAIBrowserStoreListeners } =
+const { useAIBrowserStore, selectViewOwner, selectPageOperating, isPageInUseByOthers, initAIBrowserStoreListeners } =
   await import('../../../src/renderer/stores/ai-browser.store')
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
@@ -116,18 +128,48 @@ describe('ai browser store', () => {
     expect(s.views['app-chat:dh1'].viewId).toBe('page-b')
   })
 
-  it('drops every entry pointing at a destroyed view, and its operating flag', () => {
+  it('drops every entry pointing at a destroyed view, which then no longer reads as operated', () => {
     const { applyActiveView, setOperating, handleViewGone } = useAIBrowserStore.getState()
     applyActiveView(view('app-chat:dh1', 'shared'))
-    applyActiveView(view('conv-2', 'shared'))
+    applyActiveView(view('conv-2', 'shared', 'https://x.test/shared', false))
     applyActiveView(view('conv-3', 'other'))
     setOperating('app-chat:dh1', true)
+    expect(selectPageOperating(useAIBrowserStore.getState(), 'shared')).toBe(true)
 
     handleViewGone('shared')
 
     const s = useAIBrowserStore.getState()
     expect(Object.keys(s.views)).toEqual(['conv-3'])
-    expect(s.operating).toEqual({})
+    expect(selectPageOperating(s, 'shared')).toBe(false)
+    // Whether the conversation is operating is main's to end, not a page's going away.
+    expect(s.operating).toEqual({ 'app-chat:dh1': true })
+  })
+
+  it('reads the page worked on, even if the operator did not open it', () => {
+    const { applyActiveView, setOperating } = useAIBrowserStore.getState()
+    applyActiveView(view('owner', 'shared'))
+    applyActiveView(view('other', 'shared', undefined, false))
+    setOperating('other', true)
+    const state = useAIBrowserStore.getState()
+    expect(state.pages.shared.conversationId).toBe('owner')
+    expect(selectPageOperating(state, 'shared')).toBe(true)
+    expect(isPageInUseByOthers(state, 'shared')).toBe(true)
+  })
+
+  it('reads a page as operated only while an AI acts on that very page', () => {
+    const { applyActiveView, setOperating } = useAIBrowserStore.getState()
+    applyActiveView(view('conv-1', 'page-a'))
+    applyActiveView(view('conv-1', 'page-b'))
+    setOperating('conv-1', true)
+
+    const s = useAIBrowserStore.getState()
+    expect(selectPageOperating(s, 'page-b')).toBe(true)
+    expect(selectPageOperating(s, 'page-a')).toBe(false)
+    expect(selectPageOperating(s, undefined)).toBe(false)
+    expect(selectPageOperating(s, 'unknown')).toBe(false)
+
+    setOperating('conv-1', false)
+    expect(selectPageOperating(useAIBrowserStore.getState(), 'page-b')).toBe(false)
   })
 
   it('leaves state untouched for an unknown view', () => {
@@ -218,11 +260,30 @@ describe('store listeners', () => {
     activeHandler!(view('app-chat:dh1', 'v2'))
     releasedHandler!({ conversationId: 'app-chat:dh1' })
     expect(useAIBrowserStore.getState().views).toEqual({})
+    // Its page outlives it as the user's own: the tab takes the page over.
+    expect(adoptPages).toHaveBeenCalledWith(['v2'])
 
     dispose()
     expect(unsub.released).toHaveBeenCalled()
     expect(unsub.active).toHaveBeenCalled()
     expect(unsub.gone).toHaveBeenCalled()
+    expect(unsub.operating).toHaveBeenCalled()
+  })
+
+  it('follows main on whether a conversation\'s AI is operating its browser', () => {
+    listActive.mockResolvedValue([])
+    initAIBrowserStoreListeners()
+    operatingHandler!({ conversationId: 'conv-1', operating: true })
+    expect(useAIBrowserStore.getState().operating).toEqual({ 'conv-1': true })
+    operatingHandler!({ conversationId: 'conv-1', operating: false })
+    expect(useAIBrowserStore.getState().operating).toEqual({})
+  })
+
+  it('learns who is operating from the snapshot a late renderer asks for', async () => {
+    listActive.mockResolvedValue([{ ...page('conv-1', 'p1', true), operating: true }, page('conv-2', 'p2', true)])
+    initAIBrowserStoreListeners()
+    await flush()
+    expect(useAIBrowserStore.getState().operating).toEqual({ 'conv-1': true })
   })
 
   it('learns pages opened before the renderer started, without overriding a newer live event', async () => {
@@ -244,6 +305,53 @@ describe('store listeners', () => {
     expect(views['app-chat:dh1'].viewId).toBe('earlier')
     expect(Object.keys(pages).sort()).toEqual(['earlier', 'live-new', 'live-old', 'older'])
     expect(views['conv-user'].viewId).toBe('user-tab')
+  })
+
+  it('adds an owned child without changing the active page', () => {
+    listActive.mockResolvedValue([])
+    const dispose = initAIBrowserStoreListeners()
+    activeHandler!(view('owner', 'parent'))
+    openedHandler!({ ...view('owner', 'child'), openerViewId: 'parent' })
+    expect(useAIBrowserStore.getState().views.owner.viewId).toBe('parent')
+    expect(Object.keys(useAIBrowserStore.getState().pages)).toEqual(['parent', 'child'])
+    dispose()
+  })
+
+  it('reconciles removals and missed new pages after authentication without resurrecting a page destroyed during the read', async () => {
+    mode.electron = false
+    listActive.mockResolvedValueOnce([
+      { ...page('owner', 'old', true), operating: true },
+      page('another', 'surviving', true),
+    ])
+    const dispose = initAIBrowserStoreListeners()
+    try {
+      expect(listActive).not.toHaveBeenCalled()
+      reconnect!(() => true)
+      await flush()
+      expect(Object.keys(useAIBrowserStore.getState().pages)).toEqual(['old', 'surviving'])
+      let resolve!: (snapshot: unknown[]) => void
+      listActive.mockReturnValueOnce(new Promise(done => { resolve = done }))
+      reconnect!(() => true)
+      goneHandler!({ viewId: 'too-late' })
+      activeHandler!(view('owner', 'newer'))
+      operatingHandler!({ conversationId: 'owner', operating: false })
+      resolve([
+        page('new-chat', 'too-late', true),
+        page('owner', 'new', true),
+        { ...view(null, 'surviving', undefined, false), active: false, released: true },
+      ])
+      await flush()
+      const state = useAIBrowserStore.getState()
+      expect(Object.keys(state.pages).sort()).toEqual(['new', 'newer'])
+      expect(state.views.owner.viewId).toBe('newer')
+      expect(state.views['new-chat']).toBeUndefined()
+      expect(state.operating).toEqual({})
+      expect(adoptPages).toHaveBeenLastCalledWith(['surviving'])
+      expect(closeTabsOfGoneView).toHaveBeenCalledWith('old')
+    } finally {
+      dispose()
+      mode.electron = true
+    }
   })
 
   it('survives a failed snapshot request', async () => {

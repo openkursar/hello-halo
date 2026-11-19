@@ -35,6 +35,7 @@ import { isServerMode } from '../foundation/runtime-mode'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
 import { registerAIBrowserHandlers, cleanupAIBrowserHandlers } from '../ipc/ai-browser'
+import { registerCanvasShowHandlers, cleanupCanvasShowHandlers } from '../ipc/canvas-show'
 import { cleanupAIBrowser } from '../services/ai-browser'
 import { cleanupAITerminal } from '../services/ai-terminal'
 import { cleanupTerminalHandlers } from '../ipc/terminal'
@@ -1607,6 +1608,9 @@ export function initializeExtendedServices(): void {
   // the renderer can reveal the AI's live view. See ai-browser/DESIGN.md.
   registerAIBrowserHandlers()
 
+  // canvas_show: forwards the AI's request to every client and gathers their answers.
+  registerCanvasShowHandlers()
+
   // Search: Global search functionality
   initializeSearchHandlers()
 
@@ -1837,6 +1841,7 @@ export async function cleanupExtendedServices(): Promise<void> {
     // up by their owners: app-chat.ts / execute.ts) and unsubscribe event forwarding
     cleanupAIBrowserHandlers()
     cleanupAIBrowser()
+    cleanupCanvasShowHandlers()
 
     // AI Terminal: Unsubscribe event forwarding, then kill all pty sessions
     cleanupTerminalHandlers()

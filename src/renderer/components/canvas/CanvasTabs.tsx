@@ -36,6 +36,8 @@ import { getBrowserHomepage } from '../../utils/browser-homepage'
 import { trackToolOpen } from '../../services/tool-session-telemetry'
 import { CanvasToggleButton } from './CanvasToggleButton'
 import { NON_FILE_CONTENT_META } from './content-type-meta'
+import { AIWorkDot } from './AIWorkMarks'
+import { canEndOnThisClient } from '../../services/ai-work-tabs'
 
 interface CanvasTabsProps {
   tabs: readonly TabState[]
@@ -64,10 +66,12 @@ export function CanvasTabs({
   collapseControl,
 }: CanvasTabsProps) {
   const { t } = useTranslation()
-  const { reorderTabs } = useCanvasActions()
+  const { reorderTabs, closeTabs } = useCanvasActions()
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null)
   const [closingTabIds, setClosingTabIds] = useState<Set<string>>(new Set())
+  const keepsAIWork = tabs.some(tab => tab.aiWork) && tabs.some(tab => !tab.aiWork)
+  const closeAllLabel = keepsAIWork ? t('Close canvas (keeps tabs the AI is using)') : t('Close canvas (clears all tabs)')
   const [newTabIds, setNewTabIds] = useState<Set<string>>(new Set())
   const prevTabIdsRef = useRef<Set<string>>(new Set())
   const tabListRef = useRef<HTMLDivElement>(null)
@@ -128,6 +132,13 @@ export function CanvasTabs({
 
   // Handle tab close with animation
   const handleTabClose = useCallback((tabId: string) => {
+    // The AI's work asks before it closes: animating it away first would make
+    // a "cancel" look like the tab coming back.
+    if (tabsRef.current.find(tab => tab.id === tabId)?.aiWork) {
+      onTabClose(tabId)
+      return
+    }
+
     // Start closing animation
     setClosingTabIds(prev => new Set(prev).add(tabId))
 
@@ -142,31 +153,15 @@ export function CanvasTabs({
     }, 150) // Match animation duration
   }, [onTabClose])
 
-  // Close others handler - with staggered animation
-  // Uses tabsRef to avoid recreating this callback when tabs change
+  // Closing several at once asks once for the AI's work among them (see closeTabs).
+  // Uses tabsRef to avoid recreating these callbacks when tabs change
   const handleCloseOthers = useCallback((keepTabId: string) => {
-    const tabsToClose = tabsRef.current.filter(t => t.id !== keepTabId)
+    void closeTabs(tabsRef.current.filter(t => t.id !== keepTabId).map(t => t.id), { confirmDirty: true })
+  }, [closeTabs])
 
-    // Stagger the close animations for a smoother effect
-    tabsToClose.forEach((t, i) => {
-      setTimeout(() => {
-        handleTabClose(t.id)
-      }, i * 50)
-    })
-  }, [handleTabClose])
-
-  // Close to right handler - with staggered animation
-  // Uses tabsRef to avoid recreating this callback when tabs change
   const handleCloseToRight = useCallback((fromIndex: number) => {
-    const tabsToClose = tabsRef.current.slice(fromIndex + 1)
-
-    // Stagger the close animations for a smoother effect
-    tabsToClose.forEach((t, i) => {
-      setTimeout(() => {
-        handleTabClose(t.id)
-      }, i * 50)
-    })
-  }, [handleTabClose])
+    void closeTabs(tabsRef.current.slice(fromIndex + 1).map(t => t.id), { confirmDirty: true })
+  }, [closeTabs])
 
   // Copy path handler
   const handleCopyPath = useCallback(async (path: string) => {
@@ -320,13 +315,13 @@ export function CanvasTabs({
           </button>
         )}
 
-        {/* Close all tabs button */}
+        {/* Close all tabs button; beside the user's own tabs, the AI's work stays (see CanvasCloseGuard) */}
         {onCloseAll && tabs.length > 0 && (
           <button
             onClick={onCloseAll}
             className="canvas-tab-bar-action danger"
-            title={t('Close canvas (clears all tabs)')}
-            aria-label={t('Close canvas (clears all tabs)')}
+            title={closeAllLabel}
+            aria-label={closeAllLabel}
           >
             <X className="w-4 h-4" strokeWidth={1.5} />
           </button>
@@ -432,6 +427,7 @@ const TabItem = forwardRef<HTMLDivElement, TabItemProps>(function TabItem({
             size={16}
           />
         )}
+        {tab.aiWork && <AIWorkDot tab={tab} />}
       </div>
 
       {/* Title */}
@@ -446,17 +442,27 @@ const TabItem = forwardRef<HTMLDivElement, TabItemProps>(function TabItem({
 
       {/* Actions - only close button, shown on hover */}
       <div className="canvas-tab-actions">
-        {/* Close button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onClose()
-          }}
-          className="canvas-tab-close"
-          title={t('Close (⌘W / Middle-click)')}
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
+        {canEndOnThisClient(tab) ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            className="canvas-tab-close"
+            title={t('Close (⌘W / Middle-click)')}
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        ) : (
+          <span
+            role="img"
+            className="canvas-tab-close unavailable"
+            title={t('Can only be closed on the computer')}
+            aria-label={t('Can only be closed on the computer')}
+          >
+            <X className="w-3.5 h-3.5" />
+          </span>
+        )}
       </div>
     </div>
   )

@@ -117,12 +117,37 @@
 
 /* Tab icon - fixed size, never shrinks */
 .canvas-tab-icon {
+  position: relative;
   flex-shrink: 0;
   width: 16px;
   height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* The AI's mark on the icon: cut out of the icon by the tab's own background. */
+.canvas-tab-ai-dot {
+  box-shadow: 0 0 0 2px hsl(var(--card));
+}
+
+.canvas-tab:not(.active):hover .canvas-tab-ai-dot {
+  box-shadow: 0 0 0 2px hsl(var(--secondary));
+}
+
+.canvas-tab.active .canvas-tab-ai-dot {
+  box-shadow: 0 0 0 2px hsl(var(--background));
+}
+
+/* A close this client cannot do (the AI's page on a remote client). */
+.canvas-tab-close.unavailable {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.canvas-tab-close.unavailable:hover {
+  background: transparent;
+  color: inherit;
 }
 
 /* Tab title - clips instead of ellipsis for cleaner look when compressed */

@@ -15,8 +15,8 @@ references:
   - tests/e2e/specs/browser-view-reveal.spec.ts
 promises:
   reach:
-    en: Closing a viewing tab does not silently terminate the AI-owned page.
-    zh: 关闭查看标签不悄悄终止 AI 拥有的页面。
+    en: Closing the tab of an AI-owned page never ends it silently; it asks first, and cancelling keeps the same live page.
+    zh: 关闭 AI 拥有页面的标签绝不悄悄结束它；先询问，取消则保留同一活动页面。
   recover:
     en: A crashed or reloaded renderer releases invalid attachments and can open a fresh working page.
     zh: 渲染界面崩溃或重载后释放失效附着，并能打开新可用页面。
@@ -26,8 +26,8 @@ promises:
 scenarios:
   - id: browser.recovery.close-view
     title:
-      en: Close a view and reopen a live page
-      zh: 关闭视图后重开活动页面
+      en: Change my mind about closing a live AI page
+      zh: 关闭活动 AI 页面时改变主意
     verifies:
       - reach
     platforms: &a1
@@ -42,14 +42,14 @@ scenarios:
     requirements:
       - halo-sdk
     notes:
-      en: A real space conversation opens the target with production browser tools. Closing its borrowed canvas tab must keep the owned guest, nonce and user state; the real live-session tray reopens that view identity, and the next model step receives a production tool read of its retained state. The independent owned control page remains unchanged.
-      zh: 真实空间对话通过生产浏览器工具打开目标页。关闭借用的画布标签须保留原网页进程、文档标记及用户状态；真实活动会话托盘按原视图身份重开，下一模型步骤收到生产工具对保留状态的读取。独立自有对照页保持不变。
+      en: A real space conversation opens the target with production browser tools. Closing its canvas tab asks first; cancelling must keep the owned guest, nonce and user state and the tab, which shows the same view identity again, and the next model step receives a production tool read of its retained state. The independent owned control page remains unchanged.
+      zh: 真实空间对话通过生产浏览器工具打开目标页。关闭其画布标签会先询问；取消须保留原网页进程、文档标记、用户状态及标签，标签再次显示同一视图，下一模型步骤收到生产工具对保留状态的读取。独立自有对照页保持不变。
     preconditions:
       - en: An AI-owned page is visible in the canvas.
         zh: AI 拥有的页面正在画布显示。
     steps:
-      - en: Close its tab and reopen it from live sessions.
-        zh: 关闭标签后从活动会话入口重开。
+      - en: Close its tab, cancel the question and show the tab again.
+        zh: 关闭标签，取消询问后再次显示该标签。
     expected:
       - en: The page remains reachable with retained state.
         zh: 页面仍可找到并保留状态。

@@ -254,6 +254,7 @@ export function CsvViewer({ tab, onScrollChange }: CsvViewerProps) {
 const csvTableComponents: TableComponents<string[]> = {
   Table: ({ style, children }) => (
     <table
+      data-canvas-content-ready="true"
       style={{ ...style, tableLayout: 'fixed' }}
       className="w-full border-collapse text-sm"
     >
@@ -299,7 +300,7 @@ function TableView({
 
   if (headers.length === 0 && dataRows.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
+      <div className="flex items-center justify-center h-full text-muted-foreground" data-canvas-content-ready="true">
         <p>{t('Empty file')}</p>
       </div>
     )

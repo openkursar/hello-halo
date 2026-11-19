@@ -209,6 +209,8 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
             <iframe
               ref={iframeRef}
               srcDoc={previewDocument}
+              onLoad={event => { event.currentTarget.dataset.canvasContentReady = 'true' }}
+              key={revision}
               className="w-full h-full border-0 bg-white"
               sandbox="allow-scripts allow-forms allow-popups"
               title={tab.title}
@@ -220,6 +222,7 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
               key={revision}
               ref={iframeRef}
               src={isolatedUrl}
+              onLoad={event => { event.currentTarget.dataset.canvasContentReady = 'true' }}
               className="w-full h-full border-0 bg-white"
               sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
               title={tab.title}

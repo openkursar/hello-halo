@@ -160,6 +160,10 @@ src/
 │       │                              #   resources/api-ref/ by scripts/gen-api-ref.mjs.
 │       │                              #   Reads generated files only: the coupling to the
 │       │                              #   transport layer is build-time, never runtime.
+│       ├── canvas-show/               # `canvas_show`: the AI brings its page, a terminal or a file in front
+│       │                              #   of the user. Main asks every client (canvas:show-request) and takes
+│       │                              #   the best answer; clients decide whether the screen moves. Mounted
+│       │                              #   for space chat (broker) and a digital human's own chat only
 │       ├── code-review/               # The changes view's review buttons: snapshot, background review
 │       │                              #   conversation, built-in review task, latest review per
 │       │                              #   repository. See code-review/DESIGN.md
@@ -1222,7 +1226,7 @@ When touching a module, read its design doc first:
 - `src/main/services/agent/DESIGN.md` — Agent engine (largest subsystem, read this before any agent-related change)
 - `src/main/services/updater/DESIGN.md` — Auto-update: the two apply paths, why staged update descriptions are signed at build time, and the reversal contract with the native helper
 - `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session, including the self-API switch — see §17.1)
-- `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer)
+- `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer; the AI's terminals as canvas tabs, closing them, "operating" and "a person typed")
 - `src/main/services/git/DESIGN.md` — Git for the changes view: how git is run and located (Windows included), the request gate, compare scopes, snapshots, writes, measured costs
 - `src/main/services/code-review/DESIGN.md` — Starting an AI review of a repository's changes as a background conversation, its built-in task, and the latest review per repository
 - `src/main/services/conversation-interop/DESIGN.md` — Cross-conversation read/send/wait: delivery rules, circuit breaker, and the `ConversationSource` contract (space conversations built in, digital-human chats registered by `apps/runtime`)

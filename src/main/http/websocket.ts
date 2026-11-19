@@ -633,9 +633,11 @@ export function broadcastToWebSocket(
 }
 
 /**
- * Broadcast to all authenticated clients (for global events)
+ * Broadcast to all authenticated clients (for global events). Returns how many
+ * clients it was sent to.
  */
-export function broadcastToAll(channel: string, data: Record<string, unknown>): void {
+export function broadcastToAll(channel: string, data: Record<string, unknown>): number {
+  let sent = 0
   for (const client of Array.from(clients.values())) {
     if (!client.authenticated) continue
     // Office-member clients receive only office-scoped events belonging to their
@@ -649,7 +651,9 @@ export function broadcastToAll(channel: string, data: Record<string, unknown>): 
       channel,
       data
     })
+    sent++
   }
+  return sent
 }
 
 /**

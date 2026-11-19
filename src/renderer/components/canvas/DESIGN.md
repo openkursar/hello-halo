@@ -15,10 +15,76 @@ attachment); React renders what it says.
 | React bindings | `hooks/useCanvasLifecycle.ts` | `useTabList`, `useActiveTab`, `useActiveTabId`, `useCanvasIsOpen`, `useTabCount`, `useBrowserState`, `useCanvasActions` |
 | Legacy store proxy | `stores/canvas.store.ts` | open/maximized state for pages outside the canvas; budget-eviction toast |
 | Host | `ContentCanvas.tsx` | tab bar, keyboard shortcuts, `TabContent` (loading/error states + `ViewerHost` boundary) |
-| Collapse / restore | `CanvasToggleButton.tsx` | the tab bar's collapse action (tabs stay) and the page-edge handle that brings a collapsed canvas back, showing its tab count |
+| Collapse / restore | `CanvasToggleButton.tsx` | the tab bar's collapse action (tabs stay) and the handle that brings a collapsed canvas back — at the page edge on the desktop, among the header buttons on a phone so it never covers the conversation — showing its tab count and a dot while the AI operates one of the space's tabs |
+| The AI's work | `services/ai-work-tabs.ts`, `AIWorkMarks.tsx`, `hooks/useAIWork.ts` | which terminals and pages are the AI's live work (per space, from the terminal and AI-browser stores), the dot on such a tab's icon and the fixed status line above its content |
+| Closing | `CanvasCloseGuard.tsx` + `services/ai-work-close.ts` | the close policy: what closing one or several tabs ends, and the one question before ending the AI's work |
+| Bringing forward | `services/canvas-show-handler.ts`, `services/typing-activity.ts` | this client's part of the AI's `canvas_show` |
 | Registry | `viewer-registry.tsx` | `VIEWERS: Record<ContentType, ViewerSpec>`, `viewerFor(type)`, `viewerBringsFileList(type)` (exported for the page layout) |
 | Viewer resources | `viewer-resources.ts` | `DisposableStore`, `useViewerResources()` |
 | Viewers | `viewers/*` | rendering one tab |
+
+## The AI's work as tabs
+
+The AI's live work is ordinary tabs, one place for everything: every running
+terminal it used (`aiTouched`) and every page one of its conversations opened,
+in the space they belong to. `startAIWorkTabs` (App) reconciles only the
+spaces whose membership changes. Titles and URLs update the affected tabs;
+activity alone does not rebuild tab membership. The stores read a snapshot on
+attachment and authenticated reconnection, then follow live events without polling.
+
+- **Quiet.** A new piece of work gets a tab (`aiWork: true`) at the end of its
+  space's tabs — shown or parked — without opening the canvas, switching tabs or
+  scrolling the strip. Work already shown in a tab (the user's own terminal the
+  AI then used, a page opened from its card) only gets the mark. The tab does
+  not create a viewer, another browser guest, or a terminal replay until shown.
+- **Marked.** A dot on the type icon (pulses while the AI operates it, still
+  otherwise, never with reduced motion) and one fixed line at the top of the
+  content: "AI is operating" / "AI is idle", plus "· whose" when it is not the
+  conversation on screen. The line has no buttons and replaces the browser's old
+  banner and the terminal's ring. "Operating" comes from main and is held 10 s
+  after the AI's last call (`shared/ai-operating.ts`). The page's actual operator
+  determines the status, even if a different conversation opened it.
+- **Ending.** A page the AI closes loses its tab (`closeTabsOfGoneView`). An
+  ended terminal loses the mark; its tab disappears if nobody ever looked at it,
+  else it stays as the replay. A released conversation's pages become the user's
+  own (`adoptPages`).
+- **Opening a collapsed canvas** with no tab chosen shows the tab looked at
+  last, else the AI's most recently active work.
+
+### Showing a target from chat
+
+`canvas_show` can reveal a conversation's own page, a running terminal of its
+space, or a workspace file. Each client switches only when that space and
+conversation are on screen, the window is focused, and the user is not typing.
+Selecting the tab and opening the canvas commit together before any delayed
+viewer work can affect another space. `shown` requires the same target to be
+visible (a presented guest, a terminal with replay applied, or a ready file
+viewer). Content viewers expose `data-canvas-content-ready` on their rendered
+content, not the viewer shell, loading indicator, or error fallback. A remote
+browser-page placeholder is never `shown`. The client can
+instead report that a tab opened without confirmed content, was kept without a
+switch, or could not be kept. A foreground file may replace a reclaimable tab
+under the existing budget; a quiet file addition at the limit does not evict one.
+
+## Closing
+
+All closes go through the registered `CanvasClosePolicy` (CanvasCloseGuard):
+
+| Close | Asks | Ends |
+|---|---|---|
+| One AI tab | once: "End this terminal?" / "Close this page?" (wording follows whether the AI is operating it); Enter does not confirm | the process / the page (refused while another conversation is on the page: the tab stays, the user is told) |
+| The user's own terminal | — | its process, with the tab |
+| Several (close canvas, close others, close to the right) | — : the user's own tabs close and the AI's stay | the user's own terminals |
+| Several, all of them the AI's | once if this client can end any: list those it can end — cancel / end all; Enter on the default button cancels | all of the AI's work it can end |
+| A removed space | — | everything (main ends the space's terminals and pages too) |
+
+A client that cannot end the AI's page (remote web) shows that tab without a
+close ("Can only be closed on the computer") and keeps it in bulk closes.
+"Close canvas" collapses the canvas over whatever was kept; "close others"
+and "close to the right" do not also collapse it. Most bulk closes mean "clear my things", so keeping the
+AI's work needs no question; ending it is asked only when it is all that is
+left. While the AI's tabs sit beside the user's own, the close-canvas button
+says so ("keeps tabs the AI is using").
 
 ## Tab state and notifications
 
@@ -293,7 +359,10 @@ Applied after every activation and every new browser page
 
 Never touched: the active tab, tabs with unsaved edits, terminals (closing
 would end or prompt about a live pty), AI-attached browser views (the AI's
-session outlives the tab), and content that cannot be re-read (no path).
+session outlives the tab), and content that cannot be re-read (no path). The
+AI's own tabs (`aiWork`) are not counted toward the tab or live-page limits at
+all: they are never closed by a budget, so counting them would only push the
+user's own tabs out.
 
 Memory pressure (`app:memory-pressure`, from the main process health sampler)
 at `critical` applies the budgets with zero allowance for hidden content and
@@ -301,7 +370,7 @@ hidden views. Tabs themselves stay; everything reloads on activation.
 
 ## Spaces
 
-Each space keeps its own tabs. `enterSpace` (SpacePage, tray reveal) parks the
+Each space keeps its own tabs. `enterSpace` (SpacePage, a card's reveal) parks the
 tabs on screen under the space being left and shows the entered space's tabs as
 they were left: tabs, active tab, open state. The swap is synchronous, so no
 tab can land in the wrong space; a close-all still asking or releasing when it
@@ -313,7 +382,7 @@ entered. A parked space holds:
 |---|---|
 | unsaved edits (`content`, `savedContent`) | a clean file tab's text (`contentUnloaded`; read again when shown) |
 | running terminals (the pty is not touched) | owned browser pages (url kept, made again when shown) |
-| AI-attached pages (hidden; pruned by `closeTabsOfGoneView` if the page ends) | file watching (no `holdArtifactSpace`) |
+| AI-attached pages and guests adopted while already parked (hidden; pruned if the page ends) | file watching (no `holdArtifactSpace`) |
 | content with no file, view memory, edit mode | |
 
 On return, unsaved edits are compared with the disk as for a file change
@@ -322,9 +391,11 @@ finishes, a terminal title, or an AI page's navigation arriving while the tab
 is parked is applied to it silently.
 
 Only removing a space closes its tabs: `space.store` calls `forgetSpace` on
-delete and on remove-from-list, shown or parked, with close-all semantics and
-no prompt. The terminal close policy lives on SpacePage, which is not mounted
-on the spaces list, so a removed space's terminals wait for the next policy.
+delete and on remove-from-list, shown or parked, without asking; what the tabs
+ran ends (`endRemoved`), and main ends the space's terminals and AI pages
+itself. The close policy lives on SpacePage, which is not mounted on the spaces
+list, so the renderer's part waits for the next policy. The AI's work of a
+removed space gets no new tab.
 
 ## Canvas Viewer rules
 

@@ -9,7 +9,7 @@
  * exactly once; a late client can ask for the current pages.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 const states = new Map<string, { id: string; url: string; title: string }>()
 const destroyedListeners = new Set<(viewId: string) => void>()
@@ -39,10 +39,14 @@ vi.mock('../../../../src/main/services/ai-browser/download-handler', () => ({
 }))
 
 const active: Array<Record<string, unknown>> = []
+const opened: Array<Record<string, unknown>> = []
 const gone: string[] = []
 const released: string[] = []
+const operating: Array<{ conversationId: string; operating: boolean }> = []
 vi.mock('../../../../src/main/services/ai-browser/events', () => ({
+  emitBrowserOperating: (e: { conversationId: string; operating: boolean }) => { operating.push(e) },
   emitBrowserActiveView: (e: Record<string, unknown>) => { active.push(e) },
+  emitBrowserPageOpened: (e: Record<string, unknown>) => { opened.push(e) },
   emitBrowserViewGone: ({ viewId }: { viewId: string }) => { gone.push(viewId) },
   emitBrowserConversationReleased: ({ conversationId }: { conversationId: string }) => { released.push(conversationId) },
 }))
@@ -60,6 +64,9 @@ const {
   releaseInteractiveBrowserContext,
   listLivePages,
   stopLivePage,
+  conversationPage,
+  listSpacePageIds,
+  closeBrowserPages,
 } = await import('../../../../src/main/services/ai-browser/context')
 
 function openTab(id: string): void {
@@ -253,8 +260,8 @@ describe('live-page snapshot for a late client', () => {
     auto.setActiveViewId('auto-view')
 
     expect(listLivePages()).toEqual([
-      { conversationId: 'app-chat:dh1', spaceId: 'space-1', viewId: 'dh-older', owned: true, url: 'https://example.com/dh-older', title: 'Title dh-older', active: false },
-      { conversationId: 'app-chat:dh1', spaceId: 'space-1', viewId: 'dh-view', owned: true, url: 'https://example.com/dh-view', title: 'Title dh-view', active: true },
+      { conversationId: 'app-chat:dh1', spaceId: 'space-1', viewId: 'dh-older', owned: true, url: 'https://example.com/dh-older', title: 'Title dh-older', active: false, operating: false },
+      { conversationId: 'app-chat:dh1', spaceId: 'space-1', viewId: 'dh-view', owned: true, url: 'https://example.com/dh-view', title: 'Title dh-view', active: true, operating: false },
     ])
     dh.destroy()
     auto.destroy()
@@ -367,5 +374,114 @@ describe('a conversation’s context ending', () => {
   it('says nothing for an automation run', () => {
     createScopedBrowserContext().destroy()
     expect(released).toEqual([])
+  })
+})
+
+describe('the AI operating its browser', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    states.clear()
+    operating.length = 0
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('reports the first call, then silence while calls follow each other, then the end after the hold', () => {
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
+    ctx.beginToolCall()
+    ctx.endToolCall()
+    vi.advanceTimersByTime(4000)
+    ctx.beginToolCall()
+    ctx.endToolCall()
+    expect(operating).toEqual([{ conversationId: 'app-chat:dh1', operating: true }])
+
+    vi.advanceTimersByTime(9999)
+    expect(operating).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(operating).toEqual([
+      { conversationId: 'app-chat:dh1', operating: true },
+      { conversationId: 'app-chat:dh1', operating: false },
+    ])
+    ctx.destroy()
+  })
+
+  it('stays operating through a call that outlasts the hold', () => {
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh2', spaceId: 'space-1' } })
+    ctx.beginToolCall()
+    vi.advanceTimersByTime(60_000)
+    expect(operating).toEqual([{ conversationId: 'app-chat:dh2', operating: true }])
+    ctx.endToolCall()
+    vi.advanceTimersByTime(10_000)
+    expect(operating.at(-1)).toEqual({ conversationId: 'app-chat:dh2', operating: false })
+    ctx.destroy()
+  })
+
+  it('says nothing for an unattended context, which no screen can show', () => {
+    const ctx = createScopedBrowserContext()
+    ctx.beginToolCall()
+    ctx.endToolCall()
+    vi.advanceTimersByTime(20_000)
+    expect(operating).toEqual([])
+    ctx.destroy()
+  })
+
+  it('marks the active page of an operating conversation for a client that connects late', () => {
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh3', spaceId: 'space-1' } })
+    openTab('older')
+    openTab('current')
+    ctx.trackView('older')
+    ctx.trackView('current')
+    ctx.setActiveViewId('current')
+    ctx.beginToolCall()
+
+    const pages = listLivePages().filter(page => page.conversationId === 'app-chat:dh3')
+    expect(pages.map(page => [page.viewId, page.operating])).toEqual([['older', false], ['current', true]])
+    ctx.endToolCall()
+    ctx.destroy()
+  })
+})
+
+describe('finding pages by conversation and space', () => {
+  it('keeps released pages reachable for workspace cleanup without treating them as AI-owned', () => {
+    const context = getInteractiveBrowserContext('released-in-space', 'parked-space')
+    openTab('released-view')
+    context.trackView('released-view')
+    context.setActiveViewId('released-view')
+    releaseInteractiveBrowserContext('released-in-space')
+    expect(conversationPage('released-in-space')).toBeNull()
+    expect(listLivePages()).toContainEqual(expect.objectContaining({ viewId: 'released-view', owned: false, released: true }))
+    expect(listSpacePageIds('parked-space')).toEqual(['released-view'])
+    closeBrowserPages(listSpacePageIds('parked-space'))
+    expect(listSpacePageIds('parked-space')).toEqual([])
+    expect(states.has('released-view')).toBe(false)
+  })
+
+  beforeEach(() => states.clear())
+
+  it('names the page a conversation acts on, and nothing for one with none', () => {
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh4', spaceId: 'space-4' } })
+    expect(conversationPage('app-chat:dh4')).toBeNull()
+    openTab('page-4')
+    ctx.trackView('page-4')
+    ctx.setActiveViewId('page-4')
+    expect(conversationPage('app-chat:dh4')).toMatchObject({ viewId: 'page-4', url: 'https://example.com/page-4', title: 'Title page-4' })
+    expect(conversationPage('someone-else')).toBeNull()
+    ctx.destroy()
+  })
+
+  it('lists the pages a space\'s conversations opened, and ends them when asked', () => {
+    const a = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:a', spaceId: 'space-x' } })
+    const b = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:b', spaceId: 'space-y' } })
+    openTab('x-page')
+    openTab('y-page')
+    a.trackView('x-page')
+    b.trackView('y-page')
+
+    expect(listSpacePageIds('space-x')).toEqual(['x-page'])
+    expect(listSpacePageIds('space-none')).toEqual([])
+    closeBrowserPages(['x-page'])
+    expect(states.has('x-page')).toBe(false)
+    expect(states.has('y-page')).toBe(true)
+    a.destroy()
+    b.destroy()
   })
 })

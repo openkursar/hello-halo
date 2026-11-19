@@ -252,8 +252,9 @@ export async function startHttpServer(
   // Register API routes
   registerApiRoutes(expressApp)
 
+  const useViteProxy = is.dev && Boolean(process.env.ELECTRON_RENDERER_URL)
   // Serve static files (frontend)
-  if (is.dev) {
+  if (useViteProxy) {
     // In development, proxy to Vite dev server
     expressApp.use('/{*path}', (req, res) => {
       // Check if authenticated (has valid token in query or localStorage check via cookie)
@@ -349,7 +350,7 @@ export async function startHttpServer(
   initWebSocket(httpServer)
 
   // In dev mode, proxy Vite HMR WebSocket connections
-  if (is.dev) {
+  if (useViteProxy) {
     httpServer.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url || '/', `http://${req.headers.host}`)
 

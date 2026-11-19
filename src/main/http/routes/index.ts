@@ -26,6 +26,8 @@ import { registerTaskRoutes } from './task.routes'
 import { registerGitRoutes } from './git.routes'
 import { registerCodeReviewRoutes } from './code-review.routes'
 import { registerSkillsRoutes } from './skills.routes'
+import { registerCanvasRoutes } from './canvas.routes'
+import { registerAIBrowserRoutes } from './ai-browser.routes'
 
 /**
  * Register all API routes.
@@ -50,6 +52,8 @@ export function registerApiRoutes(app: Express, options: { assistant?: boolean }
   registerGitRoutes(app)
   registerCodeReviewRoutes(app)
   registerSkillsRoutes(app)
+  registerCanvasRoutes(app)
+  registerAIBrowserRoutes(app)
 
   console.log('[HTTP] API routes registered')
 }

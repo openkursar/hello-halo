@@ -12,9 +12,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const env = vi.hoisted(() => ({
   runner: null as any,
   activeConversationId: null as string | null,
-  views: {} as Record<string, { viewId: string; url: string | null }>,
+  views: {} as Record<string, { viewId: string; url: string | null; title?: string | null }>,
   attach: vi.fn(),
-  setOperating: vi.fn(),
 }))
 
 vi.mock('react', async original => ({
@@ -27,12 +26,7 @@ vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text
 vi.mock('../../../src/renderer/stores/canvas.store', () => ({
   useCanvasStore: (select: any) => select({ attachAIBrowserView: env.attach }),
 }))
-vi.mock('../../../src/renderer/stores/chat.store', () => ({
-  useChatStore: () => env.activeConversationId,
-  selectActiveConversationId: () => null,
-}))
 vi.mock('../../../src/renderer/stores/ai-browser.store', () => ({
-  useAIBrowserStore: (select: any) => select({ setOperating: env.setOperating }),
   useActiveConversationBrowserView: () => (env.activeConversationId ? env.views[env.activeConversationId] ?? null : null),
 }))
 
@@ -74,7 +68,6 @@ describe('BrowserTaskCard live view', () => {
     env.activeConversationId = DH_KEY
     env.views = {}
     env.attach.mockReset().mockResolvedValue('tab-1')
-    env.setOperating.mockReset()
   })
 
   it('is disabled until the on-screen conversation has a page', () => {
@@ -89,7 +82,15 @@ describe('BrowserTaskCard live view', () => {
     expect(button.props.disabled).toBe(false)
     button.props.onClick()
 
-    expect(env.attach).toHaveBeenCalledWith('ai-browser-42', 'https://example.com/live', '🤖 AI Browser')
+    expect(env.attach).toHaveBeenCalledWith('ai-browser-42', 'https://example.com/live', undefined)
+  })
+
+  it('names the tab after the page itself', () => {
+    env.views[DH_KEY] = { viewId: 'ai-browser-42', url: 'https://example.com/live', title: 'Example page' }
+
+    viewButton(render()).props.onClick()
+
+    expect(env.attach).toHaveBeenCalledWith('ai-browser-42', 'https://example.com/live', 'Example page')
   })
 
   it('never offers another conversation’s page', () => {
@@ -103,7 +104,7 @@ describe('BrowserTaskCard live view', () => {
 
     viewButton(render()).props.onClick()
 
-    expect(env.attach).toHaveBeenCalledWith('ai-browser-42', 'https://example.com/a', '🤖 AI Browser')
+    expect(env.attach).toHaveBeenCalledWith('ai-browser-42', 'https://example.com/a', undefined)
   })
 
   it('has no button where live view is switched off (IM, team, automation views)', () => {
@@ -112,12 +113,8 @@ describe('BrowserTaskCard live view', () => {
     expect(viewButton(render({ showViewButton: false }))).toBeUndefined()
   })
 
-  it('reports operating state for the on-screen conversation only while its turn runs', () => {
-    render({ isActive: true, browserToolCalls: [{ ...call, status: 'running' }] })
-    expect(env.setOperating).toHaveBeenCalledWith(DH_KEY, true)
-
-    env.setOperating.mockReset()
-    render({ isActive: false, browserToolCalls: [{ ...call, status: 'running' }] })
-    expect(env.setOperating).not.toHaveBeenCalled()
+  it('does not decide whether the AI is operating: that comes from the main process, card or no card', () => {
+    // The card is only on screen while its conversation is; the signal must not depend on it.
+    expect(() => render({ isActive: true, browserToolCalls: [{ ...call, status: 'running' }] })).not.toThrow()
   })
 })

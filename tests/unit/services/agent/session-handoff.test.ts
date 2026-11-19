@@ -44,7 +44,7 @@ vi.mock('../../../../src/main/openai-compat-router', async () => ({
 vi.mock('../../../../src/main/services/ai-sources', async () => {
   const { getConfig } = await import('../../../../src/main/foundation/config.service')
   const getSource = (id: string) => getConfig().aiSources?.sources.find(source => source.id === id) ?? null
-  return { getGroup: () => null, getAISourceManager: () => ({
+  return { ...await import('../../../../src/main/services/ai-sources/subagent-models'), getGroup: () => null, getAISourceManager: () => ({
     ensureInitialized: async () => {},
     getCurrentSourceConfig: () => getSource(getConfig().aiSources!.currentId!),
     getSourceConfig: getSource,
@@ -186,6 +186,7 @@ vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({ clearSupp
 vi.mock('../../../../src/main/apps/runtime/conversation-collab', () => ({ resolveConversationCollab: () => null, createConversationCollabMcpServer: vi.fn() }))
 vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({ createNotifyToolServer: () => ({}) }))
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({ createRemindersMcpServer: () => ({}) }))
+vi.mock('../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer: () => ({}) }))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({ createReportToolServer: vi.fn() }))
 vi.mock('../../../../src/main/services/notify-channels', () => ({ getEnabledChannels: () => [] }))
 vi.mock('../../../../src/main/services/memory-consolidation', () => ({ requestConsolidation: vi.fn() }))

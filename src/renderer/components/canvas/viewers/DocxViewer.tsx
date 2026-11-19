@@ -106,6 +106,7 @@ export default function DocxViewer({ tab, onScrollChange }: DocxViewerProps) {
             pages shrink on narrow screens instead of forcing overflow. */}
         <div
           ref={containerRef}
+          data-canvas-content-ready={!rendering}
           className="[&_.docx-wrapper]:!bg-transparent [&_.docx-wrapper]:!p-4 sm:[&_.docx-wrapper]:!p-8 [&_.docx-wrapper>section.docx]:!shadow-md [&_.docx-wrapper>section.docx]:max-w-full [&_.docx-wrapper>section.docx]:box-border"
         />
       </div>

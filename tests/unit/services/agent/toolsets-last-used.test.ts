@@ -14,6 +14,7 @@ const { saveConfig, openSet } = vi.hoisted(() => ({
   openSet: new Set<string>()
 }))
 
+vi.mock('../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer: () => ({ name: 'canvas' }) }))
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(() => ({})),
   saveConfig

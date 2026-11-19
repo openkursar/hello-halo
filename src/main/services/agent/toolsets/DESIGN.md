@@ -59,6 +59,13 @@ actual access grants, tool restrictions and platform availability remain host po
 | `capability-index.ts` | `buildToolsetSection`: guides for the mode's mounted capabilities |
 | `service.ts` | User-initiated open/close/list façade for transport |
 
+Beside the toolsets, the broker mounts `canvas` (`services/canvas-show`,
+`canvas_show`) for every space conversation: someone may have it on screen. It
+is no switch and no toolset: one small tool, used rarely, so its definition is
+deferred (`tool-discovery.ts`) and only a one-line summary sits in every request. A
+digital human's own chat in Halo mounts it from `apps/runtime/app-chat.ts`;
+IM, HTTP, team and automation entries have no screen and do not.
+
 ## 4) Seeding & rebuild
 
 - `send-message.ts` / `ensureSessionWarm` pass a deferred builder

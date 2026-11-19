@@ -10,8 +10,8 @@ export { ContentCanvas, CollapsibleCanvas } from './ContentCanvas'
 // Collapses the canvas, or brings a collapsed one back (shows the tab count)
 export { CanvasToggleButton } from './CanvasToggleButton'
 
-// Terminal pty close policy (mounted once at the space level, always active)
-export { TerminalCloseGuard } from './TerminalCloseGuard'
+// What closing tabs ends, and the question before ending the AI's work (mounted where the canvas lives)
+export { CanvasCloseGuard } from './CanvasCloseGuard'
 
 // Opens chat tables in the canvas (wraps pages that host one)
 export { CanvasTableOpener } from './CanvasTableOpener'

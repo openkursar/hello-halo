@@ -8,6 +8,8 @@ const installedContexts = new WeakMap<object, { appId: string; policy: ServiceCo
 
 const deferredCapabilities = new Set(['ai-browser', 'ai-terminal'])
 const deferredBuiltins = new Map([
+  // Called rarely by design; only this line stays in every request.
+  ['canvas', 'Bring a page, terminal or file in front of the user in Halo\'s canvas.'],
   ['halo-apps', 'Create and manage digital humans, their settings and installed capabilities.'],
   ['halo-email', 'Read, search and send email through the configured email account.'],
 ])

@@ -95,8 +95,9 @@ export default function PdfViewer({ tab }: PdfViewerProps) {
     const canvas = canvasRef.current
     if (!doc || !canvas || containerWidth === 0) return
     let cancelled = false
+    delete canvas.dataset.canvasContentReady
 
-    doc.getPage(pageNum).then((page) => {
+    void doc.getPage(pageNum).then((page) => {
       if (cancelled) return
       renderTaskRef.current?.cancel()
 
@@ -116,12 +117,11 @@ export default function PdfViewer({ tab }: PdfViewerProps) {
       if (!ctx) return
       const task = page.render({ canvasContext: ctx, viewport, canvas })
       renderTaskRef.current = task
-      task.promise.catch((err) => {
-        // Cancellation is expected when zoom/page changes quickly
-        if (err?.name !== 'RenderingCancelledException') {
-          console.error('[PdfViewer] Failed to render page:', err)
-        }
+      return task.promise.then(() => {
+        if (!cancelled) canvas.dataset.canvasContentReady = 'true'
       })
+    }).catch(error => {
+      if (!cancelled) console.error('[PdfViewer] Failed to render page', { page: pageNum }, error)
     })
 
     return () => {

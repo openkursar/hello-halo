@@ -25,7 +25,6 @@ import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
-import { LiveSessionsHeader } from './LiveSessionsHeader'
 import { ComposerMenu, type ComposerMenuSection } from './composer-menu/ComposerMenu'
 import { useComposerToolsets } from './composer-menu/useComposerToolsets'
 import { sortToolsets, toolsetDescription, toolsetIcon, toolsetLabel } from './composer-menu/toolset-display'
@@ -1343,10 +1342,6 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
           className="hidden"
           onChange={handleFileInputChange}
         />
-
-        {/* Live AI sessions — capsule tab adhered to the input's top-left edge.
-            Sibling above the input card; the input box itself is untouched. */}
-        <LiveSessionsHeader />
 
         {/* Inset past the card's corner radius so the shelf sits on its straight top edge. */}
         {goal && <div className={standalone ? 'mx-6' : 'mx-5'}>{goal.shelf}</div>}

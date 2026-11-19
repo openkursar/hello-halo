@@ -30,17 +30,25 @@ import {
   shutdownPtyHost
 } from './host'
 import { emitTerminalData, emitTerminalLifecycle } from './events'
+import { isPersonInput } from './person-input'
+import { createActivityHold } from '../../../shared/ai-operating'
 import type { PtyHostEvent } from '../../../shared/protocol/pty-host.protocol'
 import type {
   CreateTerminalOptions,
   TerminalInfo,
-  TerminalLifecycleEvent
+  TerminalLifecycleEvent,
+  TerminalSnapshotEntry
 } from '../../../shared/types/terminal'
 
 export class TerminalContext extends EventEmitter {
   private sessions = new Map<string, TerminalSessionProxy>()
   /** Sessions the user killed: removed from the registry on the worker's exit event. */
   private killed = new Set<string>()
+  private operating = createActivityHold<string>((id, active) => this.emitOperating(id, active))
+  /** The conversation whose AI last operated each session. */
+  private operators = new Map<string, string>()
+  /** Sessions a person typed in since the AI's last call on them. */
+  private typedSinceAi = new Set<string>()
   private workDir: string
   readonly flow: TerminalFlowController
 
@@ -90,6 +98,14 @@ export class TerminalContext extends EventEmitter {
     return [...this.sessions.values()].map(s => s.info)
   }
 
+  listForClient(): TerminalSnapshotEntry[] {
+    return Array.from(this.sessions.values(), ({ id, info }) => ({
+      ...info,
+      operating: this.operating.isActive(id),
+      conversationId: this.operators.get(id),
+    }))
+  }
+
   kill(id: string): boolean {
     const session = this.sessions.get(id)
     if (!session) return false
@@ -106,11 +122,69 @@ export class TerminalContext extends EventEmitter {
     return true
   }
 
-  /** Signal that the AI is (or is not) actively writing to a session. */
-  markAiActivity(id: string, writing: boolean): void {
+  /** Ends every running session of a space; returns how many. */
+  killSpaceSessions(spaceId: string): number {
+    let count = 0
+    for (const session of [...this.sessions.values()]) {
+      if (session.info.spaceId !== spaceId || session.info.state !== 'running') continue
+      this.kill(session.id)
+      count++
+    }
+    return count
+  }
+
+  /**
+   * An AI tool call on a session started. People see the session as operated
+   * from the first call until a while after the last one ends; only those two
+   * moments are announced (see shared/ai-operating.ts).
+   */
+  beginAiOperation(id: string, conversationId?: string): void {
+    if (!this.sessions.has(id)) return
+    const previous = this.operators.get(id)
+    if (conversationId) this.operators.set(id, conversationId)
+    if (this.operating.isActive(id) && conversationId && previous !== conversationId) {
+      this.emitOperating(id, true)
+    }
+    this.operating.begin(id)
+  }
+
+  endAiOperation(id: string): void {
+    this.operating.end(id)
+  }
+
+  /**
+   * Keyboard input reached a session. Once the AI has worked in it, input a
+   * person typed (not a reply the terminal generated itself) is remembered so
+   * the AI's next call on it can say so. What was typed is never kept.
+   */
+  noteUserInput(id: string, data: string): void {
+    const session = this.sessions.get(id)
+    if (!session?.info.aiTouched || !isPersonInput(data)) return
+    this.typedSinceAi.add(id)
+  }
+
+  /** Whether a person typed in the session since the AI's last call on it; asking clears it. */
+  takeUserInputNote(id: string): boolean {
+    return this.typedSinceAi.delete(id)
+  }
+
+  private emitOperating(id: string, operating: boolean): void {
     const session = this.sessions.get(id)
     if (!session) return
-    this.emitLifecycle({ sessionId: id, type: 'ai-activity' as const, info: session.info, aiWriting: writing })
+    this.emitLifecycle({
+      sessionId: id,
+      type: 'ai-activity' as const,
+      info: session.info,
+      operating,
+      conversationId: this.operators.get(id),
+    })
+  }
+
+  /** The session ended: nothing about the AI's work in it is reported any more. */
+  private forgetAiWork(id: string): void {
+    this.operating.forget(id)
+    this.operators.delete(id)
+    this.typedSinceAi.delete(id)
   }
 
   /**
@@ -158,6 +232,7 @@ export class TerminalContext extends EventEmitter {
           break
         }
         session.applyInfo(event.info)
+        this.forgetAiWork(event.sessionId)
         this.emitLifecycle({ sessionId: event.sessionId, type: 'exited' as const, info: session.info })
         // A user-killed session is not retained for replay (the worker freed
         // its buffers on the kill notification), so drop the proxy now.
@@ -183,6 +258,7 @@ export class TerminalContext extends EventEmitter {
     this.sessions.delete(id)
     this.killed.delete(id)
     this.flow.drop(id)
+    this.forgetAiWork(id)
     this.emitLifecycle({ sessionId: id, type: 'removed' as const })
   }
 
@@ -202,6 +278,7 @@ export class TerminalContext extends EventEmitter {
       session.info.state = 'exited'
       session.info.exitCode = null
       this.flow.drop(session.id)
+      this.forgetAiWork(session.id)
       this.emitLifecycle({ sessionId: session.id, type: 'exited' as const, info: session.info })
     }
   }

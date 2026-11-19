@@ -23,18 +23,25 @@ export { createScopedBrowserContext }
 export { getInteractiveBrowserContext, releaseInteractiveBrowserContext } from './context'
 // Every page a conversation holds, for a client that missed the live events.
 export { listLivePages } from './context'
-// A tray stop, refused unless the page is the named conversation's alone.
+// The user closing an AI page, refused unless the page is the named conversation's alone.
 export { stopLivePage } from './context'
+// The page a conversation acts on, for bringing it in front of the user.
+export { conversationPage } from './context'
+// Pages that end with their space.
+export { listSpacePageIds, closeBrowserPages } from './context'
 export type { BrowserContext } from './context'
 
 // View-lifecycle event bus (consumed by ipc/ai-browser.ts transport layer)
 export {
   onBrowserActiveView,
+  onBrowserPageOpened,
   onBrowserViewGone,
   onBrowserConversationReleased,
+  onBrowserOperating,
   type BrowserActiveViewEvent,
   type BrowserViewGoneEvent,
   type BrowserConversationReleasedEvent,
+  type BrowserOperatingEvent,
 } from './events'
 
 export { AI_BROWSER_DESCRIPTION, AI_BROWSER_INSTRUCTIONS, AI_BROWSER_SYSTEM_PROMPT } from './guidance'

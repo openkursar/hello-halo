@@ -2,7 +2,7 @@ import { createServer, createConnection, type Socket } from 'node:net'
 import type { BrowserContext, Page } from '@playwright/test'
 import { test as base, expect } from './acceptance-app'
 import type { HaloAPI } from '../../../src/preload'
-import { serveBuiltRenderer } from './acceptance-renderer-redirect'
+import { installRemoteLoopbackGuard, readRemoteLoopbackGuard } from './acceptance-remote-lifecycle'
 
 interface RemoteStatus { server: { port: number; token: string | null; running: boolean } }
 interface RemoteFixtures {
@@ -54,14 +54,23 @@ async function startLink(port: number) {
 export const test = base.extend<RemoteFixtures>({
   remote: async ({ acceptanceApp, browser }, use, testInfo) => {
     const packaged = await acceptanceApp.app.evaluate(({ app }) => app.isPackaged)
-    const assets = packaged ? null : await serveBuiltRenderer(acceptanceApp.app)
     let link: Awaited<ReturnType<typeof startLink>> | undefined
     let context: BrowserContext | undefined
+    let guarded = false
+    let remotePort: number | undefined
     const failures: unknown[] = []
     try {
+      await acceptanceApp.app.evaluate(installRemoteLoopbackGuard)
+      guarded = true
       const enabled = await acceptanceApp.window.evaluate(async port => (globalThis as unknown as { halo: HaloAPI }).halo.enableRemoteAccess(port), await freePort())
       expect(enabled.success).toBe(true)
       const status = enabled.data as RemoteStatus
+      remotePort = status.server.port
+      const binding = await acceptanceApp.app.evaluate(readRemoteLoopbackGuard)
+      expect(binding.violations).toEqual([])
+      expect(binding.attempts.filter(attempt => attempt.listening && attempt.actual?.port === remotePort)).toEqual([
+        expect.objectContaining({ actual: { address: '127.0.0.1', family: 'IPv4', port: remotePort } }),
+      ])
       expect(status.server.running).toBe(true)
       expect(status.server.token).toBeTruthy()
       link = await startLink(status.server.port)
@@ -85,13 +94,18 @@ export const test = base.extend<RemoteFixtures>({
     } catch (error) { failures.push(error) }
     finally {
       try { await context?.close() } catch (error) { failures.push(error) }
-      let rendererConnections: number | undefined
-      if (assets) {
-        try { rendererConnections = await assets.close() } catch (error) { failures.push(error) }
+      if (guarded) {
+        try {
+          const stopped = await acceptanceApp.window.evaluate(() => (globalThis as unknown as { halo: HaloAPI }).halo.disableRemoteAccess())
+          expect(stopped.success).toBe(true)
+          const binding = await acceptanceApp.app.evaluate(readRemoteLoopbackGuard)
+          expect(binding.violations).toEqual([])
+          expect(binding.attempts.some(attempt => attempt.listening && attempt.actual?.port === remotePort)).toBe(false)
+        } catch (error) { failures.push(error) }
       }
       if (link) {
         try {
-          await testInfo.attach('remote-transport', { body: JSON.stringify({ renderer: packaged ? 'packaged' : 'built-assets-development-proxy', rendererConnections, events: link.events }), contentType: 'application/json' })
+          await testInfo.attach('remote-transport', { body: JSON.stringify({ renderer: packaged ? 'packaged' : 'built-application-assets', events: link.events }), contentType: 'application/json' })
         } catch (error) { failures.push(error) }
         try { await link.close() } catch (error) { failures.push(error) }
       }

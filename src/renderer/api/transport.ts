@@ -256,6 +256,23 @@ const _subscribedConversations = new Set<string>()
 export type WsConnectionState = 'connected' | 'disconnected' | 'connecting'
 
 const wsStateListeners = new Set<(state: WsConnectionState) => void>()
+let authenticatedSocket: WebSocket | null = null
+const wsAuthenticatedListeners = new Set<(isCurrent: () => boolean) => void>()
+
+/** Recover missed data only when the new socket can already receive live events. */
+export function onWsAuthenticated(callback: (isCurrent: () => boolean) => void): () => void {
+  wsAuthenticatedListeners.add(callback)
+  if (authenticatedSocket && wsConnection === authenticatedSocket) notifyWsAuthenticated(authenticatedSocket, callback)
+  return () => { wsAuthenticatedListeners.delete(callback) }
+}
+
+function notifyWsAuthenticated(socket: WebSocket, callback: (isCurrent: () => boolean) => void): void {
+  try {
+    callback(() => socket === wsConnection && socket === authenticatedSocket)
+  } catch (error) {
+    console.warn('[WS] Authenticated connection listener failed', error)
+  }
+}
 
 /** Subscribe to WebSocket connection state changes */
 export function onWsStateChange(cb: (state: WsConnectionState) => void): () => void {
@@ -272,7 +289,7 @@ function emitWsState(state: WsConnectionState) {
 export function connectWebSocket(): void {
   // Works in both remote-browser and Capacitor modes
   if (isElectron()) return
-  if (wsConnection?.readyState === WebSocket.OPEN) return
+  if (wsConnection && wsConnection.readyState <= WebSocket.OPEN) return
 
   const token = getAuthToken()
   if (!token) {
@@ -290,22 +307,29 @@ export function connectWebSocket(): void {
   console.log(`[WS] Connecting to: ${wsUrl} (attempt: ${wsReconnectAttempt})`)
   emitWsState('connecting')
 
-  wsConnection = new WebSocket(wsUrl)
+  const socket = new WebSocket(wsUrl)
+  wsConnection = socket
 
-  wsConnection.onopen = () => {
+  socket.onopen = () => {
+    if (wsConnection !== socket) return
     console.log('[WS] Connected')
     wsReconnectAttempt = 0 // reset backoff on success
     emitWsState('connected')
     // Authenticate
-    wsConnection?.send(JSON.stringify({ type: 'auth', payload: { token } }))
+    socket.send(JSON.stringify({ type: 'auth', payload: { token } }))
   }
 
-  wsConnection.onmessage = (event) => {
+  socket.onmessage = (event) => {
+    if (wsConnection !== socket) return
     try {
       const message = JSON.parse(event.data)
 
       if (message.type === 'auth:success') {
         console.log('[WS] Authenticated')
+        if (authenticatedSocket !== socket) {
+          authenticatedSocket = socket
+          for (const listener of wsAuthenticatedListeners) notifyWsAuthenticated(socket, listener)
+        }
 
         // Re-subscribe to all previously subscribed conversations after reconnect
         if (_subscribedConversations.size > 0) {
@@ -339,7 +363,9 @@ export function connectWebSocket(): void {
     }
   }
 
-  wsConnection.onclose = () => {
+  socket.onclose = () => {
+    if (authenticatedSocket === socket) authenticatedSocket = null
+    if (wsConnection !== socket) return
     console.log('[WS] Disconnected')
     wsConnection = null
     emitWsState('disconnected')
@@ -356,7 +382,7 @@ export function connectWebSocket(): void {
     }
   }
 
-  wsConnection.onerror = (error) => {
+  socket.onerror = (error) => {
     console.error('[WS] Error:', error)
   }
 }
@@ -489,9 +515,12 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'browser:tab-opened': 'onBrowserTabOpened',
       'browser:zoom-changed': 'onBrowserZoomChanged',
       'canvas:tab-action': 'onCanvasTabAction',
+      'canvas:show-request': 'onCanvasShowRequest',
       'ai-browser:active-view-changed': 'onAIBrowserActiveViewChanged',
+      'ai-browser:page-opened': 'onAIBrowserPageOpened',
       'ai-browser:view-gone': 'onAIBrowserViewGone',
       'ai-browser:conversation-released': 'onAIBrowserConversationReleased',
+      'ai-browser:operating': 'onAIBrowserOperating',
       'artifact:tree-update': 'onArtifactTreeUpdate',
       'artifact:changed-batch': 'onArtifactChangedBatch',
       'perf:snapshot': 'onPerfSnapshot',

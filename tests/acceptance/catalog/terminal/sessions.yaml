@@ -5,22 +5,23 @@ title:
   en: Keep command sessions controllable
   zh: 让命令会话始终可控制
 story:
-  en: I can see a running terminal, return after closing its tab and deliberately terminate it.
-  zh: 我能看到运行终端，关闭标签后找回，并主动终止。
+  en: I can see every running terminal the AI used as a tab, and closing it asks once before it really ends the process.
+  zh: 我能把 AI 用过的每个运行终端看作一个标签，关闭时先问一次，然后真正结束进程。
 basis: documented
 references:
   - src/main/services/ai-terminal/DESIGN.md
-  - src/renderer/components/canvas/TerminalCloseGuard.tsx
+  - src/renderer/components/canvas/CanvasCloseGuard.tsx
+  - src/renderer/services/ai-work-close.ts
   - src/main/services/ai-terminal/available.ts
   - tests/e2e/specs/acceptance-terminal-sessions.spec.ts
   - tests/e2e/fixtures/acceptance-terminal-sessions.ts
 promises:
   lifetime:
-    en: An AI-touched terminal offers background retention versus termination when its tab is closed.
-    zh: AI 使用过的终端关闭标签时可选择后台保留或终止。
+    en: Closing the tab of a terminal the AI used asks once; ending it really ends the process, cancelling keeps both.
+    zh: 关闭 AI 用过的终端标签先问一次；结束即真正结束进程，取消则两者都保留。
   reachable:
-    en: Every retained live terminal remains reachable through its workspace’s live-session entry.
-    zh: 保留的活动终端可从所属空间的活动会话入口找到。
+    en: Every live terminal the AI used is a tab of its workspace's canvas, with no separate background list.
+    zh: AI 用过的每个活动终端都是所属空间画布的标签，没有单独的后台列表。
   output:
     en: The terminal presents real command output and input reaches the same session.
     zh: 终端显示真实输出，输入送达同一会话。
@@ -56,8 +57,8 @@ scenarios:
         zh: 双方观察同一活动会话及有序输出。
   - id: terminal.sessions.keep
     title:
-      en: Keep a terminal after closing its tab
-      zh: 关闭标签后保留终端
+      en: Change my mind about closing a terminal the AI used
+      zh: 关闭 AI 用过的终端时改变主意
     verifies:
       - lifetime
       - reachable
@@ -75,15 +76,15 @@ scenarios:
       - en: A running terminal has been used by the AI.
         zh: 运行中的终端已被 AI 使用。
     steps:
-      - en: Close its tab, choose background retention and reopen from live sessions.
-        zh: 关闭标签选择后台保留，再从活动会话重开。
+      - en: Close its tab, read the question and cancel.
+        zh: 关闭标签，阅读询问后取消。
     expected:
-      - en: The process is unchanged and its output remains visible.
-        zh: 进程未替换，输出仍可见。
+      - en: The question offers only ending it or cancelling; afterwards the same process runs, its tab is still there and still takes input.
+        zh: 询问只提供结束或取消；之后同一进程仍在运行，标签仍在且仍可输入。
   - id: terminal.sessions.terminate
     title:
-      en: Terminate retained work
-      zh: 终止保留的任务
+      en: End a terminal the AI used by closing its tab
+      zh: 关闭标签结束 AI 用过的终端
     verifies:
       - lifetime
       - reachable
@@ -97,14 +98,14 @@ scenarios:
     automation: automated
     requirements: *terminal_requirements
     notes:
-      en: The target terminal is created through the UI. A separately titled control terminal is created through the real public terminal API as a setup condition; this does not verify a UI naming action. The scripted model reads both actual terminals, after which the aggregate tray opens each exact entry. The user starts the isolated control program through its visible terminal, closes the target completely, then verifies the target is absent and the control remains in the tray. Actual program and shell PID exit, unchanged control identity and keyboard acknowledgements are required. Runner Node is only the harmless fixture executable, not evidence for Halo-shipped commands; unknown exit state retains the profile. macOS uses system Bash and Windows requires actual system PowerShell execution.
-      zh: 目标终端通过界面创建；带独立标题的对照终端通过真实公开终端 API 建立前置，不据此声称验证了界面命名。脚本模型实际读取两个终端后，从聚合入口打开对应的唯一条目；用户在可见对照终端启动隔离程序，完全关闭目标，再确认列表中目标消失而对照保留。必须验证程序及 shell 的操作系统 PID 已退出、对照身份不变及键盘回执。运行器 Node 仅是无害测试程序执行器，不代表 Halo 随包命令覆盖；退出状态未知时保留资料。macOS 使用系统 Bash，Windows 要求实际系统 PowerShell 执行。
+      en: The target terminal is created through the UI. A separately titled control terminal is created through the real public terminal API as a setup condition; this does not verify a UI naming action. The scripted model reads both actual terminals, which makes both the AI's tabs. The user starts the isolated control program through its visible terminal, closes the target's tab and chooses to end it, then verifies the target's tab is gone and the control's remains. Actual program and shell PID exit, unchanged control identity and keyboard acknowledgements are required. Runner Node is only the harmless fixture executable, not evidence for Halo-shipped commands; unknown exit state retains the profile. macOS uses system Bash and Windows requires actual system PowerShell execution.
+      zh: 目标终端通过界面创建；带独立标题的对照终端通过真实公开终端 API 建立前置，不据此声称验证了界面命名。脚本模型实际读取两个终端，使两者都成为 AI 的标签；用户在可见对照终端启动隔离程序，关闭目标标签并选择结束，再确认目标标签消失而对照标签保留。必须验证程序及 shell 的操作系统 PID 已退出、对照身份不变及键盘回执。运行器 Node 仅是无害测试程序执行器，不代表 Halo 随包命令覆盖；退出状态未知时保留资料。macOS 使用系统 Bash，Windows 要求实际系统 PowerShell 执行。
     preconditions:
-      - en: A test process runs in a retained terminal.
-        zh: 测试进程在保留终端运行。
+      - en: A test process runs in a terminal the AI used, beside another one.
+        zh: 测试进程在 AI 用过的终端中运行，旁边还有另一个终端。
     steps:
-      - en: Choose termination and inspect the process and live-session list.
-        zh: 选择终止并检查进程及活动列表。
+      - en: Close its tab, choose to end it and inspect the processes and the tabs.
+        zh: 关闭标签并选择结束，检查进程与标签。
     expected:
-      - en: The intended process ends and no stale live entry claims it is running.
-        zh: 指定进程结束，不遗留声称仍运行的活动入口。
+      - en: The intended process ends with its tab, and the other terminal and its tab are untouched.
+        zh: 指定进程随标签结束，另一个终端及其标签不受影响。

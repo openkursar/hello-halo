@@ -21,6 +21,7 @@ export {
   terminalInput,
   terminalResize,
   killTerminal,
+  endSpaceTerminals,
   getTerminalReplay,
   createTerminalForUser,
   terminalViewerAttach,

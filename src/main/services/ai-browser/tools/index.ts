@@ -23,6 +23,7 @@
  */
 
 import type { BrowserContext } from '../context'
+import type { SdkMcpToolDefinition } from '../../agent/mcp/types'
 import { buildNavigationTools } from './navigation'
 import { buildInputTools } from './input'
 import { buildSnapshotTools } from './snapshot'
@@ -45,5 +46,21 @@ export function buildAllTools(ctx: BrowserContext) {
     ...buildTabTools(ctx),         // 1 tool:  tab
     ...buildInspectTools(ctx),     // 1 tool:  inspect
     ...buildDownloadTools(ctx),    // 1 tool:  download
-  ]
+  ].map(definition => operating(ctx, definition))
+}
+
+/** Every call shows the conversation's page as operated by the AI while it runs. */
+function operating(ctx: BrowserContext, definition: SdkMcpToolDefinition): SdkMcpToolDefinition {
+  const handler = definition.handler
+  return {
+    ...definition,
+    handler: async (args, extra) => {
+      ctx.beginToolCall()
+      try {
+        return await handler(args, extra)
+      } finally {
+        ctx.endToolCall()
+      }
+    },
+  }
 }

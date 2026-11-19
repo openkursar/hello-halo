@@ -15,11 +15,12 @@
  */
 
 import { EventEmitter } from 'events'
-import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserViewGone } from '../../../shared/types/ai-browser'
+import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserOperating, AIBrowserPageOpened, AIBrowserViewGone } from '../../../shared/types/ai-browser'
 
 export type BrowserActiveViewEvent = AIBrowserActiveView
 export type BrowserViewGoneEvent = AIBrowserViewGone
 export type BrowserConversationReleasedEvent = AIBrowserConversationReleased
+export type BrowserOperatingEvent = AIBrowserOperating
 
 class BrowserEventBus extends EventEmitter {}
 
@@ -29,6 +30,15 @@ browserEventBus.setMaxListeners(0)
 
 export function emitBrowserActiveView(event: BrowserActiveViewEvent): void {
   browserEventBus.emit('active-view', event)
+}
+
+export function emitBrowserPageOpened(event: AIBrowserPageOpened): void {
+  browserEventBus.emit('page-opened', event)
+}
+
+export function onBrowserPageOpened(handler: (event: AIBrowserPageOpened) => void): () => void {
+  browserEventBus.on('page-opened', handler)
+  return () => browserEventBus.off('page-opened', handler)
 }
 
 export function emitBrowserViewGone(event: BrowserViewGoneEvent): void {
@@ -52,4 +62,13 @@ export function emitBrowserConversationReleased(event: BrowserConversationReleas
 export function onBrowserConversationReleased(handler: (e: BrowserConversationReleasedEvent) => void): () => void {
   browserEventBus.on('released', handler)
   return () => browserEventBus.off('released', handler)
+}
+
+export function emitBrowserOperating(event: BrowserOperatingEvent): void {
+  browserEventBus.emit('operating', event)
+}
+
+export function onBrowserOperating(handler: (e: BrowserOperatingEvent) => void): () => void {
+  browserEventBus.on('operating', handler)
+  return () => browserEventBus.off('operating', handler)
 }

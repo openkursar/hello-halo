@@ -380,7 +380,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
               // match the single-document spacing exactly (a heading-led chunk
               // sits tighter than a paragraph-led one). Known trade-off of
               // per-chunk rendering; not a bug to chase by retuning `pt-6`.
-              <div className={`prose prose-invert max-w-none px-6 sm:px-8 ${index === 0 ? 'pt-6 sm:pt-8' : 'pt-6'}`}>
+              <div data-canvas-content-ready={contentReady} className={`prose prose-invert max-w-none px-6 sm:px-8 ${index === 0 ? 'pt-6 sm:pt-8' : 'pt-6'}`}>
                 <Streamdown
                   mode="static"
                   controls={STREAMDOWN_CONTROLS}
@@ -401,7 +401,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
           onScroll={handleScroll}
           className="flex-1 overflow-auto"
         >
-          <div className="prose prose-invert max-w-none p-6 sm:p-8">
+          <div className="prose prose-invert max-w-none p-6 sm:p-8" data-canvas-content-ready={contentReady}>
             <Streamdown
               mode="static"
               controls={STREAMDOWN_CONTROLS}

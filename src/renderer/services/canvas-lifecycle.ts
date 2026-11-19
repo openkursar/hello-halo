@@ -14,7 +14,7 @@ import {
   MAX_LIVE_BROWSER_VIEWS,
   MAX_OPEN_TABS,
 } from '../../shared/constants/canvas-budget'
-import { planCanvasBudget, type CanvasBudgetLimits } from './canvas-budget'
+import { canEvictTab, planCanvasBudget, type CanvasBudgetLimits } from './canvas-budget'
 import { holdArtifactSpace } from './artifact-space-holds'
 import { gitDiscovery } from './git-discovery'
 import type { ChangesViewMemory } from '../types/changes-view'
@@ -26,7 +26,7 @@ import type { BrowserTabOpened } from '../../shared/types/browser-host'
 // ============================================
 
 /** What the tab list renders; a change to any other field is not the list's business. */
-const TAB_LIST_FIELDS = ['type', 'title', 'path', 'url', 'isDirty', 'isLoading', 'error'] as const
+const TAB_LIST_FIELDS = ['type', 'title', 'path', 'url', 'isDirty', 'isLoading', 'error', 'aiWork'] as const
 
 /** Tab types whose viewer parses raw bytes rather than text (see TabState.bytes). */
 const DOCUMENT_TYPES = new Set(['xlsx', 'docx', 'pdf'])
@@ -180,8 +180,31 @@ export interface TabState {
   changes?: ChangesSource
   /** A place to show once; see RevealRequest. */
   reveal?: RevealRequest
-  /** False for borrowed AI pages: closing their tab must not end the AI session. */
+  /** False for pages a conversation holds: the canvas shows them but does not end them itself. */
   browserViewOwned?: boolean
+  /**
+   * The tab shows the AI's live work: a running terminal it used, or a page it
+   * opened. Set and cleared by `syncAIWork` only.
+   */
+  aiWork?: boolean
+}
+
+/** A piece of the AI's live work that has a tab of its own (see services/ai-work-tabs). */
+export type AIWorkItem =
+  | { kind: 'terminal'; sessionId: string; title: string; activityAt: number }
+  | { kind: 'page'; viewId: string; url: string | null; title: string | null; activityAt: number }
+
+/**
+ * What closing tabs does to what they run. The canvas owns tabs, not ptys or
+ * the AI's pages, so the domain that can end them (and ask first) decides.
+ */
+export interface CanvasClosePolicy {
+  /** One tab closed by the user: end what it runs, asking first for the AI's work. False keeps the tab. */
+  closeOne(tab: TabState): Promise<boolean>
+  /** Several closed at once: keeps the AI's work, asking only when nothing else is closing. Null cancels; `keep` stays open. */
+  closeMany(tabs: readonly TabState[]): Promise<{ keep: ReadonlySet<string> } | null>
+  /** The tabs of a removed space: end what they run, without asking. */
+  endRemoved(tabs: readonly TabState[]): Promise<void>
 }
 
 // Callback types
@@ -446,6 +469,54 @@ function parkedForm(tab: TabState): TabState {
   return { ...tab, content: undefined, bytes: undefined, contentUnloaded: true, isLoading: false }
 }
 
+/** Which piece of AI work a tab shows, if it can show one. */
+function aiWorkKeyOf(tab: TabState): string | null {
+  if (tab.type === 'terminal' && tab.terminalSessionId) return `terminal:${tab.terminalSessionId}`
+  if (tab.type === 'browser' && tab.browserViewId && tab.browserViewOwned === false) return `page:${tab.browserViewId}`
+  return null
+}
+
+function aiWorkKey(item: AIWorkItem): string {
+  return item.kind === 'terminal' ? `terminal:${item.sessionId}` : `page:${item.viewId}`
+}
+
+function pageTitle(url: string | null, title: string | null): string {
+  if (title) return title
+  try {
+    if (url) return new URL(url).hostname || url
+  } catch {
+    // Not a URL worth naming the tab after.
+  }
+  return i18n.t('Web page')
+}
+
+/** A quiet tab for a piece of AI work: added, never opened or switched to. */
+function aiWorkTab(item: AIWorkItem): NewTab {
+  if (item.kind === 'terminal') {
+    return {
+      id: generateTabId(),
+      type: 'terminal',
+      title: item.title || 'Terminal',
+      terminalSessionId: item.sessionId,
+      isDirty: false,
+      isLoading: false,
+      aiWork: true,
+    }
+  }
+  return {
+    id: generateTabId(),
+    type: 'browser',
+    title: pageTitle(item.url, item.title),
+    url: item.url ?? undefined,
+    isDirty: false,
+    isLoading: false,
+    browserViewId: item.viewId,
+    browserViewOwned: false,
+    browserState: { isLoading: false, canGoBack: false, canGoForward: false },
+    aiWork: true,
+  }
+}
+
 // ============================================
 // CanvasLifecycle Class
 // ============================================
@@ -509,24 +580,17 @@ class CanvasLifecycle {
   private openStateChangeCallbacks: Set<OpenStateChangeCallback> = new Set()
 
   /**
-   * Policy for disposing a terminal's pty when its tab goes away. This manager
-   * owns tabs, not ptys, so it delegates the pty decision to the terminal domain
-   * (which can read session state and prompt the user):
-   *  - `confirmSingleClose` — a deliberate single-tab close: prompt keep vs
-   *    terminate for an AI-operated session, resolve false to cancel the close.
-   *  - `disposeOnBulkClose` — a non-interactive bulk teardown (closeAll / a
-   *    removed space): silently terminate the user's own terminals, keep
-   *    AI-operated ones alive (they remain reachable in the live-sessions tray).
-   * Absent a policy (host not mounted) closeAll removes tabs and leaves ptys
-   * running — the pre-existing decoupled behavior. A removed space's terminals
-   * wait for the next policy instead: spaces are removed from the spaces list,
-   * where the host is not mounted, and nothing else could reach them.
+   * What closing tabs ends (see CanvasClosePolicy). Absent a policy (its host
+   * not mounted) tabs close and what they run keeps running. A removed space's
+   * tabs wait for the next policy instead: spaces are removed from the spaces
+   * list, where the host is not mounted, and nothing else could reach them.
    */
-  private terminalClosePolicy: {
-    confirmSingleClose: (sessionId: string) => Promise<boolean>
-    disposeOnBulkClose: (sessionId: string) => Promise<void>
-  } | null = null
-  private pendingTerminalDisposals: string[] = []
+  private closePolicy: CanvasClosePolicy | null = null
+  private pendingRemovals: TabState[] = []
+  /** Spaces removed in this session: the AI's work there gets no new tab. */
+  private removedSpaces = new Set<string>()
+  /** AI tab id -> when its work was last active, to pick a tab when the canvas opens with none chosen. */
+  private aiActivity = new Map<string, number>()
 
   /**
    * Content type -> prompt shown before a user closes a tab of that type with
@@ -638,8 +702,9 @@ class CanvasLifecycle {
     this.memoryPressureUnsubscribe?.()
     this.memoryPressureUnsubscribe = null
 
-    // Destroy all browser views
-    this.closeAll()
+    // Release every tab's page; nothing is asked or ended on the way out.
+    this.closePolicy = null
+    void this.closeAll()
     for (const spaceId of [...this.parkedSpaces.keys()]) void this.forgetSpace(spaceId)
     this.spaceHold?.release()
     this.spaceHold = null
@@ -943,22 +1008,12 @@ class CanvasLifecycle {
       }
     }
 
-    // Parse URL for title
-    let displayTitle = title || '🤖 AI Browser'
-    if (!title) {
-      try {
-        displayTitle = `🤖 ${new URL(url).hostname}`
-      } catch {
-        // Keep default
-      }
-    }
-
     // Create tab with existing browserViewId
     const tabId = generateTabId()
     const tab: NewTab = {
       id: tabId,
       type: 'browser',
-      title: displayTitle,
+      title: pageTitle(url || null, title ?? null),
       url,
       isDirty: false,
       isLoading: false, // Already loaded by AI
@@ -1099,8 +1154,14 @@ class CanvasLifecycle {
   }
 
   /** Update a terminal tab's title (from lifecycle title events). */
-  setTerminalTitle(sessionId: string, title: string): void {
+  setTerminalTitle(sessionId: string, title: string, spaceId?: string): void {
     const isSession = (tab: TabState) => tab.type === 'terminal' && tab.terminalSessionId === sessionId
+    if (spaceId) {
+      for (const tab of this.spaceTabs(spaceId)?.values() ?? []) {
+        if (isSession(tab) && tab.title !== title) this.updateSpaceTab(spaceId, tab, { title })
+      }
+      return
+    }
     for (const [, tab] of this.tabs) {
       if (isSession(tab)) {
         this.patchTab(tab.id, { title })
@@ -1139,19 +1200,226 @@ class CanvasLifecycle {
   }
 
   /**
-   * Register the terminal close policy. Returns an unsubscribe function.
-   * Provided by TerminalCloseGuard, which can read session state and prompt the
-   * user. Only one policy is active at a time.
+   * Register what closing tabs ends (CanvasCloseGuard). Returns an unsubscribe
+   * function. Only one policy is active at a time.
    */
-  setTerminalClosePolicy(policy: {
-    confirmSingleClose: (sessionId: string) => Promise<boolean>
-    disposeOnBulkClose: (sessionId: string) => Promise<void>
-  }): () => void {
-    this.terminalClosePolicy = policy
-    void this.disposeTerminals(this.pendingTerminalDisposals.splice(0))
+  setClosePolicy(policy: CanvasClosePolicy): () => void {
+    this.closePolicy = policy
+    void this.endRemovedTabs(this.pendingRemovals.splice(0))
     return () => {
-      if (this.terminalClosePolicy === policy) this.terminalClosePolicy = null
+      if (this.closePolicy === policy) this.closePolicy = null
     }
+  }
+
+  // ============================================
+  // The AI's work as tabs
+  // ============================================
+
+  /**
+   * Bring every space's tabs in line with the AI's live work there, given for
+   * each space that has any (services/ai-work-tabs). New work gets a tab at the
+   * end of its space's tabs without opening the canvas or switching tabs, in a
+   * space not on screen too. Work that ended loses its mark; a terminal nobody
+   * ever looked at loses its tab as well.
+   */
+  syncAIWork(work: ReadonlyMap<string, readonly AIWorkItem[]>, changedSpaces?: ReadonlySet<string>): void {
+    if (changedSpaces) {
+      for (const spaceId of changedSpaces) this.syncSpaceAIWork(spaceId, work.get(spaceId) ?? [])
+      return
+    }
+    const spaces = new Set(work.keys())
+    if (this.currentSpaceId && [...this.tabs.values()].some(tab => tab.aiWork)) spaces.add(this.currentSpaceId)
+    for (const [spaceId, parked] of this.parkedSpaces) {
+      if ([...parked.tabs.values()].some(tab => tab.aiWork)) spaces.add(spaceId)
+    }
+    for (const spaceId of spaces) this.syncSpaceAIWork(spaceId, work.get(spaceId) ?? [])
+  }
+
+  /** Make sure one piece of AI work has its tab in `spaceId`; returns the tab id. */
+  ensureAIWorkTab(spaceId: string, item: AIWorkItem): string | null {
+    if (this.removedSpaces.has(spaceId)) return null
+    const shows = (tab: TabState) => item.kind === 'terminal'
+      ? tab.type === 'terminal' && tab.terminalSessionId === item.sessionId
+      : tab.browserViewId === item.viewId
+    const existing = [...this.spaceTabs(spaceId)?.values() ?? []].find(shows)
+    if (existing) return existing.id
+    const tab = aiWorkTab(item)
+    this.aiActivity.set(tab.id, item.activityAt)
+    this.addTabToSpace(spaceId, tab)
+    return tab.id
+  }
+
+  /**
+   * Make sure a file has a tab in `spaceId` without opening the canvas or
+   * switching to it; its content is read when the tab is first shown.
+   */
+  ensureFileTab(spaceId: string, path: string, presenting = false): string | null {
+    if (this.removedSpaces.has(spaceId)) return null
+    const tabs = this.spaceTabs(spaceId)
+    let counted = 0
+    let evictable = 0
+    for (const tab of tabs?.values() ?? []) {
+      if (tab.path === path) return tab.id
+      if (!tab.aiWork) counted++
+      if (canEvictTab(tab)) evictable++
+    }
+    // A quiet request cannot displace the user's tabs. A reveal protects its
+    // new tab as active and lets the ordinary eviction rule make room.
+    if (counted >= MAX_OPEN_TABS &&
+      (!presenting || spaceId !== this.currentSpaceId || evictable <= counted - MAX_OPEN_TABS)) return null
+    const { type, language } = detectContentType(path)
+    const nativePdf = type === 'pdf' && !api.isRemoteMode()
+    const tab: NewTab = {
+      id: generateTabId(),
+      type,
+      title: getFileName(path),
+      path,
+      language,
+      isDirty: false,
+      isLoading: false,
+      ...(nativePdf
+        ? { url: `file://${encodeURI(path)}`, browserState: { isLoading: true, canGoBack: false, canGoForward: false } }
+        : { contentUnloaded: true }),
+    }
+    this.addTabToSpace(spaceId, tab)
+    return tab.id
+  }
+
+  /**
+   * Pages whose conversation ended stay open as the user's own: their tabs now
+   * own them, so closing such a tab ends the page like any page the user opened.
+   */
+  adoptPages(viewIds: readonly string[]): void {
+    const adopted = new Set(viewIds)
+    const adopt = (tab: TabState) => tab.browserViewId && adopted.has(tab.browserViewId) && tab.browserViewOwned === false
+    for (const tab of [...this.tabs.values()]) {
+      if (adopt(tab)) this.patchTab(tab.id, { browserViewOwned: true, aiWork: undefined })
+    }
+    for (const parked of this.parkedSpaces.values()) {
+      for (const tab of [...parked.tabs.values()]) {
+        if (adopt(tab)) parked.tabs.set(tab.id, { ...tab, browserViewOwned: true, aiWork: undefined })
+      }
+    }
+  }
+
+  updateAIPageMetadata(spaceId: string, viewId: string, url: string | null, title: string | null): void {
+    const displayTitle = pageTitle(url, title)
+    for (const tab of this.spaceTabs(spaceId)?.values() ?? []) {
+      if (tab.browserViewId === viewId && (tab.title !== displayTitle || tab.url !== (url ?? undefined))) {
+        this.updateSpaceTab(spaceId, tab, { title: displayTitle, url: url ?? undefined })
+      }
+    }
+  }
+
+  /** Whether the user ever looked at the tab (it was the active tab at some point). */
+  private wasViewed(tabId: string, lastActivated: ReadonlyMap<string, number>): boolean {
+    return lastActivated.has(tabId)
+  }
+
+  /** The tabs of a space, shown or parked; undefined when it has none. */
+  private spaceTabs(spaceId: string): Map<string, TabState> | undefined {
+    if (spaceId === this.currentSpaceId) return this.tabs
+    return this.parkedSpaces.get(spaceId)?.tabs
+  }
+
+  /** Adds a tab to a space's tabs without opening the canvas or switching to it. */
+  private addTabToSpace(spaceId: string, tab: NewTab): void {
+    if (spaceId === this.currentSpaceId) {
+      this.addTab(tab, false)
+      return
+    }
+    let parked = this.parkedSpaces.get(spaceId)
+    if (!parked) {
+      parked = { tabs: new Map(), activeTabId: null, isOpen: false, lastActivated: new Map() }
+      this.parkedSpaces.set(spaceId, parked)
+    }
+    parked.tabs.set(tab.id, parkedForm({ ...tab, view: {} }))
+  }
+
+  private syncSpaceAIWork(spaceId: string, items: readonly AIWorkItem[]): void {
+    if (this.removedSpaces.has(spaceId)) return
+    const wanted = new Map(items.map(item => [aiWorkKey(item), item]))
+    const shown = spaceId === this.currentSpaceId
+    const parked = shown ? undefined : this.parkedSpaces.get(spaceId)
+    const tabs = shown ? this.tabs : parked?.tabs
+    const lastActivated = shown ? this.lastActivated : parked?.lastActivated ?? new Map<string, number>()
+
+    for (const tab of [...tabs?.values() ?? []]) {
+      const key = aiWorkKeyOf(tab)
+      const item = key ? wanted.get(key) : undefined
+      if (item) {
+        wanted.delete(key!)
+        this.aiActivity.set(tab.id, item.activityAt)
+        if (!tab.aiWork) this.updateSpaceTab(spaceId, tab, { aiWork: true })
+        continue
+      }
+      if (!tab.aiWork) continue
+      this.aiActivity.delete(tab.id)
+      if (tab.type === 'terminal' && !this.wasViewed(tab.id, lastActivated)) {
+        this.dropSpaceTab(spaceId, tab.id)
+      } else {
+        this.updateSpaceTab(spaceId, tab, { aiWork: undefined })
+      }
+    }
+
+    for (const item of wanted.values()) {
+      const tab = aiWorkTab(item)
+      this.aiActivity.set(tab.id, item.activityAt)
+      this.addTabToSpace(spaceId, tab)
+    }
+  }
+
+  private updateSpaceTab(spaceId: string, tab: TabState, patch: Partial<Omit<TabState, 'id' | 'view'>>): void {
+    if (spaceId === this.currentSpaceId) {
+      this.patchTab(tab.id, patch)
+      return
+    }
+    this.parkedSpaces.get(spaceId)?.tabs.set(tab.id, { ...tab, ...patch })
+  }
+
+  /** Removes a tab that holds no view and was never viewed (so it is not the active one). */
+  private dropSpaceTab(spaceId: string, tabId: string): void {
+    this.aiActivity.delete(tabId)
+    if (spaceId === this.currentSpaceId) {
+      if (!this.tabs.delete(tabId)) return
+      this.lastActivated.delete(tabId)
+      if (this.activeTabId === tabId) this.activeTabId = null
+      if (this.tabs.size === 0) this.setOpen(false)
+      this.notifyTabListChange()
+      return
+    }
+    const parked = this.parkedSpaces.get(spaceId)
+    if (!parked) return
+    parked.tabs.delete(tabId)
+    parked.lastActivated.delete(tabId)
+    if (parked.activeTabId === tabId) parked.activeTabId = null
+    if (parked.tabs.size === 0) this.parkedSpaces.delete(spaceId)
+  }
+
+  /**
+   * The tab to show when the canvas opens with none chosen: the one looked at
+   * last, else the AI's most recently active work, else the last tab.
+   */
+  private resumeTabId(): string | null {
+    let best: string | null = null
+    let bestSeq = -1
+    for (const tabId of this.tabs.keys()) {
+      const seq = this.lastActivated.get(tabId)
+      if (seq !== undefined && seq > bestSeq) {
+        best = tabId
+        bestSeq = seq
+      }
+    }
+    if (best) return best
+    let latest = -1
+    for (const tabId of this.tabs.keys()) {
+      const at = this.aiActivity.get(tabId)
+      if (at !== undefined && at > latest) {
+        best = tabId
+        latest = at
+      }
+    }
+    return best ?? [...this.tabs.keys()].pop() ?? null
   }
 
   /**
@@ -1171,18 +1439,19 @@ class CanvasLifecycle {
    * browser page-loss event so they can recover independently of AI sessions.
    */
   async closeTabsOfGoneView(viewId: string): Promise<void> {
-    const isGone = (tab: TabState) => tab.browserViewId === viewId && !tab.browserViewOwned
+    const isGone = (tab: TabState) => tab.browserViewId === viewId && (!tab.browserViewOwned || api.isRemoteMode())
     for (const [spaceId, parked] of this.parkedSpaces) {
       for (const tab of [...parked.tabs.values()]) {
         if (!isGone(tab)) continue
         parked.tabs.delete(tab.id)
         parked.lastActivated.delete(tab.id)
+        this.aiActivity.delete(tab.id)
       }
       if (parked.tabs.size === 0) this.parkedSpaces.delete(spaceId)
       else if (parked.activeTabId && !parked.tabs.has(parked.activeTabId)) parked.activeTabId = [...parked.tabs.keys()].pop()!
     }
     const stale = [...this.tabs.values()].filter(isGone)
-    for (const tab of stale) await this.closeTab(tab.id)
+    for (const tab of stale) await this.removeTab(tab.id, false)
   }
 
   private handleBrowserPageGone(viewId: string, reason: 'closed' | 'lost'): void {
@@ -1190,7 +1459,7 @@ class CanvasLifecycle {
     for (const tab of this.tabs.values()) {
       if (tab.browserViewId !== viewId || !tab.browserViewOwned) continue
       if (reason === 'closed') {
-        void this.closeTab(tab.id).catch(error => {
+        void this.removeTab(tab.id).catch(error => {
           console.error('[CanvasLifecycle] Closing a browser tab failed:', viewId, error)
         })
         continue
@@ -1219,7 +1488,8 @@ class CanvasLifecycle {
   }
 
   /**
-   * Close a tab
+   * The user closes one tab: unsaved edits and what the tab runs (a terminal,
+   * the AI's page) are asked about first, and the tab stays if either says no.
    */
   async closeTab(tabId: string): Promise<void> {
     const tab = this.tabs.get(tabId)
@@ -1231,24 +1501,29 @@ class CanvasLifecycle {
       return
     }
 
-    // Terminal tabs: defer to the close policy for the underlying pty (keep in
-    // background / terminate / cancel). A cancel aborts the whole close.
-    if (tab.type === 'terminal' && tab.terminalSessionId && this.terminalClosePolicy) {
-      const proceed = await this.terminalClosePolicy.confirmSingleClose(tab.terminalSessionId)
-      if (!proceed) return
-    }
+    const current = this.tabs.get(tabId)
+    if (!current) return
+    if (this.closePolicy && !(await this.closePolicy.closeOne(current))) return
+    await this.removeTab(tabId)
+  }
 
-    // Tear the tab's view down per ownership: an AI-attached view is only
-    // hidden, so the session it belongs to survives losing its tab.
+  /** Removes a tab, releasing its page per ownership; asks nothing and ends nothing else. */
+  private async removeTab(tabId: string, releaseView = true): Promise<void> {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+
+    // Tear the tab's view down per ownership: a page a conversation holds is
+    // only hidden here; ending it is the close policy's decision.
     const hasBrowserView = (tab.type === 'browser' || tab.type === 'pdf') && tab.browserViewId
-    if (hasBrowserView) {
+    if (releaseView && hasBrowserView) {
       await this.releaseBrowserView(tab)
     }
 
     // Remove tab
-    this.tabs.delete(tabId)
+    if (!this.tabs.delete(tabId)) return
     this.tabsSnapshot = null
     this.lastActivated.delete(tabId)
+    this.aiActivity.delete(tabId)
 
     // If closing active tab, switch to another tab
     if (this.activeTabId === tabId) {
@@ -1274,61 +1549,83 @@ class CanvasLifecycle {
   }
 
   /**
-   * Close all tabs. `confirmDirty` is for a close the user asked for: each
-   * dirty tab with a guard asks first, and one "keep" cancels the whole close.
+   * Close every tab and the canvas. `confirmDirty` is for a close the user
+   * asked for: each dirty tab with a guard asks first, and one "keep" cancels
+   * the whole close. Tabs the close policy keeps (the AI's work the user chose
+   * to keep) stay, with the canvas collapsed.
    */
   async closeAll(options?: { confirmDirty?: boolean }): Promise<void> {
+    await this.closeTabs([...this.tabs.keys()], { confirmDirty: options?.confirmDirty, collapse: true })
+  }
+
+  /**
+   * Close several tabs at once (close others, close to the right, close all).
+   * Unsaved edits are asked about one by one; the close policy is asked once
+   * for the lot and may keep some (the AI's work) or cancel. `collapse` closes
+   * the canvas too, leaving whatever was kept behind its edge handle.
+   */
+  async closeTabs(tabIds: readonly string[], options: { confirmDirty?: boolean; collapse?: boolean } = {}): Promise<void> {
     // A space switch during any await below parks these tabs and shows another
     // space's, which this close was not asked for.
     const generation = this.parkGeneration
     const spaceChanged = () => {
       if (this.parkGeneration === generation) return false
-      console.log('[CanvasLifecycle] Close all stopped: the space changed while it ran')
+      console.log('[CanvasLifecycle] Closing tabs stopped: the space changed while it ran')
       return true
     }
+    const targets = () => tabIds.flatMap(id => this.tabs.get(id) ?? [])
 
-    if (options?.confirmDirty) {
-      for (const tab of [...this.tabs.values()]) {
+    if (options.confirmDirty) {
+      for (const tab of targets()) {
         const dirtyGuard = tab.isDirty ? this.dirtyCloseGuards.get(tab.type) : undefined
         if (!dirtyGuard || !this.tabs.has(tab.id)) continue
         await this.switchTab(tab.id)
         if (spaceChanged()) return
         if (!(await dirtyGuard(tab))) {
-          console.log(`[CanvasLifecycle] Close all cancelled by user at dirty tab ${tab.id}`)
+          console.log(`[CanvasLifecycle] Closing tabs cancelled by user at dirty tab ${tab.id}`)
           return
         }
         if (spaceChanged()) return
       }
     }
 
-    // Tear down each tab's underlying resource. Browser/pdf views go by
-    // ownership (see releaseBrowserView). Terminals defer to the bulk disposal
-    // policy — non-interactive, so no per-tab prompts: the user's own terminals
-    // are terminated, AI-operated ones are kept alive in the tray.
-    const terminalDisposals: Promise<void>[] = []
-    for (const [, tab] of this.tabs) {
-      const hasBrowserView = (tab.type === 'browser' || tab.type === 'pdf') && tab.browserViewId
-      if (hasBrowserView) {
-        await this.releaseBrowserView(tab)
-        if (spaceChanged()) return
-      } else if (tab.type === 'terminal' && tab.terminalSessionId && this.terminalClosePolicy) {
-        terminalDisposals.push(this.terminalClosePolicy.disposeOnBulkClose(tab.terminalSessionId))
-      }
+    let keep: ReadonlySet<string> = new Set()
+    if (this.closePolicy) {
+      const decision = await this.closePolicy.closeMany(targets())
+      if (spaceChanged() || !decision) return
+      keep = decision.keep
     }
-    await Promise.all(terminalDisposals)
-    if (spaceChanged()) return
 
-    this.tabs.clear()
+    const closing = targets().filter(tab => !keep.has(tab.id))
+    for (const tab of closing) {
+      const hasBrowserView = (tab.type === 'browser' || tab.type === 'pdf') && tab.browserViewId
+      if (!hasBrowserView) continue
+      await this.releaseBrowserView(tab)
+      if (spaceChanged()) return
+    }
+
+    for (const tab of closing) {
+      this.tabs.delete(tab.id)
+      this.lastActivated.delete(tab.id)
+      this.aiActivity.delete(tab.id)
+    }
     this.tabsSnapshot = null
-    this.lastActivated.clear()
-    this.activeTabId = null
-    this.setOpen(false)
-
+    const activeClosed = this.activeTabId !== null && !this.tabs.has(this.activeTabId)
+    if (options.collapse || this.tabs.size === 0) {
+      if (activeClosed) this.activeTabId = null
+      this.setOpen(false)
+      this.notifyTabListChange()
+      if (activeClosed) this.notifyActiveTabChange()
+      return
+    }
     this.notifyTabListChange()
-    this.notifyActiveTabChange()
+    if (activeClosed) {
+      const next = this.resumeTabId()
+      if (next) await this.switchTab(next)
+    }
   }
 
-  async switchTab(tabId: string): Promise<void> {
+  async switchTab(tabId: string, { open = false } = {}): Promise<void> {
     const tab = this.tabs.get(tabId)
     if (!tab) {
       console.warn(`[CanvasLifecycle] Tab not found: ${tabId}`)
@@ -1338,35 +1635,45 @@ class CanvasLifecycle {
     const previousTabId = this.activeTabId
     const previousTab = previousTabId ? this.tabs.get(previousTabId) : null
 
-    // Publish before awaiting hide so overlapping switches see the new target.
+    const spaceId = this.currentSpaceId
+    const activation = ++this.activationSeq
     this.activeTabId = tabId
-    this.lastActivated.set(tabId, ++this.activationSeq)
-    if (this.currentSpaceId && tab.path && tab.type !== 'changes') {
-      gitDiscovery.noteFile(this.currentSpaceId, tab.path)
+    this.lastActivated.set(tabId, activation)
+    if (spaceId && tab.path && tab.type !== 'changes') {
+      gitDiscovery.noteFile(spaceId, tab.path)
     }
 
     const prevNeedsBrowserView = previousTab?.type === 'browser' || previousTab?.type === 'pdf'
     if (prevNeedsBrowserView && previousTab.browserViewId && previousTabId !== tabId) {
-      await api.hideBrowserView(previousTab.browserViewId)
+      const hide = this.hideBrowserView(previousTab.browserViewId)
+      if (open) {
+        // A reveal commits in this stack. A delayed hide must never open the
+        // canvas in whatever space the user has since moved to.
+        void hide.catch(error => console.warn('[CanvasLifecycle] Could not hide the previous page during reveal', { tabId: previousTabId, error }))
+      } else {
+        await hide
+      }
     }
 
+    const current = this.tabs.get(tabId)
+    if (!current || this.currentSpaceId !== spaceId || this.activeTabId !== tabId || this.lastActivated.get(tabId) !== activation) return
+
     // The outgoing viewer still owns the bounds; the new viewer presents after commit.
-    const needsBrowserView = tab.type === 'browser' || tab.type === 'pdf'
-    if (needsBrowserView && !tab.browserViewId) {
+    const needsBrowserView = current.type === 'browser' || current.type === 'pdf'
+    if (needsBrowserView && !current.browserViewId) {
       // Creation must not delay the tab switch; navigation state arrives by event.
-      this.createBrowserView(tabId, tab.url || 'about:blank').catch(err => {
+      this.createBrowserView(tabId, current.url || 'about:blank').catch(err => {
         console.error(`[CanvasLifecycle] Failed to create browser page for tab ${tabId}:`, err)
       })
     }
 
-    // Restore content released by the hidden-tab budget.
-    if (tab.contentUnloaded && tab.path) {
+    if (current.contentUnloaded && current.path) {
       this.patchTab(tabId, { contentUnloaded: false, isLoading: true, error: undefined })
-      void this.loadFileContent(tabId, tab.path, tab.type)
+      void this.loadFileContent(tabId, current.path, current.type)
     }
 
     this.notifyActiveTabChange()
-
+    if (open) this.setOpen(true)
     void this.applyBudgets()
   }
 
@@ -1437,7 +1744,7 @@ class CanvasLifecycle {
   private async closeTabForBudget(tabId: string): Promise<boolean> {
     const untouched = () => {
       const tab = this.tabs.get(tabId)
-      return !!tab && tabId !== this.activeTabId && !tab.isDirty
+      return !!tab && tabId !== this.activeTabId && canEvictTab(tab)
     }
     if (!untouched()) return false
     const tab = this.tabs.get(tabId)!
@@ -1446,7 +1753,7 @@ class CanvasLifecycle {
       await this.releaseBrowserView(tab)
       if (!untouched()) return false
     }
-    await this.closeTab(tabId)
+    await this.removeTab(tabId)
     return !this.tabs.has(tabId)
   }
 
@@ -1851,6 +2158,12 @@ class CanvasLifecycle {
     // Can't open if no tabs
     if (open && this.tabs.size === 0) return
 
+    // Tabs the AI added quietly may be all there is: open on one of them.
+    if (open && !this.activeTabId) {
+      const resume = this.resumeTabId()
+      if (resume) void this.switchTab(resume)
+    }
+
     this.isOpen = open
     this.isTransitioning = true
 
@@ -1906,6 +2219,11 @@ class CanvasLifecycle {
     return this.tabs.get(tabId)
   }
 
+  /** Whether a tab is still kept in its original space, even if parked. */
+  hasSpaceTab(spaceId: string, tabId: string): boolean {
+    return !this.removedSpaces.has(spaceId) && !!this.spaceTabs(spaceId)?.has(tabId)
+  }
+
   getActiveTabId(): string | null {
     return this.activeTabId
   }
@@ -1944,6 +2262,13 @@ class CanvasLifecycle {
   async enterSpace(spaceId: string): Promise<void> {
     const previousSpaceId = this.currentSpaceId
     this.currentSpaceId = spaceId
+    // A space removed and added back is a space again.
+    this.removedSpaces.delete(spaceId)
+    if (!previousSpaceId && this.parkedSpaces.has(spaceId)) {
+      // The AI's work that got its tabs before any space was entered joins the tabs already shown.
+      this.mergeParked(spaceId)
+      return
+    }
     if (!previousSpaceId || previousSpaceId === spaceId || (this.tabs.size === 0 && !this.parkedSpaces.has(spaceId))) {
       this.syncSpaceHold()
       return
@@ -1959,19 +2284,32 @@ class CanvasLifecycle {
 
   /**
    * Closes a space's tabs for good, shown or parked: the space was deleted or
-   * removed from the list. Like closing all tabs, without asking — the user's
-   * own terminals end, the ones the AI used stay in its tray.
+   * removed from the list. Without asking, what they run ends with them.
    */
   async forgetSpace(spaceId: string): Promise<void> {
     gitDiscovery.forget(spaceId)
+    this.removedSpaces.add(spaceId)
     const released = spaceId === this.currentSpaceId ? this.parkShown(spaceId) : undefined
     const parked = this.parkedSpaces.get(spaceId)
     this.parkedSpaces.delete(spaceId)
     const shown = released ? this.showParked(undefined) : undefined
-    const sessionIds = parked
-      ? [...parked.tabs.values()].flatMap(tab => tab.type === 'terminal' && tab.terminalSessionId ? [tab.terminalSessionId] : [])
-      : []
-    await Promise.all([released, shown, this.disposeTerminals(sessionIds)])
+    const tabs = [...parked?.tabs.values() ?? []]
+    for (const tab of tabs) this.aiActivity.delete(tab.id)
+    // A parked borrowed page can become canvas-owned after the space was left.
+    const adopted = tabs.filter(tab => tab.browserViewId && tab.browserViewOwned)
+    const releasedAdopted = adopted.map(tab => this.releaseBrowserView(tab).catch(error => {
+      console.error('[CanvasLifecycle] Could not release a removed workspace page', { spaceId, viewId: tab.browserViewId, error })
+    }))
+    await Promise.all([released, shown, ...releasedAdopted, this.endRemovedTabs(tabs)])
+  }
+
+  private mergeParked(spaceId: string): void {
+    const parked = this.parkedSpaces.get(spaceId)
+    if (!parked) return
+    this.parkedSpaces.delete(spaceId)
+    for (const [tabId, tab] of parked.tabs) this.tabs.set(tabId, tab)
+    for (const [tabId, seq] of parked.lastActivated) this.lastActivated.set(tabId, seq)
+    this.notifyTabListChange()
   }
 
   /**
@@ -2033,16 +2371,17 @@ class CanvasLifecycle {
     return activated ?? Promise.resolve()
   }
 
-  private async disposeTerminals(sessionIds: string[]): Promise<void> {
-    if (sessionIds.length === 0) return
-    const policy = this.terminalClosePolicy
+  private async endRemovedTabs(tabs: TabState[]): Promise<void> {
+    if (tabs.length === 0) return
+    const policy = this.closePolicy
     if (!policy) {
-      this.pendingTerminalDisposals.push(...sessionIds)
+      this.pendingRemovals.push(...tabs)
       return
     }
-    const results = await Promise.allSettled(sessionIds.map(sessionId => policy.disposeOnBulkClose(sessionId)))
-    for (const result of results) {
-      if (result.status === 'rejected') console.error('[CanvasLifecycle] Ending a removed space\'s terminal failed:', result.reason)
+    try {
+      await policy.endRemoved(tabs)
+    } catch (error) {
+      console.error('[CanvasLifecycle] Ending what a removed space\'s tabs ran failed:', error)
     }
   }
 

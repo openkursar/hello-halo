@@ -51,6 +51,7 @@ export interface BrowserPageOwner {
   isActive(): boolean
   reserve(viewId: string, background: boolean): void
   ready(viewId: string): void
+  childOpened(viewId: string, openerViewId: string): boolean
   release(viewId: string): void
 }
 
@@ -372,7 +373,8 @@ class BrowserPageManager {
     const contents = this.getWebContents(viewId)
     if (!contents) throw new Error('Browser tab closed during creation')
     this.updateState(viewId, { url: request.url, isLoading: true })
-    if (!childOffscreen && this.mainWindow && !this.mainWindow.isDestroyed() && !this.mainWindow.webContents.isDestroyed()) {
+    if (childOffscreen || owner?.childOpened(viewId, openerViewId)) return
+    if (this.mainWindow && !this.mainWindow.isDestroyed() && !this.mainWindow.webContents.isDestroyed()) {
       const opened: BrowserTabOpened = { viewId, openerViewId, url: request.url, title: state.title, background: request.background, borrowed: !!owner }
       this.mainWindow.webContents.send('browser:tab-opened', opened)
     }

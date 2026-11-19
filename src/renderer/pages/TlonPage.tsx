@@ -22,7 +22,7 @@ import { KBList } from '../components/tlon/KBList'
 import { KBDetail } from '../components/tlon/KBDetail'
 import { CreateKBDialog } from '../components/tlon/CreateKBDialog'
 import { EmptyState } from '../components/tlon/EmptyState'
-import { CanvasTableOpener, CanvasToggleButton, ContentCanvas, TerminalCloseGuard } from '../components/canvas'
+import { CanvasTableOpener, CanvasToggleButton, ContentCanvas, CanvasCloseGuard } from '../components/canvas'
 import { useCanvasIsOpen } from '../stores/canvas.store'
 import { takeEntry, trackHome } from '../services/home-telemetry'
 
@@ -177,7 +177,7 @@ export function TlonPage() {
           />
         )}
 
-        <TerminalCloseGuard />
+        <CanvasCloseGuard />
       </div>
     </CanvasTableOpener>
   )

@@ -20,9 +20,27 @@ export interface AIBrowserActiveView {
   title: string | null
 }
 
+/** A website opened a child of an AI-owned page without selecting it for the AI. */
+export interface AIBrowserPageOpened extends AIBrowserActiveView {
+  openerViewId: string
+}
+
 /** One page an AI conversation holds; `active` marks the page its next tool call acts on. */
 export interface AIBrowserLivePage extends AIBrowserActiveView {
   active: boolean
+  /** The active page while the conversation's AI is operating its browser. */
+  operating?: boolean
+  /** Still alive after its conversation released it; no longer an AI tab. */
+  released?: boolean
+}
+
+/**
+ * Whether a conversation's AI is operating its browser, from its first tool
+ * call until a while after the last (shared/ai-operating.ts).
+ */
+export interface AIBrowserOperating {
+  conversationId: string
+  operating: boolean
 }
 
 /** An AI-driven view was destroyed and can no longer be revealed. */
@@ -38,7 +56,7 @@ export interface AIBrowserConversationReleased {
   conversationId: string
 }
 
-/** Outcome of a tray stop; refused when the page is not (or no longer) the named conversation's alone. */
+/** Outcome of ending an AI page; refused when the page is not (or no longer) the named conversation's alone. */
 export interface AIBrowserStopResult {
   stopped: boolean
   reason?: 'not-owned' | 'in-use'
