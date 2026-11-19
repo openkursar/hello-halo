@@ -128,6 +128,7 @@ import {
   flushPendingInstallOrders,
   getRegistryById,
   getPrimaryRegistry,
+  syncCliCatalogRevocations,
 } from '../store'
 import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
 import { startAnnouncementScheduler, stopAnnouncementScheduler } from '../services/announcement.service'
@@ -1481,6 +1482,9 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
   registerIdleTask('verify-office-runtime', () => verifyOfficeRuntime())
   // Imports the CLI tools shipped with this build; the first session waits for it if earlier.
   registerIdleTask('prepare-cli-tools', () => prepareCliTools())
+  // Applies the enterprise store's CLI revocations once per launch; no request
+  // without a catalog-capable source and a signed-in account, never a download.
+  registerIdleTask('sync-cli-catalog', () => syncCliCatalogRevocations())
   // The knowledge base chat's conversations left by a run that quit mid-chat;
   // only those created before this process started, so none is in use now.
   registerIdleTask('delete-ephemeral-conversations', () => { deleteEphemeralConversations(performance.timeOrigin) })

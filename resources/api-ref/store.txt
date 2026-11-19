@@ -28,6 +28,7 @@ operations on this page:
   POST   /api/store/apps/<slug>/install                              Install an app from the store by slug (REST-style path variant)
   GET    /api/store/capabilities                                     Get which store features this build supports (publish, reviews, install counts)
   GET    /api/store/category-taxonomy                                Get the store category enum used for browsing and publishing
+  GET    /api/store/cli-catalog                                      List the command-line tools the enterprise store offers and which are installed here
   GET    /api/store/discover-page                                    Get the curated store home page (featured/trending sections)
   POST   /api/store/ignore-version                                   Dismiss an available update so it stops appearing as pending
   POST   /api/store/import-dhpkg                                     Install a digital human from a local .dhpkg file
@@ -221,13 +222,18 @@ POST   /api/store/apps/<slug>/install                              Install an ap
 
 GET    /api/store/capabilities                                     Get which store features this build supports (publish, reviews, install counts)
      curl -s "$HALO_API_URL/api/store/capabilities" -H "Authorization: Bearer $HALO_API_TOKEN"
-     # out: {success:true,data:{catalog:true,installs:boolean,publish:boolean,reviewWorkflow:boolean,identity:"none"|string}}
+     # out: {success:true,data:{catalog:true,installs:boolean,publish:boolean,reviewWorkflow:boolean,identity:"none"|string,cliTools:boolean}}
      # note: Reports what this build supports. Publishing itself is not open to you — if the user wants to publish, tell them to do it in the Halo app.
 
 GET    /api/store/category-taxonomy                                Get the store category enum used for browsing and publishing
      curl -s "$HALO_API_URL/api/store/category-taxonomy" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true,data:{default:[{id,label|labelKey,icon?}],<appType>?:[...]}}
      # note: Categories are keyed per app type (skill/automation/mcp/extension) with "default" as the fallback list for types without their own entry.
+
+GET    /api/store/cli-catalog                                      List the command-line tools the enterprise store offers and which are installed here
+     curl -s "$HALO_API_URL/api/store/cli-catalog" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{tools:[{id,displayName,source,revoked,latest,versions:[{version,size,platforms,supported,minNode?,sideEffects?,auth?,commands,publishedAt?}],installed:{current,versions,revoked}|null}]}}
+     # note: Empty when this store serves no CLI catalog (check capabilities.cliTools); fails with a sign-in error when no account is signed in. Installing is the user's decision: tell them to install from the store's CLI tools page. A revoked tool is not available to new tasks.
 
 GET    /api/store/discover-page                                    Get the curated store home page (featured/trending sections)
      curl -s "$HALO_API_URL/api/store/discover-page" -H "Authorization: Bearer $HALO_API_TOKEN"

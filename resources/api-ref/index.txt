@@ -179,6 +179,7 @@ POST   /api/store/revalidate                                       [ai]       st
 GET    /api/store/discover-page                                    [ai]       store                   Get the curated store home page (featured/trending sections)
 GET    /api/store/my-publications                                  [ai]       store                   List the signed-in creator's own published apps
 POST   /api/store/unpublish                                        [ai]       store                   Take down one of the creator's own published apps
+GET    /api/store/cli-catalog                                      [ai]       store                   List the command-line tools the enterprise store offers and which are installed here
 POST   /api/store/ignore-version                                   [ai]       store                   Dismiss an available update so it stops appearing as pending
 POST   /api/store/registries                                       [ai]       store                   Add a new registry source
 DELETE /api/store/registries/<registryId>                          [ai]       store                   Remove a configured registry source

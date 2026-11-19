@@ -45,14 +45,23 @@ describe('DhpV2Adapter — handshake', () => {
     vi.useFakeTimers()
     fetchMock.mockReset()
   })
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
   it('normalizes the advertised features and caches them for the full TTL', async () => {
     const adapter = new DhpV2Adapter()
     fetchMock.mockResolvedValue(
       reply(200, {
         protocol: 'dhp-v2',
-        features: { installs: true, featured: true, collections: true, reviewWorkflow: true, identityBinding: 'account' },
+        features: {
+          installs: true,
+          featured: true,
+          collections: true,
+          reviewWorkflow: true,
+          identityBinding: 'account',
+          cliTools: { schema: 'halo.cli/1', catalog: '/clis.json' },
+        },
       }),
     )
 
@@ -62,6 +71,7 @@ describe('DhpV2Adapter — handshake', () => {
       collections: true,
       reviewWorkflow: true,
       identityBinding: 'account',
+      cliTools: true,
     })
 
     vi.advanceTimersByTime(59 * 60 * 1000)
@@ -124,7 +134,9 @@ describe('DhpV2Adapter — handshake', () => {
 })
 
 describe('DhpV2Adapter — install orders', () => {
-  beforeEach(() => fetchMock.mockReset())
+  beforeEach(() => {
+    fetchMock.mockReset()
+  })
 
   const order = {
     slug: 'alice/hn-daily',
@@ -181,7 +193,9 @@ describe('DhpV2Adapter — install orders', () => {
 })
 
 describe('DhpV2Adapter — collections and page documents', () => {
-  beforeEach(() => fetchMock.mockReset())
+  beforeEach(() => {
+    fetchMock.mockReset()
+  })
 
   it('distinguishes an empty collection list from a backend failure', async () => {
     const adapter = new DhpV2Adapter()
@@ -241,7 +255,9 @@ describe('DhpV2Adapter — catalog delegation', () => {
 })
 
 describe('DhpV2Adapter — creator publications', () => {
-  beforeEach(() => fetchMock.mockReset())
+  beforeEach(() => {
+    fetchMock.mockReset()
+  })
 
   it('surfaces a rejected token as the shared signed-out sentinel', async () => {
     const adapter = new DhpV2Adapter()
@@ -266,5 +282,88 @@ describe('DhpV2Adapter — creator publications', () => {
 
     await adapter.unpublish(SRC, 'alice/hn-daily', { token: 'tok' })
     expect(fetchMock.mock.calls[0][0]).toBe('http://reg.test/my/publications/alice/hn-daily/unpublish')
+  })
+})
+
+/** A download Response stand-in carrying bytes. */
+function binary(status: number, bytes: Uint8Array, headers?: Record<string, string>): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers(headers),
+    body: { cancel: async () => undefined },
+    arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  } as unknown as Response
+}
+
+describe('DhpV2Adapter — CLI tool catalog', () => {
+  beforeEach(() => {
+    fetchMock.mockReset()
+  })
+
+  it('does not advertise the catalog unless the handshake carries a cliTools block', async () => {
+    const adapter = new DhpV2Adapter()
+    fetchMock.mockResolvedValue(reply(200, { features: { cliTools: true } }))
+    expect((await adapter.serverFeatures(source('a', 'http://a.test')))?.cliTools).toBe(false)
+  })
+
+  it('reads the catalog with the account token and treats absence as no catalog', async () => {
+    const adapter = new DhpV2Adapter()
+    fetchMock.mockResolvedValueOnce(reply(200, { schema: 'halo.cli.catalog/1', tools: [] }))
+    expect(await adapter.fetchCliCatalog(SRC, { token: 'tok' })).toEqual({ schema: 'halo.cli.catalog/1', tools: [] })
+    expect(fetchMock.mock.calls[0][0]).toBe('http://reg.test/clis.json')
+    expect((fetchMock.mock.calls[0][1]?.headers as Record<string, string>).Authorization).toBe('Bearer tok')
+
+    fetchMock.mockResolvedValueOnce(reply(404))
+    expect(await adapter.fetchCliCatalog(SRC, { token: 'tok' })).toBeNull()
+  })
+
+  it('surfaces a rejected token as the signed-out sentinel and other faults as errors', async () => {
+    const adapter = new DhpV2Adapter()
+    fetchMock.mockResolvedValueOnce(reply(401))
+    await expect(adapter.fetchCliCatalog(SRC, { token: 'stale' })).rejects.toThrow(STORE_NOT_SIGNED_IN)
+    fetchMock.mockResolvedValueOnce(reply(503))
+    await expect(adapter.fetchCliCatalog(SRC, { token: 'tok' })).rejects.toThrow('cli-catalog failed: 503')
+  })
+
+  it('downloads a package path on the same source, keeping a gateway prefix', async () => {
+    const adapter = new DhpV2Adapter()
+    const gateway = source('gw', 'https://gw.test/store/')
+    fetchMock.mockResolvedValueOnce(binary(200, new Uint8Array([1, 2, 3]), { 'Content-Length': '3' }))
+    const bytes = await adapter.downloadCliPackage(gateway, '/clis/com.example.tool/1.0.0/package.hcli', { token: 'tok' }, 10)
+    expect(Array.from(bytes)).toEqual([1, 2, 3])
+    expect(fetchMock.mock.calls[0][0]).toBe('https://gw.test/store/clis/com.example.tool/1.0.0/package.hcli')
+  })
+
+  it('refuses a catalog path that could send the token elsewhere', async () => {
+    const adapter = new DhpV2Adapter()
+    for (const bad of [
+      'https://evil.test/x.hcli',
+      '//evil.test/x.hcli',
+      'clis/a/1.0.0/package.hcli',
+      '/clis/../admin',
+      '/clis/%2e%2e/admin',
+      '/clis\\a',
+      '/clis/a?x=1',
+    ]) {
+      await expect(adapter.downloadCliPackage(SRC, bad, { token: 'tok' }, 10)).rejects.toThrow('not a plain path')
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a body larger than the limit, declared or actual', async () => {
+    const adapter = new DhpV2Adapter()
+    fetchMock.mockResolvedValueOnce(binary(200, new Uint8Array(4), { 'Content-Length': '400' }))
+    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', { token: 'tok' }, 10)).rejects.toThrow('larger than allowed')
+    fetchMock.mockResolvedValueOnce(binary(200, new Uint8Array(11)))
+    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', { token: 'tok' }, 10)).rejects.toThrow('larger than allowed')
+  })
+
+  it('reports a withdrawn package and a rejected token distinctly', async () => {
+    const adapter = new DhpV2Adapter()
+    fetchMock.mockResolvedValueOnce(binary(404, new Uint8Array()))
+    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', { token: 'tok' }, 10)).rejects.toThrow('no longer available')
+    fetchMock.mockResolvedValueOnce(binary(401, new Uint8Array()))
+    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', { token: 'tok' }, 10)).rejects.toThrow(STORE_NOT_SIGNED_IN)
   })
 })

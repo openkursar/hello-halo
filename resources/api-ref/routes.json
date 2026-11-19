@@ -1265,6 +1265,15 @@
     "group": "store"
   },
   {
+    "method": "GET",
+    "path": "/api/store/cli-catalog",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/cli-install"
+  },
+  {
     "method": "POST",
     "path": "/api/store/ignore-version",
     "group": "store"

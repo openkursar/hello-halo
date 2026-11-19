@@ -54,7 +54,7 @@ describe('store controller delegation', () => {
   })
 
   it('getStoreCapabilities reaches the store module instead of itself', async () => {
-    const capabilities = { catalog: true, installs: true, publish: false, reviewWorkflow: false, identity: 'none' }
+    const capabilities = { catalog: true, installs: true, publish: false, reviewWorkflow: false, identity: 'none', cliTools: false }
     storeMock.getStoreCapabilities.mockResolvedValue(capabilities)
 
     const res = await controller.getStoreCapabilities()

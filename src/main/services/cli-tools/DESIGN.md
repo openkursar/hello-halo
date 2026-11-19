@@ -18,8 +18,11 @@ runtime Node version and platform from its caller. `host.ts` is the one place
 the app wires it: bootstrap passes the paths in, and session and terminal code
 call `applyCliToolsEnv`. The module imports no Electron, agent or app code.
 
-Not part of this module yet: catalog download and sync, user import, and UI.
-Callers depend only on `index.ts`.
+Catalog fetch, download and the catalog UI belong to the store module
+(`src/main/store/backend/cli-catalog.ts`), which calls this module's public
+surface to install a verified file and apply revocations. Not part of any
+module yet: user import and a management UI for installed tools. Callers
+depend only on `index.ts`.
 
 ## Package contract (`halo.cli/1`)
 
@@ -66,8 +69,9 @@ Optional manifest fields:
 subresource-integrity form (`sha256-<base64>`). The listing has one line per
 file, `path\0<sha256 hex>\n`, sorted by path. Packaging tools compute it
 with `computePayloadIntegrity`. A caller may also pass an expected
-archive sha256, for example from a catalog. A mismatch in either check returns
-`DIGEST_MISMATCH`.
+archive sha256 and an expected payload integrity, for example from a catalog. A
+mismatch in any of these checks returns `DIGEST_MISMATCH`. An expected id and
+version that differ from the manifest return `PACKAGE_INVALID`.
 
 ### Pure-JS rule
 
@@ -263,6 +267,18 @@ version pin never freezes.
   fingerprint, so the next request rebuilds the session with the new set while
   a running turn finishes on the old one. Old sets stay pinned until the
   process exits and are released at the next start.
+- **Catalog packages.** `installCatalogPackage(archive, expected)` imports a
+  package the caller downloaded from an administrator catalog with source
+  `catalog` and makes it current. The archive sha256, payload integrity, id
+  and version must all equal the catalog's (`expectedArchiveSha256`,
+  `expectedIntegrity`, `expectedTool`); any difference fails before publish
+  and leaves the installed versions unchanged.
+- **Catalog revocation.** `applyCatalogRevocations({ id: revoked })` sets the
+  revocation flag of each installed tool the catalog lists, whatever its
+  source; tools the catalog does not list are untouched. The catalog is the
+  only revocation authority today, so clearing a flag it no longer sets is
+  safe. `readCliToolState` gives callers the installed state to compare with
+  a catalog. All three wait for prepare.
 
 ## Relation to external-runtime
 
@@ -277,9 +293,10 @@ service does not depend on it.
 It follows the same conventions instead: private staging, verification before
 an atomic publish into immutable content-addressed directories, failure keeping
 the current selection, no install scripts, SRI-form integrity, and no startup
-work. The bounded HTTPS transfer in `external-runtime` is internal to that
-service. Catalog download is a later step, and that step will propose how to
-share it rather than copy it.
+work. Catalog download does not reuse the `external-runtime` transfer: the
+catalog is an endpoint of the store source, so the store module fetches it and
+the package through its source driver (same proxy, timeout and token rules as
+other identity-bound store calls) and hands this service a local file.
 
 ## Cost
 

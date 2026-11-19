@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { delimiter, join } from 'path'
+import { createHash } from 'crypto'
 import { CliToolStore } from '../../../../src/main/services/cli-tools'
-import { makeTempDir, removeTree, writePackage } from './helpers'
+import type { CatalogPackageExpectation } from '../../../../src/main/services/cli-tools'
+import { buildManifest, makeTempDir, removeTree, writePackage } from './helpers'
 
 const ID = 'com.example.tool'
 
@@ -183,6 +185,81 @@ describe('cli-tools host: bundled tools across launches', () => {
     expect(host.shouldActivatePreset(tool('1.0.0', 'preset'), ID)).toBe(true)
     expect(host.shouldActivatePreset(tool('1.0.0', 'user-import'), ID)).toBe(false)
     expect(host.shouldActivatePreset(tool('1.0.0', 'catalog'), ID)).toBe(false)
+  })
+})
+
+describe('cli-tools host: administrator catalog', () => {
+  function sha256(file: string): string {
+    return createHash('sha256').update(readFileSync(file)).digest('hex')
+  }
+
+  function expectation(file: string, version: string, overrides: Partial<CatalogPackageExpectation> = {}) {
+    return {
+      id: ID,
+      version,
+      archiveSha256: sha256(file),
+      integrity: buildManifest({ version }).integrity as string,
+      ...overrides,
+    }
+  }
+
+  it('reports no state and refuses an install before the host is initialized', async () => {
+    vi.resetModules()
+    const bare = await import('../../../../src/main/services/cli-tools/host')
+    expect(await bare.readCliToolState()).toBeNull()
+    expect(await bare.applyCatalogRevocations({ [ID]: true })).toEqual([])
+    const file = writePackage(pkgs, { version: '1.0.0' })
+    await expect(bare.installCatalogPackage(file, expectation(file, '1.0.0'))).rejects.toMatchObject({ code: 'RUNTIME_MISSING' })
+  })
+
+  it('installs a verified catalog package as the current version over a bundled one', async () => {
+    preset('1.0.0')
+    const host = await startHost()
+    const file = writePackage(pkgs, { version: '1.1.0' })
+    const result = await host.installCatalogPackage(file, expectation(file, '1.1.0'))
+    expect(result).toMatchObject({ id: ID, version: '1.1.0' })
+
+    const state = await host.readCliToolState()
+    expect(state!.tools[ID].current).toBe('1.1.0')
+    expect(state!.tools[ID].versions['1.1.0'].source).toBe('catalog')
+    expect(state!.tools[ID].versions['1.0.0']).toBeTruthy()
+  })
+
+  it('leaves the installed versions untouched when the package differs from the catalog', async () => {
+    preset('1.0.0')
+    const host = await startHost()
+    const file = writePackage(pkgs, { version: '1.1.0' })
+    const before = await host.readCliToolState()
+
+    await expect(host.installCatalogPackage(file, expectation(file, '1.1.0', { archiveSha256: '0'.repeat(64) })))
+      .rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
+    await expect(host.installCatalogPackage(file, expectation(file, '1.1.0', { integrity: `sha256-${'A'.repeat(43)}=` })))
+      .rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
+    await expect(host.installCatalogPackage(file, expectation(file, '1.1.0', { id: 'com.example.other' })))
+      .rejects.toMatchObject({ code: 'PACKAGE_INVALID' })
+    await expect(host.installCatalogPackage(file, expectation(file, '1.2.0')))
+      .rejects.toMatchObject({ code: 'PACKAGE_INVALID' })
+
+    expect(await host.readCliToolState()).toEqual(before)
+  })
+
+  it('revokes only listed installed tools and keeps them out of new executions', async () => {
+    preset('1.0.0')
+    const host = await startHost()
+    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
+    expect(await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })).toBeTruthy()
+
+    expect(await host.applyCatalogRevocations({ [ID]: true, 'com.example.absent': true })).toEqual([ID])
+    expect(await host.applyCatalogRevocations({ [ID]: true })).toEqual([])
+    expect((await host.readCliToolState())!.tools['com.example.absent']).toBeUndefined()
+
+    const after: Record<string, string | undefined> = { PATH: '/usr/bin' }
+    expect(await host.applyCliToolsEnv(after, { entry: 'other', engine: 'claude' })).toBeNull()
+    expect(after).toEqual({ PATH: '/usr/bin' })
+
+    expect(await host.applyCatalogRevocations({ [ID]: false })).toEqual([ID])
+    const restored: Record<string, string | undefined> = { PATH: '/usr/bin' }
+    expect(await host.applyCliToolsEnv(restored, { entry: 'other', engine: 'claude' })).toBeTruthy()
   })
 })
 

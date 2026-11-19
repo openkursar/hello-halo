@@ -76,6 +76,10 @@ export interface ImportOptions {
   source: CliToolSource
   /** Expected archive sha256 hex (e.g. from a catalog); mismatch is DIGEST_MISMATCH. */
   expectedArchiveSha256?: string
+  /** Expected payload integrity (e.g. from a catalog); mismatch is DIGEST_MISMATCH. */
+  expectedIntegrity?: string
+  /** Tool id and version the package must declare (e.g. the catalog entry it was fetched for). */
+  expectedTool?: { id: string; version: string }
   /** Make the imported version current (default true). */
   activate?: boolean
 }
@@ -300,6 +304,10 @@ export class CliToolStore {
       stage = 'manifest'
       const manifest = parseCliManifest(await fsp.readFile(join(staging, 'manifest.json'), 'utf-8'))
       label = `${manifest.id}@${manifest.version}`
+      const expected = options.expectedTool
+      if (expected && (expected.id !== manifest.id || expected.version !== manifest.version)) {
+        throw new CliToolError('PACKAGE_INVALID', `package declares ${label}, expected ${expected.id}@${expected.version}`)
+      }
       assertManifestSupported(manifest, {
         platform: this.platform,
         arch: this.arch,
@@ -312,6 +320,9 @@ export class CliToolStore {
       const inspection = await inspectPayload(payloadDir)
       if (inspection.integrity !== manifest.integrity) {
         throw new CliToolError('DIGEST_MISMATCH', 'payload content differs from the manifest integrity')
+      }
+      if (options.expectedIntegrity && options.expectedIntegrity !== inspection.integrity) {
+        throw new CliToolError('DIGEST_MISMATCH', 'payload content differs from the expected integrity')
       }
       for (const command of manifest.commands) {
         const stat = await fsp.lstat(join(payloadDir, command.entry)).catch(() => null)

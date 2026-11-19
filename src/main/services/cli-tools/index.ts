@@ -4,8 +4,16 @@
  */
 
 export { CliToolStore, commandOnPath } from './store'
-export { CLI_TOOLS_BIN_ENV, applyCliToolsEnv, initCliTools, prepareCliTools } from './host'
-export type { CliToolsHostOptions } from './host'
+export {
+  CLI_TOOLS_BIN_ENV,
+  applyCatalogRevocations,
+  applyCliToolsEnv,
+  initCliTools,
+  installCatalogPackage,
+  prepareCliTools,
+  readCliToolState,
+} from './host'
+export type { CatalogPackageExpectation, CliToolsHostOptions } from './host'
 export type {
   CliExecutionEntry,
   CliExecutionLock,

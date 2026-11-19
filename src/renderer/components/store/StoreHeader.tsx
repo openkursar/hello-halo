@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Search, RefreshCw, Upload, ChevronRight } from 'lucide-react'
+import { Search, RefreshCw, Upload, ChevronRight, SquareTerminal } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useStoreCapabilities } from '../../hooks/useStoreCapabilities'
@@ -63,6 +63,7 @@ export function StoreHeader() {
   const revalidateStore = useAppsPageStore(state => state.revalidateStore)
   const refreshStore = useAppsPageStore(state => state.refreshStore)
   const setStoreMineOpen = useAppsPageStore(state => state.setStoreMineOpen)
+  const setStoreCliOpen = useAppsPageStore(state => state.setStoreCliOpen)
 
   const consumeStorePublishIntent = useAppsPageStore(state => state.consumeStorePublishIntent)
   const storePublishIntent = useAppsPageStore(state => state.storePublishIntent)
@@ -154,6 +155,16 @@ export function StoreHeader() {
         </button>
         {capabilities?.publish && (
           <PublishButton onClick={() => { setPublishPreselect(null); setShowShareDialog(true) }} />
+        )}
+        {capabilities?.cliTools && (
+          <button
+            onClick={() => setStoreCliOpen(true)}
+            className="flex flex-shrink-0 items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-[13px] border border-border-soft bg-card text-muted-foreground hover:text-foreground hover:border-border rounded-lg transition-colors"
+            title={t('Command-line tools')}
+          >
+            <SquareTerminal className="w-4 h-4" />
+            <span className="hidden sm:inline">{t('CLI tools')}</span>
+          </button>
         )}
         {capabilities?.identity === 'account' && (
           <button

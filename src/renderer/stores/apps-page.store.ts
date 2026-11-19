@@ -163,6 +163,8 @@ interface AppsPageState {
   storeHasMore: boolean
   /** True when the store's "My Publications" second-level view is open. */
   storeMineOpen: boolean
+  /** True when the store's command-line tools second-level view is open. */
+  storeCliOpen: boolean
   storeSelectedSlug: string | null
   storeAutoInstall: boolean
   /** Pending "open the publish dialog pre-selected on this installed app"
@@ -207,6 +209,7 @@ interface AppsPageState {
   setStoreCategory: (category: string | null) => void
   setStoreTypeFilter: (type: AppType | null) => void
   setStoreMineOpen: (open: boolean) => void
+  setStoreCliOpen: (open: boolean) => void
   /**
    * Switch to the Marketplace tab pre-filtered by the given app type and
    * force a fresh fetch so the listing matches the new filter. Use this
@@ -259,6 +262,7 @@ export const useAppsPageStore = create<AppsPageState>()(
   storePage: 1,
   storeHasMore: false,
   storeMineOpen: false,
+  storeCliOpen: false,
   storeSelectedSlug: null,
   storeAutoInstall: false,
   storePublishIntent: null,
@@ -541,6 +545,7 @@ export const useAppsPageStore = create<AppsPageState>()(
 
   setStoreTypeFilter: (type) => set({ storeTypeFilter: type }),
   setStoreMineOpen: (open) => set({ storeMineOpen: open }),
+  setStoreCliOpen: (open) => set({ storeCliOpen: open }),
 
   openMarketplaceFilteredBy: async (type) => {
     // Set the filter before kicking off the fetch so the marketplace UI
@@ -609,6 +614,7 @@ export const useAppsPageStore = create<AppsPageState>()(
     useAppStore.getState().navigate('store')
     set({
       storeMineOpen: false,
+      storeCliOpen: false,
       storeSelectedSlug: null,
       storePublishIntent: { type, appId, specOverride },
     })

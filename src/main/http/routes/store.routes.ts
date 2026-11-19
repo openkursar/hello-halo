@@ -271,6 +271,24 @@ export function registerStoreRoutes(app: Express): void {
     }
   })
 
+  // GET /api/store/cli-catalog — CLI tool catalog merged with installed state
+  app.get('/api/store/cli-catalog', async (_req: Request, res: Response) => {
+    try {
+      res.json(await storeController.getStoreCliCatalog())
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/cli-install — install one verified catalog version of a CLI tool
+  app.post('/api/store/cli-install', async (req: Request, res: Response) => {
+    try {
+      res.json(await storeController.installStoreCliTool(req.body))
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // POST /api/store/ignore-version — skip an available update version for an app
   app.post('/api/store/ignore-version', async (req: Request, res: Response) => {
     try {

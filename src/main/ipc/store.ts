@@ -17,6 +17,8 @@
  *   store:toggle-registry                Enable or disable a registry source
  *   store:update-registry-adapter-config Update adapter config (e.g. API keys) for a registry
  *   store:get-capabilities               Resolve renderer-safe store capability flags
+ *   store:get-cli-catalog                CLI tool catalog merged with installed state
+ *   store:install-cli-tool               Install one verified catalog version of a CLI tool
  */
 
 import { ipcMain } from 'electron'
@@ -350,6 +352,16 @@ export function registerStoreHandlers(): void {
     // ── store:unpublish ────────────────────────────────────────────────────
     storeUnpublish: async (input: { slug: string }) => {
       return storeController.unpublishStoreApp(input)
+    },
+
+    // ── store:get-cli-catalog ──────────────────────────────────────────────
+    storeGetCliCatalog: async () => {
+      return storeController.getStoreCliCatalog()
+    },
+
+    // ── store:install-cli-tool ─────────────────────────────────────────────
+    storeInstallCliTool: async (input: { id: string; version: string }) => {
+      return storeController.installStoreCliTool(input)
     },
 
     // ── store:ignore-version ───────────────────────────────────────────────

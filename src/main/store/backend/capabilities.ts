@@ -72,5 +72,8 @@ export async function getStoreCapabilities(): Promise<StoreCapabilities> {
     publish,
     reviewWorkflow: features?.reviewWorkflow === true,
     identity: resolveIdentity(features?.identityBinding),
+    // The catalog is read with an account token, so a build without an
+    // identity provider has nothing to present and the entry stays hidden.
+    cliTools: features?.cliTools === true && getStoreIdentityProvider() != null,
   }
 }

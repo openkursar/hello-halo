@@ -1,9 +1,9 @@
 {
-  "totalRoutes": 346,
+  "totalRoutes": 348,
   "expose": {
-    "ai": 214,
+    "ai": 215,
     "wrapped": 11,
-    "internal": 121,
+    "internal": 122,
     "unlabeled": 0
   },
   "groups": {
@@ -14,7 +14,7 @@
     "knowledge-base": 22,
     "channels": 22,
     "settings": 23,
-    "store": 40,
+    "store": 41,
     "terminal": 6
   },
   "files": [

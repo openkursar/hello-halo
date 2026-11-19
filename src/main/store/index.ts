@@ -35,6 +35,7 @@ export { getCategoryTaxonomy, invalidateServerTaxonomyCache } from './backend/ta
 export { getDiscoverLayout, invalidateDiscoverLayoutCache } from './backend/discover'
 export { getDiscoverPage } from './discover-page'
 export { fetchMyPublications, unpublishApp } from './backend/publications'
+export { fetchCliCatalog, installCliTool, syncCliCatalogRevocations } from './backend/cli-catalog'
 export { ensureStoreIdentity, getStoreIdentity, getStoreSignInStatus } from './backend/identity'
 export { fetchCollections } from './backend/collections'
 export { flushPendingInstallOrders } from './backend/install-orders'

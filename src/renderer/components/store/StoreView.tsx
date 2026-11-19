@@ -17,6 +17,7 @@ import { StoreGrid } from './StoreGrid'
 import { StoreDiscover } from './StoreDiscover'
 import { StoreDetail } from './StoreDetail'
 import { StoreMine } from './StoreMine'
+import { StoreCliTools } from './StoreCliTools'
 import { StoreSkeletonGrid } from './StoreSkeletonGrid'
 import { useTranslation } from '../../i18n'
 
@@ -26,6 +27,7 @@ export function StoreView() {
   const storeError = useAppsPageStore(state => state.storeError)
   const storeSelectedSlug = useAppsPageStore(state => state.storeSelectedSlug)
   const storeMineOpen = useAppsPageStore(state => state.storeMineOpen)
+  const storeCliOpen = useAppsPageStore(state => state.storeCliOpen)
   const storeApps = useAppsPageStore(state => state.storeApps)
   const storeTypeFilter = useAppsPageStore(state => state.storeTypeFilter)
   const storeSearchQuery = useAppsPageStore(state => state.storeSearchQuery)
@@ -35,7 +37,7 @@ export function StoreView() {
 
   // Only while the store is the view in front of the user — a background tab has
   // nothing to keep fresh.
-  useStoreRevalidation(!storeSelectedSlug && !storeMineOpen)
+  useStoreRevalidation(!storeSelectedSlug && !storeMineOpen && !storeCliOpen)
 
   // Store funnel: entering the store and every tab switch.
   useEffect(() => {
@@ -111,6 +113,11 @@ export function StoreView() {
   // My Publications second-level view
   if (storeMineOpen) {
     return <StoreMine />
+  }
+
+  // Command-line tools second-level view
+  if (storeCliOpen) {
+    return <StoreCliTools />
   }
 
   const showDiscover = storeTypeFilter === null && !storeSearchQuery

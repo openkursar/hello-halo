@@ -94,7 +94,7 @@ export const MODULE: RouteModuleMeta = {
       expose: 'ai',
       group: 'store',
       summary: 'Get which store features this build supports (publish, reviews, install counts)',
-      returns: '{success:true,data:{catalog:true,installs:boolean,publish:boolean,reviewWorkflow:boolean,identity:"none"|string}}',
+      returns: '{success:true,data:{catalog:true,installs:boolean,publish:boolean,reviewWorkflow:boolean,identity:"none"|string,cliTools:boolean}}',
       notes: 'Reports what this build supports. Publishing itself is not open to you — if the user wants to publish, tell them to do it in the Halo app.',
     },
     'GET /api/store/category-taxonomy': {
@@ -134,6 +134,14 @@ export const MODULE: RouteModuleMeta = {
       impact: 'reversible',
       notes: 'Can be republished later; already-installed/downloaded copies elsewhere are not affected either way.',
     },
+    'GET /api/store/cli-catalog': {
+      expose: 'ai',
+      group: 'store',
+      summary: 'List the command-line tools the enterprise store offers and which are installed here',
+      returns: '{success:true,data:{tools:[{id,displayName,source,revoked,latest,versions:[{version,size,platforms,supported,minNode?,sideEffects?,auth?,commands,publishedAt?}],installed:{current,versions,revoked}|null}]}}',
+      notes: "Empty when this store serves no CLI catalog (check capabilities.cliTools); fails with a sign-in error when no account is signed in. Installing is the user's decision: tell them to install from the store's CLI tools page. A revoked tool is not available to new tasks.",
+    },
+    'POST /api/store/cli-install': { expose: 'internal' },
     'POST /api/store/ignore-version': {
       expose: 'ai',
       group: 'store',

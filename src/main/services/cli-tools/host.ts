@@ -9,8 +9,8 @@
 
 import { existsSync, promises as fsp } from 'fs'
 import { delimiter, join } from 'path'
-import { CliToolStore, type CliExecutionEntry, type CliToolState } from './store'
-import { isCliToolError } from './errors'
+import { CliToolStore, type CliExecutionEntry, type CliToolState, type ImportResult } from './store'
+import { CliToolError, isCliToolError } from './errors'
 
 /** Launcher directory of the tool set an environment was given; also tells the agent where TOOLS.md is. */
 export const CLI_TOOLS_BIN_ENV = 'HALO_CLI_TOOLS_BIN'
@@ -124,6 +124,67 @@ async function importPresets(cliStore: CliToolStore, presetDir: string, root: st
     await fsp.writeFile(stampFile, stamp, 'utf-8')
   }
   console.log('[CliTools] Bundled tools checked', { packages: names.length, failures })
+}
+
+/** What an administrator catalog promises about one package version. */
+export interface CatalogPackageExpectation {
+  id: string
+  version: string
+  /** sha256 hex of the archive. */
+  archiveSha256: string
+  /** Payload integrity, `sha256-<base64>`. */
+  integrity: string
+}
+
+/** Installed tools once the store is prepared; null when the host has no store. */
+export async function readCliToolState(): Promise<CliToolState | null> {
+  const cliStore = getStore()
+  if (!cliStore) return null
+  await prepareCliTools()
+  return cliStore.readState()
+}
+
+/**
+ * Import a package fetched from an administrator catalog and make it current.
+ * The archive digest, payload integrity, id and version must all match what
+ * the catalog promised; any difference leaves the installed versions as they
+ * were. Executions already running keep their pinned versions.
+ */
+export async function installCatalogPackage(
+  archivePath: string,
+  expected: CatalogPackageExpectation,
+): Promise<ImportResult> {
+  const cliStore = getStore()
+  if (!cliStore) throw new CliToolError('RUNTIME_MISSING', 'the CLI tool store is not available in this process')
+  await prepareCliTools()
+  return cliStore.importPackage(archivePath, {
+    source: 'catalog',
+    expectedArchiveSha256: expected.archiveSha256,
+    expectedIntegrity: expected.integrity,
+    expectedTool: { id: expected.id, version: expected.version },
+    activate: true,
+  })
+}
+
+/**
+ * Apply an administrator catalog's revocation flags to the installed tools it
+ * lists, whatever their source; tools the catalog does not list are left
+ * alone. Revocation keeps a tool out of new executions only; running ones
+ * keep their launchers. Returns the ids whose flag changed.
+ */
+export async function applyCatalogRevocations(flags: Record<string, boolean>): Promise<string[]> {
+  const cliStore = getStore()
+  if (!cliStore) return []
+  await prepareCliTools()
+  const state = await cliStore.readState()
+  const changed: string[] = []
+  for (const [id, revoked] of Object.entries(flags)) {
+    const tool = state.tools[id]
+    if (!tool || tool.revoked === revoked) continue
+    await cliStore.setRevoked(id, revoked)
+    changed.push(id)
+  }
+  return changed
 }
 
 /** Whether a bundled version may replace a tool's current version. */

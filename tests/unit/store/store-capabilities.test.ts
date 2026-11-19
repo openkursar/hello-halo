@@ -59,6 +59,7 @@ function features(overrides: Partial<ServerFeatures> = {}): ServerFeatures {
     collections: false,
     reviewWorkflow: false,
     identityBinding: 'none',
+    cliTools: false,
     ...overrides,
   }
 }
@@ -79,6 +80,7 @@ describe('store capabilities', () => {
       publish: false,
       reviewWorkflow: false,
       identity: 'none',
+      cliTools: false,
     })
   })
 
@@ -137,6 +139,25 @@ describe('store capabilities', () => {
     expect(caps.installs).toBe(false)
     expect(caps.reviewWorkflow).toBe(false)
     expect(caps.identity).toBe('none')
+  })
+
+  it('offers the CLI catalog only when advertised and this build has an identity provider', async () => {
+    const m = await loadModules()
+    m.resolvePublishTarget.mockReturnValue(null)
+    withHandshake(m, features({ cliTools: true, identityBinding: 'account' }))
+    expect((await m.getStoreCapabilities()).cliTools).toBe(true)
+
+    withHandshake(m, features({ cliTools: false, identityBinding: 'account' }))
+    expect((await m.getStoreCapabilities()).cliTools).toBe(false)
+
+    const config = await import('../../../src/main/foundation/product-config')
+    vi.mocked(config.getStoreIdentityProvider).mockReturnValue(undefined)
+    try {
+      withHandshake(m, features({ cliTools: true, identityBinding: 'account' }))
+      expect((await m.getStoreCapabilities()).cliTools).toBe(false)
+    } finally {
+      vi.mocked(config.getStoreIdentityProvider).mockReturnValue('halo-cloud')
+    }
   })
 
   it('reports the raw server requirement independently of the client intersection', async () => {

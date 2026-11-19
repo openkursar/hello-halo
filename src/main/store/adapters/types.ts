@@ -186,6 +186,24 @@ export interface RegistryAdapter {
   /** Take down one of the caller's own published apps. */
   unpublish?(source: RegistrySource, slug: string, auth: RegistryAuth): Promise<void>
 
+  /**
+   * The administrator-reviewed CLI tool catalog. Null when the source serves
+   * none. Payload validated by the caller.
+   */
+  fetchCliCatalog?(source: RegistrySource, auth: RegistryAuth): Promise<unknown | null>
+
+  /**
+   * Download one CLI package named by a catalog `downloadUrl`. The driver
+   * resolves it against the source itself and refuses anything that would
+   * send the token elsewhere, and refuses bodies larger than `maxBytes`.
+   */
+  downloadCliPackage?(
+    source: RegistrySource,
+    downloadUrl: string,
+    auth: RegistryAuth,
+    maxBytes: number,
+  ): Promise<Uint8Array>
+
   // ── Page-level documents (optional) ──────────────────────────────────────
   // One chip row, one discover page: merging N answers has no meaning, so only
   // the primary source's document is adopted. See DESIGN.md §2.1.

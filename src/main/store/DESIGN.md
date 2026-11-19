@@ -55,6 +55,7 @@ catalog
 optional     serverFeatures, openInstallOrder, fetchCollections,
 backend      fetchMyPublications, unpublish              (per source)
              fetchPageTaxonomy, fetchPageLayout          (primary source only)
+             fetchCliCatalog, downloadCliPackage         (primary source only)
 ```
 
 **Optional means the source decides.** The architecture assigns no work: a
@@ -78,6 +79,7 @@ stays in the domain module that owns the resulting shape.
 | my publications / unpublish | **primary only** | one identity token ⇒ one attributing store (§3.4) |
 | category taxonomy | **primary only** | there is one chip row |
 | discover layout | **primary only** | there is one discover page |
+| CLI tool catalog / package download | **primary only** | read with the account token (§3.13) |
 
 Merging N discover layouts has no meaning. Someone must decide, and the
 decision follows the existing `isDefault` flag — never a source id or name.
@@ -406,6 +408,36 @@ Server side the *mechanism* (`auth.type`: `token` / `introspect` /
 (`identityBinding`). A future mechanism (mTLS, mutual OIDC, …) that also
 reaches account strength changes `auth.type` only; no client changes.
 
+### 3.13 The CLI tool catalog installs through cli-tools, on demand
+
+`backend/cli-catalog.ts` reads the primary source's administrator-reviewed CLI
+catalog (`GET /clis.json`, schema `halo.cli.catalog/1`) with the identity
+token, like "my publications" (§3.4). It is the only store file that depends on
+`services/cli-tools`, and only on its public surface; cli-tools knows nothing of
+stores, URLs or tokens. The dependency points downward (a domain module calling
+a service), and the store stays the only owner of source transport.
+
+- **On demand.** Listing never downloads a package. `installCliTool({id,
+  version})` re-reads the catalog, refuses a tool that is revoked, missing,
+  withdrawn or unsupported on this platform, downloads the archive through the
+  driver (capped at the cli-tools archive limit), checks its sha256 against the
+  catalog, and hands a temp file to `installCatalogPackage`, which checks the
+  payload integrity, id and version before publishing it as current.
+- **Untrusted paths.** `downloadUrl` comes from the catalog body. The driver
+  accepts only a plain absolute path and joins it to the source URL, so the
+  token never leaves the source and a gateway prefix is kept.
+- **Revocation.** Every catalog read applies the catalog's `revoked` flags to
+  the installed tools it lists (`applyCatalogRevocations`). The idle task
+  `sync-cli-catalog` does one read per launch when someone is signed in; the
+  catalog view and installs read it again. A revoked tool is excluded from new
+  executions; running ones finish. A tool that disappears from the catalog
+  (every version withdrawn) is not revoked locally, and a withdrawn version
+  stays installed.
+- **Renderer view.** `CliCatalog` carries no URL, digest or token. The entry is
+  gated on `capabilities.cliTools` (handshake `features.cliTools` and an
+  identity provider in this build), per §3.1 the handshake gates the surface,
+  not the method.
+
 ## 5. Persistence
 
 `~/.halo/store-install-orders.pending.json` — the backfill queue, de-duplicated
@@ -440,7 +472,7 @@ adapters/                 source drivers — the only polymorphic layer
   index.ts                sourceType → driver (the discoverable catalogue)
   halo.adapter.ts         DHP static source (GitHub Pages / mirror), catalog only
   dhp-v2.adapter.ts       DHP v2 full protocol: catalog (delegated to Halo)
-                          + 7 backend endpoints + handshake + wire vocabulary
+                          + 9 backend endpoints + handshake + wire vocabulary
   mcp-registry / smithery / skillhub / claude-skills
 
 backend/                  consumers of the backend surface
@@ -450,6 +482,8 @@ backend/                  consumers of the backend surface
   install-orders.ts       install ledger: installId, backfill queue, retry policy
   collections.ts          federated aggregation + payload mapping
   publications.ts         federated read / primary write + NOT_SIGNED_IN semantics
+  cli-catalog.ts          CLI tool catalog: validate, on-demand install via
+                          services/cli-tools, revocation sync (§3.13)
   taxonomy.ts             server ?? product.json ?? built-in
   discover.ts             server ?? built-in
   identity.ts             identity-token resolution (product.json → AI-source OAuth)
@@ -495,4 +529,6 @@ it.
   The rule is about the composition layer, not about a single file.)
 - A community build entering the store and installing an app issues **zero**
   requests to `/installs`, `/collections`, `/my/publications`,
-  `/category-taxonomy.json`, `/discover-layout.json`.
+  `/category-taxonomy.json`, `/discover-layout.json`, `/clis.json`.
+- `services/cli-tools` is imported only by `backend/cli-catalog.ts`, through its
+  `index.ts`; no CLI catalog URL, digest or token reaches the renderer (§3.13).

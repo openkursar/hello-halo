@@ -10,7 +10,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { StoreSignInStatus, SkillDepInspection } from '../../shared/store/store-types'
+import type { StoreSignInStatus, SkillDepInspection, CliCatalog, CliCatalogTool } from '../../shared/store/store-types'
 import type { AppType, AppSpec } from '../../shared/apps/spec-types'
 import type { SpecUpgradeOutcome } from '../../shared/apps/app-types'
 
@@ -267,6 +267,20 @@ export const storeApi = {
       return window.halo.storeUnpublish(input)
     }
     return httpRequest('POST', '/api/store/unpublish', input)
+  },
+
+  storeGetCliCatalog: async (): Promise<ApiResponse<CliCatalog>> => {
+    if (isElectron()) {
+      return window.halo.storeGetCliCatalog()
+    }
+    return httpRequest('GET', '/api/store/cli-catalog')
+  },
+
+  storeInstallCliTool: async (input: { id: string; version: string }): Promise<ApiResponse<CliCatalogTool>> => {
+    if (isElectron()) {
+      return window.halo.storeInstallCliTool(input)
+    }
+    return httpRequest('POST', '/api/store/cli-install', input)
   },
 
   storeIgnoreVersion: async (input: { appId: string; version: string }): Promise<ApiResponse> => {

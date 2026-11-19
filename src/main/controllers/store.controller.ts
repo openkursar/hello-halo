@@ -10,7 +10,7 @@
  */
 
 import type { StoreQuery, StoreQueryParams, StoreQueryResponse } from '../../shared/store/store-types'
-import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection } from '../../shared/store/store-types'
+import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, CliCatalog, CliCatalogTool } from '../../shared/store/store-types'
 import { DISCOVER_CATALOG_PAGE_SIZE } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import {
@@ -33,6 +33,8 @@ import {
   invalidateDiscoverLayoutCache,
   fetchMyPublications,
   unpublishApp,
+  fetchCliCatalog,
+  installCliTool,
   ensureStoreIdentity,
   // Aliased: this controller exports same-named wrappers, and an unaliased
   // import would bind to the wrapper instead of the store function.
@@ -470,6 +472,43 @@ export async function unpublishStoreApp(input: { slug: string }): Promise<StoreC
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] unpublishStoreApp error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * The store's CLI tool catalog merged with what is installed on this device.
+ * Listing never downloads a package.
+ */
+export async function getStoreCliCatalog(): Promise<StoreControllerResponse<CliCatalog>> {
+  try {
+    return { success: true, data: await fetchCliCatalog() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreCliCatalog error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+const CLI_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/
+const CLI_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+
+/**
+ * Install one catalog version of a CLI tool on this device, verified against
+ * the catalog, and make it the version new executions use.
+ */
+export async function installStoreCliTool(
+  input: { id: string; version: string },
+): Promise<StoreControllerResponse<CliCatalogTool>> {
+  try {
+    const id = typeof input?.id === 'string' ? input.id : ''
+    const version = typeof input?.version === 'string' ? input.version : ''
+    if (!CLI_ID.test(id) || id.length > 128) return { success: false, error: 'a valid tool id is required' }
+    if (!CLI_VERSION.test(version) || version.length > 64) return { success: false, error: 'a valid version is required' }
+    return { success: true, data: await installCliTool({ id, version }) }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] installStoreCliTool error:', err.message)
     return { success: false, error: err.message }
   }
 }

@@ -680,6 +680,10 @@
     "path": "/api/store/unpublish"
   },
   {
+    "method": "GET",
+    "path": "/api/store/cli-catalog"
+  },
+  {
     "method": "POST",
     "path": "/api/store/ignore-version"
   },

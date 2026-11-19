@@ -30,6 +30,7 @@ const CONSERVATIVE_DEFAULT: StoreCapabilities = {
   publish: false,
   reviewWorkflow: false,
   identity: 'none',
+  cliTools: false,
 }
 
 // Re-fetch on a fresh mount once the cache is older than this, so a degraded
@@ -45,6 +46,7 @@ function coerce(value: Partial<StoreCapabilities> | undefined): StoreCapabilitie
     publish: value.publish === true,
     reviewWorkflow: value.reviewWorkflow === true,
     identity: identity === 'account' || identity === 'shared' ? identity : 'none',
+    cliTools: value.cliTools === true,
   }
 }
 

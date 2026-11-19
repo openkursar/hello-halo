@@ -12,6 +12,8 @@
  *   POST {url}/my/publications/{author}/{id}/unpublish
  *   GET  {url}/category-taxonomy.json                        ops-managed chips
  *   GET  {url}/discover-layout.json                          ops-managed page
+ *   GET  {url}/clis.json                                     CLI tool catalog (account token)
+ *   GET  {url}/clis/{id}/{version}/package.hcli              CLI package (path from the catalog)
  *
  * The catalog half is byte-identical to the static protocol, so it is delegated
  * to HaloAdapter rather than duplicated.
@@ -146,6 +148,7 @@ export class DhpV2Adapter implements RegistryAdapter {
         collections: f.collections === true,
         reviewWorkflow: f.reviewWorkflow === true,
         identityBinding: readIdentityBinding(f.identityBinding),
+        cliTools: typeof f.cliTools === 'object' && f.cliTools !== null,
       }
       this.handshakes.set(key, { features, expiresAt: now + HANDSHAKE_TTL_MS })
       return features
@@ -236,6 +239,47 @@ export class DhpV2Adapter implements RegistryAdapter {
     if (!res.ok) throw new Error(`unpublish failed: ${res.status}`)
   }
 
+  // ── CLI tool catalog ─────────────────────────────────────────────────────
+
+  async fetchCliCatalog(source: RegistrySource, auth: RegistryAuth): Promise<unknown | null> {
+    const res = await fetchWithTimeout(`${baseUrl(source)}/clis.json`, {
+      headers: { ...JSON_HEADERS, Authorization: `Bearer ${auth.token}` },
+    })
+    if (res.status === 404 || res.status === 501) return null
+    if (res.status === 401) throw new Error(STORE_NOT_SIGNED_IN)
+    if (!res.ok) throw new Error(`cli-catalog failed: ${res.status}`)
+    return (await res.json()) as unknown
+  }
+
+  /**
+   * `downloadUrl` comes from the catalog body, so it is treated as untrusted:
+   * only a plain absolute path on this source is accepted. Joining it to the
+   * source URL keeps any gateway prefix and never sends the token to another
+   * origin.
+   */
+  async downloadCliPackage(
+    source: RegistrySource,
+    downloadUrl: string,
+    auth: RegistryAuth,
+    maxBytes: number,
+  ): Promise<Uint8Array> {
+    if (!isSafeSourcePath(downloadUrl)) throw new Error('CLI package path is not a plain path on this source')
+    const res = await fetchWithTimeout(`${baseUrl(source)}${downloadUrl}`, {
+      headers: { 'User-Agent': JSON_HEADERS['User-Agent'], Authorization: `Bearer ${auth.token}` },
+    })
+    if (res.status === 401) throw new Error(STORE_NOT_SIGNED_IN)
+    if (res.status === 404) throw new Error('This CLI version is no longer available from the store')
+    if (!res.ok) throw new Error(`cli-package download failed: ${res.status}`)
+    const declared = Number(res.headers.get('Content-Length') ?? '')
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await res.body?.cancel().catch(() => undefined)
+      throw new Error('CLI package is larger than allowed')
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    if (bytes.byteLength > maxBytes) throw new Error('CLI package is larger than allowed')
+    return bytes
+  }
+
   // ── Page-level documents ─────────────────────────────────────────────────
 
   fetchPageTaxonomy(source: RegistrySource, validator?: string): Promise<PageDocumentResult> {
@@ -273,6 +317,14 @@ export class DhpV2Adapter implements RegistryAdapter {
 
 function baseUrl(source: RegistrySource): string {
   return source.url.replace(/\/+$/, '')
+}
+
+/** A single-rooted path with no scheme, authority, parent segment or backslash. */
+function isSafeSourcePath(path: string): boolean {
+  if (!path.startsWith('/') || path.startsWith('//')) return false
+  if (path.includes('\\') || path.includes('?') || path.includes('#')) return false
+  if (/[\u0000-\u001f]/.test(path)) return false
+  return !path.split('/').some(segment => segment === '..' || segment === '.' || /%2e%2e|%2f|%5c/i.test(segment))
 }
 
 function splitScopedSlug(slug: string): [string, string] {

@@ -579,6 +579,8 @@ export interface ServerFeatures {
   /** Creator-identity strength this backend can establish. A driver downgrades
    * any value it does not recognise, so this is already the closed vocabulary. */
   identityBinding: StoreIdentityMode
+  /** An administrator-reviewed CLI tool catalog is served (account tokens only). */
+  cliTools: boolean
 }
 
 /** An install the client asks a source to authorise and record. */
@@ -625,6 +627,55 @@ export interface StoreCapabilities {
   reviewWorkflow: boolean
   /** Creator identity strength for publish / my-publications. */
   identity: StoreIdentityMode
+  /**
+   * CLI tool catalog entry point. True when the primary source serves the
+   * catalog and this build can present an account token to read it.
+   */
+  cliTools: boolean
+}
+
+// ============================================
+// CLI tool catalog
+// ============================================
+
+/** One administrator-approved version of a CLI tool, as offered to this device. */
+export interface CliCatalogVersion {
+  version: string
+  /** Bytes of the package archive. */
+  size: number
+  /** `<platform>-<arch>` values, or `any`. */
+  platforms: string[]
+  /** Whether this device can install it (platform only; the runtime check runs at install). */
+  supported: boolean
+  minNode?: string
+  sideEffects?: 'read-only' | 'writes'
+  /** How the tool signs in: `none`, `env-ref` or `external-login`. */
+  auth?: 'none' | 'env-ref' | 'external-login'
+  commands: string[]
+  publishedAt?: string
+}
+
+/**
+ * A CLI tool in the store's catalog merged with what is installed here.
+ * Nothing in it may carry a URL or credential: install requests name the tool
+ * and version, and the main process resolves the rest.
+ */
+export interface CliCatalogTool {
+  id: string
+  displayName: string
+  /** How the administrator delivered it (`npm`, `upload`, …); informational. */
+  source: string
+  /** Revoked by an administrator: never installed, and excluded from new executions here. */
+  revoked: boolean
+  latest: string
+  /** Newest first. */
+  versions: CliCatalogVersion[]
+  /** Installed state on this device; null when not installed. */
+  installed: { current: string | null; versions: string[]; revoked: boolean } | null
+}
+
+export interface CliCatalog {
+  tools: CliCatalogTool[]
 }
 
 /** How publishing will handle one skill a digital human depends on. */
