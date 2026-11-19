@@ -399,6 +399,8 @@ describe('cli-tools store: launchers', () => {
     expect(files).toEqual(['tool', 'tool.cmd'])
     const cmd = readFileSync(join(pinned.binDir!, 'tool.cmd'), 'utf-8')
     expect(cmd).toContain('set ELECTRON_RUN_AS_NODE=1')
+    expect(cmd).toContain(`--require "${join(pinned.binDir!, '..', 'argv-preload.cjs')}"`)
+    expect(readFileSync(join(pinned.binDir!, '..', 'argv-preload.cjs'), 'utf-8')).toContain('process.defaultApp = true')
     expect(cmd).toContain('%*')
     expect(cmd).toContain('exit /b %ERRORLEVEL%')
     expect(cmd.includes('\r\n')).toBe(true)
@@ -410,7 +412,7 @@ describe('cli-tools store: launchers', () => {
         "let input = ''",
         "process.stdin.on('data', d => { input += d })",
         "process.stdin.on('end', () => {",
-        "  console.log(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), input, asNode: process.env.ELECTRON_RUN_AS_NODE }))",
+        "  console.log(JSON.stringify({ args: process.argv.slice(2), script: process.argv[1], defaultApp: process.defaultApp, cwd: process.cwd(), input, asNode: process.env.ELECTRON_RUN_AS_NODE }))",
         '  process.exit(7)',
         '})',
         '',
@@ -430,6 +432,13 @@ describe('cli-tools store: launchers', () => {
     })
     expect(result.status).toBe(7)
     const out = JSON.parse(result.stdout.trim())
-    expect(out).toEqual({ args: ['a b', '--flag=$HOME', "it's"], cwd: realpathSync(work), input: 'from-stdin', asNode: '1' })
+    expect(out).toEqual({
+      args: ['a b', '--flag=$HOME', "it's"],
+      script: join(root, 'store', ID, storeEntries()[0], 'payload', 'bin', 'tool.js'),
+      defaultApp: true,
+      cwd: realpathSync(work),
+      input: 'from-stdin',
+      asNode: '1',
+    })
   })
 })

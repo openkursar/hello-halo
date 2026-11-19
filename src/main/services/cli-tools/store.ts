@@ -8,6 +8,7 @@
  *   staging/<txid>/                    one import transaction; removed on exit
  *   views/<viewKey>/bin/               launchers for one exact tool set
  *   views/<viewKey>/TOOLS.md           what those launchers are, for the agent
+ *   views/<viewKey>/argv-preload.cjs   argv fix the launchers load (see shims.ts)
  *   locks/<executionId>.json           the tool set an execution is pinned to
  *   state.json                         versions, current choice, revocation
  *
@@ -23,7 +24,7 @@ import { extractPackageArchive, DEFAULT_ARCHIVE_LIMITS, type ArchiveLimits } fro
 import { CliToolError, isCliToolError } from './errors'
 import { assertManifestSupported, parseCliManifest, type CliManifest } from './manifest'
 import { inspectPayload, integrityOf, integrityShortHex, scanPayload } from './payload'
-import { launcherFiles } from './shims'
+import { ARGV_PRELOAD_FILE, launcherFiles, renderArgvPreload } from './shims'
 
 export type CliToolSource = 'preset' | 'catalog' | 'user-import'
 
@@ -632,7 +633,7 @@ export class CliToolStore {
 
   private viewKeyOf(lock: CliExecutionLock, state: CliToolState): string {
     const targets = this.launcherTargets(lock, state)
-    return sha256(JSON.stringify({ v: 2, platform: this.platform, runtime: this.runtimePath, targets })).slice(0, 20)
+    return sha256(JSON.stringify({ v: 3, platform: this.platform, runtime: this.runtimePath, targets })).slice(0, 20)
   }
 
   /**
@@ -648,8 +649,12 @@ export class CliToolStore {
     const tmp = this.path('views', `.tmp-${randomUUID()}`)
     try {
       await fsp.mkdir(join(tmp, 'bin'), { recursive: true })
+      // Launchers name the preload by its final path, where the view lands after the rename.
+      await fsp.writeFile(join(tmp, ARGV_PRELOAD_FILE), renderArgvPreload(), 'utf-8')
+      const preloadPath = join(viewDir, ARGV_PRELOAD_FILE)
       for (const target of this.launcherTargets(lock, state)) {
-        for (const file of launcherFiles(this.platform, target.exposedAs, this.runtimePath, target.entry)) {
+        const paths = { runtimePath: this.runtimePath, preloadPath, entryPath: target.entry }
+        for (const file of launcherFiles(this.platform, target.exposedAs, paths)) {
           const path = join(tmp, 'bin', file.name)
           await fsp.writeFile(path, file.content, { encoding: 'utf-8', mode: file.executable ? 0o755 : 0o644 })
         }

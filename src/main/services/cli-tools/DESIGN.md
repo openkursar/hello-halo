@@ -198,6 +198,16 @@ the fixed entry and passes arguments through. The sh launcher uses `exec`, so
 cwd, stdio, exit status and signals belong to the tool. On Windows, a `.cmd`
 launcher and an extensionless sh twin for Git Bash are both written.
 
+The runtime also gets `--require <view>/argv-preload.cjs`, which only sets
+`process.defaultApp = true`. Running as Node, Electron still reports
+`process.versions.electron` but leaves `defaultApp` unset, so yargs and
+commander take the process for a packaged Electron app and pass the entry path
+to the tool as its first argument. `defaultApp` is the flag Electron sets when
+it runs a script, and with it those parsers read argv as Node does. The
+preload is CommonJS, so it also loads before `.mjs` entries, and `fork()`
+children inherit it through `execArgv`. It belongs to the view, and the view
+key includes the launcher format, so a format change builds new views.
+
 When `basePath` is given and a command name already resolves there, the command
 is exposed as `halo-<name>`. The user's own tool keeps its name. The lock
 records which name was used.
@@ -293,6 +303,9 @@ scan. fflate is loaded only when an archive is extracted.
 - Launchers pass `ELECTRON_RUN_AS_NODE` to the tool's own children. Those
   children need it when they run `process.execPath` as Node, but any Electron
   app the tool starts would also run as Node.
+- A tool child started with `spawn(process.execPath, [script])` instead of
+  `fork()` does not get the argv preload, so a yargs or commander child started
+  that way sees its script path as an argument.
 - On Ctrl+C, cmd.exe may ask "Terminate batch job".
 - Paths containing `"` or line breaks are refused for launchers.
 - Windows behavior has unit-test coverage only, until it is verified on a real
