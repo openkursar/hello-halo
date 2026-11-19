@@ -78,14 +78,33 @@ export async function createSpace(input: {
   }
 }
 
+/**
+ * A removed space's terminals and AI pages could never be shown again, so they
+ * end with it. Pages are listed before the removal releases their conversations;
+ * call the returned function once the space is gone.
+ */
+async function prepareSpaceWorkEnd(spaceId: string): Promise<() => void> {
+  const [{ endSpaceTerminals }, { closeBrowserPages, listSpacePageIds }] = await Promise.all([
+    import('../services/ai-terminal'),
+    import('../services/ai-browser'),
+  ])
+  const pages = listSpacePageIds(spaceId)
+  return () => {
+    endSpaceTerminals(spaceId)
+    closeBrowserPages([...new Set([...pages, ...listSpacePageIds(spaceId)])])
+  }
+}
+
 /** Runtime owns stopping work and preserving people; the service removes only the prepared space. */
 export async function deleteSpace(spaceId: string): Promise<ControllerResponse> {
   try {
     const { removeWorkspacePreservingPeople } = await import('../apps/runtime')
+    const endSpaceWork = await prepareSpaceWorkEnd(spaceId)
     const result = await removeWorkspacePreservingPeople(spaceId, async () => {
       await destroySpaceCache(spaceId)
       return serviceDeleteSpace(spaceId)
     })
+    if (result) endSpaceWork()
     return { success: result }
   } catch (error: unknown) {
     console.error('[SpaceController] Workspace deletion failed; retained digital humans were not removed', { spaceId, error })
@@ -278,7 +297,9 @@ export async function reorderSpaces(spaceIds: string[]): Promise<ControllerRespo
 export async function forgetSpace(spaceId: string): Promise<ControllerResponse> {
   try {
     const { removeWorkspacePreservingPeople } = await import('../apps/runtime')
+    const endSpaceWork = await prepareSpaceWorkEnd(spaceId)
     const result = await removeWorkspacePreservingPeople(spaceId, () => serviceForgetSpace(spaceId))
+    if (result) endSpaceWork()
     return { success: result }
   } catch (error: unknown) {
     const err = error as Error

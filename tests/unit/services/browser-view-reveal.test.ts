@@ -234,7 +234,7 @@ describe('website tabs', () => {
   it.each([true, false])('inherits ownership and device mode without watching, hidden=%s', async offscreen => {
     const main = new FakeWindow()
     manager.initialize(main as never)
-    const owner = { isActive: () => true, reserve: vi.fn(), ready: vi.fn(), release: vi.fn() }
+    const owner = { isActive: () => true, reserve: vi.fn(), ready: vi.fn(), childOpened: vi.fn(() => false), release: vi.fn() }
     await manager.create('owned-opener', 'https://example.com', { offscreen, deviceMode: 'h5', owner })
     const options = popups.configure.mock.calls[0][1] as PopupOptions
     expect(options.canOpenTab()).toBe(true)
@@ -257,7 +257,7 @@ describe('website tabs', () => {
     let finish!: (guest: FakeGuest) => void
     host.create.mockImplementationOnce(() => new Promise<FakeGuest>(resolve => { finish = resolve }))
     let active = true
-    const owner = { isActive: () => active, reserve: vi.fn(), ready: vi.fn(), release: vi.fn() }
+    const owner = { isActive: () => active, reserve: vi.fn(), ready: vi.fn(), childOpened: vi.fn(() => false), release: vi.fn() }
     const opening = manager.create('reserved', 'https://example.com', { owner })
     const rejected = expect(opening).rejects.toThrow(/closed|released/)
     expect(owner.reserve).toHaveBeenCalledWith('reserved', false)

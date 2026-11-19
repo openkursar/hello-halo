@@ -62,13 +62,16 @@ describe('Halo tool discovery policy', () => {
 
   it('defers browser and terminal while retaining core and unknown services eagerly', () => {
     const policies = buildToolDiscoveryOptions({
+      canvas: { type: 'sdk' },
       'halo-apps': { type: 'sdk' }, 'halo-email': { type: 'sdk' },
       'ai-browser': { type: 'sdk' }, 'ai-terminal': { type: 'sdk' },
       'halo-docs': { type: 'sdk' }, 'halo-api-ref': { type: 'sdk' },
       'halo-team': { type: 'sdk' }, 'halo-report': { type: 'sdk' },
       custom: { type: 'http' }, unknown: { type: 'sdk' },
     })!
-    expect(Object.keys(policies.services)).toEqual(['ai-browser', 'ai-terminal', 'halo-apps', 'halo-email'])
+    expect(Object.keys(policies.services)).toEqual(['ai-browser', 'ai-terminal', 'canvas', 'halo-apps', 'halo-email'])
+    // Rarely called: one summary line stays in every request instead of the whole definition.
+    expect(policies.services.canvas).toEqual({ identity: 'builtin:canvas', loading: 'deferred', summary: expect.stringContaining('in front of the user') })
     expect(Object.values(policies.services).every(service => service.loading === 'deferred')).toBe(true)
     expect(policies.services['ai-browser']).toEqual({ identity: 'builtin:ai-browser', loading: 'deferred' })
     expect(policies.services['ai-terminal']).not.toHaveProperty('summary')

@@ -260,6 +260,7 @@ export function ImageViewer({ tab }: ImageViewerProps) {
           <img
             src={imageUrl}
             alt={tab.title}
+            data-canvas-content-ready={imageLoaded}
             className="max-w-none transition-transform duration-100"
             style={{
               transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,

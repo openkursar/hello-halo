@@ -284,6 +284,7 @@ vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({
   createRemindersMcpServer: () => ({ _isMcpServer: true, name: 'halo-reminders' }),
 }))
+vi.mock('../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer: () => ({ _isMcpServer: true, name: 'canvas' }) }))
 vi.mock('../../../../src/main/apps/runtime/notify-availability', () => ({
   resolveNotifyAvailability: () => ({
     channelsConfigured: false, emailChannelConfigured: false, imContactsAvailable: false,
@@ -581,10 +582,11 @@ const ROWS = Object.keys(ROW_DRIVERS) as Row[]
  * default, digital humans enabled, no external MCP apps, no email channel.
  */
 const EXPECTED_SERVERS: Record<Row, readonly string[]> = {
-  'space chat': ['capabilities', 'halo-apps', 'halo-conversations', 'halo-docs', 'halo-team', 'web-search'],
+  // A conversation someone has on screen can bring its work in front of them.
+  'space chat': ['canvas', 'capabilities', 'halo-apps', 'halo-conversations', 'halo-docs', 'halo-team', 'web-search'],
   // Operating Halo is no switch for a digital human: the owner's own turns and runs hold it.
   'digital human chat (owner)': [
-    'ai-browser', 'halo-api-ref', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-reminders', 'halo-team', 'ocr', 'web-search',
+    'ai-browser', 'canvas', 'halo-api-ref', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-reminders', 'halo-team', 'ocr', 'web-search',
   ],
   // Only what the strict policy classes as safe survives the guest filter
   // (reminders included: a guest is offered no switch for them).

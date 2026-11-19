@@ -14,7 +14,6 @@ import {
   Unlock,
   Globe,
   ExternalLink,
-  Bot,
   MoreVertical,
   Search,
   Smartphone,
@@ -26,7 +25,7 @@ import { api } from '../../../api'
 import type { TabState, BrowserState } from '../../../services/canvas-lifecycle'
 import { useBrowserState, useCanvasActions } from '../../../hooks/useCanvasLifecycle'
 import { useViewerResources } from '../viewer-resources'
-import { useAIBrowserStore, selectViewOwner } from '../../../stores/ai-browser.store'
+import { AIWorkStatusLine } from '../AIWorkMarks'
 import { useTranslation } from '../../../i18n'
 import { useSecurityPolicy } from '../../../hooks/useSecurityPolicy'
 import { getBrowserHomepage } from '../../../utils/browser-homepage'
@@ -162,11 +161,6 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
       }
     }
   }, [blockedUrl, blockedHost, tab.browserViewId, tab.id, t])
-
-  // Ownership follows page identity; unrelated tabs can share a URL or title.
-  const aiOwnerId = useAIBrowserStore(state => selectViewOwner(state, tab.browserViewId))
-  const isAIOperating = useAIBrowserStore(state => !!aiOwnerId && !!state.operating[aiOwnerId])
-  const isThisAIBrowser = aiOwnerId !== null
 
   useLayoutEffect(() => {
     const container = containerRef.current
@@ -317,21 +311,7 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* AI Operating Indicator (browser only, not PDF) */}
-      {!isPdf && isThisAIBrowser && (
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-primary/10 border-b border-primary/30">
-          <div className="relative">
-            <Bot size={16} className="text-primary" />
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-green-500 rounded-full" />
-          </div>
-          <span className="text-xs font-medium text-primary">{t('AI is operating this browser')}</span>
-          <div className="flex-1" />
-          <div className="flex items-center gap-1">
-            <div className={`w-1.5 h-1.5 rounded-full ${isAIOperating ? 'bg-green-500 animate-pulse' : 'bg-muted-foreground/40'}`} />
-            <span className="text-xs text-muted-foreground">{isAIOperating ? t('Live') : t('Idle')}</span>
-          </div>
-        </div>
-      )}
+      {!isPdf && tab.aiWork && <AIWorkStatusLine tab={tab} />}
 
       {/* PDF Toolbar - simplified */}
       {isPdf ? (
@@ -571,6 +551,7 @@ export function BrowserViewerFallback({ tab }: BrowserViewerProps) {
 
   return (
     <div className="flex flex-col h-full bg-background">
+      {tab.aiWork && <AIWorkStatusLine tab={tab} />}
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center max-w-md px-4">
           <Globe className="w-16 h-16 mx-auto mb-4 text-muted-foreground/30" />

@@ -77,8 +77,8 @@ export interface TerminalInfo {
    * True once the AI has operated this session through any terminal_* tool
    * (always true for owner==='ai', since the AI created it). Distinct from
    * `owner`: a user-opened terminal the AI later drove is `owner:'user'` but
-   * `aiTouched:true`. Drives the close policy (closing an aiTouched terminal's
-   * tab prompts keep-background vs terminate) and the live-sessions tray.
+   * `aiTouched:true`. A running aiTouched session is one of the AI's canvas
+   * tabs, and closing that tab asks before ending it.
    */
   aiTouched: boolean
   state: TerminalRunState
@@ -88,6 +88,12 @@ export interface TerminalInfo {
   createdAt: number
   /** Owning space id (for per-space isolation of the AI's terminal tools) */
   spaceId?: string
+}
+
+/** The client list adds main-process AI activity to the worker's session metadata. */
+export interface TerminalSnapshotEntry extends TerminalInfo {
+  operating: boolean
+  conversationId?: string
 }
 
 /** Result of a write-and-wait cycle */
@@ -159,6 +165,11 @@ export interface TerminalLifecycleEvent {
    */
   type: 'created' | 'exited' | 'title' | 'ai-activity' | 'touched' | 'removed'
   info?: TerminalInfo
-  /** For 'ai-activity': whether the AI is currently writing */
-  aiWriting?: boolean
+  /**
+   * For 'ai-activity': whether the AI is operating the session, held a while
+   * after its last call (shared/ai-operating.ts).
+   */
+  operating?: boolean
+  /** For 'ai-activity': the conversation whose AI operates it, when known. */
+  conversationId?: string
 }

@@ -17,6 +17,7 @@ const m = vi.hoisted(() => ({
   seeded: [] as string[][],
 }))
 
+vi.mock('../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer: () => ({ name: 'canvas' }) }))
 vi.mock('fs', () => {
   const files = new Map<string, string>()
   return {

@@ -3,7 +3,7 @@ import type { Page } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
 import { test, observeBrowserMetadata, metadataWasReceived } from '../fixtures/acceptance-browser-metadata'
 import { expect, acceptance, openAiBrowser, revealFromReply, readGuest, paintAiBrowser, runBrowserChat, parseBrowserState, READ_BROWSER_STATE } from '../fixtures/acceptance-browser-work'
-import { readAcceptanceConversation } from '../fixtures/acceptance-app'
+import { tabTitled } from '../fixtures/acceptance-ai-work'
 import { navigateToChat } from '../fixtures/helpers'
 import { guestIdentity } from '../fixtures/browser-site'
 
@@ -16,22 +16,16 @@ async function composerState(page: Page) {
   })
 }
 
-test('loaded and asynchronous page metadata identifies both owned pages without reopening a collapsed canvas or stealing focus', acceptance('browser.work.live-metadata'), async ({ acceptanceApp, model, window, browserMetadataSite }, info) => {
+test('loaded and asynchronous page metadata names both owned pages\' tabs without reopening a collapsed canvas or stealing focus', acceptance('browser.work.live-metadata'), async ({ acceptanceApp, model, window, browserMetadataSite }, info) => {
   await navigateToChat(window)
   const opened = await openAiBrowser(window, acceptanceApp.app, model, browserMetadataSite, `Metadata draft ${randomUUID()}`)
-  const owner = (await readAcceptanceConversation(window, opened.turn.spaceId, opened.turn.conversationId)).title
-  const rowLabel = (title: string) => `${owner} · ${title}`
-  const tray = window.getByRole('dialog').filter({ has: window.getByText('Active sessions', { exact: true }) })
-  const openTray = async () => {
-    await window.getByRole('button', { name: '2 sessions running', exact: true }).click()
-    await expect(tray).toBeVisible()
-  }
-  const row = (title: string) => tray.getByRole('button').filter({ has: window.getByText(rowLabel(title), { exact: true }) })
-  await openTray()
-  await expect(row(browserMetadataSite.targetTitle)).toHaveCount(1)
-  await expect(row(browserMetadataSite.controlTitle)).toHaveCount(1)
-  await window.keyboard.press('Escape')
-  await expect(tray).toHaveCount(0)
+  // Both pages are already the AI's tabs, added without opening the canvas.
+  await expect(window.locator('.canvas-tab')).toHaveCount(0)
+  await window.getByRole('button', { name: 'Expand canvas', exact: true }).click()
+  await expect(tabTitled(window, browserMetadataSite.targetTitle)).toHaveCount(1)
+  await expect(tabTitled(window, browserMetadataSite.controlTitle)).toHaveCount(1)
+  await expect(window.locator('.canvas-tab').filter({ has: window.locator('.canvas-tab-ai-dot') })).toHaveCount(2)
+  await window.getByRole('button', { name: 'Collapse canvas', exact: true }).click()
   await revealFromReply(window, opened.answer)
   await paintAiBrowser(window, acceptanceApp.app, opened.viewId)
   expect(await readGuest(acceptanceApp.app, opened.guestId)).toEqual(opened.target)
@@ -90,13 +84,12 @@ test('loaded and asynchronous page metadata identifies both owned pages without 
     await paintAiBrowser(window, acceptanceApp.app, opened.viewId)
     await expect(window.getByPlaceholder(/Enter URL or search Bing/)).toHaveValue(targetUrl)
     expect(await readGuest(acceptanceApp.app, opened.guestId)).toEqual(navigated)
-    await window.locator('.canvas-tab.active').getByTitle('Close (⌘W / Middle-click)', { exact: true }).click()
-    await expect(window.locator('.canvas-tab')).toHaveCount(0)
-    await openTray()
-    await expect(row(changes[0].title)).toHaveCount(1)
-    await expect(row(changes[2].title)).toHaveCount(1)
-    await row(changes[2].title).click()
-    await expect(tray).toHaveCount(0)
+    // The tabs carry the pages' own current titles; choosing the target's shows the same page.
+    await expect(tabTitled(window, changes[0].title)).toHaveCount(1)
+    await expect(tabTitled(window, changes[2].title)).toHaveCount(1)
+    await tabTitled(window, changes[0].title).click()
+    await tabTitled(window, changes[2].title).click()
+    await expect(tabTitled(window, changes[2].title)).toHaveClass(/\bactive\b/)
     await info.attach('live-metadata-revealed-page', { body: await paintAiBrowser(window, acceptanceApp.app, opened.viewId), contentType: 'image/png' })
     await expect(window.getByPlaceholder(/Enter URL or search Bing/)).toHaveValue(targetUrl)
     expect(await readGuest(acceptanceApp.app, opened.guestId)).toEqual(navigated)

@@ -13,6 +13,7 @@ import type {
   ApiResponse,
 } from './_shared'
 import type { Goal, GoalInput } from '../../shared/types/goal'
+import type { TerminalSnapshotEntry } from '../../shared/types/terminal'
 import type { AgentInjectRequest, AgentSendRequest } from '../../shared/types/agent-send'
 
 export const agentApi = {
@@ -170,7 +171,7 @@ export const agentApi = {
   },
 
   // ===== Terminal (user-facing viewer operations) =====
-  listTerminals: async (): Promise<ApiResponse> => {
+  listTerminals: async (): Promise<ApiResponse<TerminalSnapshotEntry[]>> => {
     if (isElectron()) return window.halo.listTerminals()
     return httpRequest('GET', '/api/terminal/list')
   },

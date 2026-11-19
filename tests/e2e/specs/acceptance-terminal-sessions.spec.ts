@@ -104,32 +104,30 @@ async function touchWithAi(page: Page, model: AcceptanceModel, terminal: OpenedT
   assertModelOperations(model, reads.map(read => read.id), 1)
 }
 
-async function closeChoice(page: Page, terminal: OpenedTerminal, choice: 'Keep running in background' | 'Close completely') {
+/** Closes the terminal's tab and answers the one question closing an AI-used terminal asks. */
+async function closeChoice(page: Page, terminal: OpenedTerminal, choice: 'End and close' | 'Cancel') {
   const info = (await terminals(page)).find(session => session.id === terminal.info.id)!
   const tab = terminalTab(page, info.title)
   await expect(tab).toHaveCount(1)
   await tab.hover()
   await tab.locator('.canvas-tab-close').click()
-  const guard = page.getByText('This terminal has been used by AI', { exact: true }).locator('..').locator('..')
-  await expect(guard).toBeVisible()
-  await expect(guard).toContainText(info.title)
-  await guard.getByRole('button', { name: choice, exact: true }).click()
-  await expect(guard).toHaveCount(0)
-  await expect(tab).toHaveCount(0)
+  const question = page.getByRole('alertdialog', { name: 'End this terminal?', exact: true })
+  await expect(question).toBeVisible()
+  await expect(question).toContainText('The AI used this terminal. Closing it ends the process running in it.')
+  await expect(question.getByRole('button')).toHaveText(['Cancel', 'End and close'])
+  // Enter never ends a process: it answers the focused Cancel.
+  await expect(question.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(question).toHaveCount(0)
+  await expect(tab).toHaveCount(1)
+  expect((await terminals(page)).find(session => session.id === terminal.info.id)?.state).toBe('running')
+  await tab.hover()
+  await tab.locator('.canvas-tab-close').click()
+  await expect(question).toBeVisible()
+  await question.getByRole('button', { name: choice, exact: true }).click()
+  await expect(question).toHaveCount(0)
+  await expect(tab).toHaveCount(choice === 'Cancel' ? 1 : 0)
   return info
-}
-
-function liveTrigger(page: Page, title: string) {
-  return page.locator('[role="button"][aria-haspopup="dialog"]').filter({ has: page.getByText(title, { exact: true }) })
-}
-
-async function openAggregateTerminal(page: Page, selectedTitle: string, titles: string[]) {
-  expect(new Set(titles).size).toBe(titles.length)
-  await page.getByRole('button', { name: `${titles.length} sessions running`, exact: true }).click()
-  const tray = page.getByRole('dialog').filter({ has: page.getByText('Active sessions', { exact: true }) })
-  for (const title of titles) await expect(tray.getByRole('button').filter({ has: page.getByText(title, { exact: true }) })).toHaveCount(1)
-  await tray.getByRole('button').filter({ has: page.getByText(selectedTitle, { exact: true }) }).click()
-  await expect(terminalTab(page, selectedTitle)).toHaveClass(/\bactive\b/)
 }
 
 test('AI terminal tools and user keyboard input reach the same real interactive process in order', terminalAcceptance('terminal.sessions.interact'), async ({ terminalApp, model, window }, info) => {
@@ -176,29 +174,25 @@ test('AI terminal tools and user keyboard input reach the same real interactive 
   await info.attach('shared-terminal-input', { body: JSON.stringify({ observed, processBefore, inputs: terminal.program.inputs() }, null, 2), contentType: 'application/json' })
 })
 
-test('keeping an AI-touched terminal closes its tab and reopens the same live process from the workspace tray', terminalAcceptance('terminal.sessions.keep'), async ({ terminalApp, model, window }, info) => {
+test('cancelling the close of an AI-touched terminal keeps the same live process and its tab', terminalAcceptance('terminal.sessions.keep'), async ({ terminalApp, model, window }, info) => {
   const space = await workspace(terminalApp, 'Retained terminal')
   await enterWorkspace(window, space)
   const terminal = await openOwnedTerminal(terminalApp, 'retained', space.id)
   const processBefore = assertProcess(terminal, space)
   await touchWithAi(window, model, terminal)
-  const retained = await closeChoice(window, terminal, 'Keep running in background')
+  const retained = await closeChoice(window, terminal, 'Cancel')
   expect(assertProcess(terminal, space)).toEqual(processBefore)
-  await expect(liveTrigger(window, retained.title)).toHaveCount(1)
-  await liveTrigger(window, retained.title).click()
-  const tray = window.getByRole('dialog').filter({ has: window.getByText('Active sessions', { exact: true }) })
-  await expect(tray).toBeVisible()
-  await tray.getByRole('button').filter({ has: window.getByText(retained.title, { exact: true }) }).click()
   await expect(terminalTab(window, retained.title)).toHaveClass(/\bactive\b/)
+  await expect(terminalTab(window, retained.title).locator('.canvas-tab-ai-dot')).toHaveCount(1)
   await expect(window.locator('.xterm-rows')).toContainText(terminal.program.ready)
-  await typeTerminalInput(window, terminal.program, marker('REOPENED'))
+  await typeTerminalInput(window, terminal.program, marker('STILL_HERE'))
   expect(assertProcess(terminal, space)).toEqual(processBefore)
   expect((await replay(window, terminal.info.id)).info).toMatchObject({ id: terminal.info.id, createdAt: retained.createdAt, state: 'running', aiTouched: true })
   expect(await terminals(window)).toHaveLength(1)
   await info.attach('retained-terminal-process', { body: JSON.stringify({ retained, processBefore, inputs: terminal.program.inputs() }, null, 2), contentType: 'application/json' })
 })
 
-test('terminating the retained target exits its actual program and shell while a separate terminal remains interactive', terminalAcceptance('terminal.sessions.terminate'), async ({ terminalApp, model, window }, info) => {
+test('ending an AI-touched terminal by closing its tab exits its actual program and shell while a separate terminal remains interactive', terminalAcceptance('terminal.sessions.terminate'), async ({ terminalApp, model, window }, info) => {
   const space = await workspace(terminalApp, 'Terminal termination')
   await enterWorkspace(window, space)
   const target = await openOwnedTerminal(terminalApp, 'target', space.id)
@@ -211,28 +205,27 @@ test('terminating the retained target exits its actual program and shell while a
   expect(controlInfoBefore).toMatchObject({ title: controlTitle, spaceId: space.id, owner: 'user', aiTouched: false, state: 'running' })
   expect(controlInfoBefore.id).not.toBe(target.info.id)
   await touchWithAi(window, model, target, controlInfoBefore)
-  await openAggregateTerminal(window, controlTitle, [target.info.title, controlTitle])
+  // Used by the AI, the control terminal became one of its tabs without anyone opening it.
+  await expect(terminalTab(window, controlTitle)).toHaveCount(1)
+  await expect(terminalTab(window, controlTitle).locator('.canvas-tab-ai-dot')).toHaveCount(1)
+  await terminalTab(window, controlTitle).click()
   const control = await startOwnedTerminalProgram(terminalApp, 'control', controlInfoBefore)
   const controlProcess = assertProcess(control, space)
   expect(targetProcess.pid).not.toBe(controlProcess.pid)
   expect(targetProcess.shellPid).not.toBe(controlProcess.shellPid)
-  const targetInfo = await closeChoice(window, target, 'Keep running in background')
-  await openAggregateTerminal(window, targetInfo.title, [targetInfo.title, controlTitle])
-  await closeChoice(window, target, 'Close completely')
+  await terminalTab(window, (await terminals(window)).find(session => session.id === target.info.id)!.title).click()
+  const targetInfo = await closeChoice(window, target, 'Cancel')
+  expect(assertProcess(target, space)).toEqual(targetProcess)
+  await closeChoice(window, target, 'End and close')
   await expect.poll(() => target.program.confirmedExited(), { timeout: 15000, message: 'Both the target program and its PTY shell must leave the OS process table' }).toBe(true)
   await expect.poll(async () => (await terminalEvents(window)).some(event => event.sessionId === target.info.id && event.type === 'exited' && event.info?.state === 'exited')).toBe(true)
   expect((await terminals(window)).some(session => session.id === target.info.id && session.state === 'running')).toBe(false)
   expect(target.program.observation().exit?.reason).not.toBe('watchdog')
-  await expect(liveTrigger(window, targetInfo.title)).toHaveCount(0)
+  await expect(terminalTab(window, targetInfo.title)).toHaveCount(0)
   expect(assertProcess(control, space)).toEqual(controlProcess)
   const controlInfo = (await terminals(window)).find(session => session.id === control.info.id)!
-  await expect(liveTrigger(window, controlInfo.title)).toHaveCount(1)
-  await liveTrigger(window, controlInfo.title).click()
-  const remainingTray = window.getByRole('dialog').filter({ has: window.getByText('Active sessions', { exact: true }) })
-  await expect(remainingTray.getByRole('button').filter({ has: window.getByText(targetInfo.title, { exact: true }) })).toHaveCount(0)
-  const controlRow = remainingTray.getByRole('button').filter({ has: window.getByText(controlInfo.title, { exact: true }) })
-  await expect(controlRow).toHaveCount(1)
-  await controlRow.click()
+  await expect(terminalTab(window, controlInfo.title)).toHaveCount(1)
+  await terminalTab(window, controlInfo.title).click()
   await expect(terminalTab(window, controlInfo.title)).toHaveClass(/\bactive\b/)
   await typeTerminalInput(window, control.program, marker('CONTROL_ALIVE'))
   expect(assertProcess(control, space)).toEqual(controlProcess)

@@ -13,6 +13,7 @@ import { api } from '../api'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 import { useChatStore, selectActiveConversationId } from './chat.store'
 import type { AIBrowserActiveView, AIBrowserCredentialRequest, AIBrowserLivePage } from '../../shared/types/ai-browser'
+import { followLiveSnapshot } from './live-snapshot'
 
 // ============================================
 // Types
@@ -22,7 +23,7 @@ export interface AIBrowserView {
   viewId: string
   url: string | null
   title: string | null
-  /** Last time this conversation's active view changed (live-session ordering). */
+  /** Last time this conversation's active view changed. */
   lastActivityAt: number
 }
 
@@ -39,10 +40,12 @@ export interface AIBrowserPage {
 interface AIBrowserState {
   /** Active view per conversation id. */
   views: Record<string, AIBrowserView>
-  /** Every live page an AI conversation opened itself, by view id (the tray lists these). */
+  /** Every live page an AI conversation opened itself, by view id (each has a canvas tab). */
   pages: Record<string, AIBrowserPage>
-  /** Conversations whose browser card has a step running right now. */
+  /** Conversations whose AI is operating its browser, as main reports it (held after the last call). */
   operating: Record<string, boolean>
+  releasedPages: ReadonlySet<string>
+  /** This remote client's server streams pages to watch (server mode); a desktop's does not. */
   remoteLive: boolean
   /**
    * Pages waiting for text the model must not hold, by request id. Kept here
@@ -51,12 +54,11 @@ interface AIBrowserState {
    */
   credentialRequests: Record<string, AIBrowserCredentialRequest>
 
-  /** Apply an active-view event from the main process. */
   applyActiveView: (event: AIBrowserActiveView) => void
+  applyOwnedPage: (event: AIBrowserActiveView) => void
   /** Refresh known page metadata without selecting, revealing or reordering it. */
   applyPageMetadata: (viewId: string, metadata: Partial<Pick<AIBrowserView, 'url' | 'title'>>) => void
-  /** Seed from the main process's snapshot; anything already known is newer and kept. */
-  applySnapshot: (pages: AIBrowserLivePage[]) => void
+  applySnapshot: (pages: AIBrowserLivePage[], changed?: ReadonlySet<string>) => void
   /** An AI-driven view was destroyed; drop every entry pointing at it. */
   handleViewGone: (viewId: string) => void
   /** A conversation's browser context ended: it points at nothing and owns no page. */
@@ -74,10 +76,17 @@ interface AIBrowserState {
 // Store
 // ============================================
 
-export const useAIBrowserStore = create<AIBrowserState>()((set) => ({
+const pageChange = (id: string) => `page:${id}`
+const selectionChange = (id: string) => `selection:${id}`
+const activityChange = (id: string) => `activity:${id}`
+const releaseChange = (id: string) => `release:${id}`
+const destroyedChange = (id: string) => `destroyed:${id}`
+
+export const useAIBrowserStore = create<AIBrowserState>()((set, get) => ({
   views: {},
   pages: {},
   operating: {},
+  releasedPages: new Set(),
   remoteLive: false,
   credentialRequests: {},
 
@@ -98,6 +107,13 @@ export const useAIBrowserStore = create<AIBrowserState>()((set) => ({
           ? { ...state.pages, [viewId]: { viewId, conversationId, spaceId, url, title, lastActivityAt: pageActivityAt } }
           : state.pages,
       }
+    })
+  },
+
+  applyOwnedPage: ({ conversationId, spaceId, viewId, owned, url, title }) => {
+    if (!owned || !conversationId) return
+    set(state => state.pages[viewId] ? state : {
+      pages: { ...state.pages, [viewId]: { viewId, conversationId, spaceId, url, title, lastActivityAt: Date.now() } },
     })
   },
 
@@ -126,33 +142,59 @@ export const useAIBrowserStore = create<AIBrowserState>()((set) => ({
     })
   },
 
-  applySnapshot: (snapshot) => {
-    set(state => {
-      const views = { ...state.views }
-      const pages = { ...state.pages }
-      const now = Date.now()
-      for (const { conversationId, spaceId, viewId, owned, url, title, active } of snapshot) {
-        if (!conversationId) continue
-        if (owned && !pages[viewId]) pages[viewId] = { viewId, conversationId, spaceId, url, title, lastActivityAt: now }
-        if (active && !views[conversationId]) views[conversationId] = { viewId, url, title, lastActivityAt: now }
+  applySnapshot: (snapshot, changed = new Set()) => {
+    const state = get()
+    const views: AIBrowserState['views'] = {}
+    const pages: AIBrowserState['pages'] = {}
+    const operating: AIBrowserState['operating'] = {}
+    const adopted: string[] = []
+    const now = Date.now()
+    for (const { conversationId, spaceId, viewId, owned, url, title, active, released, operating: isOperating } of snapshot) {
+      if (changed.has(destroyedChange(viewId))) continue
+      if (released && (state.pages[viewId] || state.releasedPages.has(viewId))) adopted.push(viewId)
+      if (!conversationId || changed.has(releaseChange(conversationId))) continue
+      const pageChanged = changed.has(pageChange(viewId))
+      if (owned && !pageChanged) {
+        pages[viewId] = { viewId, conversationId, spaceId, url, title, lastActivityAt: state.pages[viewId]?.lastActivityAt ?? now }
       }
-      return { views, pages }
-    })
+      if (active && !changed.has(selectionChange(conversationId))) {
+        const live = state.views[conversationId]
+        const metadata = pageChanged && live?.viewId === viewId ? live : { viewId, url, title, lastActivityAt: now }
+        views[conversationId] = metadata
+      }
+      if (isOperating && !changed.has(activityChange(conversationId))) operating[conversationId] = true
+    }
+    for (const [id, page] of Object.entries(state.pages)) {
+      if (changed.has(pageChange(id))) pages[id] = page
+    }
+    for (const [id, view] of Object.entries(state.views)) {
+      if (changed.has(selectionChange(id))) views[id] = view
+    }
+    for (const id of Object.keys(state.operating)) {
+      if (changed.has(activityChange(id))) operating[id] = true
+    }
+    if (adopted.length > 0) canvasLifecycle.adoptPages(adopted)
+    const releasedPages = new Set(adopted)
+    for (const id of state.releasedPages ?? []) {
+      if (changed.has(pageChange(id)) && !changed.has(destroyedChange(id))) releasedPages.add(id)
+    }
+    for (const id of [...Object.keys(state.pages), ...state.releasedPages]) {
+      if (!pages[id] && !releasedPages.has(id)) void canvasLifecycle.closeTabsOfGoneView(id)
+    }
+    set({ views, pages, operating, releasedPages })
   },
 
   handleViewGone: (viewId) => {
     set(state => {
       const gone = Object.keys(state.views).filter(id => state.views[id].viewId === viewId)
-      if (gone.length === 0 && !state.pages[viewId]) return state
+      if (gone.length === 0 && !state.pages[viewId] && !state.releasedPages.has(viewId)) return state
       const views = { ...state.views }
-      const operating = { ...state.operating }
       const pages = { ...state.pages }
+      const releasedPages = new Set(state.releasedPages)
       delete pages[viewId]
-      for (const id of gone) {
-        delete views[id]
-        delete operating[id]
-      }
-      return { views, operating, pages }
+      releasedPages.delete(viewId)
+      for (const id of gone) delete views[id]
+      return { views, pages, releasedPages }
     })
   },
 
@@ -165,8 +207,12 @@ export const useAIBrowserStore = create<AIBrowserState>()((set) => ({
       const pages = { ...state.pages }
       delete views[conversationId]
       delete operating[conversationId]
-      for (const viewId of ownedPages) delete pages[viewId]
-      return { views, operating, pages }
+      const releasedPages = new Set(state.releasedPages)
+      for (const viewId of ownedPages) {
+        delete pages[viewId]
+        releasedPages.add(viewId)
+      }
+      return { views, operating, pages, releasedPages }
     })
   },
 
@@ -213,12 +259,24 @@ export function useActiveConversationBrowserView(): AIBrowserView | null {
 }
 
 /**
- * Whether a conversation other than the page's owner is currently on it. Such a
- * page is not the tray's to stop: closing it would pull it from under them.
+ * Whether a conversation other than the page's owner is currently on it.
+ * Closing such a page would pull it from under them, so it is refused.
  */
 export function isPageInUseByOthers(state: Pick<AIBrowserState, 'views' | 'pages'>, viewId: string): boolean {
   const owner = state.pages[viewId]?.conversationId
   return Object.entries(state.views).some(([id, view]) => id !== owner && view.viewId === viewId)
+}
+
+/** The active operator does not have to be the conversation that opened the page. */
+export function selectPageOperator(state: Pick<AIBrowserState, 'views' | 'operating'>, viewId: string | undefined): string | undefined {
+  if (!viewId) return undefined
+  for (const conversationId of Object.keys(state.operating)) {
+    if (state.operating[conversationId] && state.views[conversationId]?.viewId === viewId) return conversationId
+  }
+}
+
+export function selectPageOperating(state: Pick<AIBrowserState, 'views' | 'operating'>, viewId: string | undefined): boolean {
+  return selectPageOperator(state, viewId) !== undefined
 }
 
 /**
@@ -258,77 +316,89 @@ export function selectViewOwner(state: AIBrowserState, viewId: string | undefine
  * @returns Cleanup function to unsubscribe from events
  */
 export function initAIBrowserStoreListeners(): () => void {
-  const remote = api.isRemoteMode()
-  const store = useAIBrowserStore
-  const receivesPages = () => !remote || store.getState().remoteLive
-  let pending: {
-    gone: Set<string>
-    released: Set<string>
-    resolved: Set<string>
-  } | null = null
-
+  let snapshot: ReturnType<typeof followLiveSnapshot<AIBrowserLivePage[], string>> | undefined
   const unsubActive = api.onAIBrowserActiveViewChanged(data => {
-    if (receivesPages()) store.getState().applyActiveView(data)
+    if (data.conversationId) snapshot?.changed(selectionChange(data.conversationId))
+    if (data.owned) snapshot?.changed(pageChange(data.viewId))
+    useAIBrowserStore.getState().applyActiveView(data)
+  })
+  const unsubOpened = api.onAIBrowserPageOpened(data => {
+    snapshot?.changed(pageChange(data.viewId))
+    useAIBrowserStore.getState().applyOwnedPage(data)
   })
   const unsubMetadata = api.onBrowserStateChange((data: unknown) => {
     const event = data as { viewId: string; state: Partial<Pick<AIBrowserView, 'url' | 'title'>> }
-    if (receivesPages()) store.getState().applyPageMetadata(event.viewId, event.state)
+    if (useAIBrowserStore.getState().pages[event.viewId]) snapshot?.changed(pageChange(event.viewId))
+    useAIBrowserStore.getState().applyPageMetadata(event.viewId, event.state)
   })
-  const unsubGone = api.onAIBrowserViewGone(data => {
-    if (!receivesPages()) return
-    pending?.gone.add(data.viewId)
-    store.getState().handleViewGone(data.viewId)
-    void canvasLifecycle.closeTabsOfGoneView(data.viewId)
+  const unsubGone = api.onAIBrowserViewGone(({ viewId }) => {
+    snapshot?.changed(destroyedChange(viewId))
+    const state = useAIBrowserStore.getState()
+    for (const [id, view] of Object.entries(state.views)) {
+      if (view.viewId === viewId) snapshot?.changed(selectionChange(id))
+    }
+    void canvasLifecycle.closeTabsOfGoneView(viewId)
+    state.handleViewGone(viewId)
   })
-  const unsubReleased = api.onAIBrowserConversationReleased(data => {
-    if (!receivesPages()) return
-    pending?.released.add(data.conversationId)
-    store.getState().handleConversationReleased(data.conversationId)
+  const unsubReleased = api.onAIBrowserConversationReleased(({ conversationId }) => {
+    snapshot?.changed(releaseChange(conversationId))
+    snapshot?.changed(selectionChange(conversationId))
+    snapshot?.changed(activityChange(conversationId))
+    const state = useAIBrowserStore.getState()
+    const surviving = Object.values(state.pages).filter(page => page.conversationId === conversationId).map(page => page.viewId)
+    for (const id of surviving) snapshot?.changed(pageChange(id))
+    canvasLifecycle.adoptPages(surviving)
+    state.handleConversationReleased(conversationId)
+  })
+  const unsubOperating = api.onAIBrowserOperating(({ conversationId, operating }) => {
+    snapshot?.changed(activityChange(conversationId))
+    useAIBrowserStore.getState().setOperating(conversationId, operating)
   })
 
-  const seed = async (withCredentials: boolean) => {
-    const current = { gone: new Set<string>(), released: new Set<string>(), resolved: new Set<string>() }
-    pending = current
-    const pages = api.listAIBrowserLivePages().then(list => {
-      if (pending !== current) return
-      store.getState().applySnapshot(list.filter(page =>
-        !current.gone.has(page.viewId) && !current.released.has(page.conversationId ?? '')))
-    }).catch(() => console.warn('[AI Browser Store] Failed to load live pages'))
-    const credentials = withCredentials ? api.listAIBrowserCredentialRequests().then(list => {
-      if (pending !== current) return
-      store.getState().applyCredentialSnapshot(list.filter(request =>
-        request.expiresAt > Date.now() && !current.resolved.has(request.requestId)))
-    }).catch(() => console.warn('[AI Browser Store] Failed to load pending requests')) : null
-    await Promise.all([pages, credentials])
-    if (pending === current) pending = null
+  // Each connection tells a remote client whether its server streams pages and
+  // asks for credentials; prompts are re-read per connection, not kept across it.
+  const remote = api.isRemoteMode()
+  let pendingCredentials: Set<string> | null = null
+  const seedCredentials = () => {
+    const resolved = new Set<string>()
+    pendingCredentials = resolved
+    void api.listAIBrowserCredentialRequests().then(list => {
+      if (pendingCredentials !== resolved) return
+      useAIBrowserStore.getState().applyCredentialSnapshot(list.filter(request =>
+        request.expiresAt > Date.now() && !resolved.has(request.requestId)))
+    }).catch(() => console.warn('[AI Browser Store] Failed to load pending requests')).finally(() => {
+      if (pendingCredentials === resolved) pendingCredentials = null
+    })
   }
-
-  function syncRemote() {
+  const syncRemote = () => {
     const remoteLive = api.supportsBrowserLive()
-    pending = null
-    store.setState({ remoteLive, views: {}, pages: {}, operating: {}, credentialRequests: {} })
-    if (remoteLive) void seed(true)
+    pendingCredentials = null
+    useAIBrowserStore.setState({ remoteLive, credentialRequests: {} })
+    if (remoteLive) seedCredentials()
   }
-
   const unsubCredentialRequest = remote ? api.onAIBrowserCredentialRequest(data => {
-    if (receivesPages() && data.expiresAt > Date.now()) store.getState().addCredentialRequest(data)
+    const state = useAIBrowserStore.getState()
+    if (state.remoteLive && data.expiresAt > Date.now()) state.addCredentialRequest(data)
   }) : null
   const unsubCredentialResolved = remote ? api.onAIBrowserCredentialResolved(data => {
-    if (!receivesPages()) return
-    pending?.resolved.add(data.requestId)
-    store.getState().removeCredentialRequest(data.requestId)
+    if (!useAIBrowserStore.getState().remoteLive) return
+    pendingCredentials?.add(data.requestId)
+    useAIBrowserStore.getState().removeCredentialRequest(data.requestId)
   }) : null
   const unsubWs = remote ? api.onWsStateChange(syncRemote) : null
   if (remote) syncRemote()
-  else void seed(false)
 
+  snapshot = followLiveSnapshot(api.listAIBrowserLivePages, useAIBrowserStore.getState().applySnapshot, 'AI Browser Store')
   return () => {
-    pending = null
+    snapshot?.dispose()
+    pendingCredentials = null
     unsubWs?.()
     unsubActive()
+    unsubOpened()
     unsubMetadata()
     unsubGone()
     unsubReleased()
+    unsubOperating()
     unsubCredentialRequest?.()
     unsubCredentialResolved?.()
   }

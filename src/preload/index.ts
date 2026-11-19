@@ -18,7 +18,9 @@ import type { AgentInjectRequest, AgentSendRequest } from '../shared/types/agent
 import type { Thought, TranscriptPage } from '../shared/types/transcript'
 import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } from '../shared/types/artifact'
 import type { MemoryPressureEvent } from '../shared/types/memory-pressure'
-import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
+import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserOperating, AIBrowserPageOpened, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
+import type { CanvasShowReply, CanvasShowRequest } from '../shared/types/canvas-show'
+import type { TerminalSnapshotEntry } from '../shared/types/terminal'
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import type { SpaceDetailsRequestOptions } from '../shared/types/space'
 import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
@@ -258,7 +260,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   setGoal: (data: { spaceId: string; conversationId: string; goal: GoalInput | null }) => Promise<IpcResponse>
 
   // Terminal (derived from terminalRpc contract)
-  listTerminals: () => Promise<IpcResponse>
+  listTerminals: () => Promise<IpcResponse<TerminalSnapshotEntry[]>>
   createTerminal: (data: { spaceId: string; shell?: string; cwd?: string; title?: string }) => Promise<IpcResponse>
   terminalInput: (data: { sessionId: string; data: string }) => Promise<IpcResponse>
   terminalResize: (data: { sessionId: string; cols: number; rows: number }) => Promise<IpcResponse>
@@ -465,12 +467,17 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
     tabIndex?: number
     tabPath?: string
   }) => void) => () => void
+  // The AI asks to bring something in front of the user; this client answers what it did
+  onCanvasShowRequest: (callback: (data: CanvasShowRequest) => void) => () => void
+  replyCanvasShow: (reply: CanvasShowReply) => Promise<IpcResponse>
 
   // AI Browser
   onAIBrowserActiveViewChanged: (callback: (data: AIBrowserActiveView) => void) => () => void
+  onAIBrowserPageOpened: (callback: (data: AIBrowserPageOpened) => void) => () => void
   onAIBrowserViewGone: (callback: (data: AIBrowserViewGone) => void) => () => void
   listAIBrowserLivePages: () => Promise<IpcResponse<AIBrowserLivePage[]>>
   onAIBrowserConversationReleased: (callback: (data: AIBrowserConversationReleased) => void) => () => void
+  onAIBrowserOperating: (callback: (data: AIBrowserOperating) => void) => () => void
   stopAIBrowserPage: (viewId: string, conversationId: string) => Promise<IpcResponse<AIBrowserStopResult>>
 
   // Performance Monitoring (Developer Tools)
@@ -1070,12 +1077,16 @@ const api: HaloAPI = {
   // Canvas Tab Menu (native Electron menu)
   showCanvasTabContextMenu: (options) => ipcRenderer.invoke('canvas:show-tab-context-menu', options),
   onCanvasTabAction: (callback) => createEventListener('canvas:tab-action', callback),
+  onCanvasShowRequest: (callback) => createEventListener('canvas:show-request', callback),
+  replyCanvasShow: (reply) => ipcRenderer.invoke('canvas:show-reply', reply),
 
   // AI Browser - active view change / view gone notifications from main process
   onAIBrowserActiveViewChanged: (callback) => createEventListener('ai-browser:active-view-changed', callback),
+  onAIBrowserPageOpened: (callback) => createEventListener('ai-browser:page-opened', callback),
   onAIBrowserViewGone: (callback) => createEventListener('ai-browser:view-gone', callback),
   listAIBrowserLivePages: () => ipcRenderer.invoke('ai-browser:list-live-pages'),
   onAIBrowserConversationReleased: (callback) => createEventListener('ai-browser:conversation-released', callback),
+  onAIBrowserOperating: (callback) => createEventListener('ai-browser:operating', callback),
   stopAIBrowserPage: (viewId, conversationId) => ipcRenderer.invoke('ai-browser:stop-page', { viewId, conversationId }),
 
   // Performance Monitoring (Developer Tools)

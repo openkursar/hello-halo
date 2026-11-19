@@ -70,7 +70,7 @@ const CONT_INDENT = '          '
 const ROUTE_FILES = [
   'config', 'ai-sources', 'ai-groups', 'subagent-models', 'space', 'agent', 'terminal', 'browser', 'artifact',
   'notify', 'im', 'system', 'apps', 'team', 'store', 'tlon', 'task',
-  'git', 'code-review', 'skills',
+  'git', 'code-review', 'skills', 'canvas', 'ai-browser',
 ]
 
 /**

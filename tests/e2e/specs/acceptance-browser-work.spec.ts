@@ -8,6 +8,7 @@ import {
 import { guestIdentity } from '../fixtures/browser-site'
 import { navigateToChat } from '../fixtures/helpers'
 import { preserveSystemClipboard } from '../fixtures/clipboard'
+import { aiTabs, expandHandle, expectHandleCount } from '../fixtures/acceptance-ai-work'
 
 test.setTimeout(180000)
 
@@ -67,6 +68,9 @@ test('an AI-owned ordinary target-blank page remains in the same context and can
     { name: 'browser_tab', input: { action: 'list' } },
   ])
   expect(result.results[2]).toContain('/next?role=target')
+  await expectHandleCount(window, 3)
+  await expandHandle(window).click()
+  await expect(aiTabs(window)).toHaveCount(3)
   const follow = await runBrowserChat(window, model, 'Select the child page and read its current URL and page title.', [
     { name: 'browser_tab', input: { action: 'list' } },
     { name: 'browser_tab', input: results => { const line = results[0].split('\n').find(line => line.includes('/next?role=target')); return { action: 'select', pageIdx: Number(line?.match(/^\[(\d+)\]/)?.[1] ?? -1) } } },
@@ -115,7 +119,7 @@ test('a real browser conversation reveals, hides and reopens its entered page be
   await info.attach('revealed-browser-identity', { body: JSON.stringify({ viewId: opened.viewId, guestId: opened.guestId, retained, navigated }), contentType: 'application/json' })
 })
 
-test('closing an AI viewing tab keeps its live page and the session tray reopens that exact page', acceptance('browser.recovery.close-view'), async ({ acceptanceApp, model, window, browserWorkSite }, info) => {
+test('closing an AI page\'s tab asks first, and cancelling keeps that exact live page and its tab', acceptance('browser.recovery.close-view'), async ({ acceptanceApp, model, window, browserWorkSite }, info) => {
   await navigateToChat(window)
   const opened = await openAiBrowser(window, acceptanceApp.app, model, browserWorkSite, `AI retained ${randomUUID()}`)
   await revealFromReply(window, opened.answer)
@@ -126,20 +130,21 @@ test('closing an AI viewing tab keeps its live page and the session tray reopens
   await scrollGuest(window, acceptanceApp.app, opened.guestId)
   const retained = await readGuest(acceptanceApp.app, opened.guestId)
   const tab = window.locator('.canvas-tab.active')
+  const title = await tab.locator('.canvas-tab-title').innerText()
   await tab.getByTitle('Close (⌘W / Middle-click)', { exact: true }).click()
-  await expect(window.locator('.canvas-tab')).toHaveCount(0)
-  await expect(window.locator(`webview[data-browser-page-id="${opened.viewId}"]`)).toHaveAttribute('aria-hidden', 'true')
+  const question = window.getByRole('alertdialog', { name: 'Close this page?', exact: true })
+  await expect(question).toBeVisible()
+  await expect(question.getByRole('button')).toHaveText(['Cancel', 'Close page'])
+  await info.attach('close-page-question', { body: await window.screenshot(), contentType: 'image/png' })
+  await question.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(question).toHaveCount(0)
+  const kept = window.locator('.canvas-tab.active')
+  await expect(kept.locator('.canvas-tab-title')).toHaveText(title)
+  await expect(window.locator(`webview[data-browser-page-id="${opened.viewId}"]`)).toHaveAttribute('aria-hidden', 'false')
+  await info.attach('kept-live-browser', { body: await paintAiBrowser(window, acceptanceApp.app, opened.viewId), contentType: 'image/png' })
   expect(await readGuest(acceptanceApp.app, opened.guestId)).toEqual(retained)
   await assertOwnedPage(window, acceptanceApp.app, opened, browserWorkSite.targetUrl)
-  await window.locator('[aria-haspopup="dialog"]').filter({ hasText: '2 sessions running' }).click()
-  const sessions = window.getByRole('dialog').filter({ hasText: 'Active sessions' })
-  await expect(sessions).toBeVisible()
-  await sessions.locator('button[title="Open"]').filter({ hasText: browserWorkSite.targetTitle }).click()
-  await expect(sessions).toHaveCount(0)
-  await info.attach('reopened-live-browser', { body: await paintAiBrowser(window, acceptanceApp.app, opened.viewId), contentType: 'image/png' })
-  expect(await readGuest(acceptanceApp.app, opened.guestId)).toEqual(retained)
-  await assertOwnedPage(window, acceptanceApp.app, opened, browserWorkSite.targetUrl)
-  const continued = await runBrowserChat(window, model, 'Read the current browser document after I reopened its viewing tab.', [
+  const continued = await runBrowserChat(window, model, 'Read the current browser document after I changed my mind about closing it.', [
     { name: 'browser_evaluate', input: { function: READ_BROWSER_STATE } },
   ])
   expect(continued.turn.conversationId).toBe(opened.turn.conversationId)

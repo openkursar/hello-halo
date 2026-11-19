@@ -142,6 +142,7 @@ vi.mock('../../../../src/main/apps/runtime/conversation-collab', () => ({ resolv
 vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({ createNotifyToolServer: () => ({ name: 'halo-notify' }) }))
 vi.mock('../../../../src/main/apps/runtime/notify-availability', () => ({ resolveNotifyAvailability: () => ({}) }))
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({ createRemindersMcpServer: () => ({ name: 'halo-reminders' }) }))
+vi.mock('../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer: () => ({}) }))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({ createReportToolServer: () => ({ name: 'halo-report' }) }))
 
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'

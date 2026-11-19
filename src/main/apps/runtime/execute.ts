@@ -604,7 +604,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         'ocr': createOcrMcpServer(),              // built-in: on-device image OCR
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
         ...(usesTerminal
-          ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId: app.spaceId!, workDir }) }
+          ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId: app.spaceId!, workDir, conversationId: runSender }) }
           : {}),
         ...(usesHaloApi ? { 'halo-api-ref': createApiRefMcpServer() } : {}),
         // Acts under the run's own sender key: what it sends is a one-way notice,

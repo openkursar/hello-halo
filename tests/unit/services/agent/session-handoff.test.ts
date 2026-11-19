@@ -186,6 +186,7 @@ vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({ clearSupp
 vi.mock('../../../../src/main/apps/runtime/conversation-collab', () => ({ resolveConversationCollab: () => null, createConversationCollabMcpServer: vi.fn() }))
 vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({ createNotifyToolServer: () => ({}) }))
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({ createRemindersMcpServer: () => ({}) }))
+vi.mock('../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer: () => ({}) }))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({ createReportToolServer: vi.fn() }))
 vi.mock('../../../../src/main/services/notify-channels', () => ({ getEnabledChannels: () => [] }))
 vi.mock('../../../../src/main/services/memory-consolidation', () => ({ requestConsolidation: vi.fn() }))

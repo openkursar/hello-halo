@@ -26,10 +26,14 @@ const MAX_WAIT_SECONDS = 600
 const clampSeconds = (value: number | undefined, fallback: number): number =>
   Math.min(Math.max(value ?? fallback, 1), MAX_WAIT_SECONDS)
 
+const PERSON_TYPED_NOTE = 'Note: the user typed in this terminal since your last action here. Read it with mode "screen" before you continue.'
+
 /** Minimal scope the terminal tools need — the owning space and its working dir. */
 export interface TerminalToolScope {
   spaceId: string
   workDir: string
+  /** The conversation these tools serve, named in the terminal's status line. */
+  conversationId?: string
 }
 
 export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToolScope) {
@@ -41,6 +45,21 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     const s = ctx.get(id)
     return s && s.info.spaceId === scope.spaceId ? s : undefined
   }
+
+  // A call on a session shows it as operated while it runs (and briefly after).
+  const operate = async <T>(id: string, work: () => Promise<T>): Promise<T> => {
+    ctx.beginAiOperation(id, scope.conversationId)
+    try {
+      return await work()
+    } finally {
+      ctx.endAiOperation(id)
+    }
+  }
+
+  // Taken at the start of a call: input that arrives during it is reported next time.
+  // A screen read is itself the resync the note asks for.
+  const personTypedNote = (id: string, resyncing = false): string =>
+    ctx.takeUserInputNote(id) && !resyncing ? `${PERSON_TYPED_NOTE}\n` : ''
 
   const createTool = tool(
     'terminal_create',
@@ -62,6 +81,7 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
           owner: 'ai',
           spaceId: scope.spaceId
         })
+        await operate(session.id, async () => {})
         return text(
           `Created terminal session "${session.info.title}" (id: ${session.id}), ` +
           `shell: ${session.info.shell}, cwd: ${session.info.cwd}.\n` +
@@ -133,23 +153,23 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
       ctx.markAiTouched(args.session)
-      ctx.markAiActivity(args.session, true)
-      try {
-        const result = await session.write(args.input, clampSeconds(args.timeout, 10) * 1000, args.submit ?? true)
-        const status =
-          result.reason === 'exited' ? 'session exited' :
-          result.awaitingContinuation ? 'awaiting continuation (shell wedged mid-statement — send the closing ' +
-            'quote/here-doc delimiter, or input "\\u0003" to cancel; do NOT send a new command)' :
-          result.running ? 'running (command still in progress)' :
-          result.awaitingInput ? 'awaiting input' :
-          `done${result.exitCode !== null ? ` (exit ${result.exitCode})` : ''}`
-        const body = result.output.trim() ? result.output : '(no new output)'
-        return text(`[${status}]\n${body}`)
-      } catch (e) {
-        return errorText(e instanceof Error ? e.message : String(e))
-      } finally {
-        ctx.markAiActivity(args.session, false)
-      }
+      const note = personTypedNote(args.session)
+      return operate(args.session, async () => {
+        try {
+          const result = await session.write(args.input, clampSeconds(args.timeout, 10) * 1000, args.submit ?? true)
+          const status =
+            result.reason === 'exited' ? 'session exited' :
+            result.awaitingContinuation ? 'awaiting continuation (shell wedged mid-statement — send the closing ' +
+              'quote/here-doc delimiter, or input "\\u0003" to cancel; do NOT send a new command)' :
+            result.running ? 'running (command still in progress)' :
+            result.awaitingInput ? 'awaiting input' :
+            `done${result.exitCode !== null ? ` (exit ${result.exitCode})` : ''}`
+          const body = result.output.trim() ? result.output : '(no new output)'
+          return text(`${note}[${status}]\n${body}`)
+        } catch (e) {
+          return errorText(e instanceof Error ? e.message : String(e))
+        }
+      })
     }
   )
 
@@ -175,13 +195,17 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
       ctx.markAiTouched(args.session)
-      const result = await session.read(args.mode ?? 'new', { lines: args.lines, offset: args.offset })
-      const header =
-        result.mode === 'screen' && result.cursor
-          ? `[screen ${session.info.cols}x${session.info.rows}, cursor ${result.cursor.row},${result.cursor.col}]\n`
-          : ''
-      const body = result.content.trim() ? result.content : '(empty)'
-      return text(header + body)
+      const mode = args.mode ?? 'new'
+      const note = personTypedNote(args.session, mode === 'screen')
+      return operate(args.session, async () => {
+        const result = await session.read(mode, { lines: args.lines, offset: args.offset })
+        const header =
+          result.mode === 'screen' && result.cursor
+            ? `[screen ${session.info.cols}x${session.info.rows}, cursor ${result.cursor.row},${result.cursor.col}]\n`
+            : ''
+        const body = result.content.trim() ? result.content : '(empty)'
+        return text(note + header + body)
+      })
     }
   )
 
@@ -203,11 +227,14 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
       ctx.markAiTouched(args.session)
-      const result = await session.search(args.pattern, args.context)
-      if (result.totalMatches === 0) return text(`No lines match /${args.pattern}/.`)
-      const header = `[${result.totalMatches} matching line${result.totalMatches === 1 ? '' : 's'}` +
-        `${result.truncated ? ' — showing the most recent; narrow the pattern to see fewer' : ''}]\n`
-      return text(header + result.content)
+      const note = personTypedNote(args.session)
+      return operate(args.session, async () => {
+        const result = await session.search(args.pattern, args.context)
+        if (result.totalMatches === 0) return text(`${note}No lines match /${args.pattern}/.`)
+        const header = `[${result.totalMatches} matching line${result.totalMatches === 1 ? '' : 's'}` +
+          `${result.truncated ? ' — showing the most recent; narrow the pattern to see fewer' : ''}]\n`
+        return text(note + header + result.content)
+      })
     }
   )
 
@@ -226,16 +253,19 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
       ctx.markAiTouched(args.session)
-      // One worker-side RPC: the poll loop runs next to the buffer (baseline
-      // snapshot + since-diff, see worker session.waitFor), never over IPC.
-      const { outcome, content } = await session.waitFor(args.text, clampSeconds(args.timeout, 60) * 1000)
-      if (outcome === 'found') {
-        return text(`Found "${args.text}".\n${content}`)
-      }
-      if (outcome === 'exited') {
-        return text(`Session exited before "${args.text}" appeared. Final output:\n${content}`)
-      }
-      return text(`Timed out waiting for "${args.text}". Recent output:\n${content}`)
+      const note = personTypedNote(args.session)
+      return operate(args.session, async () => {
+        // One worker-side RPC: the poll loop runs next to the buffer (baseline
+        // snapshot + since-diff, see worker session.waitFor), never over IPC.
+        const { outcome, content } = await session.waitFor(args.text, clampSeconds(args.timeout, 60) * 1000)
+        if (outcome === 'found') {
+          return text(`${note}Found "${args.text}".\n${content}`)
+        }
+        if (outcome === 'exited') {
+          return text(`${note}Session exited before "${args.text}" appeared. Final output:\n${content}`)
+        }
+        return text(`${note}Timed out waiting for "${args.text}". Recent output:\n${content}`)
+      })
     }
   )
 

@@ -8,6 +8,8 @@ import { useChatStore, initChatMemoryPressureListener } from './stores/chat.stor
 import { useOnboardingStore } from './stores/onboarding.store'
 import { initAIBrowserStoreListeners, useOldestCredentialRequest } from './stores/ai-browser.store'
 import { initTerminalStoreListeners } from './stores/terminal.store'
+import { startAIWorkTabs } from './services/ai-work-tabs'
+import { startCanvasShowHandler } from './services/canvas-show-handler'
 import { initGoalStoreListeners } from './stores/goal.store'
 import { initPerfStoreListeners } from './stores/perf.store'
 import { useSpaceStore } from './stores/space.store'
@@ -636,11 +638,16 @@ export default function App() {
     initPerfStoreListeners()
     const cleanupBrowser = initAIBrowserStoreListeners()
     const cleanupTerminal = initTerminalStoreListeners()
+    // The AI's terminals and pages become canvas tabs; it can bring one forward.
+    const cleanupAIWork = startAIWorkTabs()
+    const cleanupCanvasShow = startCanvasShowHandler()
     const cleanupGoal = initGoalStoreListeners()
     const cleanupChatMemory = initChatMemoryPressureListener()
     return () => {
       cleanupBrowser()
       cleanupTerminal()
+      cleanupAIWork()
+      cleanupCanvasShow()
       cleanupGoal()
       cleanupChatMemory()
     }

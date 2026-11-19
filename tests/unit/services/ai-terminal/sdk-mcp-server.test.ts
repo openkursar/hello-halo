@@ -41,7 +41,9 @@ function build(session?: ReturnType<typeof fakeSession>) {
     list: vi.fn(() => []),
     create: vi.fn(),
     kill: vi.fn(() => true),
-    markAiActivity: vi.fn(),
+    beginAiOperation: vi.fn(),
+    endAiOperation: vi.fn(),
+    takeUserInputNote: vi.fn(() => false),
     markAiTouched: vi.fn()
   }
   const server = createTerminalMcpServer(ctx as any, SCOPE) as unknown as { tools: Tool[] }
@@ -153,5 +155,86 @@ describe('terminal_write status mapping', () => {
     const text = await statusFor({ exitCode: null })
     expect(text).toContain('[done]')
     expect(text).not.toContain('exit')
+  })
+})
+
+describe('the AI operating a session', () => {
+  it('shows the session as operated while a call runs, even when the call fails', async () => {
+    const session = fakeSession('space-A')
+    session.write.mockRejectedValueOnce(new Error('pty gone'))
+    const { ctx, tools } = build(session)
+    const server = createTerminalMcpServer(ctx as any, { ...SCOPE, conversationId: 'conv-1' }) as unknown as { tools: Tool[] }
+    const write = server.tools.find(t => t.name === 'terminal_write')!
+    const res = await write.handler({ session: 'sess-1', input: 'x' })
+    expect(res.isError).toBe(true)
+    expect(ctx.beginAiOperation).toHaveBeenCalledWith('sess-1', 'conv-1')
+    expect(ctx.endAiOperation).toHaveBeenCalledWith('sess-1')
+    expect(tools.terminal_write).toBeDefined()
+  })
+
+  it.each([
+    ['terminal_read', { session: 'sess-1' }],
+    ['terminal_search', { session: 'sess-1', pattern: 'x' }],
+    ['terminal_wait_for', { session: 'sess-1', text: 'x' }],
+  ])('counts %s as operating it', async (name, args) => {
+    const session = fakeSession('space-A') as any
+    session.search = vi.fn(async () => ({ totalMatches: 0, content: '', truncated: false }))
+    session.waitFor = vi.fn(async () => ({ outcome: 'found', content: '' }))
+    const { ctx, tools } = build(session)
+    await tools[name].handler(args)
+    expect(ctx.beginAiOperation).toHaveBeenCalledTimes(1)
+    expect(ctx.endAiOperation).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not mark a session it cannot reach', async () => {
+    const { ctx, tools } = build(fakeSession('space-B'))
+    await tools.terminal_read.handler({ session: 'sess-1' })
+    expect(ctx.beginAiOperation).not.toHaveBeenCalled()
+  })
+})
+
+describe('a person typing in the terminal', () => {
+  const NOTE = 'the user typed in this terminal since your last action here'
+
+  function typed(session = fakeSession('space-A')) {
+    const built = build(session)
+    ;(built.ctx.takeUserInputNote as ReturnType<typeof vi.fn>).mockReturnValueOnce(true)
+    return built
+  }
+
+  it('is reported once, ahead of the next write result, without anything that was typed', async () => {
+    const { tools } = typed()
+    const first = (await tools.terminal_write.handler({ session: 'sess-1', input: 'ls' })).content[0].text
+    expect(first).toContain(NOTE)
+    expect(first.indexOf(NOTE)).toBeLessThan(first.indexOf('[done]'))
+    const second = (await tools.terminal_write.handler({ session: 'sess-1', input: 'ls' })).content[0].text
+    expect(second).not.toContain(NOTE)
+  })
+
+  it('rides on read, search and wait results too', async () => {
+    const session = fakeSession('space-A') as any
+    session.search = vi.fn(async () => ({ totalMatches: 1, content: 'hit', truncated: false }))
+    session.waitFor = vi.fn(async () => ({ outcome: 'found', content: '' }))
+    for (const [name, args] of [
+      ['terminal_read', { session: 'sess-1', mode: 'new' }],
+      ['terminal_search', { session: 'sess-1', pattern: 'x' }],
+      ['terminal_wait_for', { session: 'sess-1', text: 'x' }],
+    ] as const) {
+      const { tools } = typed(session)
+      expect((await tools[name].handler(args)).content[0].text).toContain(NOTE)
+    }
+  })
+
+  it('is not repeated to a call that reads the screen, which is the resync it asks for', async () => {
+    const { ctx, tools } = typed()
+    const text = (await tools.terminal_read.handler({ session: 'sess-1', mode: 'screen' })).content[0].text
+    expect(text).not.toContain(NOTE)
+    expect(ctx.takeUserInputNote).toHaveBeenCalledTimes(1)
+  })
+
+  it('is absent when nobody typed', async () => {
+    const { tools } = build(fakeSession('space-A'))
+    const text = (await tools.terminal_write.handler({ session: 'sess-1', input: 'ls' })).content[0].text
+    expect(text).not.toContain('typed')
   })
 })

@@ -2,7 +2,7 @@ import { createServer, createConnection, type Socket } from 'node:net'
 import type { BrowserContext, Page } from '@playwright/test'
 import { test as base, expect } from './acceptance-app'
 import type { HaloAPI } from '../../../src/preload'
-import { installRemoteLoopbackGuard } from './acceptance-remote-lifecycle'
+import { installRemoteLoopbackGuard, readRemoteLoopbackGuard } from './acceptance-remote-lifecycle'
 
 interface RemoteStatus { server: { port: number; token: string | null; running: boolean } }
 interface RemoteFixtures {
@@ -54,18 +54,25 @@ export async function startLink(port: number) {
 export const test = base.extend<RemoteFixtures>({
   remote: async ({ acceptanceApp, browser }, use, testInfo) => {
     const packaged = await acceptanceApp.app.evaluate(({ app }) => app.isPackaged)
-    await acceptanceApp.app.evaluate(installRemoteLoopbackGuard)
     let link: Awaited<ReturnType<typeof startLink>> | undefined
-    let remotePort: number | undefined
     let context: BrowserContext | undefined
+    let guarded = false
+    let remotePort: number | undefined
     const failures: unknown[] = []
     try {
+      await acceptanceApp.app.evaluate(installRemoteLoopbackGuard)
+      guarded = true
       const enabled = await acceptanceApp.window.evaluate(async port => (globalThis as unknown as { halo: HaloAPI }).halo.enableRemoteAccess(port), await freePort())
       expect(enabled.success).toBe(true)
       const status = enabled.data as RemoteStatus
+      remotePort = status.server.port
+      const binding = await acceptanceApp.app.evaluate(readRemoteLoopbackGuard)
+      expect(binding.violations).toEqual([])
+      expect(binding.attempts.filter(attempt => attempt.listening && attempt.actual?.port === remotePort)).toEqual([
+        expect.objectContaining({ actual: { address: '127.0.0.1', family: 'IPv4', port: remotePort } }),
+      ])
       expect(status.server.running).toBe(true)
       expect(status.server.token).toBeTruthy()
-      remotePort = status.server.port
       link = await startLink(remotePort)
       context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'en-US' })
       const page = await context.newPage()
@@ -87,15 +94,20 @@ export const test = base.extend<RemoteFixtures>({
     } catch (error) { failures.push(error) }
     finally {
       try { await context?.close() } catch (error) { failures.push(error) }
-      try {
-        const stopped = await acceptanceApp.window.evaluate(() => (globalThis as unknown as { halo: HaloAPI }).halo.disableRemoteAccess())
-        expect(stopped.success).toBe(true)
-        const restored = await acceptanceApp.app.evaluate((_electron, port) => {
-          const state = globalThis as unknown as { acceptanceRemoteBinding?: { restore(port?: number): { restored: boolean; violations: string[] } } }
-          return state.acceptanceRemoteBinding?.restore(port)
-        }, remotePort)
-        expect(restored).toEqual({ restored: true, violations: [] })
-      } catch (error) { failures.push(error) }
+      if (guarded) {
+        try {
+          const stopped = await acceptanceApp.window.evaluate(() => (globalThis as unknown as { halo: HaloAPI }).halo.disableRemoteAccess())
+          expect(stopped.success).toBe(true)
+          const binding = await acceptanceApp.app.evaluate(readRemoteLoopbackGuard)
+          expect(binding.violations).toEqual([])
+          expect(binding.attempts.some(attempt => attempt.listening && attempt.actual?.port === remotePort)).toBe(false)
+          const restored = await acceptanceApp.app.evaluate((_electron, port) => {
+            const state = globalThis as unknown as { acceptanceRemoteBinding?: { restore(port?: number): { restored: boolean; violations: string[] } } }
+            return state.acceptanceRemoteBinding?.restore(port)
+          }, remotePort)
+          expect(restored).toEqual({ restored: true, violations: [] })
+        } catch (error) { failures.push(error) }
+      }
       if (link) {
         try {
           await testInfo.attach('remote-transport', { body: JSON.stringify({ renderer: packaged ? 'packaged' : 'built-application-assets', events: link.events }), contentType: 'application/json' })

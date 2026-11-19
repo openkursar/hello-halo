@@ -19,10 +19,7 @@ vi.mock('../../../src/renderer/hooks/useCanvasLifecycle', () => ({
 vi.mock('../../../src/renderer/components/canvas/viewer-resources', () => ({
   useViewerResources: () => ({ scope: () => ({ add: vi.fn() }) }),
 }))
-vi.mock('../../../src/renderer/stores/ai-browser.store', () => ({
-  useAIBrowserStore: (select: (state: { operating: Record<string, boolean> }) => unknown) => select({ operating: {} }),
-  selectViewOwner: () => null,
-}))
+vi.mock('../../../src/renderer/components/canvas/AIWorkMarks', () => ({ AIWorkStatusLine: () => null }))
 vi.mock('../../../src/renderer/hooks/useSecurityPolicy', () => ({ useSecurityPolicy: () => null }))
 vi.mock('../../../src/renderer/utils/browser-homepage', () => ({ getBrowserHomepage: vi.fn() }))
 vi.mock('../../../src/renderer/browser-host', () => ({ bindBrowserSurface: vi.fn(), focusBrowserPage: vi.fn() }))
