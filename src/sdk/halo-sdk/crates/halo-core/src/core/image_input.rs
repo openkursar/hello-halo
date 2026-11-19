@@ -54,7 +54,13 @@ fn replace(
         .sum()
 }
 
-pub(crate) fn repair_empty(messages: &mut [Value], harness: &ResolvedHarness) -> usize {
+pub(crate) fn repair_recorded(messages: &mut [Value], harness: &ResolvedHarness) -> (usize, usize) {
+    let empty = repair_empty(messages, harness);
+    let relabeled = super::image_media_type::correct(messages);
+    (empty, relabeled)
+}
+
+fn repair_empty(messages: &mut [Value], harness: &ResolvedHarness) -> usize {
     replace(messages, harness, true, None)
 }
 
@@ -127,7 +133,7 @@ impl ImageInputState {
         }
     }
 
-    fn project_for_request(
+    pub(crate) fn project_for_request(
         &self,
         model: &str,
         supported: bool,

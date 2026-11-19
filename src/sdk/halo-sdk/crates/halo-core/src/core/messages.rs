@@ -151,7 +151,32 @@ pub fn strip_reasoning_with_harness(
 }
 pub fn strip_reasoning_indexed_with_harness(
     messages: &mut [Value],
+    keep: impl FnMut(usize, &Value) -> bool,
+    harness: &ResolvedHarness,
+) -> usize {
+    strip_reasoning_blocks(messages, keep, |block| {
+        ["thinking", "redacted_thinking", "signature"].contains(&block["type"].as_str().unwrap_or(""))
+    }, harness)
+}
+
+fn is_unsigned_thinking(block: &Value) -> bool {
+    block["type"] == "thinking" && block["signature"].as_str().is_none_or(|signature| signature.is_empty())
+}
+
+pub(crate) fn count_unsigned_thinking(messages: &[Value]) -> usize {
+    messages.iter().filter(|message| message["role"] == "assistant")
+        .flat_map(|message| message["content"].as_array().into_iter().flatten())
+        .filter(|block| is_unsigned_thinking(block)).count()
+}
+
+pub(crate) fn strip_unsigned_thinking(messages: &mut [Value], harness: &ResolvedHarness) -> usize {
+    strip_reasoning_blocks(messages, |_, _| false, is_unsigned_thinking, harness)
+}
+
+fn strip_reasoning_blocks(
+    messages: &mut [Value],
     mut keep: impl FnMut(usize, &Value) -> bool,
+    remove: impl Fn(&Value) -> bool,
     harness: &ResolvedHarness,
 ) -> usize {
     let mut removed = 0;
@@ -159,26 +184,18 @@ pub fn strip_reasoning_indexed_with_harness(
         if message["role"] != "assistant" || keep(index, message) {
             continue;
         }
-        let Some(content) = message["content"].as_array() else {
+        let Some(content) = message["content"].as_array_mut() else {
             continue;
         };
-        let filtered: Vec<_> = content
-            .iter()
-            .filter(|block| {
-                !["thinking", "redacted_thinking", "signature"]
-                    .contains(&block["type"].as_str().unwrap_or(""))
-            })
-            .cloned()
-            .collect();
-        if filtered.len() == content.len() {
+        let count = content.len();
+        content.retain(|block| !remove(block));
+        if content.len() == count {
             continue;
         }
-        removed += content.len() - filtered.len();
-        message["content"] = if filtered.is_empty() {
-            json!([{"type":"text","text":harness.text(TextId::ContextHistoryReasoningOmitted)}])
-        } else {
-            json!(filtered)
-        };
+        removed += count - content.len();
+        if content.is_empty() {
+            content.push(json!({"type":"text","text":harness.text(TextId::ContextHistoryReasoningOmitted)}));
+        }
     }
     removed
 }

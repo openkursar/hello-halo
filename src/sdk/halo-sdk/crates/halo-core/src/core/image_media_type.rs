@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 pub fn sniff(data: &str) -> Option<&'static str> {
-    if crate::js::utf16_len(data) < 16 {
+    if data.encode_utf16().take(16).count() < 16 {
         return None;
     }
     let mut bytes = Vec::with_capacity(18);

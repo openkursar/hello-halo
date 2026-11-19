@@ -265,7 +265,11 @@ impl ActorState<'_> {
         Ok(())
     }
     async fn compact(&mut self, instructions: Option<&str>, cancellation: &CancellationToken) -> Result<bool> {
-        use super::{compact::session::{compact_request, CompactTrigger, OutputAllowance}, loop_budget::LoopBudget, loop_runtime};
+        use super::{
+            compact::session::{compact_request, CompactTrigger, OutputAllowance},
+            loop_budget::LoopBudget,
+            loop_runtime::{self, request_assembly},
+        };
         let (execution, provider) = self.manual.ok_or_else(|| Error::template(
             "NATIVE_CAPABILITY_UNAVAILABLE", TextId::CommandsRuntimeOperationUnavailable, &[("name", "compactSession".into())]
         ))?;
@@ -276,32 +280,21 @@ impl ActorState<'_> {
             return Err(Error::template("BUDGET_EXCEEDED", TextId::ContextExecutionBudget,
                 &[("spent", crate::js::to_fixed(spent,4).into()), ("maximum", crate::js::to_fixed(maximum,4).into())]));
         }
-        let model = self.options["model"].as_str().unwrap_or("");
         let (definitions, eager) = match self.discovery {
             Some(state) => { let state = state.lock().unwrap(); (state.model_definitions.clone(), state.catalog.eager.clone()) },
             None => (self.tools.definitions(), self.tools.catalog_tools()),
         };
-        let system = loop_runtime::system_prompt(self.options, &self.context.environment, &definitions, &eager, &self.context.harness)?;
-        let mut injected = Vec::new();
-        let mut memory = self.context.memory.user_context_with_harness(self.options, &self.context.harness).await;
-        if !memory.is_null() { memory["isMeta"] = json!(true); injected.push(memory); }
-        if let Some(skills) = &self.context.skill_context { let mut skills = skills.clone(); skills["isMeta"] = json!(true); injected.push(skills); }
-        let combined: Vec<_> = injected.iter().chain(self.messages.iter()).cloned().collect();
-        let mut projected = tool_context::history::project(&super::messages::repair_with_harness(&combined, &self.context.harness).0);
-        self.context.image_input.project(model, provider.capabilities["imageInput"] != false, &mut projected, &self.context.harness, &execution.session_id);
-        if provider.capabilities["caching"] == true { projected = super::messages::cache_breakpoint(projected); }
-        let effort = super::effort::resolve(self.options);
-        let thinking = super::token_budget::effective_thinking(&effort.thinking, self.budget.max_output_tokens);
         let mut budget = LoopBudget::Borrowed(self.budget);
-        budget.configure_output(thinking.clone(), None);
-        let mut request = json!({"model":model,"messages":projected,"systemPrompt":system,"tools":definitions,
-            "thinking":thinking,"maxTokens":budget.max_output_tokens(),"stream":true,"providerOptions":{"fallbackModelAvailable":false}});
-        if thinking.is_null() { request.as_object_mut().unwrap().remove("thinking"); }
-        if let Some(temperature) = effort.temperature { request["temperature"] = json!(temperature); }
-        if let Some(reasoning) = effort.reasoning { request["providerOptions"]["reasoning_effort"] = json!(reasoning); }
-        if crate::js::truthy(&self.options["effort"]) { request["providerOptions"]["effort"] = self.options["effort"].clone(); }
-        else if self.options["nativeResolvedConfig"] != true { request["providerOptions"]["effort"] = json!("high"); }
-        if crate::js::truthy(&self.options["taskBudget"]) { request["providerOptions"]["taskBudget"] = self.options["taskBudget"].clone(); }
+        let request_assembly::Assembled { request, injected, .. } = request_assembly::assemble(
+            execution, self.options, self.context, &provider.capabilities,
+            request_assembly::History::ReadOnly(self.messages), &mut budget,
+            request_assembly::Inputs {
+                definitions: &definitions,
+                eager: &eager,
+                output_limit: None,
+                fallback_available: false,
+            },
+        ).await?;
         let mut attachments = loop_runtime::working_attachments(execution, self.tools, self.discovery, self.messages, &mut Vec::new(), &self.context.harness).await?;
         if let Some(state) = super::compact::collaboration::attachment(execution, self.tools, cancellation, &self.context.harness).await? { attachments.push(state); }
         let snapshot = self.discovery.as_ref().map(|state| state.lock().unwrap().snapshot());

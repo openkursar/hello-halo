@@ -16,12 +16,15 @@ function fixtureProvider(script) {
     async createMessage() { throw new Error('Unexpected summary request'); },
     async *createMessageStream(request) {
       requests.push(structuredClone({ ...request, providerOptions: undefined }));
-      const block = await script(request, requests.length);
+      const reply = await script(request, requests.length);
+      const blocks = Array.isArray(reply) ? reply : [reply];
       yield { type: 'message_start', id: `command-${requests.length}`, model: request.model, usage: { input_tokens: 10, output_tokens: 0 } };
-      yield { type: 'content_block_start', index: 0, content_block: block.type === 'text' ? { type: 'text', text: '' } : block };
-      if (block.type === 'text') yield { type: 'text_delta', index: 0, text: block.text };
-      yield { type: 'content_block_stop', index: 0 };
-      yield { type: 'message_delta', stopReason: block.type === 'tool_use' ? 'tool_use' : 'end_turn', usage: { output_tokens: 2 } };
+      for (const [index, block] of blocks.entries()) {
+        yield { type: 'content_block_start', index, content_block: block.type === 'text' ? { type: 'text', text: '' } : block };
+        if (block.type === 'text') yield { type: 'text_delta', index, text: block.text };
+        yield { type: 'content_block_stop', index };
+      }
+      yield { type: 'message_delta', stopReason: blocks.some(block => block.type === 'tool_use') ? 'tool_use' : 'end_turn', usage: { output_tokens: 2 } };
       yield { type: 'message_stop' };
     },
   };
@@ -358,6 +361,192 @@ for (const failure of ['summary', 'cancel', 'checkpoint']) test(`manual compacti
     if (saved) { await rm(path, { recursive: true, force: true }); await rename(saved, path); }
     await session?.[Symbol.asyncDispose](); await f.close();
   }
+});
+
+const unsignedThinking = blocks => blocks.some(block => block.type === 'thinking' && !block.signature);
+const summaryBlocks = request => request.messages.flatMap(message => Array.isArray(message.content) ? message.content : []);
+const missingThinkingSignature = (requestRejected = true) => Object.assign(
+  new Error('messages.6.content.0.thinking.signature: Field required'), { statusCode: 400, requestRejected },
+);
+
+for (const outcome of ['success', 'rejected', 'stream-error', 'cancel', 'checkpoint']) {
+  test(`manual compaction recovers rejected reasoning after resume: ${outcome}`, { timeout: 15000 }, async () => {
+    const f = await fixture(); let session; let saved; let path;
+    const started = deferred();
+    const beforeHooks = [], afterHooks = [], summaries = [];
+    const unsigned = { type: 'thinking', thinking: 'Reasoning from the earlier model.' };
+    const visibleEvidence = 'Visible evidence from the earlier model.';
+    const handover = 'REPAIRED_HANDOVER: Keep the visible evidence and follow the latest constraint.';
+    const earlier = fixtureProvider((_request, step) => step === 5 ? unsigned : { type: 'text', text: `${visibleEvidence} ${'Observed facts. '.repeat(190)}` });
+    const resumed = fixtureProvider(() => ({ type: 'text', text: 'Continued from the same conversation.' }));
+    resumed.createMessage = async request => {
+      summaries.push({ ...request, messages: structuredClone(request.messages) });
+      if (summaries.length === 1 || outcome === 'rejected') throw missingThinkingSignature(outcome !== 'stream-error');
+      if (outcome === 'cancel') {
+        started.resolve();
+        const signal = request.providerOptions.signal;
+        if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+        throw Object.assign(new Error('Cancelled repaired summary'), { name: 'AbortError' });
+      }
+      return { id: 'repaired-summary', model: request.model, stopReason: 'end_turn',
+        content: [{ type: 'text', text: handover }], usage: { input_tokens: 29, output_tokens: 13 } };
+    };
+    const options = { ...f.options, persistSession: true };
+    try {
+      session = await seedForManualCompact(f, earlier, { model: 'earlier-model' });
+      const id = session.sessionId;
+      path = join(options.env.CLAUDE_CONFIG_DIR, 'projects', f.cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`);
+      await session[Symbol.asyncDispose]();
+      const original = await readFile(path, 'utf8');
+      session = await createSession({ ...options, model: 'claude-fixture', provider: resumed, resume: id, strictResume: true,
+        hooks: { PreCompact: [{ hooks: [input => { beforeHooks.push(input.trigger); return {}; }] }],
+          PostCompact: [{ hooks: [input => { afterHooks.push(input.trigger); return {}; }] }] } });
+      const before = await session.command('readHistory');
+      assert.ok(unsignedThinking(summaryBlocks({ messages: before })));
+      if (outcome === 'checkpoint') {
+        saved = `${path}.saved`; await rename(path, saved); await mkdir(path);
+      }
+      const running = send(session, '/compact retain verified facts');
+      if (outcome === 'cancel') { await started.promise; await session.interrupt(); }
+      const events = await running;
+      const terminal = result(events);
+      assert.equal(terminal.is_error, outcome !== 'success', terminal.result);
+      assert.equal(terminal.num_turns, 0);
+      assert.equal(summaries.length, outcome === 'stream-error' ? 1 : 2);
+      assert.equal(resumed.requests.length, 0);
+      assert.ok(unsignedThinking(summaryBlocks(summaries[0])));
+      if (outcome !== 'stream-error') assert.ok(!unsignedThinking(summaryBlocks(summaries[1])));
+      for (const request of summaries) {
+        assert.match(JSON.stringify(request.messages), /Visible evidence from the earlier model/);
+        assert.match(JSON.stringify(request.messages), /LATEST_CONSTRAINT/);
+        assert.match(request.messages.at(-1).content, /retain verified facts/);
+        assert.equal(request.model, 'claude-fixture');
+      }
+      assert.deepEqual(beforeHooks, ['manual']);
+      const boundaries = events.filter(event => event.subtype === 'compact_boundary');
+      const after = await session.command('readHistory');
+      if (outcome === 'success') {
+        assert.deepEqual(afterHooks, ['manual']);
+        assert.equal(boundaries.length, 1);
+        assert.match(boundaries[0].summary, /REPAIRED_HANDOVER/);
+        assert.equal(terminal.usage.input_tokens, 29);
+        assert.equal(terminal.usage.output_tokens, 13);
+        assert.ok(!unsignedThinking(summaryBlocks({ messages: after })));
+        await session[Symbol.asyncDispose]();
+        assert.ok((await readFile(path, 'utf8')).startsWith(original), 'Original transcript records must not be rewritten');
+        session = await createSession({ ...options, model: 'claude-fixture', provider: resumed, resume: id, strictResume: true });
+      } else {
+        assert.deepEqual(afterHooks, []);
+        assert.equal(boundaries.length, 0);
+        assert.deepEqual(after, before);
+        if (saved) { await rm(path, { recursive: true }); await rename(saved, path); saved = undefined; }
+        assert.equal(await readFile(path, 'utf8'), original);
+      }
+      const continuation = result(await send(session, 'Continue without repeating completed work.'));
+      assert.equal(continuation.is_error, false, continuation.result);
+      assert.equal(resumed.requests.length, 1);
+      assert.match(JSON.stringify(resumed.requests[0].messages), /LATEST_CONSTRAINT/);
+      assert.equal(unsignedThinking(summaryBlocks(resumed.requests[0])), outcome !== 'success');
+    } finally {
+      if (saved) { await rm(path, { recursive: true, force: true }); await rename(saved, path); }
+      await session?.[Symbol.asyncDispose](); await f.close();
+    }
+  });
+}
+
+test('manual compaction reclaims output space without removing a signed tool exchange', { timeout: 15000 }, async () => {
+  const f = await fixture(); let session;
+  const signed = { type: 'thinking', thinking: 'Verify the latest decision.', signature: 'recent-provider-signature' };
+  const call = { type: 'tool_use', id: 'recent-check', name: 'Check', input: {} };
+  const handover = 'Keep the latest constraint and the completed check result.';
+  let effects = 0;
+  const tool = { name: 'Check', description: 'Verify the fixture value.', inputSchema: { type: 'object', properties: {} },
+    permissionLevel: 'none', async execute() { effects++; return { content: 'Verified: amber-218.' }; } };
+  const earlier = fixtureProvider((_request, step) => {
+    if (step === 1) return [
+      { type: 'thinking', thinking: 'Old reasoning. '.repeat(830) },
+      { type: 'text', text: 'Original verified evidence.' },
+    ];
+    return { type: 'text', text: 'Earlier work recorded.' };
+  });
+  const current = fixtureProvider((_request, step) => {
+    if (step === 1) return [signed, call];
+    if (step === 2) throw Object.assign(new Error('Fixture stopped before answering the tool result'), { statusCode: 400 });
+    return { type: 'text', text: 'Continued without repeating the check.' };
+  });
+  const budgets = [];
+  const pairs = request => summaryBlocks(request).filter(block =>
+    block.signature === signed.signature || block.id === call.id || block.tool_use_id === call.id);
+  current.createMessage = async request => {
+    budgets.push(request.maxTokens);
+    if (unsignedThinking(summaryBlocks(request))) throw missingThinkingSignature();
+    assert.deepEqual(pairs(request), [signed, call, { type: 'tool_result', tool_use_id: call.id, content: 'Verified: amber-218.' }]);
+    return { id: 'summary-with-tool-context', model: request.model,
+      stopReason: request.maxTokens < 2000 ? 'max_tokens' : 'end_turn',
+      content: [{ type: 'text', text: handover }], usage: { input_tokens: 31, output_tokens: 17 } };
+  };
+  const options = { ...f.options, persistSession: true, contextWindow: 8100, maxOutputTokens: 3000 };
+  const active = { ...options, model: 'claude-fixture', provider: current, customTools: [tool] };
+  try {
+    session = await createSession({ ...options, contextWindow: 200_000, model: 'earlier-model', provider: earlier });
+    for (let index = 0; index < 4; index++) {
+      assert.equal(result(await send(session, `Earlier records ${index}. ${'Verified. '.repeat(90)}`)).is_error, false);
+    }
+    const id = session.sessionId;
+    await session[Symbol.asyncDispose]();
+    session = await createSession({ ...active, contextWindow: 200_000, resume: id, strictResume: true });
+    const interrupted = result(await send(session, 'LATEST_CONSTRAINT: Keep only the verified value.'));
+    assert.equal(interrupted.is_error, true);
+    assert.match(interrupted.result, /Fixture stopped before answering the tool result/);
+    assert.equal(effects, 1);
+    await session[Symbol.asyncDispose]();
+    session = await createSession({ ...active, resume: id, strictResume: true });
+    const events = await send(session, '/compact');
+    assert.equal(result(events).is_error, false, result(events).result);
+    assert.equal(events.filter(event => event.subtype === 'compact_boundary').length, 1);
+    assert.equal(budgets.length, 2);
+    assert.ok(budgets[0] >= 1024 && budgets[0] < 2000, JSON.stringify(budgets));
+    assert.equal(budgets[1], 3000);
+    assert.equal(current.requests.length, 2);
+    const checkpoint = await session.command('readHistory');
+    assert.deepEqual(pairs({ messages: checkpoint }), [signed, call, { type: 'tool_result', tool_use_id: call.id, content: 'Verified: amber-218.' }]);
+    assert.ok(!unsignedThinking(summaryBlocks({ messages: checkpoint })));
+    assert.equal(effects, 1);
+    await session[Symbol.asyncDispose]();
+    session = await createSession({ ...active, resume: id, strictResume: true });
+    const continuation = result(await send(session, 'Continue without repeating the check.'));
+    assert.equal(continuation.is_error, false, continuation.result);
+    assert.equal(effects, 1);
+    assert.deepEqual(pairs(current.requests.at(-1)), pairs({ messages: checkpoint }));
+    assert.match(JSON.stringify(current.requests.at(-1).messages), /LATEST_CONSTRAINT/);
+  } finally { await session?.[Symbol.asyncDispose](); await f.close(); }
+});
+
+test('manual summary repairs image input without replacing stored images', { timeout: 15000 }, async () => {
+  const f = await fixture(); let session;
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO/Fim0AAAAASUVORK5CYII=';
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } };
+  const model = fixtureProvider(() => ({ type: 'text', text: 'Evidence recorded.' }));
+  const summaries = [];
+  model.createMessage = async request => {
+    summaries.push(structuredClone(request.messages));
+    if (summaries.length === 1) throw Object.assign(new Error('This model does not support image input.'), { statusCode: 400, requestRejected: true });
+    return { id: 'image-summary', model: request.model, stopReason: 'end_turn',
+      content: [{ type: 'text', text: 'IMAGE_HANDOVER: Keep the latest user evidence.' }], usage: { input_tokens: 23, output_tokens: 9 } };
+  };
+  try {
+    session = await seedForManualCompact(f, model);
+    await session.send({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'Latest evidence is attached.' }, image] } });
+    assert.equal(result(await collect(session.stream())).is_error, false);
+    const sends = model.requests.length;
+    assert.equal(result(await send(session, '/compact')).is_error, false);
+    assert.equal(model.requests.length, sends);
+    assert.equal(summaries.length, 2);
+    assert.ok(JSON.stringify(summaries[0]).includes(png));
+    assert.ok(!JSON.stringify(summaries[1]).includes(png));
+    assert.match(JSON.stringify(summaries[1]), /Latest evidence is attached/);
+    assert.ok(JSON.stringify(await session.command('readHistory')).includes(png));
+  } finally { await session?.[Symbol.asyncDispose](); await f.close(); }
 });
 
 test('a text-only input envelope invokes compact without sending its slash text to the provider', { timeout: 15000 }, async () => {

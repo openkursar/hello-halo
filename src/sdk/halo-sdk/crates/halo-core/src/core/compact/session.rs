@@ -4,12 +4,9 @@ use super::{
 };
 use crate::{
     bridge::EventSink,
-    core::loop_owner::LoopExecution,
-    core::{
-        hooks,
-        token_budget::TokenBudget,
-    },
+    core::{hooks, image_input, loop_failure, loop_owner::LoopExecution, messages, token_budget::TokenBudget},
     error::{Error, Result},
+    harness::ResolvedHarness,
     llm::provider::Provider,
 };
 use async_trait::async_trait;
@@ -91,44 +88,112 @@ impl OutputAllowance {
         Some(ceiling)
     }
 }
+#[derive(Default)]
+struct ManualReplay {
+    images: image_input::ImageInputState,
+    images_retried: bool,
+    image_repairs_reported: bool,
+    omit_unsigned_thinking: bool,
+}
+
+impl ManualReplay {
+    fn prepare(
+        &mut self,
+        records: &mut [Value],
+        model: &str,
+        supports_images: bool,
+        harness: &ResolvedHarness,
+        session_id: &str,
+    ) -> bool {
+        let (empty, relabeled) = image_input::repair_recorded(records, harness);
+        if empty + relabeled > 0 && !self.image_repairs_reported {
+            self.image_repairs_reported = true;
+            tracing::warn!(session_id, empty, relabeled, "Repaired recorded images for the manual summary without changing history");
+        }
+        let projected = self.images.project_for_request(model, supports_images, records, harness);
+        empty + relabeled + projected + self.remove_unsigned_thinking(records, harness) > 0
+    }
+
+    fn remove_unsigned_thinking(&self, records: &mut [Value], harness: &ResolvedHarness) -> usize {
+        if self.omit_unsigned_thinking {
+            messages::strip_unsigned_thinking(records, harness)
+        } else {
+            0
+        }
+    }
+
+    fn recover(&mut self, error: &Error, records: &[Value], model: &str, session_id: &str) -> bool {
+        // An error emitted after the response starts is not a rejected request.
+        if !error.details.as_ref().is_some_and(|details| details["requestRejected"] == true) {
+            return false;
+        }
+        if !self.omit_unsigned_thinking && loop_failure::status(error) == Some(400.0) && loop_failure::invalid_thinking(error) {
+            let unsigned = messages::count_unsigned_thinking(records);
+            if unsigned > 0 {
+                self.omit_unsigned_thinking = true;
+                tracing::warn!(session_id, unsigned, "Provider rejected recorded reasoning; retrying the manual summary without unsigned thinking blocks");
+                return true;
+            }
+        }
+        if !self.images_retried && self.images.rejected(model, error, records) {
+            self.images_retried = true;
+            tracing::warn!(session_id, model, "Provider rejected recorded images; retrying the manual summary with text notices while retaining original history");
+            return true;
+        }
+        false
+    }
+}
+
 struct Summary<'a> {
     provider: &'a Provider,
     budget: Mutex<TokenBudget>,
     allowance: Arc<Mutex<OutputAllowance>>,
     session: &'a LoopExecution,
+    harness: &'a ResolvedHarness,
+    manual_replay: Option<&'a Mutex<ManualReplay>>,
 }
-#[async_trait]
-impl SummaryProvider for Summary<'_> {
-    async fn complete(&self, sent: &mut Value, cancel: &CancellationToken) -> Result<Value> {
+impl Summary<'_> {
+    fn output_for(&self, request: &Value, requested: f64) -> f64 {
         let limit = self.allowance.lock().unwrap().limit;
-        let ceiling = sent["maxTokens"]
-            .as_f64()
-            .unwrap_or(0.0)
-            .min(limit.unwrap_or(f64::INFINITY));
-        let input = self.budget.lock().unwrap().estimate_request(sent);
-        let thinking = if sent["thinking"]["type"] == "enabled" {
-            sent["thinking"]["budgetTokens"].as_f64().unwrap_or(0.0)
+        let ceiling = requested.min(limit.unwrap_or(f64::INFINITY));
+        let budget = self.budget.lock().unwrap();
+        let input = budget.estimate_request(request);
+        let thinking = if request["thinking"]["type"] == "enabled" {
+            request["thinking"]["budgetTokens"].as_f64().unwrap_or(0.0)
         } else {
             0.0
         };
         let minimum = thinking + 1024.0_f64.min((ceiling - thinking).max(1.0));
-        let available = self
-            .budget
-            .lock()
-            .unwrap()
-            .request_max_tokens(input, Some(ceiling));
-        sent["maxTokens"] = json!(if available >= minimum {
-            available
-        } else {
-            ceiling
-        });
+        let available = budget.request_max_tokens(input, Some(ceiling));
+        if available >= minimum { available } else { ceiling }
+    }
+}
+
+#[async_trait]
+impl SummaryProvider for Summary<'_> {
+    async fn complete(&self, sent: &mut Value, cancel: &CancellationToken) -> Result<Value> {
+        let requested = sent["maxTokens"].as_f64().unwrap_or(0.0);
+        let mut measure_output = true;
         let mut attempt = 0u32;
         loop {
             check_cancel(cancel)?;
             let mut request = sent.clone();
-            let records: Vec<_> = sent["messages"].as_array().into_iter().flatten()
+            let mut records: Vec<_> = sent["messages"].as_array().into_iter().flatten()
                 .filter(|message| !super::context::is_context(message)).cloned().collect();
+            let repaired = self.manual_replay.is_some_and(|replay| {
+                replay.lock().unwrap().prepare(
+                    &mut records, sent["model"].as_str().unwrap_or(""), self.provider.capabilities["imageInput"] != false,
+                    self.harness, &self.session.session_id,
+                )
+            });
             request["messages"] = json!(crate::core::tool_context::history::project(&records));
+            if measure_output {
+                let input = if repaired { &request } else { &*sent };
+                sent["maxTokens"] = json!(self.output_for(input, requested));
+                measure_output = false;
+            }
+            request["maxTokens"] = sent["maxTokens"].clone();
+            let replay = self.manual_replay.map(move |state| (state, records));
             match self.provider.complete(request, cancel.clone()).await {
                 Ok(response) => return Ok(response),
                 Err(error) => {
@@ -149,6 +214,14 @@ impl SummaryProvider for Summary<'_> {
                             sent["maxTokens"] = json!(limit);
                             continue;
                         }
+                    }
+                    if replay.is_some_and(|(state, records)| {
+                        state.lock().unwrap().recover(
+                            &error, &records, sent["model"].as_str().unwrap_or(""), &self.session.session_id,
+                        )
+                    }) {
+                        measure_output = true;
+                        continue;
                     }
                     let status = details
                         .get("statusCode")
@@ -179,7 +252,8 @@ struct Callbacks<'a> {
     injected: &'a [Value],
     history: &'a [Value],
     discovery: Option<Value>,
-    harness: Arc<crate::harness::ResolvedHarness>,
+    harness: Arc<ResolvedHarness>,
+    manual_replay: Option<&'a Mutex<ManualReplay>>,
 }
 #[async_trait]
 impl CompactCallbacks for Callbacks<'_> {
@@ -193,7 +267,10 @@ impl CompactCallbacks for Callbacks<'_> {
         Ok(self.budget.estimate_request(&request))
     }
     async fn prepare_candidate(&self, candidate: CompactCandidate) -> Result<CompactCandidate> {
-        let candidate = super::context::reconcile(candidate);
+        let mut candidate = super::context::reconcile(candidate);
+        if let Some(replay) = self.manual_replay {
+            replay.lock().unwrap().remove_unsigned_thinking(&mut candidate.messages, &self.harness);
+        }
         if self.discovery.is_some() {
             let messages = crate::core::tool_context::checkpoint::prepare_with_harness(
                 &candidate.messages,
@@ -308,11 +385,15 @@ pub async fn compact_request(
     let compact_options = json!({"maxTokens":ceiling,"promptProfile":options["promptProfile"],"request":envelope,"injectedMessages":injected,"targetInputTokens":if trigger.reduce_target(){budget.target_input_tokens().min((pre_tokens/2.0).floor())}else{budget.target_input_tokens()},"maxInputTokens":budget.available_input_tokens()});
     let mut estimator = TokenBudget::new(window, output);
     estimator.configure_output(request["thinking"].clone(), allowance.lock().unwrap().limit);
+    let manual_replay = matches!(trigger, CompactTrigger::Manual { .. })
+        .then(|| Mutex::new(ManualReplay::default()));
     let summary_provider = Summary {
         provider,
         budget: Mutex::new(summary_budget),
         allowance,
         session,
+        harness: &harness,
+        manual_replay: manual_replay.as_ref(),
     };
     let callbacks = Callbacks {
         session,
@@ -324,6 +405,7 @@ pub async fn compact_request(
         history: messages,
         discovery,
         harness: harness.clone(),
+        manual_replay: manual_replay.as_ref(),
     };
     let result = full_compact_with_harness(
         messages,
