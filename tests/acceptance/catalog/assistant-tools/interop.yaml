@@ -71,8 +71,8 @@ scenarios:
       - en: While that tool is still held, inspect the recipient or switch back to it, expand the source card and follow its source link; then release the tool, finish and reopen the conversation.
         zh: 工具仍被保持时查看或切回接收方，展开来源卡并点击来源链接；随后释放工具、完成并重开对话。
     expected:
-      - en: Before the recipient finishes, its source card shows the sender and summary, expands to the original message, and opens the correct sender conversation.
-        zh: 接收方尚未完成时，来源卡已显示发送方和摘要，可展开原始消息并打开正确发送方对话。
+      - en: Before the recipient finishes, a standalone source line shows the sender and summary without a box or relative time. It expands to the original message and opens the correct sender conversation.
+        zh: 接收方尚未完成时，独立来件以无边框、无相对时间的一行显示发送方和摘要，可展开原始消息并打开正确发送方对话。
       - en: Completion and reopening keep exactly one attributed system record, with no extra user message or replayed model input; an unaddressed conversation is unchanged.
         zh: 完成和重开后仍只有一条带来源的系统记录，不多出用户消息或重放模型输入，未寻址对话保持不变。
     notes:

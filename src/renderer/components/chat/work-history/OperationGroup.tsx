@@ -1,8 +1,8 @@
 /**
  * A stretch of operations between two things the AI said, as one line:
  * "Ran 5 commands, searched 3 times and read 1 file". Opened, it lists every
- * step; a long stretch lists the latest ones first and loads earlier ones on
- * request, so a run of hundreds of steps costs one line until asked for. A
+ * step; a long stretch opens near the latest steps in a bounded scroll area
+ * and loads earlier ones on request. A
  * stretch with at most one operation is drawn as its own lines instead.
  *
  * The line stays neutral whatever its steps returned: an error a tool reported
@@ -11,7 +11,7 @@
  * named in the primary color.
  */
 
-import { memo, useState } from 'react'
+import { memo, useId, useLayoutEffect, useRef, useState } from 'react'
 import { describeThoughtActivity } from '../../../utils/thought-activity'
 import { PROCESS_CUE, PROCESS_LINE } from '../process-line'
 import { OperationRow } from './OperationRow'
@@ -25,6 +25,7 @@ import { getCurrentLanguage, useTranslation } from '../../../i18n'
 export const GROUP_PAGE = 50
 /** Kinds a summary names before it says "and other work". */
 const SUMMARY_KINDS = 3
+const INLINE_STEPS = 10
 
 type Translate = (key: string, options?: Record<string, unknown>) => string
 
@@ -64,7 +65,9 @@ export const OperationGroup = memo(function OperationGroup({ steps, live, childG
   const [chosen, setOpen] = useRememberedOpen(key, defaultOpen)
   // A step the person opened is not folded away when the next step joins it into a stretch.
   const open = chosen || (view?.steps.get(key) === undefined && steps.some(step => view?.steps.get(step.id) === true))
-  const [shown, setShown] = useState(GROUP_PAGE)
+  const panelId = useId()
+  const headingId = `${panelId}-heading`
+  const [earlier, setEarlier] = useState(0)
 
   const summary = summarizeGroup(steps, live)
   // At most one operation: its own line opens its result in one click, beside any reasoning before it.
@@ -80,15 +83,14 @@ export const OperationGroup = memo(function OperationGroup({ steps, live, childG
   const Icon = operationIcon(summary.lead!)
   const subject = summaryText(summary.parts, t)
   const activityText = activity ? t(activity.key, activity.params) : ''
-  const hidden = Math.max(0, steps.length - shown)
-  const visible = hidden > 0 ? steps.slice(hidden) : steps
-
   return (
     <div className="min-w-0">
       <button
         type="button"
+        id={headingId}
         onClick={() => setOpen(!open)}
         aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
         aria-label={[subject, activityText].filter(Boolean).join(' · ')}
         className={PROCESS_LINE}
       >
@@ -98,21 +100,76 @@ export const OperationGroup = memo(function OperationGroup({ steps, live, childG
         <span aria-hidden="true" className={PROCESS_CUE}>{open ? t('Collapse') : t('Expand')}</span>
       </button>
       {open && (
-        <div className="mb-1.5 ml-[7px] mt-px border-l border-border-soft pl-2.5">
-          {hidden > 0 && (
-            <button
-              type="button"
-              onClick={() => setShown(shown + GROUP_PAGE)}
-              className="-mx-1.5 flex min-h-8 items-center rounded-[5px] px-1.5 text-xs text-primary transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary [@media(pointer:coarse)]:min-h-11"
-            >
-              {t('Show {{count}} earlier steps', { count: hidden })}
-            </button>
-          )}
-          {visible.map(step => (
-            <OperationRow key={step.id} thought={step} live={live} childThoughts={childGroups.get(step.id)} baseDir={baseDir} />
-          ))}
-        </div>
+        <GroupSteps steps={steps} live={live} childGroups={childGroups} baseDir={baseDir}
+          panelId={panelId} headingId={headingId} earlier={earlier} onEarlier={setEarlier} />
       )}
     </div>
   )
 }, sameGroup)
+
+const PAGE_ACTION = '-mx-1.5 flex min-h-8 items-center rounded-[5px] px-1.5 text-xs text-primary transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary [@media(pointer:coarse)]:min-h-11'
+
+function GroupSteps({ steps, live, childGroups, baseDir, panelId, headingId, earlier, onEarlier }: Omit<OperationGroupProps, 'defaultOpen'> & {
+  panelId: string
+  headingId: string
+  earlier: number
+  onEarlier: (count: number) => void
+}) {
+  const { t } = useTranslation()
+  const list = useRef<HTMLDivElement>(null)
+  // Once a page fills, new steps must not evict the ones the person is reading.
+  const [pageEnd, setPageEnd] = useState(() => Math.max(GROUP_PAGE, steps.length))
+  const end = Math.min(pageEnd, steps.length)
+  const start = Math.max(0, end - GROUP_PAGE - earlier)
+  const scrollable = end - start > INLINE_STEPS
+  const position = useRef<number | 'end' | null>('end')
+
+  useLayoutEffect(() => {
+    const el = list.current
+    if (!el || position.current === null) return
+    el.scrollTop = position.current === 'end' ? el.scrollHeight : el.scrollHeight - position.current
+    position.current = null
+  }, [start, end])
+
+  return (
+    <div
+      id={panelId}
+      ref={list}
+      role={scrollable ? 'group' : undefined}
+      aria-labelledby={scrollable ? headingId : undefined}
+      tabIndex={scrollable ? 0 : undefined}
+      className={`mb-1.5 ml-[7px] mt-px border-l border-border-soft pl-2.5 ${scrollable
+        ? 'max-h-[min(50dvh,20rem)] overflow-y-auto px-2.5 py-0.5 scrollbar-thin focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary' : ''}`}
+    >
+      {start > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            const el = list.current
+            if (el) {
+              position.current = el.scrollHeight - el.scrollTop
+              if (start <= GROUP_PAGE) el.focus({ preventScroll: true })
+            }
+            onEarlier(earlier + GROUP_PAGE)
+          }}
+          className={PAGE_ACTION}
+        >
+          {t('Show {{count}} earlier steps', { count: start })}
+        </button>
+      )}
+      {steps.slice(start, end).map(step => (
+        <OperationRow key={step.id} thought={step} live={live} childThoughts={childGroups.get(step.id)} baseDir={baseDir} />
+      ))}
+      {end < steps.length && (
+        <button type="button" onClick={() => {
+          position.current = 'end'
+          onEarlier(0)
+          setPageEnd(steps.length)
+          list.current?.focus({ preventScroll: true })
+        }} className={PAGE_ACTION}>
+          {t('Back to latest')}
+        </button>
+      )}
+    </div>
+  )
+}

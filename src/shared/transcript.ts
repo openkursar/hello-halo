@@ -148,7 +148,8 @@ export function tailStartWithinBudget<T>(
 /**
  * Match an accepted input to its persisted twin without relying on a provisional
  * id. The reply anchor and the outcome are learned after the input is announced,
- * so they never tell two inputs apart.
+ * and the reasoning setting is added by whoever records it, so they never tell
+ * two inputs apart.
  */
 export function sameTranscriptInput(left: TranscriptMessage, right: TranscriptMessage): boolean {
   return left.role === right.role && left.source === right.source
@@ -157,9 +158,11 @@ export function sameTranscriptInput(left: TranscriptMessage, right: TranscriptMe
     && sameInputMetadata(left.metadata, right.metadata)
 }
 
+const RECORDED_ONLY_METADATA = new Set(['inputReplyId', 'inputOutcome', 'reasoning'])
+
 function sameInputMetadata(left: TranscriptMessage['metadata'], right: TranscriptMessage['metadata']): boolean {
   const comparable = (metadata: TranscriptMessage['metadata']) => Object.entries(metadata ?? {})
-    .filter(([key, value]) => value !== undefined && key !== 'inputReplyId' && key !== 'inputOutcome')
+    .filter(([key, value]) => value !== undefined && !RECORDED_ONLY_METADATA.has(key))
   const leftEntries = comparable(left)
   const rightEntries = comparable(right)
   if (leftEntries.length !== rightEntries.length) return false

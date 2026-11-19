@@ -1,27 +1,13 @@
-/**
- * CrossConversationMessage — a message delivered by another conversation in the
- * same space, rendered inside the receiving conversation's stream.
- *
- * The visual separation from a user bubble is the enforcement point of the rule
- * that a peer conversation is not the owner speaking. Three independent signals
- * carry it, so no single one being missed can cause a misread:
- *   1. left aligned, where user messages are right aligned
- *   2. weak `muted` fill + hairline border, where a user bubble is a primary fill
- *   3. 12px, where user body text is 14px
- *
- * Collapsed to a one-line summary by default; the model always receives the full
- * body regardless of this UI state.
- */
+/** A peer's delivery is a source line, not a message from the person. */
 
 import { useEffect, useState } from 'react'
-import { ChevronRight, Send, ExternalLink } from 'lucide-react'
+import { Send, ExternalLink } from 'lucide-react'
 import type { Message } from '../../../types'
 import { useTranslation } from '../../../i18n'
 import { useChatStore } from '../../../stores/chat.store'
 import { useAppsStore } from '../../../stores/apps.store'
 import { nativeChatAppId, parseRunSenderKey } from '../../../../shared/apps/im-keys'
 import { navigateToAppChat, navigateToConversation } from '../../../utils/conversation-navigation'
-import { formatTimeAgo } from '../../../utils/format-time'
 import { readProvenance } from './message-source'
 import { clipSubject, PROCESS_CUE, PROCESS_DETAIL, PROCESS_LINE } from '../process-line'
 
@@ -79,7 +65,6 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
   const fromRun = parseRunSenderKey(provenance.fromConversationId) !== null
   const isSourceAvailable = sourceAppId ? digitalHumanAvailable : liveTitle !== undefined
   const displayTitle = liveTitle ?? provenance.fromConversationTitle
-  const time = formatTimeAgo(new Date(message.timestamp).getTime(), t)
 
   const openSource = () => {
     if (!isSourceAvailable) return
@@ -92,16 +77,15 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
   }
 
   const body = isExpanded && (
-    <div className={inProcess ? PROCESS_DETAIL : 'px-2.5 pb-2 animate-slide-down'}>
-      <div className="text-[13px] leading-[1.7] text-foreground/[0.88] whitespace-pre-wrap break-words">
+    <div className={PROCESS_DETAIL}>
+      <div className="text-[13px] leading-[1.7] text-foreground/[0.88] whitespace-pre-wrap [overflow-wrap:anywhere]">
         {message.content}
       </div>
       {/* /80 rather than the /55-/60 used for incidental meta elsewhere: this row
           carries "sent by that conversation's AI", the only visual statement that this
           message is not the user's. Measured at /55 it lands near 3:1 in dark mode,
           under the 4.5:1 floor — too weak for the one line that has to be read. */}
-      <div className={`flex flex-wrap items-center gap-x-1 gap-y-0.5 text-muted-foreground/80 ${
-        inProcess ? 'mt-1 min-h-6 text-[11px]' : 'mt-2 border-t border-dashed border-border-faint pt-1.5 text-[10px]'}`}>
+      <div className="mt-1 flex min-h-6 flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-muted-foreground/80 [overflow-wrap:anywhere]">
         <span>{t('From conversation')}</span>
         {fromRun ? (
           <span>{displayTitle}</span>
@@ -116,59 +100,23 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
         ) : (
           <span className="text-muted-foreground/50 italic">{t('deleted conversation')}</span>
         )}
-        <span>· {time} ·</span>
+        <span>·</span>
         <span>{fromRun ? t('one-way notice from a scheduled run, no reply possible') : t("sent by that conversation's AI")}</span>
       </div>
     </div>
   )
 
-  if (inProcess) {
-    return (
-      <div className="min-w-0" data-message-id={message.id}>
-        <button type="button" onClick={() => setIsExpanded(v => !v)} aria-expanded={isExpanded} className={PROCESS_LINE}>
-          <Send size={14} aria-hidden="true" className="shrink-0" />
-          <span className="max-w-[45%] shrink-0 truncate">{t('From @{{title}}:', { title: displayTitle })}</span>
-          {provenance.summary && (
-            <span className="min-w-0 truncate text-[13px] text-muted-foreground">{clipSubject(provenance.summary).text}</span>
-          )}
-          <span aria-hidden="true" className={PROCESS_CUE}>{isExpanded ? t('Collapse') : t('View')}</span>
-        </button>
-        {body}
-      </div>
-    )
-  }
-
   return (
-    <div className="flex justify-start animate-fade-in" data-message-id={message.id}>
-      <div className="max-w-[85%] min-w-0 rounded-xl bg-muted/15 border border-border-soft overflow-hidden">
-        <button
-          onClick={() => setIsExpanded(v => !v)}
-          className={`w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors
-            hover:bg-muted/25 ${isFresh ? 'border-b border-primary/35' : ''}`}
-        >
-          <ChevronRight
-            size={12}
-            className={`shrink-0 text-muted-foreground/60 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-          />
-          <span
-            className={`shrink-0 w-4 h-4 rounded-[5px] flex items-center justify-center
-              ${isFresh ? 'bg-primary text-primary-foreground' : 'bg-primary/15 text-primary'}`}
-          >
-            <Send size={9} />
-          </span>
-          <span className="shrink-0 text-xs font-semibold text-primary/90">
-            {t('From @{{title}}:', { title: displayTitle })}
-          </span>
-          {provenance.summary && (
-            <span className="text-xs text-muted-foreground truncate min-w-0">
-              {provenance.summary}
-            </span>
-          )}
-          <span className="shrink-0 text-muted-foreground/40 text-[10px]">·</span>
-          <span className="shrink-0 text-[10px] text-muted-foreground/55">{time}</span>
-        </button>
-        {body}
-      </div>
+    <div className={inProcess ? 'min-w-0' : 'w-[85%] min-w-0'} data-message-id={message.id}>
+      <button type="button" onClick={() => setIsExpanded(v => !v)} aria-expanded={isExpanded} className={PROCESS_LINE}>
+        <Send size={14} aria-hidden="true" className={`shrink-0 ${isFresh ? 'text-primary' : ''}`} />
+        <span className={`${provenance.summary ? 'max-w-[45%] shrink-0' : 'min-w-0'} truncate`}>{t('From @{{title}}:', { title: displayTitle })}</span>
+        {provenance.summary && (
+          <span className="min-w-0 truncate text-[13px] text-muted-foreground">{inProcess ? clipSubject(provenance.summary).text : provenance.summary}</span>
+        )}
+        <span aria-hidden="true" className={PROCESS_CUE}>{isExpanded ? t('Collapse') : t('View')}</span>
+      </button>
+      {body}
     </div>
   )
 }

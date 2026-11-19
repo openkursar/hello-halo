@@ -10,11 +10,13 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Locator, Page } from '@playwright/test'
+import type { HaloAPI } from '../../../src/preload'
+import type { Thought } from '../../../src/shared/types/transcript'
 import { test, expect, acceptance, sendAcceptanceMessage, waitForAcceptanceIdle } from '../fixtures/acceptance-app'
 import { openManagedConversation, seedManagedConversation, seedManagedSpace } from '../fixtures/acceptance-management'
 import { createModelGate, modelTool, type ModelReply, type ModelRequest } from '../fixtures/acceptance-model'
 import { seedDigitalHumanChat, type SeededDigitalHumanChat } from '../fixtures/seed-digital-human-chat'
-import { navigateToChat, openDigitalHumanConversation } from '../fixtures/helpers'
+import { navigateToChat, openDigitalHumanConversation, setTheme } from '../fixtures/helpers'
 
 test.setTimeout(120000)
 
@@ -118,6 +120,7 @@ for (const viewport of ['1280', '390'] as const) {
       const openBox = await command.boundingBox()
       expect(Math.round(openBox!.height)).toBe(Math.round(closedBox!.height))
       await reads.click()
+      await expect(reply.getByRole('group', { name: 'Read 6 files', exact: true })).toHaveCount(0)
       const readRows = reply.getByRole('button', { name: /^Read · handoff\/step-\d\.md$/ })
       await expect(readRows).toHaveCount(6)
       await readRows.nth(3).click()
@@ -131,6 +134,67 @@ for (const viewport of ['1280', '390'] as const) {
       await expect(second).toBeVisible()
       await expect(reply.getByText('Task plan', { exact: true })).toBeVisible()
     })
+}
+
+for (const viewport of ['1280', '390'] as const) {
+  test(`long tool groups scroll in place without taking over the reply (${viewport}px)`, {
+    annotation: { type: 'acceptance', description: JSON.stringify({ caseId: 'chat.work-history.long-tool-group', evidence: 'ui', mode: 'none', variant: { viewport } }) },
+  }, async ({ window }, info) => {
+    const answer = 'The records are ready to review.'
+    const space = await seedManagedSpace(window, `Long tool group ${viewport}`)
+    const conversation = await seedManagedConversation(window, space.id, 'Long tool group', [
+      { role: 'assistant', content: Array.from({ length: 35 }, (_, index) => `Earlier hand-off note ${index + 1}.`).join('\n\n') },
+      { role: 'user', content: 'Review the hand-off records.' }, { role: 'assistant', content: answer },
+    ])
+    const thoughts: Thought[] = Array.from({ length: 60 }, (_, index) => {
+      const timestamp = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString()
+      return {
+        id: `read-${index + 1}`, type: 'tool_use', content: '', toolName: 'Read',
+        toolInput: { file_path: `record-${index + 1}.md` }, timestamp,
+        toolResult: { output: `Evidence for record ${index + 1}`, isError: false, timestamp },
+      }
+    })
+    const saved = await window.evaluate(({ spaceId, id, thoughts }) => (globalThis as unknown as { halo: HaloAPI }).halo
+      .updateLastMessage(spaceId, id, { thoughts }), { spaceId: space.id, id: conversation.id, thoughts })
+    expect(saved.success).toBe(true)
+    expect(saved.data).toBeTruthy()
+    await openManagedConversation(window, conversation.title, space.id)
+    await window.setViewportSize({ width: Number(viewport), height: 844 })
+
+    const reply = window.locator('[data-transcript-index]').filter({ hasText: answer }).last()
+    await reply.getByRole('button', { name: /^Work process/ }).click()
+    const heading = reply.getByRole('button', { name: 'Read 60 files', exact: true })
+    await heading.click()
+    const list = reply.getByRole('group', { name: 'Read 60 files', exact: true })
+    await expect(list.getByRole('button', { name: /^Read · record-/ })).toHaveCount(50)
+    await expect.poll(() => list.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(1)
+    const size = await list.evaluate(el => ({ height: el.clientHeight, total: el.scrollHeight, viewport: innerHeight }))
+    expect(size.height).toBeLessThanOrEqual(size.viewport / 2)
+    expect(size.total).toBeGreaterThan(size.height)
+    await noSidewaysScroll(window)
+    for (const theme of ['dark', 'light'] as const) {
+      await setTheme(window, theme)
+      await list.scrollIntoViewIfNeeded()
+      await info.attach(`long-tool-group-${viewport}-${theme}`, { body: await window.screenshot(), contentType: 'image/png' })
+    }
+
+    await list.getByRole('button', { name: 'Read · record-60.md', exact: true }).click()
+    await expect(list.getByText('Evidence for record 60', { exact: true })).toBeVisible()
+    await list.evaluate(el => { el.scrollTop = 0 })
+    await list.getByRole('button', { name: 'Show 10 earlier steps', exact: true }).click()
+    await expect(list.getByRole('button', { name: /^Read · record-/ })).toHaveCount(60)
+    await expect(list.getByRole('button', { name: 'Read · record-60.md', exact: true })).toHaveAttribute('aria-expanded', 'true')
+    await list.evaluate(el => { el.scrollTop = 0 })
+    const chat = window.getByTestId('transcript-scroller')
+    await list.hover()
+    const before = await chat.evaluate(el => el.scrollTop)
+    expect(before).toBeGreaterThan(0)
+    await window.mouse.wheel(0, -220)
+    await expect.poll(() => chat.evaluate(el => el.scrollTop)).toBeLessThan(before)
+    await heading.click()
+    await expect(list).toHaveCount(0)
+    await expect(reply.locator('.message-assistant')).toContainText(answer)
+  })
 }
 
 test('a running reply keeps its latest words in view and shows them once when opened',

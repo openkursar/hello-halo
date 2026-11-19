@@ -27,8 +27,8 @@ promises:
     en: A finished reply's answer is in view, with its work folded to one line above it that says how long it took. A reply with nothing but its answer has no such line.
     zh: 完成的回复直接显示答案，上方只有一行折叠的工作经过及用时；只有答案的回复不显示这一行。
   timeline:
-    en: Opening the work shows what the AI said along the way and, between those words, each stretch of operations as one line that sums it up ("Ran 5 commands and read 1 file") and opens to its steps in one click; a long stretch lists its latest steps first and loads earlier ones on request. Compactions and sub-agent tasks keep lines of their own.
-    zh: 展开工作经过后，按顺序显示 AI 中途说过的话；两段话之间的操作合为一行摘要（如“运行了 5 条命令和读取了 1 个文件”），点一次列出各步；步骤很多时先列最近的，更早的按需加载。上下文压缩与子智能体任务各占一行。
+    en: Opening the work shows what the AI said along the way and, between those words, each stretch of operations as one line that sums it up ("Ran 5 commands and read 1 file"). Short groups open inline; long groups open in a limited-height area at the latest steps, with earlier steps available on request. Compactions and sub-agent tasks keep lines of their own.
+    zh: 展开工作经过后，按顺序显示 AI 中途说过的话；两段话之间的操作合为一行摘要（如“运行了 5 条命令和读取了 1 个文件”）。短组直接展开；长组在限高区域内展开，从最近步骤看起，更早的按需显示。上下文压缩与子智能体任务各占一行。
   live-words:
     en: While the reply runs, its latest words stay in the reply's own place in the body color, whether the work is folded or open, and are not repeated inside the work; the folded line says what it is doing, or that it is replying. Work left open stays open, with what was opened inside it, when the reply finishes.
     zh: 回复运行中，最近的文字始终留在回复原位、正文颜色，工作经过展开或收起都一样，且不在工作经过里重复；折叠行说明它正在做什么，或正在回复。回复结束时，展开着的工作经过及其中点开的内容保持展开。
@@ -76,6 +76,27 @@ scenarios:
     expected:
       - en: The answer shows once with a folded work line above it; opened, the command's line sits between the two sentences and the six reads are one line after the second, with the plan below and no step of the reads drawn; one click on the command or a read shows its existing result, and the command's line keeps its height; closing the reads keeps the sentences and the plan; nothing scrolls sideways.
         zh: 答案只出现一次，上方是折叠的工作经过；展开后命令那一行位于两句话之间，六次读取在第二句话后合为一行，任务计划在下方，读取的各步尚未画出；点一次命令或读取即显示现有结果，命令那一行高度不变；收起读取后发言和计划仍在；页面不横向滚动。
+  - id: chat.work-history.long-tool-group
+    title:
+      en: Review a long tool group without losing the reply
+      zh: 长工具组在原地滚动，不挤走回复
+    verifies: [timeline, operation-detail]
+    platforms: *a1
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    variants:
+      viewport: ['1280', '390']
+    preconditions:
+      - en: A saved reply has a group of sixty operations with results.
+        zh: 一条已保存的回复含有一组带结果的六十步操作。
+    steps:
+      - en: Open the group, inspect its latest result, show the earlier steps, and scroll past the top of the list.
+        zh: 展开操作组，查看最近结果，显示更早的步骤，然后滚过列表顶部。
+    expected:
+      - en: The group opens at the latest steps in at most half the viewport. Earlier steps appear on request without closing the opened result, and scrolling past the edge returns to the conversation.
+        zh: 列表从最近的步骤打开，高度不超过视口一半。按需显示更早步骤时结果不收起，滚到边缘继续滚可回到外层对话。
   - id: chat.work-history.running
     title:
       en: Follow a running reply without reading its words twice

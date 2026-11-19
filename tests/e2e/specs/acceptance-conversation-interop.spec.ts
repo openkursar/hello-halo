@@ -186,6 +186,9 @@ for (const recipient of ['visible', 'cached-background', 'unopened'] as const) {
       expect(delivery).toMatchObject({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: sender.id, fromConversationTitle: sender.title, summary } })
       const card = window.locator(`[data-message-id="${delivery.id}"]`)
       await expect(card).toHaveCount(1)
+      await expect(card.getByRole('button').first()).toHaveAttribute('aria-expanded', /^(true|false)$/)
+      await expect(card.locator('.border')).toHaveCount(0)
+      await expect(card).not.toContainText(/\bago\b/)
       await expect.poll(async () => {
         const state = await window.evaluate(id => (window as unknown as { halo: HaloAPI }).halo.getSessionState(id), target.id)
         return (state.data as { isActive?: boolean })?.isActive

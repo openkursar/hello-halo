@@ -12,7 +12,7 @@ state. Both derive from the same incremental `ThoughtPanelModel`
 |---|---|---|
 | Folded line | Saved: "Work process · 33 min" with a History icon. Live: a spinner and the task in progress, else "Replying…" while words are written, else the latest activity, else "Working…"; plus "Tasks i/n" | — |
 | Timeline | What the AI said along the way (muted), records received, lines of their own (session notice, compaction, sub-agent task, engine error), and between them each stretch of operations as one line; then the task plan | the folded line |
-| Stretch | Its steps — tools and reasoning — one line each, latest `GROUP_PAGE` first, earlier on request | its line |
+| Stretch | Its steps — tools and reasoning — one line each; long lists scroll below their summary, opening at the end of the latest `GROUP_PAGE` steps, with earlier steps on request | its line |
 | One step | Halo's existing detail: `ToolResultViewer`, raw input, `NestedToolTimeline`, `ErrorContent` | its line |
 
 - A stretch's line sums up its counted kinds in order of first appearance

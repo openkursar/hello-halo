@@ -53,6 +53,12 @@ beforeAll(async () => {
         window.addStep = () => setSteps(current => [...current, tool('t2', 'npm run test:handoff', 3)]);
         return <ThoughtProcess thoughts={steps} isThinking={true} />;
       }
+      function LongLive() {
+        const read = index => ({ ...tool('t' + index, '', index), toolName: 'Read', toolInput: { file_path: 'record-' + index + '.md' } });
+        const [steps, setSteps] = useState(() => Array.from({ length: 50 }, (_, index) => read(index + 1)));
+        window.addStep = () => setSteps(current => [...current, read(current.length + 1)]);
+        return <ThoughtProcess thoughts={steps} isThinking={true} />;
+      }
       function Saved({ open }) {
         const [memory] = useState(() => { const memory = new WorkViewMemory(); if (open) memory.view('reply-1').open = true; return memory; });
         const load = () => { window.reads++; return new Promise(done => setTimeout(() => done([say('s1', 'Checking the edges.', 1), tool('t1', 'npm test', 2), tool('t2', 'npm run lint', 3)]), 150)); };
@@ -64,7 +70,7 @@ beforeAll(async () => {
         return <ThoughtProcess isThinking={false} thoughts={[say('s1', 'Checking.', 1), tool('t1', 'grep -rn "handOff" src/main/apps/runtime/x.ts', 2)]} />;
       }
       const scene = window.scene;
-      createRoot(document.getElementById('root')).render(scene === 'live' ? <Live /> : scene === 'narrow' ? <Narrow /> : <Saved open={scene === 'reopen'} />);
+      createRoot(document.getElementById('root')).render(scene === 'long-live' ? <LongLive /> : scene === 'live' ? <Live /> : scene === 'narrow' ? <Narrow /> : <Saved open={scene === 'reopen'} />);
     `, resolveDir: root, loader: 'tsx' },
     bundle: true, write: false, format: 'iife', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' },
     plugins: [{ name: 'work-history-scenes', setup(builder) {
@@ -105,6 +111,25 @@ describe('what the person opened stays open', () => {
     // Folding the stretch is still the person's choice.
     await stretch.click()
     expect(await page.getByText('output of t1').count()).toBe(0)
+  })
+
+  it('does not move or evict a result as a tool is appended to a full group', async () => {
+    await open('long-live')
+    await page.getByRole('button', { name: /^Reading / }).click()
+    await page.getByRole('button', { name: 'Read 50 files' }).click()
+    const list = page.getByRole('group', { name: 'Read 50 files' })
+    await list.getByRole('button', { name: 'Read · record-1.md', exact: true }).click()
+    const output = list.getByText('output of t1', { exact: true })
+    await output.waitFor()
+    const top = await output.evaluate(el => el.getBoundingClientRect().top)
+    await page.evaluate(() => (window as any).addStep())
+    const updated = page.getByRole('group', { name: 'Read 51 files' })
+    await updated.getByRole('button', { name: 'Back to latest' }).waitFor({ state: 'attached' })
+    expect(await updated.getByText('output of t1', { exact: true }).evaluate(el => el.getBoundingClientRect().top)).toBeCloseTo(top, 0)
+    await updated.getByRole('button', { name: 'Back to latest' }).click()
+    await updated.getByRole('button', { name: 'Read · record-51.md', exact: true }).waitFor()
+    expect(await updated.getByRole('button', { name: /^Read · record-/ }).count()).toBe(50)
+    expect(await updated.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(1)
   })
 
   it('reads a saved reply’s work once when it is opened', async () => {
