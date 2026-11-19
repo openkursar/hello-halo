@@ -129,7 +129,10 @@ describe('getOrCreateV2Session in-flight sharing', () => {
     try {
       await getOrCreateV2Session('space', 'lazy-model-policy', options, undefined, undefined, undefined, undefined, build)
       saveConfig({ aiSources: { ...getConfig().aiSources!, subagentModels: {
-        version: 1, selectionMode: 'inherit', policyRevision: 1, revision: 1, profiles: [],
+        version: 1, selectionMode: 'inherit', policyRevision: 1, revision: 1, profiles: [{
+          id: 'builtin:small', kind: 'builtin', slot: 'small', revision: 1, description: 'Focused checks',
+          target: { kind: 'model', sourceId: 'source', modelId: 'm' },
+        }],
       } } })
       const current = await getOrCreateV2Session('space', 'lazy-model-policy', options, undefined, undefined, undefined, undefined, build)
       expect(current).toBe(configured)
