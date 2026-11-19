@@ -281,11 +281,11 @@ scenarios:
     steps:
       - en: Join from a remote web client while the AI is operating a terminal and has a page open.
         zh: AI 正在操作终端并开有网页时，从远程客户端进入。
-      - en: Select the page's placeholder, ask the AI to show its page, then disconnect the remote client. Let the AI close that page, open another and end the terminal.
-        zh: 选中远程网页占位，请 AI 展示该页，然后断开远程连接。让 AI 关闭旧页、打开新页并结束终端。
+      - en: Open the live page, ask the AI to show its page, then disconnect the remote client. Let the AI close that page, open another and end the terminal.
+        zh: 打开实时网页，请 AI 展示该页，然后断开远程连接。让 AI 关闭旧页、打开新页并结束终端。
     expected:
-      - en: The late client shows the live terminal activity. The unavailable webpage has no close button and does not count as shown.
-        zh: 晚到的客户端能看到终端正在操作。不能在远程显示的网页没有关闭按钮，也不会被算作已展示。
+      - en: The late client shows live terminal activity and the AI's actual browser page. It acknowledges the page as shown only when it can display the live frame.
+        zh: 晚到的客户端能看到终端活动及 AI 正在使用的网页。只有显示实时画面后，才确认网页已展示。
       - en: Reconnecting removes the old page and terminal activity and adds the new page without reopening the remote client.
         zh: 不用重开远程客户端，重连后旧网页与终端活动标记消失，新网页出现。
   - id: files.ai-work.show-file-at-limit

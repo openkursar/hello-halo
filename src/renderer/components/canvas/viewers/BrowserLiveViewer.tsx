@@ -221,7 +221,6 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
   const jump = useCallback((top: number) => controller.current?.scrollTo(top), [])
 
   if (!viewId) return <BrowserLiveUnavailable tab={tab} />
-  // A desktop shared through Remote Access does not stream its pages.
   if (stopped === 'unsupported') return <BrowserViewerFallback tab={tab} />
 
   const pageUrl = frame?.url || tab.url
@@ -270,6 +269,7 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
           <>
             <img
               ref={frameImage}
+              data-browser-live-frame="true"
               src={frame.image}
               width={frame.width}
               height={frame.height}

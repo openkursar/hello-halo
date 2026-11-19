@@ -1,12 +1,8 @@
 # Browser Live View
 
-Streams a server's browser page to a remote client (a browser tab, a phone),
-which cannot host the page itself.
-
-Server mode only. The desktop app does not use this: there a canvas browser tab
-owns the real `<webview>`, which is faster and interactive. A remote client of a
-desktop is refused (`browser-live-attach` answers `unsupported`, and
-`/api/browser/*` declines) and keeps the plain link fallback.
+Streams the AI's browser page to an authenticated remote client, whether Halo
+runs on a desktop or as a server. Local desktop Canvas still displays the
+real `<webview>` without a stream.
 
 ## Who may watch
 
@@ -49,8 +45,7 @@ renders outside the captured surface).
 Opening the page's canvas tab attaches the viewer; switching tabs, collapsing
 Canvas, hiding the client, or disconnecting detaches it. There is no separate
 watch/operate mode. An eligible remote owner learns support from the existing
-WebSocket authentication reply; a desktop-backed web client keeps its link,
-without probing browser endpoints. No stream runs for a page nobody is viewing:
+WebSocket authentication reply. No stream runs for a page nobody is viewing:
 
 - the frame lease is taken on the first viewer and released by the last one,
   restoring the page's original background-throttling policy

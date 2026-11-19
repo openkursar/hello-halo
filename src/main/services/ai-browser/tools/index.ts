@@ -24,7 +24,6 @@
 
 import type { BrowserContext } from '../context'
 import type { SdkMcpToolDefinition } from '../../agent/mcp/types'
-import { isServerMode } from '../../../foundation/runtime-mode'
 import { buildNavigationTools } from './navigation'
 import { buildInputTools } from './input'
 import { textResult } from './helpers'
@@ -49,10 +48,7 @@ export function buildAllTools(ctx: BrowserContext) {
     ...buildInspectTools(ctx),     // 1 tool:  inspect
     ...buildDownloadTools(ctx),    // 1 tool:  download
   ]
-  // Only a remote live view (server mode) lets a person operate a page from
-  // outside its window, so only there can a tool result need the notice.
-  const inputAware = isServerMode() ? tools.map(definition => withUserInputNotice(ctx, definition)) : tools
-  return inputAware.map(definition => operating(ctx, definition))
+  return tools.map(definition => operating(ctx, withUserInputNotice(ctx, definition)))
 }
 
 interface ToolDefinition {

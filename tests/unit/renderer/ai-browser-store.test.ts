@@ -42,6 +42,7 @@ vi.mock('../../../src/renderer/api', () => ({
     onAIBrowserCredentialResolved: (cb: (e: unknown) => void) => { credentialResolvedHandler = cb; return unsub.credentialResolved },
     isRemoteMode: () => remote,
     supportsBrowserLive: () => browserLive,
+    supportsBrowserCredentials: () => browserLive,
     listAIBrowserLivePages: (...args: unknown[]) => listActive(...args),
     listAIBrowserCredentialRequests: (...args: unknown[]) => listCredentials(...args),
     onWsStateChange: (cb: (state: string) => void) => { wsStateHandler = cb; return unsub.ws },

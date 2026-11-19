@@ -36,6 +36,7 @@ export type BrowserLiveStopSink = (stopped: BrowserLiveStopped) => void
 
 export interface BrowserLiveViewerLink {
   viewerId: string
+  isCurrent?: () => boolean
   frame: BrowserLiveFrameSink
   stopped: BrowserLiveStopSink
 }
@@ -150,7 +151,7 @@ export class BrowserLiveSession {
     this.pendingInputs++
     this.enqueueInput(async () => {
       try {
-        if (this.viewers.get(viewerId) !== viewer || this.contents.isDestroyed()) return
+        if (this.viewers.get(viewerId) !== viewer || viewer.isCurrent?.() === false || this.contents.isDestroyed()) return
         if (changesPage(input)) {
           onDispatch?.()
           this.burstUntil = Date.now() + INPUT_BURST_MS

@@ -1,10 +1,3 @@
-/**
- * The remote live view, and what exists only because of it, is a server
- * feature. On a desktop the person types into the visible page, so the model
- * gets no browser_fill_secret, no tool result carries a "the user operated
- * the page" notice, and the /api/browser routes decline.
- */
-
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const serverMode = vi.hoisted(() => ({ on: false }))
@@ -60,13 +53,8 @@ describe('the user-input notice', () => {
     return tools.find(t => t.name === 'browser_fill')!.handler({ uid: 'x', value: 'y' }, {})
   }
 
-  it('is never appended on a desktop', async () => {
-    const result = await callATool()
-    expect(JSON.stringify(result.content)).not.toContain('The user clicked on this page.')
-  })
-
-  it('is appended to the next tool result on a server', async () => {
-    serverMode.on = true
+  it.each([false, true])('blocks stale actions after remote input (server mode: %s)', async (on) => {
+    serverMode.on = on
     const result = await callATool()
     expect(JSON.stringify(result.content)).toContain('The user clicked on this page.')
   })

@@ -54,6 +54,7 @@ interface WebSocketClient {
   id: string
   ws: WebSocket
   authenticated: boolean
+  browserAttachments?: Map<string, { viewerId: string; detach?: () => void }>
   /** Socket address captured at upgrade time — feeds the auth lockout counters */
   ip: string
   subscriptions: Set<string> // conversationIds this client is subscribed to
@@ -241,7 +242,7 @@ export function initWebSocket(server: any): WebSocketServer {
     ws.on('close', (code: number, reason: Buffer) => {
       clients.delete(clientId)
       clearDetailConversations(`ws:${clientId}`)
-      releaseViewerAttachments(clientId)
+      releaseViewerAttachments(client)
       const why = reason?.length ? reason.toString() : ''
       console.log(`[WS] Client disconnected: ${clientId} code=${code}${why ? ` reason=${why}` : ''}`)
     })
@@ -251,7 +252,7 @@ export function initWebSocket(server: any): WebSocketServer {
       console.error(`[WS] Client error ${clientId}:`, error)
       clients.delete(clientId)
       clearDetailConversations(`ws:${clientId}`)
-      releaseViewerAttachments(clientId)
+      releaseViewerAttachments(client)
     })
   })
 
@@ -331,13 +332,17 @@ function resolveReentrySession(
  * terminal backlog would pause a pty forever (see ai-terminal/flow-control.ts),
  * and an unacked browser frame would hold that page's frame lease open.
  */
-function releaseViewerAttachments(clientId: string): void {
+function releaseViewerAttachments(client: WebSocketClient): void {
   void import('../services/ai-terminal').then(({ terminalViewerDisconnected }) => {
-    terminalViewerDisconnected(clientId)
+    terminalViewerDisconnected(client.id)
   }).catch(() => { /* terminal module unavailable on this platform */ })
-  if (isServerMode()) void import('../services/browser-live').then(({ browserLiveViewerDisconnected }) => {
-    browserLiveViewerDisconnected(clientId)
-  }).catch(() => console.warn('[WS] Could not release remote browser attachments'))
+  releaseBrowserAttachments(client)
+}
+
+function releaseBrowserAttachments(client: WebSocketClient): void {
+  const attachments = client.browserAttachments
+  client.browserAttachments = undefined
+  for (const attachment of attachments?.values() ?? []) attachment.detach?.()
 }
 
 /**
@@ -349,6 +354,7 @@ function handleClientMessage(
 ): void {
   switch (message.type) {
     case 'auth': {
+      releaseBrowserAttachments(client)
       const token: unknown = message.payload?.token
       // An office token is verified independently from the remote-control PIN.
       if (typeof token === 'string' && parseCredentialType(token) === 'office-member') {
@@ -412,9 +418,7 @@ function handleClientMessage(
       } else if (typeof token === 'string' && authenticateWebSocket(token, client.ip)) {
         client.authenticated = true
         client.credential = { type: 'remote-control' }
-        sendToClient(client, isServerMode()
-          ? { type: 'auth:success', payload: { browserLive: true } }
-          : { type: 'auth:success' })
+        sendToClient(client, { type: 'auth:success', payload: { browserLive: true, browserCredentials: isServerMode() } })
         console.log(`[WS] Client ${client.id} authenticated successfully`)
         break
       }
@@ -594,8 +598,6 @@ function handleClientMessage(
     // Watching a browser page this client cannot host itself. Frames go only to
     // the client that asked, so delivery is per-client rather than broadcast,
     // and a failed send is how the stream learns this viewer is gone.
-    // Only a server offers this: a desktop's pages are on its own screen, and a
-    // remote client of a desktop keeps the plain link fallback.
     case 'browser-live-attach': {
       if (!client.authenticated) {
         sendToClient(client, { type: 'error', error: 'Not authenticated' })
@@ -603,24 +605,44 @@ function handleClientMessage(
       }
       const viewId = message.payload?.viewId
       if (typeof viewId !== 'string') break
-      if (!isServerMode()) {
-        sendEventToClient(client.id, 'browser:live-stopped', { viewId, reason: 'unsupported' })
-        break
-      }
       if (!mayUseBrowserLive(client)) {
         sendEventToClient(client.id, 'browser:live-stopped', { viewId, reason: 'unavailable' })
         break
       }
-      void Promise.all([import('../services/browser-live'), import('../services/ai-browser')]).then(([{ browserLiveAttach }, { isLiveConversationPage }]) => {
-        if (clients.get(client.id) !== client || client.ws.readyState !== WebSocket.OPEN || !mayUseBrowserLive(client)) return
-        const started = isLiveConversationPage(viewId) && browserLiveAttach(viewId, {
-          viewerId: client.id,
-          frame: (frame) => sendEventToClient(client.id, 'browser:live-frame', frame as unknown as Record<string, unknown>),
-          stopped: (stopped) => { sendEventToClient(client.id, 'browser:live-stopped', stopped as unknown as Record<string, unknown>) },
-        })
-        if (!started) sendEventToClient(client.id, 'browser:live-stopped', { viewId, reason: 'gone' })
+      const attachments = client.browserAttachments ??= new Map()
+      if (attachments.has(viewId)) break
+      const attachment: { viewerId: string; detach?: () => void } = { viewerId: uuidv4() }
+      attachments.set(viewId, attachment)
+      const isCurrent = () => currentBrowserAttachment(client, viewId) === attachment
+      const forget = (reason: 'gone' | 'unavailable') => {
+        if (!isCurrent()) return
+        attachments.delete(viewId)
+        sendEventToClient(client.id, 'browser:live-stopped', { viewId, reason })
+      }
+      void Promise.all([import('../services/browser-live'), import('../services/ai-browser')]).then(([live, { isLiveConversationPage }]) => {
+        if (!isCurrent()) return
+        if (!isLiveConversationPage(viewId) || !live.browserLiveAttach(viewId, {
+          viewerId: attachment.viewerId,
+          isCurrent,
+          frame: (frame) => {
+            if (!isCurrent()) return false
+            const delivered = sendEventToClient(client.id, 'browser:live-frame', frame as unknown as Record<string, unknown>)
+            if (!delivered) attachments.delete(viewId)
+            return delivered
+          },
+          stopped: (stopped) => {
+            if (!isCurrent()) return
+            attachments.delete(viewId)
+            sendEventToClient(client.id, 'browser:live-stopped', stopped as unknown as Record<string, unknown>)
+          },
+        })) {
+          forget('gone')
+          return
+        }
+        attachment.detach = () => live.browserLiveDetach(viewId, attachment.viewerId)
       }).catch(() => {
-        sendEventToClient(client.id, 'browser:live-stopped', { viewId, reason: 'unavailable' })
+        console.warn(`[WS] Could not start browser attachment for ${client.id}`)
+        forget('unavailable')
       })
       break
     }
@@ -629,9 +651,9 @@ function handleClientMessage(
       if (!mayUseBrowserLive(client)) break
       const viewId = message.payload?.viewId
       if (typeof viewId !== 'string') break
-      void import('../services/browser-live').then(({ browserLiveDetach }) => {
-        browserLiveDetach(viewId, client.id)
-      }).catch(() => { /* nothing was streaming */ })
+      const attachment = client.browserAttachments?.get(viewId)
+      client.browserAttachments?.delete(viewId)
+      attachment?.detach?.()
       break
     }
 
@@ -640,8 +662,10 @@ function handleClientMessage(
       const viewId = message.payload?.viewId
       const seq = message.payload?.seq
       if (typeof viewId !== 'string' || typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq <= 0) break
+      const attachment = currentBrowserAttachment(client, viewId)
+      if (!attachment?.detach) break
       void import('../services/browser-live').then(({ browserLiveAck }) => {
-        browserLiveAck(viewId, client.id, seq)
+        if (currentBrowserAttachment(client, viewId) === attachment) browserLiveAck(viewId, attachment.viewerId, seq)
       }).catch(() => { /* nothing was streaming */ })
       break
     }
@@ -651,8 +675,10 @@ function handleClientMessage(
       const viewId = message.payload?.viewId
       if (typeof viewId !== 'string') break
       const scope = message.payload?.scope === 'page' ? 'page' : 'screen'
+      const attachment = currentBrowserAttachment(client, viewId)
+      if (!attachment?.detach) break
       void import('../services/browser-live').then(({ browserLiveRequestDetail }) => {
-        browserLiveRequestDetail(viewId, client.id, scope)
+        if (currentBrowserAttachment(client, viewId) === attachment) browserLiveRequestDetail(viewId, attachment.viewerId, scope)
       }).catch(() => { /* nothing was streaming */ })
       break
     }
@@ -661,8 +687,10 @@ function handleClientMessage(
       if (!mayUseBrowserLive(client)) break
       const viewId = message.payload?.viewId
       if (typeof viewId !== 'string') break
+      const attachment = currentBrowserAttachment(client, viewId)
+      if (!attachment?.detach) break
       void import('../services/browser-live').then(({ browserLiveInput }) => {
-        browserLiveInput(viewId, client.id, message.payload?.input)
+        if (currentBrowserAttachment(client, viewId) === attachment) browserLiveInput(viewId, attachment.viewerId, message.payload?.input)
       }).catch(() => { /* nothing was streaming */ })
       break
     }
@@ -677,10 +705,15 @@ function handleClientMessage(
  * the AI has signed into, so watching is as privileged as operating: only the
  * install's owner (remote-control) qualifies. An office-member session is a
  * peer node or a team viewer and never reaches a page, whatever view id it
- * names. Server mode only, see the attach case.
+ * names.
  */
 function mayUseBrowserLive(client: WebSocketClient): boolean {
-  return client.authenticated && client.credential?.type === 'remote-control' && isServerMode()
+  return client.authenticated && client.credential?.type === 'remote-control'
+}
+
+function currentBrowserAttachment(client: WebSocketClient, viewId: string) {
+  if (!mayUseBrowserLive(client) || clients.get(client.id) !== client || client.ws.readyState !== WebSocket.OPEN) return
+  return client.browserAttachments?.get(viewId)
 }
 
 /**
@@ -803,6 +836,7 @@ export function shutdownWebSocket(): void {
   }
   if (wss) {
     for (const client of Array.from(clients.values())) {
+      releaseBrowserAttachments(client)
       client.ws.close()
     }
     clients.clear()

@@ -58,6 +58,7 @@ interface LiveLink {
   stopped: (stopped: Record<string, unknown>) => void
 }
 const browserLiveAttach = vi.fn((_viewId: string, _link: LiveLink) => true)
+const browserLiveDetach = vi.fn()
 const browserLiveAck = vi.fn()
 const browserLiveRequestDetail = vi.fn()
 const browserLiveInput = vi.fn()
@@ -67,18 +68,11 @@ vi.mock('../../../src/main/services/ai-browser', () => ({
 }))
 vi.mock('../../../src/main/services/browser-live', () => ({
   browserLiveAttach: (viewId: string, link: LiveLink) => browserLiveAttach(viewId, link),
-  browserLiveDetach: vi.fn(),
+  browserLiveDetach: (...args: unknown[]) => browserLiveDetach(...args),
   browserLiveAck: (...args: unknown[]) => browserLiveAck(...args),
   browserLiveRequestDetail: (...args: unknown[]) => browserLiveRequestDetail(...args),
   browserLiveInput: (...args: unknown[]) => browserLiveInput(...args),
   browserLiveViewerDisconnected: vi.fn(),
-}))
-
-// The live view exists only in server mode; tests opt out per case.
-const serverMode = vi.fn(() => true)
-vi.mock('../../../src/main/foundation/runtime-mode', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  isServerMode: () => serverMode(),
 }))
 
 import {
@@ -171,7 +165,7 @@ describe('websocket handleClientMessage', () => {
 
     client.emitMessage({ type: 'auth', payload: { token: 'good' } })
 
-    expect(client.sent).toContainEqual({ type: 'auth:success', payload: { browserLive: true } })
+    expect(client.sent).toContainEqual({ type: 'auth:success', payload: { browserLive: true, browserCredentials: false } })
   })
 
   it('rejects terminal-resize with non-integer or negative dimensions', async () => {
@@ -260,11 +254,10 @@ describe('browser live view control', () => {
     authenticateWebSocket.mockReset()
     browserLiveAttach.mockReset()
     browserLiveAttach.mockReturnValue(true)
+    browserLiveDetach.mockReset()
     browserLiveAck.mockReset()
     browserLiveRequestDetail.mockReset()
     browserLiveInput.mockReset()
-    serverMode.mockReset()
-    serverMode.mockReturnValue(true)
     shutdownWebSocket()
   })
 
@@ -345,6 +338,8 @@ describe('browser live view control', () => {
     const client = connect(server)
     client.emitMessage({ type: 'auth', payload: { token: 'good' } })
 
+    client.emitMessage({ type: 'browser-live-attach', payload: { viewId: 'view-1' } })
+    await settle()
     client.emitMessage({ type: 'browser-live-ack', payload: { viewId: 'view-1', seq: 'soon' } })
     client.emitMessage({ type: 'browser-live-ack', payload: { viewId: 'view-1' } })
     await settle()
@@ -366,26 +361,48 @@ describe('browser live view control', () => {
     expect(browserLiveRequestDetail.mock.calls.slice(1).map(call => call[2])).toEqual(['page', 'screen'])
   })
 
-  it('refuses the live view outside server mode so the client keeps its link fallback', async () => {
+  it('advertises live viewing to the remote owner and handles its input', async () => {
     authenticateWebSocket.mockReturnValue(true)
-    serverMode.mockReturnValue(false)
     const server = startServer()
     const client = connect(server)
     client.emitMessage({ type: 'auth', payload: { token: 'good' } })
-    client.sent.length = 0
 
     client.emitMessage({ type: 'browser-live-attach', payload: { viewId: 'view-1' } })
-    client.emitMessage({ type: 'browser-live-ack', payload: { viewId: 'view-1', seq: 1 } })
-    client.emitMessage({ type: 'browser-live-detail', payload: { viewId: 'view-1' } })
-    client.emitMessage({ type: 'browser-live-input', payload: { viewId: 'view-1', input: { kind: 'text', text: 'x' } } })
     await settle()
+    const [viewId, link] = browserLiveAttach.mock.calls[0]
+    expect(client.sent).toEqual([{ type: 'auth:success', payload: { browserLive: true, browserCredentials: false } }])
 
-    expect(client.sent).toEqual([
-      { type: 'event', channel: 'browser:live-stopped', data: { viewId: 'view-1', reason: 'unsupported' } },
-    ])
+    const input = { kind: 'text', text: 'x' }
+    client.emitMessage({ type: 'browser-live-input', payload: { viewId, input } })
+    await settle()
+    expect(browserLiveInput).toHaveBeenCalledWith(viewId, link.viewerId, input)
+  })
+
+  it.each(['detach', 'disconnect'])('does not start a pending capture after %s', async (action) => {
+    authenticateWebSocket.mockReturnValue(true)
+    const client = connect(startServer())
+    client.emitMessage({ type: 'auth', payload: { token: 'good' } })
+    client.emitMessage({ type: 'browser-live-attach', payload: { viewId: 'view-1' } })
+    if (action === 'detach') client.emitMessage({ type: 'browser-live-detach', payload: { viewId: 'view-1' } })
+    else client.ws.readyState = 3
+    await settle()
     expect(browserLiveAttach).not.toHaveBeenCalled()
-    expect(browserLiveAck).not.toHaveBeenCalled()
-    expect(browserLiveRequestDetail).not.toHaveBeenCalled()
+  })
+
+  it('detaches an owner attachment and drops queued input on office reauthentication', async () => {
+    authenticateWebSocket.mockReturnValue(true)
+    const client = connect(startServer())
+    client.emitMessage({ type: 'auth', payload: { token: 'good' } })
+    client.emitMessage({ type: 'browser-live-attach', payload: { viewId: 'view-1' } })
+    await settle()
+    const [viewId, link] = browserLiveAttach.mock.calls[0]
+    client.emitMessage({ type: 'browser-live-input', payload: { viewId, input: { kind: 'text', text: 'x' } } })
+    parseCredentialType.mockReturnValueOnce('office-member')
+    verifyOfficeCredential.mockReturnValueOnce({ officeId: 'office-1', scope: 'member' } as never)
+    client.emitMessage({ type: 'auth', payload: { token: 'office-token' } })
+    await settle()
+    expect(browserLiveDetach).toHaveBeenCalledWith(viewId, link.viewerId)
+    expect(link.frame({ viewId, seq: 1 })).toBe(false)
     expect(browserLiveInput).not.toHaveBeenCalled()
   })
 
@@ -416,6 +433,8 @@ describe('browser live view control', () => {
 
     const owner = connect(server, '1.1.1.1')
     owner.emitMessage({ type: 'auth', payload: { token: 'good' } })
+    owner.emitMessage({ type: 'browser-live-attach', payload: { viewId: 'view-1' } })
+    await settle()
     owner.emitMessage({ type: 'browser-live-input', payload: { viewId: 'view-1', input: { kind: 'text', text: 'x' } } })
     await settle()
     expect(browserLiveInput.mock.calls).toEqual([['view-1', expect.any(String), { kind: 'text', text: 'x' }]])

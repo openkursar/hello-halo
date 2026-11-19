@@ -37,6 +37,11 @@ test('a late remote client sees active work and replaces missed browser tabs aft
       const terminal = listed.data?.find(session => session.title === 'Remote terminal')
       return !!terminal?.operating && !!terminal.conversationId
     }), { timeout: 15000 }).toBe(true)
+    const credentialRequests: string[] = []
+    remote.page.on('request', request => {
+      const { pathname } = new URL(request.url())
+      if (pathname.startsWith('/api/browser/credential-requests')) credentialRequests.push(pathname)
+    })
     await remote.login()
     await navigateToChat(remote.page)
     await expandHandle(remote.page).click()
@@ -46,7 +51,9 @@ test('a late remote client sees active work and replaces missed browser tabs aft
     await old.click()
     await expect(old.getByRole('img', { name: 'Can only be closed on the computer' })).toHaveCount(1)
     await expect(old.locator('button.canvas-tab-close')).toHaveCount(0)
-    await expect(remote.page.getByText('Browser features are only available in the desktop client')).toBeVisible()
+    const frame = remote.page.getByRole('img', { name: 'Initial AI page', exact: true })
+    await expect(frame).toBeVisible()
+    await expect.poll(() => frame.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
     await info.attach('remote-late-client', { body: await remote.page.screenshot(), contentType: 'image/png' })
 
     await window.evaluate(id => (globalThis as unknown as { halo: HaloAPI }).halo.terminalInput({ sessionId: id, data: 'echo remote-acceptance-ready\r' }), terminalId)
@@ -58,7 +65,7 @@ test('a late remote client sees active work and replaces missed browser tabs aft
     const remoteReply = remote.page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/canvas/show-reply')
     const show = await scriptedTurn(window, model, 'Show the current page.', [{ name: 'canvas_show', input: { target: 'page' } }])
     expect(show.results[0]).toMatch(/^Shown:|^Added, not switched:/)
-    expect((await remoteReply).postDataJSON()).toMatchObject({ outcome: 'added' })
+    expect((await remoteReply).postDataJSON()).toMatchObject({ outcome: 'shown' })
 
     remote.disconnect()
     await expect(remote.page.getByText('Reconnecting...', { exact: true })).toBeVisible()
@@ -81,6 +88,7 @@ test('a late remote client sees active work and replaces missed browser tabs aft
     await expect(tabTitled(remote.page, 'Replacement AI page')).toHaveCount(1)
     await expect(terminal.locator('.canvas-tab-ai-dot')).toHaveCount(0)
     await expect(aiTabs(remote.page)).toHaveCount(1)
+    expect(credentialRequests).toEqual([])
     await info.attach('remote-reconnected', { body: await remote.page.screenshot(), contentType: 'image/png' })
   } finally {
     remote.reconnect()

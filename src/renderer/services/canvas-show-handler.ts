@@ -47,6 +47,13 @@ function isPresenting(request: CanvasShowRequest, tabId: string): boolean {
 function targetVisible(request: CanvasShowRequest, tabId: string): boolean {
   const tab = canvasLifecycle.getTab(tabId)
   if (!tab || tab.error || tab.isLoading || tab.contentUnloaded) return false
+  if (request.target.kind === 'page' && !isElectron()) {
+    if (!api.supportsBrowserLive() || tab.browserViewId !== request.target.viewId) return false
+    const frame = document.querySelector<HTMLImageElement>(
+      `[data-canvas-tab-content="${CSS.escape(tabId)}"] img[data-browser-live-frame="true"]`,
+    )
+    return !!frame?.complete && frame.naturalWidth > 0 && !!frame.getClientRects().length
+  }
   if (request.target.kind === 'page' || (tab.type === 'pdf' && isElectron())) {
     return !!tab.browserViewId &&
       (request.target.kind !== 'page' || tab.browserViewId === request.target.viewId) &&
@@ -70,7 +77,7 @@ async function waitForPresentation(request: CanvasShowRequest, tabId: string, un
 export async function presentCanvasShow(request: CanvasShowRequest): Promise<CanvasShowClientOutcome> {
   // Leave time to deliver the answer, and use the client's clock for the local wait.
   const until = Date.now() + Math.min(1500, request.replyWithinMs / 2)
-  const displayable = request.target.kind !== 'page' || isElectron()
+  const displayable = request.target.kind !== 'page' || isElectron() || api.supportsBrowserLive()
   const onScreen = showsConversation(request.spaceId, request.conversationId)
   const presenting = displayable && onScreen && request.bringForward && !isUserTyping()
   const tabId = ensureTab(request, presenting)

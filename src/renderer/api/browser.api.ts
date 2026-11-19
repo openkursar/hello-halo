@@ -12,6 +12,7 @@ import {
   onEvent,
   sendWsMessage,
   supportsBrowserLive,
+  supportsBrowserCredentials,
 } from './_shared'
 import type {
   ApiResponse,
@@ -259,23 +260,24 @@ export const browserApi = {
 
   // Requests still waiting, for a client that joined after the event
   listAIBrowserCredentialRequests: async (): Promise<AIBrowserCredentialRequest[]> => {
-    if (!supportsBrowserLive()) return []
+    if (!supportsBrowserCredentials()) return []
     const result = await httpRequest<AIBrowserCredentialRequest[]>('GET', '/api/browser/credential-requests')
     return result.success && result.data ? result.data : []
   },
 
   // The values go straight to the waiting page fill and are never stored
   submitAIBrowserCredential: async (requestId: string, values: Record<string, string>): Promise<ApiResponse> => {
-    if (!supportsBrowserLive()) return { success: false }
+    if (!supportsBrowserCredentials()) return { success: false }
     return httpRequest('POST', '/api/browser/credential-requests/submit', { requestId, values })
   },
 
   declineAIBrowserCredential: async (requestId: string): Promise<ApiResponse> => {
-    if (!supportsBrowserLive()) return { success: false }
+    if (!supportsBrowserCredentials()) return { success: false }
     return httpRequest('POST', '/api/browser/credential-requests/decline', { requestId })
   },
 
   supportsBrowserLive,
+  supportsBrowserCredentials,
 
   // ===== Browser live view (remote clients only) =====
   // A client that cannot host a page watches it as paced frames instead. The

@@ -348,6 +348,23 @@ describe('browser live session', () => {
     await vi.advanceTimersByTimeAsync(0)
   })
 
+  it('drops a queued action if the attachment is no longer authorized at dispatch', async () => {
+    const contents = new LiveContents()
+    const session = new BrowserLiveSession('view-1', contents as never, vi.fn())
+    let current = true
+    session.addViewer({ ...viewer().link, isCurrent: () => current })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(session.input('client-1', { kind: 'mouse', action: 'down', x: 0.1, y: 0.1, button: 'left', clickCount: 1 })).toBe(true)
+    current = false
+    await vi.advanceTimersByTimeAsync(0)
+    expect(contents.sendInputEvent).not.toHaveBeenCalled()
+
+    session.removeViewer('client-1')
+    await vi.advanceTimersByTimeAsync(250)
+    expect(contents.throttling).toBe(true)
+  })
+
   it('lets go of whatever a departing viewer still held', async () => {
     const contents = new LiveContents()
     const session = new BrowserLiveSession('view-1', contents as never, vi.fn())

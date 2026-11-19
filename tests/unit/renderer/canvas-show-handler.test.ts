@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasShowRequest } from '../../../src/shared/types/canvas-show'
 
 const env = vi.hoisted(() => ({
-  electron: true, view: 'space', spaceId: 'space-1', viewed: 'conv-1' as string | null, typing: false,
+  browserLive: false, electron: true, view: 'space', spaceId: 'space-1', viewed: 'conv-1' as string | null, typing: false,
   isOpen: false, activeTabId: null as string | null, kept: true, visible: true, focused: true,
 }))
 let listener: (request: CanvasShowRequest) => void = () => {}
@@ -32,6 +32,7 @@ vi.mock('../../../src/renderer/api', () => ({
   api: {
     onCanvasShowRequest: (cb: typeof listener) => { listener = cb; return unlisten },
     replyCanvasShow: (r: unknown) => reply(r),
+    supportsBrowserLive: () => env.browserLive,
   },
 }))
 vi.mock('../../../src/renderer/api/transport', () => ({ isElectron: () => env.electron }))
@@ -55,13 +56,13 @@ const terminal = { kind: 'terminal', sessionId: 't1', title: 'build' } as const
 const file = { kind: 'file', path: '/w/report.md' } as const
 
 beforeEach(() => {
-  Object.assign(env, { electron: true, view: 'space', spaceId: 'space-1', viewed: 'conv-1', typing: false, isOpen: false, activeTabId: null, kept: true, visible: true, focused: true })
+  Object.assign(env, { browserLive: false, electron: true, view: 'space', spaceId: 'space-1', viewed: 'conv-1', typing: false, isOpen: false, activeTabId: null, kept: true, visible: true, focused: true })
   vi.stubGlobal('CSS', { escape: (id: string) => id })
   vi.stubGlobal('document', {
     hidden: false,
     hasFocus: () => env.focused,
-    querySelector: (selector: string) => env.visible && selector.endsWith('[data-canvas-content-ready="true"]')
-      ? { getClientRects: () => [{}] }
+    querySelector: (selector: string) => env.visible && (selector.endsWith('[data-canvas-content-ready="true"]') || selector.endsWith('img[data-browser-live-frame="true"]'))
+      ? { complete: true, naturalWidth: 120, getClientRects: () => [{}] }
       : null,
   })
   Object.values(lifecycle).forEach(fn => fn.mockClear())
@@ -136,6 +137,13 @@ describe('keeping the screen where it is', () => {
     expect(await presentCanvasShow(request(page))).toBe('added')
     expect(lifecycle.switchTab).not.toHaveBeenCalled()
     expect(await presentCanvasShow(request(terminal))).toBe('shown')
+  })
+
+  it('reports the remote page as shown only once an actual frame is visible', async () => {
+    Object.assign(env, { electron: false, browserLive: true, visible: false })
+    expect(await presentCanvasShow(request(page))).toBe('opened')
+    env.visible = true
+    expect(await presentCanvasShow(request(page))).toBe('shown')
   })
 
   it('does not count a selected remote placeholder as shown', async () => {

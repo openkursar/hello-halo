@@ -288,11 +288,16 @@ export type WsConnectionState = 'connected' | 'disconnected' | 'connecting'
 
 const wsStateListeners = new Set<(state: WsConnectionState) => void>()
 let wsBrowserLive = false
+let wsBrowserCredentials = false
 let authenticatedSocket: WebSocket | null = null
 const wsAuthenticatedListeners = new Set<(isCurrent: () => boolean) => void>()
 
 export function supportsBrowserLive(): boolean {
   return wsBrowserLive
+}
+
+export function supportsBrowserCredentials(): boolean {
+  return wsBrowserCredentials
 }
 
 /** Recover missed data only when the new socket can already receive live events. */
@@ -341,6 +346,7 @@ export function connectWebSocket(): void {
   const wsUrl = `${baseUrl.replace(/^http/, 'ws')}/ws`
   console.log(`[WS] Connecting to: ${wsUrl} (attempt: ${wsReconnectAttempt})`)
   wsBrowserLive = false
+  wsBrowserCredentials = false
   const connection = new WebSocket(wsUrl)
   wsConnection = connection
   emitWsState('connecting')
@@ -358,6 +364,8 @@ export function connectWebSocket(): void {
         console.log('[WS] Authenticated')
         wsReconnectAttempt = 0
         wsBrowserLive = message.payload?.browserLive === true
+        // Older servers advertised both capabilities through browserLive.
+        wsBrowserCredentials = wsBrowserLive && (message.payload?.browserCredentials ?? true) === true
         for (const convId of _subscribedConversations) {
           connection.send(JSON.stringify({ type: 'subscribe', payload: { conversationId: convId } }))
         }
@@ -390,6 +398,7 @@ export function connectWebSocket(): void {
     console.log('[WS] Disconnected')
     wsConnection = null
     wsBrowserLive = false
+    wsBrowserCredentials = false
     emitWsState('disconnected')
 
     if (!isElectron() && getAuthToken()) {
@@ -420,6 +429,7 @@ export function disconnectWebSocket(): void {
   const connection = wsConnection
   wsConnection = null
   wsBrowserLive = false
+  wsBrowserCredentials = false
   connection?.close()
   emitWsState('disconnected')
 

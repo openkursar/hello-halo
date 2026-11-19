@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import type { ElectronApplication, Page } from '@playwright/test'
 import { test, expect, acceptance } from '../fixtures/acceptance-app'
@@ -10,7 +11,10 @@ import { guestIdentity } from '../fixtures/browser-site'
 import { startLink } from '../fixtures/acceptance-remote'
 import { replyWithModelTool } from '../fixtures/acceptance-tool-discovery'
 import type { AcceptanceModel } from '../fixtures/acceptance-model'
-import { navigateToChat, setTheme } from '../fixtures/helpers'
+import { navigateToChat, setTheme, waitForHomePage } from '../fixtures/helpers'
+import { installRemoteLoopbackGuard, readRemoteLoopbackGuard } from '../fixtures/acceptance-remote-lifecycle'
+import type { HaloAPI } from '../../../src/preload'
+import type { RemoteAccessStatus } from '../../../src/main/services/remote'
 
 async function listen(listener: ReturnType<typeof createServer>) {
   await new Promise<void>((done, fail) => { listener.once('error', fail); listener.listen(0, '127.0.0.1', done) })
@@ -46,7 +50,8 @@ async function ask(page: Page, model: AcceptanceModel, question: string, tool: s
   return { answer, result: result! }
 }
 
-test('the Server web client operates the AI page, resumes after reconnect and releases hidden capture', acceptance('remote.browser.same-page'), async ({ model, browser }, info) => {
+for (const host of ['desktop', 'server'] as const) test(`the web client operates the AI page on ${host}, reconnects and releases hidden capture`, acceptance('remote.browser.same-page', { host }), async ({ model, browser, aiSource }, info) => {
+  const serverMode = host === 'server'
   test.setTimeout(150000)
   const site = createServer((_request, response) => {
     response.setHeader('content-type', 'text/html; charset=utf-8')
@@ -54,11 +59,22 @@ test('the Server web client operates the AI page, resumes after reconnect and re
   })
   const url = `http://127.0.0.1:${await listen(site)}/page`
   const portReservation = createServer()
-  const port = await listen(portReservation)
+  let port = await listen(portReservation)
   await close(portReservation)
   const entry = getAppEntryPath()
   const profile = createTestConfigDir(entry, [], { sdkEngine: 'halo' })
-  const token = randomUUID()
+  if (!serverMode) {
+    const configPath = join(profile, '.halo/config.json')
+    const config = JSON.parse(readFileSync(configPath, 'utf8'))
+    const now = new Date().toISOString()
+    config.api = { ...config.api, ...aiSource }
+    config.aiSources = { version: 2, currentId: 'acceptance-local', sources: [{
+      id: 'acceptance-local', name: 'Local acceptance model', authType: 'api-key', ...aiSource,
+      availableModels: [{ id: aiSource.model, name: aiSource.model }], createdAt: now, updatedAt: now,
+    }] }
+    writeFileSync(configPath, JSON.stringify(config))
+  }
+  let token: string = randomUUID()
   let app: ElectronApplication | undefined
   let link: Awaited<ReturnType<typeof startLink>> | undefined
   const client = await browser.newContext({ viewport: { width: 1200, height: 900 }, locale: 'en-US' })
@@ -66,15 +82,32 @@ test('the Server web client operates the AI page, resumes after reconnect and re
   const operations: string[] = []
   try {
     app = await launchElectronApp(entry, profile, { env: {
-      HALO_SERVER_MODE: '1', PORT: String(port), HALO_REMOTE_PASSWORD: token,
+      HALO_SERVER_MODE: serverMode ? '1' : '0', PORT: String(port), HALO_REMOTE_PASSWORD: serverMode ? token : '',
       HALO_AI_PROVIDER: 'openai', HALO_AI_API_URL: model.url, HALO_AI_API_KEY: 'local-scripted-endpoint', HALO_AI_MODEL: 'gpt-4o',
     } })
+    if (!serverMode) {
+      const desktop = await app.firstWindow()
+      await waitForHomePage(desktop)
+      await app.evaluate(installRemoteLoopbackGuard)
+      const enabled = await desktop.evaluate(async candidate =>
+        (globalThis as unknown as { halo: HaloAPI }).halo.enableRemoteAccess(candidate), port)
+      expect(enabled.success).toBe(true)
+      const status = enabled.data as RemoteAccessStatus
+      expect(status.server.token).toBeTruthy()
+      port = status.server.port
+      token = status.server.token!
+      const binding = await app.evaluate(readRemoteLoopbackGuard)
+      expect(binding.violations).toEqual([])
+      expect(binding.attempts).toContainEqual(expect.objectContaining({
+        listening: true, actual: expect.objectContaining({ address: '127.0.0.1', port }),
+      }))
+    }
     await expect.poll(async () => {
       const response = await client.request.get(`http://127.0.0.1:${port}/api/system/runtime`, {
         headers: { Authorization: `Bearer ${token}` }, timeout: 2500,
       }).catch(() => null)
-      return response?.ok() && (await response.json()).data?.serverMode
-    }, { timeout: 30000 }).toBe(true)
+      return response?.ok() ? (await response.json()).data?.serverMode : undefined
+    }, { timeout: 30000 }).toBe(serverMode)
     link = await startLink(port)
     const page = await client.newPage()
     page.on('websocket', socket => {
@@ -142,7 +175,7 @@ test('the Server web client operates the AI page, resumes after reconnect and re
     expect(reviewed.result).toContain('the user operated this page')
     expect(await guestIdentity(app, url)).toBe(guestId)
     expect(model.errors).toEqual([])
-    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every(window => !window.isVisible()))).toBe(true)
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some(window => window.isVisible()))).toBe(!serverMode)
     await info.attach('server-browser-transport', { body: JSON.stringify({ frames, operations, samePage: true }), contentType: 'application/json' })
   } finally {
     const log = `${profile}/.halo/logs/main.log`

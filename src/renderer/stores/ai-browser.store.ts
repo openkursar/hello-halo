@@ -374,14 +374,14 @@ export function initAIBrowserStoreListeners(): () => void {
     const remoteLive = api.supportsBrowserLive()
     pendingCredentials = null
     useAIBrowserStore.setState({ remoteLive, credentialRequests: {} })
-    if (remoteLive) seedCredentials()
+    if (api.supportsBrowserCredentials()) seedCredentials()
   }
   const unsubCredentialRequest = remote ? api.onAIBrowserCredentialRequest(data => {
     const state = useAIBrowserStore.getState()
-    if (state.remoteLive && data.expiresAt > Date.now()) state.addCredentialRequest(data)
+    if (api.supportsBrowserCredentials() && data.expiresAt > Date.now()) state.addCredentialRequest(data)
   }) : null
   const unsubCredentialResolved = remote ? api.onAIBrowserCredentialResolved(data => {
-    if (!useAIBrowserStore.getState().remoteLive) return
+    if (!api.supportsBrowserCredentials()) return
     pendingCredentials?.add(data.requestId)
     useAIBrowserStore.getState().removeCredentialRequest(data.requestId)
   }) : null

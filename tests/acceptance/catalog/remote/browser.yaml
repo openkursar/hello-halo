@@ -2,11 +2,11 @@ version: 1
 id: remote.browser
 module: remote
 title:
-  en: Help the AI on the same Server browser page
-  zh: 在 Server 的同一网页上协助 AI
+  en: Help the AI on the same browser page from Remote Access
+  zh: 通过远程访问在同一网页上协助 AI
 story:
-  en: As a Halo Server owner, I can open the AI's browser in the canvas, interact with its actual page and let it continue there.
-  zh: 作为 Halo Server 主人，我能在画布打开 AI 的浏览器、操作它正在使用的网页，并让 AI 从那里继续。
+  en: As a Halo owner using Remote Access, I can open the AI's browser in the canvas, interact with its actual page and let it continue there.
+  zh: 作为使用远程访问的 Halo 所有者，我能在画布打开 AI 的浏览器、操作它正在使用的网页，并让 AI 从那里继续。
 basis: documented
 references:
   - src/main/services/browser-live/DESIGN.md
@@ -32,9 +32,11 @@ scenarios:
     mode: scripted
     automation: automated
     requirements: [halo-sdk, chromium-browser]
+    variants:
+      host: [desktop, server]
     preconditions:
-      - en: An isolated Halo process runs in Server mode with a local website and a scripted model.
-        zh: 隔离的 Halo 进程以 Server 模式运行，使用本地网页与脚本模型。
+      - en: An isolated Halo process serves Remote Access in desktop or Server mode with a local website and a scripted model.
+        zh: 隔离的 Halo 进程以桌面或 Server 模式提供远程访问，使用本地网页与脚本模型。
     steps:
       - en: Sign in over the web, have the AI open a page, show it and type into the page.
         zh: 通过 Web 登录，让 AI 打开网页，然后查看并向网页输入。
