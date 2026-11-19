@@ -11,6 +11,7 @@ export * from './normalize-anthropic-reasoning'
 export * from './claude-code-identity'
 export * from './claude-code-attribution'
 export * from './session-affinity'
+export * from './request-trace'
 
 /**
  * Safe JSON parse with fallback

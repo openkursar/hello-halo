@@ -14,6 +14,8 @@
 
 import type { AnthropicRequest } from '../types'
 import { inlineToolSchemaRefs } from '../utils/json-schema'
+import { stripClaudeCodeIdentity } from '../utils/claude-code-identity'
+import { stampRequestTrace } from '../utils/request-trace'
 import { CODEX_ADAPTER_ID } from '../../../shared/constants/codex-models'
 import type { CodexModelCapability } from '../../../shared/types/ai-sources'
 import { isThinkingEffort } from '../converters/reasoning-effort'
@@ -65,6 +67,13 @@ export interface ProviderAdapter {
    * pre-conversion data `transformRequest` sees.
    */
   getExtraHeaders?(context?: AdapterContext): Record<string, string>
+
+  /**
+   * Rewrite the final header set in place, after extra headers are merged:
+   * drop what the upstream must not see, refresh what belongs to one request.
+   * Header names are lowercase.
+   */
+  transformHeaders?(headers: Record<string, string>, context?: AdapterContext): void
 }
 
 // ============================================================================
@@ -272,6 +281,10 @@ const zhipuAdapter: ProviderAdapter = {
  * - Chat Completions: top-level `reasoning_effort` string (already correct key)
  * - Responses API: nested `reasoning: { effort }` object
  *
+ * Request shaping for this gateway: the opening identity line of the engine
+ * that wrote the prompt and that engine's session headers are not forwarded,
+ * and the identifiers the provider stamps on its headers are renewed per request.
+ *
  * Matched via adapterId from provider plugins.
  */
 const tencentAdapter: ProviderAdapter = {
@@ -283,6 +296,8 @@ const tencentAdapter: ProviderAdapter = {
   },
 
   transformRequest(body: Record<string, unknown>): void {
+    stripClaudeCodeIdentity(body)
+
     // Chat Completions format: top-level reasoning_effort string
     if (typeof body.reasoning_effort === 'string') {
       const effort = body.reasoning_effort as string
@@ -302,6 +317,12 @@ const tencentAdapter: ProviderAdapter = {
       delete body.reasoning
       console.log(`[TencentAdapter] reasoning object transform: effort=${effort}`)
     }
+  },
+
+  transformHeaders(headers: Record<string, string>, context?: AdapterContext): void {
+    delete headers['x-claude-code-session-id']
+    delete headers['session_id']
+    stampRequestTrace(headers, context?.sessionId)
   }
 }
 
@@ -561,6 +582,8 @@ export function applyProviderAdapter(
   if (extraHeaders) {
     Object.assign(headers, extraHeaders)
   }
+
+  adapter.transformHeaders?.(headers, context)
 
   return adapter
 }
