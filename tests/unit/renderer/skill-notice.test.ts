@@ -8,8 +8,10 @@ vi.mock('../../../src/renderer/components/chat/ArrivalCard', () => ({ ArrivalCar
 vi.mock('../../../src/renderer/components/chat/tool-result', () => ({ ToolResultViewer: () => null }))
 vi.mock('../../../src/renderer/components/chat/NestedToolTimeline', () => ({ NestedToolTimeline: () => null }))
 vi.mock('../../../src/renderer/components/tool/TodoCard', () => ({ TodoCard: () => null }))
+vi.mock('../../../src/renderer/components/references', () => ({ useFileLinkOptions: () => null }))
+vi.mock('../../../src/renderer/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: () => null }))
 
-import { ThoughtPanel } from '../../../src/renderer/components/chat/ThoughtPanel'
+import { WorkHistory } from '../../../src/renderer/components/chat/work-history/WorkHistory'
 import { SkillNotice as SkillNoticeView } from '../../../src/renderer/components/chat/SkillNotice'
 import { LazyCollapsedThoughtProcess } from '../../../src/renderer/components/chat/CollapsedThoughtProcess'
 import { nextThoughtPanelModel } from '../../../src/renderer/components/chat/thought-utils'
@@ -21,13 +23,10 @@ import type { SkillNotice } from '../../../src/shared/types/skills'
 const codes: SkillNotice[] = ['catalog-unavailable']
 
 describe('skill notice presentation', () => {
-  it.each(codes)('renders %s in the collapsed panel, without exposing a skill name or path', code => {
+  it.each(codes)('renders %s above the folded work, without exposing a skill name or path', code => {
     const thought = parseSDKMessage({ type: 'system', subtype: 'skill_notice', skillNotice: code, content: '/private/secret-skill' })!
     const model = nextThoughtPanelModel(null, [thought])
-    const markup = renderToStaticMarkup(createElement(ThoughtPanel, {
-      model, todos: null, isThinking: false, isExpanded: false, onToggleExpanded: () => {},
-      isMaximized: false, onToggleMaximized: () => {}, scrollRef: { current: null },
-    }))
+    const markup = renderToStaticMarkup(createElement(WorkHistory, { model, todos: null, live: false, open: false, onToggle: () => {} }))
     expect(markup).toContain(`translated:${SKILL_NOTICE_TEXT[code]}`)
     expect(markup).toContain('role="status"')
     expect(markup).not.toContain('secret-skill')
@@ -64,9 +63,8 @@ describe('skill notice presentation', () => {
     const errors: string[] = []
     const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { errors.push(args.map(String).join(' ')) })
     try {
-      const live = renderToStaticMarkup(createElement(ThoughtPanel, {
-        model: nextThoughtPanelModel(null, thoughts), todos: null, isThinking: false, isExpanded: false, onToggleExpanded: () => {},
-        isMaximized: false, onToggleMaximized: () => {}, scrollRef: { current: null },
+      const live = renderToStaticMarkup(createElement(WorkHistory, {
+        model: nextThoughtPanelModel(null, thoughts), todos: null, live: false, open: false, onToggle: () => {},
       }))
       expect(live.match(/role="status"/g)).toHaveLength(2)
       const collapsed = renderToStaticMarkup(createElement(LazyCollapsedThoughtProcess, { thoughtsSummary: summarizeThoughts(thoughts), onLoadThoughts: vi.fn() }))
@@ -77,6 +75,12 @@ describe('skill notice presentation', () => {
 
   it.each(['engine-unsupported', 'skill-unsupported', 'invented'])('shows nothing for the %s notice an earlier build stored in a transcript', code => {
     expect(renderToStaticMarkup(createElement(SkillNoticeView, { code }))).toBe('')
+  })
+
+  it('records a compaction as a step of its own, which older readers show as a plain notice', () => {
+    const thought = parseSDKMessage({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 1 } })!
+    expect(thought).toMatchObject({ type: 'system', content: 'Context compacted', compaction: { trigger: 'manual' } })
+    expect(parseSDKMessage({ type: 'system', subtype: 'compact_boundary' })!.compaction).toEqual({ trigger: 'auto' })
   })
 
   it('ignores unknown notice codes and does not promote arbitrary system content', () => {

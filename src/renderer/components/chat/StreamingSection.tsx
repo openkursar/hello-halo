@@ -3,12 +3,15 @@
  *
  * Pure presentational component — no store coupling. Composes
  * ThoughtProcess + BrowserTaskCard + StreamingBubble + AskUserQuestionCard.
+ * The reply's latest words always stay in the bubble; the work above leaves
+ * out the text steps the bubble already shows.
  *
  * Shared across: MessageList (space and digital-human chat), ImChatView.
  */
 
 import { memo, useMemo, useRef } from 'react'
 import { ThoughtProcess } from './ThoughtProcess'
+import { LIVE_WORK, liveTextIds, sameIdsOr } from './work-history'
 import { MessageRow } from './MessageRow'
 import { InjectionAnnotation } from './InjectionAnnotation'
 import { ArrivalCard } from './ArrivalCard'
@@ -104,10 +107,27 @@ const EMPTY_MESSAGES: Message[] = []
 const EMPTY_THOUGHTS: Thought[] = []
 const EMPTY_ARRIVAL_THOUGHTS: ArrivalThought[] = []
 
+/** The text steps `text` already shows, keeping the previous set while it names the same steps. */
+function useShownTextIds(thoughts: readonly Thought[], text: string): ReadonlySet<string> {
+  const previous = useRef<ReadonlySet<string>>(new Set())
+  return useMemo(() => {
+    previous.current = sameIdsOr(previous.current, liveTextIds(thoughts, text))
+    return previous.current
+  }, [thoughts, text])
+}
+
 const ArrivedInputSection = memo(function ArrivedInputSection({ input, thoughts, text, embedded }: LiveInputSection & { embedded: boolean }) {
+  const shownBelow = useShownTextIds(thoughts, text)
   return <>
     <div className={embedded ? 'w-full' : 'w-[85%]'}>
-      {thoughts.length > 0 && <ThoughtProcess thoughts={thoughts} isThinking={thoughts.some(thought => thought.isStreaming || (thought.type === 'tool_use' && !thought.toolResult))} embedded={embedded} />}
+      {thoughts.length > 0 && (
+        <ThoughtProcess
+          thoughts={thoughts}
+          isThinking={thoughts.some(thought => thought.isStreaming || (thought.type === 'tool_use' && !thought.toolResult))}
+          embedded={embedded}
+          liveTextIds={shownBelow}
+        />
+      )}
       {text && <StreamingBubble content={text} isStreaming={false} thoughts={[]} textBlockVersion={input.textBlockVersion} />}
     </div>
     <MessageRow message={input.message} hideBrowserLiveView hideTerminalOpen />
@@ -162,6 +182,9 @@ export function StreamingSection({
   const trailingArrivals = useMemo(() => !hasOwnThoughts ? arrivalMessages
     : arrivalsOnly ? layout.thoughts.flatMap(thought => isArrivalThought(thought) ? [thought.arrival] : [])
     : EMPTY_MESSAGES, [hasOwnThoughts, arrivalMessages, arrivalsOnly, layout.thoughts])
+  const hasWork = replyThoughts.length > 0 || isThinking
+  const replyText = streamingContent.slice(layout.textOffset)
+  const shownBelow = useShownTextIds(replyThoughts, replyText)
   return (
     <div className={`animate-fade-in pb-4 ${className}`}>
       {layout.sections.map(section => <ArrivedInputSection key={section.input.message.clientKey ?? section.input.message.id} {...section} embedded={embedded} />)}
@@ -172,9 +195,16 @@ export function StreamingSection({
           <div className="mb-2 text-xs font-medium text-muted-foreground">{senderName}</div>
         )}
 
-        {/* Real-time thought process */}
-        {(replyThoughts.length > 0 || isThinking) && (
-          <ThoughtProcess thoughts={replyThoughts} isThinking={isThinking} embedded={embedded} />
+        {/* The reply's work so far */}
+        {hasWork && (
+          <ThoughtProcess
+            thoughts={replyThoughts}
+            isThinking={isThinking}
+            embedded={embedded}
+            liveTextIds={shownBelow}
+            writing={isStreaming}
+            workKey={LIVE_WORK}
+          />
         )}
 
         {/* The model request failed and is waiting to be sent again */}
@@ -202,10 +232,10 @@ export function StreamingSection({
           </div>
         )}
 
-        {/* Streaming text content with scroll animation */}
+        {/* The reply's latest words, with scroll animation */}
         <StreamingBubble
           key={conversationInputs.at(-1)?.message.id ?? 'reply'}
-          content={streamingContent.slice(layout.textOffset)}
+          content={replyText}
           isStreaming={isStreaming}
           thoughts={bubbleThoughts}
           textBlockVersion={textBlockVersion}

@@ -150,6 +150,24 @@ describe('the team card', () => {
     }
   })
 
+  it('is a plain line inside a reply’s work: who sent it and what about, no box, no age', () => {
+    const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team({ timestamp: at(0) }), inProcess: true }))
+    expect(html).toContain('>Reviewer<')
+    expect(html).toContain('>Report: tests pass<')
+    expect(html).not.toMatch(/border|rounded-lg|ago/)
+  })
+
+  it('names a notice the runtime wrote for the coordinating AI as team progress, keeping its text for when it is opened', () => {
+    const notice = team({
+      content: '[System] Collaboration turn-end report. These are execution facts.\n\n- Reviewer — stopped with no error reported.',
+      metadata: { teamId: 'team', teamName: 'Crew', fromMemberName: null, teamTriggerKind: 'member_stopped' } as Message['metadata'],
+    })
+    const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: notice, inProcess: true }))
+    expect(html).toContain('Team progress')
+    expect(html).not.toContain('[System]')
+    expect(html).toContain('title="Crew"')
+  })
+
   it('summarizes a record by its stored summary when the content starts with what the member read', () => {
     const html = renderToStaticMarkup(createElement(TeamMemberMessage, {
       message: team({ content: '[Team message from Reviewer]\n\nTests pass', metadata: { teamId: 'team', teamName: 'Crew', summary: 'Tests pass' } }),

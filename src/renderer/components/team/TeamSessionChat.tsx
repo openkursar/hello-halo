@@ -21,6 +21,7 @@ import { MessageRow } from '../chat/MessageRow'
 import { useStickToBottom, transcriptRowClass, captureTranscriptPosition, restoreTranscriptPosition } from '../chat/transcript'
 import { CompactNotice } from '../chat/CompactNotice'
 import { StreamingSection } from '../chat/StreamingSection'
+import { WorkViewMemoryProvider, useTranscriptWorkView } from '../chat/work-history/view-memory'
 import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
 import { InterruptedBubble } from '../chat/InterruptedBubble'
 import { TurnErrorBubble } from '../chat/TurnErrorBubble'
@@ -71,7 +72,8 @@ export interface TeamSessionChatProps {
   ensureEpochId?: (firstMessage: string) => Promise<string | null>
   toolbarSlot?: React.ReactNode
   renderAfterStreaming?: (thoughts: Thought[]) => React.ReactNode
-  renderMessages?: (messages: Message[], liveThoughts: Thought[]) => React.ReactNode
+  /** `endingShownBelow`: the reply whose ending the interruption notice below already states. */
+  renderMessages?: (messages: Message[], liveThoughts: Thought[], endingShownBelow?: string) => React.ReactNode
   isBackgroundTurn?: (messages: Message[]) => boolean
   draftKey?: string
 }
@@ -122,8 +124,16 @@ export function TeamSessionChat({
     .filter(({ message }) => message.source === 'injection')
     .map(({ message }) => ({ message, textBlockVersion: 0, textOffset: 0 })), [liveInputs])
   const visibleMessages = backgroundTurn && isGenerating ? withoutLiveInputs(messages, ownAdditions) : quietMessages
+  // The notice after a stop says how the latest reply ended, so that reply's own note steps aside meanwhile.
+  const interruptedNoticeShown = !isGenerating && !!error && errorType === 'interrupted'
+  const latestReply = interruptedNoticeShown ? visibleMessages.findLast(message => message.role === 'assistant') : undefined
   const hasLiveInputs = isGenerating && (backgroundTurn ? ownAdditions : liveInputs ?? []).length > 0
   const follower = useStickToBottom({ live: isGenerating && !backgroundTurn })
+  // What the person opened in each reply's work, kept as the running reply is replaced by its saved one.
+  const latestReplyId = visibleMessages.findLast(message => message.role === 'assistant')?.id
+  const workView = useTranscriptWorkView(isGenerating, latestReplyId)
+  // The steps just streamed stand in for the finished reply's while they load, if its work was left open.
+  const streamedThoughts = !isGenerating && latestReplyId && workView.carriedOpen(latestReplyId) && thoughts.length > 0 ? thoughts : undefined
   const { scroller, scrollToBottom, detach, isFollowing } = follower
 
   const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
@@ -514,6 +524,7 @@ export function TeamSessionChat({
       ) : (
         <div ref={epochId ? follower.scrollerRef : undefined} tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none" onScroll={handleScroll}>
           <div ref={epochId ? follower.contentRef : undefined} className="mx-auto max-w-3xl px-4 py-5">
+            <WorkViewMemoryProvider memory={workView}>
             {topSlot}
 
             {loadState === 'empty' && !epochId && !hasStreaming && !showRelayedTranscript && (
@@ -545,9 +556,10 @@ export function TeamSessionChat({
               </div>
             )}
 
-            {(loadState !== 'error' || messages.length > 0) && (renderMessages ? renderMessages(visibleMessages, hasStreaming ? thoughts : []) : visibleMessages.map(message => (
+            {(loadState !== 'error' || messages.length > 0) && (renderMessages ? renderMessages(visibleMessages, hasStreaming ? thoughts : [], latestReply?.id) : visibleMessages.map(message => (
               <div key={message.clientKey ?? message.id} className={transcriptRowClass(message)}>
-                <MessageRow message={message} hideBrowserLiveView hideTerminalOpen />
+                <MessageRow message={message} hideBrowserLiveView hideTerminalOpen endingShownBelow={interruptedNoticeShown && message === latestReply}
+                  streamedThoughts={message.id === latestReplyId ? streamedThoughts : undefined} />
               </div>
             )))}
 
@@ -604,6 +616,7 @@ export function TeamSessionChat({
                 </div>
               </div>
             )}
+            </WorkViewMemoryProvider>
           </div>
         </div>
       )}

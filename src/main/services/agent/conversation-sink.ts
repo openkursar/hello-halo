@@ -14,6 +14,8 @@ import type { EngineSessionState } from '../../../shared/types/engine-session'
 import type { Thought } from './types'
 import type { StreamResult } from './stream-processor'
 import type { TurnSink } from './turn-sink'
+import { replyEndingOf } from './reply-ending'
+import type { ReplyEnding } from '../../../shared/types/transcript'
 import {
   addMessage,
   updateLastMessage,
@@ -118,14 +120,15 @@ function persistTurnResult(
   const producedThoughts = thoughts.some((t: Thought) => t.type !== 'system' && t.type !== 'result')
 
   if (contentToStore || hasErrorThought || producedThoughts || error) {
-    // Extract file changes summary
-    let metadata: { fileChanges?: FileChangesSummary } | undefined
+    // A partial kept because of a failure shows that failure instead.
+    const ending = error ? undefined : replyEndingOf(result)
+    let metadata: { fileChanges?: FileChangesSummary; ending?: ReplyEnding } | undefined = ending ? { ending } : undefined
     let sources: KBSource[] | undefined
     if (thoughts.length > 0) {
       try {
         const fileChangesSummary = extractFileChangesSummaryFromThoughts(thoughts)
         if (fileChangesSummary) {
-          metadata = { fileChanges: fileChangesSummary }
+          metadata = { ...metadata, fileChanges: fileChangesSummary }
         }
       } catch (error) {
         console.error(`[Consumer][${conversationId}] Failed to extract file changes:`, error)

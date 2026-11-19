@@ -160,7 +160,7 @@ describe('thought activity', () => {
   const step = (over: Partial<Thought>): Thought => ({ id: Math.random().toString(), type: 'tool_use', content: '', timestamp: '', isReady: true, ...over })
 
   it('describes the latest main-agent action with the chat\'s own keys', () => {
-    expect(describeThoughtActivity([])).toEqual({ key: 'Thinking...' })
+    expect(describeThoughtActivity([])).toEqual({ key: 'Working...' })
     expect(describeThoughtActivity([step({ toolName: 'Read', toolInput: { file_path: '/a/b/provider-adapters.ts' } })]))
       .toEqual({ key: 'Reading {{file}}...', params: { file: 'provider-adapters.ts' } })
     expect(describeThoughtActivity([

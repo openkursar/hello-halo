@@ -22,6 +22,8 @@ import type {
 } from '../../../shared/types/transcript'
 import { roleForTranscriptSource, summarizeThoughts } from '../../../shared/transcript'
 import { readSkillNotice, SKILL_NOTICE_TEXT } from '../../../shared/skill-notice'
+import { COMPACTION_STEP_TEXT, readCompaction } from '../../../shared/compaction-step'
+import { readReplyEnding } from '../../../shared/reply-ending'
 
 // ============================================
 // Types
@@ -101,6 +103,12 @@ function createThoughtIdGenerator(): () => string {
  *    across that boundary until the native result or next initialization.
  * 7. An `input_outcome` line marks an earlier trigger record (by `_inputId`),
  *    e.g. a person's addition a stop left unread.
+ * 8. A `reply_ending` line, written when a turn ends, marks that turn's last
+ *    reply as ended before its answer was done (`metadata.ending`), and ends
+ *    the native turn. Its `content` is the text the reply had shown, which no
+ *    complete block may hold yet: that becomes the reply's words (the words
+ *    they replace stay among its steps).
+ * 9. An engine's `compact_boundary` becomes a compaction step where it happened.
  *
  * Result: one agent turn = one collapsed thought-process block + one message bubble,
  * identical to the main-space rendering.
@@ -169,6 +177,8 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
   const recordsByInputId = new Map<string, TranscriptMessage>()
   /** Outcomes by input id; a mark may be read before or after its record. */
   const outcomes = new Map<string, 'stopped'>()
+  /** The latest reply of the native turn being read; a `reply_ending` line marks it. */
+  let turnReply: TranscriptMessage | undefined
 
   const streamBlocks = new Map<number, {
     type: 'text' | 'thinking' | 'tool_use'
@@ -214,6 +224,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
     }
 
     messages.push(record)
+    turnReply = record
     if (content) lastFlushedAnswer = content
     releaseLive(record.id)
 
@@ -277,6 +288,30 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
       streamBlocks.clear()
       toolUseMap.clear()
       openTurnStart = messages.length
+      turnReply = undefined
+      continue
+    }
+
+    if (event.type === 'reply_ending') {
+      const shown = typeof event.content === 'string' && event.content.trim() ? event.content : ''
+      if (shown && !turnReply) {
+        // Not flushed yet: the shown words are this turn's bubble, everything said since its last substantive tool.
+        turnFirstLine ??= lineOf(index)
+        if (!lastTextThought || hadSubstantiveTool) appendText(shown, ts)
+        else if (!sameWords(lastTextThought.content, shown)) lastTextThought.content = shown
+      }
+      flush()
+      const at = turnReply ? messages.lastIndexOf(turnReply) : -1
+      if (at >= 0) {
+        let reply = shown && !sameWords(turnReply!.content, shown) ? withShownWords(turnReply!, shown, ts, generateThoughtId) : turnReply!
+        const ending = readReplyEnding(event.ending)
+        if (ending) reply = { ...reply, metadata: { ...reply.metadata, ending } }
+        messages[at] = turnReply = reply
+      }
+      closeNativeTurn()
+      streamBlocks.clear()
+      toolUseMap.clear()
+      openTurnStart = null
       continue
     }
 
@@ -284,6 +319,13 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
     if (skillNotice) {
       turnFirstLine ??= lineOf(index)
       pendingThoughts.push({ id: generateThoughtId(), type: 'system', content: SKILL_NOTICE_TEXT[skillNotice], skillNotice, timestamp: ts })
+      continue
+    }
+
+    const compaction = readCompaction(event)
+    if (compaction) {
+      turnFirstLine ??= lineOf(index)
+      pendingThoughts.push({ id: generateThoughtId(), type: 'system', content: COMPACTION_STEP_TEXT, compaction, timestamp: ts })
       continue
     }
 
@@ -673,6 +715,29 @@ const TRANSCRIPT_SOURCES: ReadonlySet<string> = new Set<TranscriptSource>([
   'environment-notice',
   'workspace-notice',
 ])
+
+function words(text: string): string {
+  return text.replace(/\s+/g, '')
+}
+
+/** Whether two texts say the same, ignoring the whitespace blocks are joined with. */
+function sameWords(a: string, b: string): boolean {
+  return words(a) === words(b)
+}
+
+/**
+ * `reply` showing `shown` as its words. Words that continue its saved text
+ * replace it; otherwise the saved text was an earlier block, kept as a text
+ * step in time order so it still reads in the work.
+ */
+function withShownWords(reply: TranscriptMessage, shown: string, ts: string, newId: () => string): TranscriptMessage {
+  if (!reply.content.trim() || words(shown).startsWith(words(reply.content))) return { ...reply, content: shown, timestamp: ts }
+  const earlier: Thought = { id: newId(), type: 'text', content: reply.content, timestamp: reply.timestamp }
+  const thoughts = [...(Array.isArray(reply.thoughts) ? reply.thoughts : [])]
+  const at = thoughts.findIndex(thought => thought.timestamp > earlier.timestamp)
+  thoughts.splice(at < 0 ? thoughts.length : at, 0, earlier)
+  return { ...reply, content: shown, timestamp: ts, thoughts, thoughtsSummary: summarizeThoughts(thoughts) }
+}
 
 /** A stored `_source`, or undefined when absent or unrecognised (read as an ordinary turn). */
 function parseSource(raw: unknown): TranscriptSource | undefined {

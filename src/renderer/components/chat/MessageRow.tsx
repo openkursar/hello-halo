@@ -22,6 +22,7 @@ import { ArrivalCard } from './ArrivalCard'
 import { mergeArrivalThoughts, toArrivalThought } from './transcript'
 import { PushedMessageLabel, isPushedMessage } from './PushedMessageLabel'
 import { ContinuityNotice, isContinuityNotice } from './ContinuityNotice'
+import { ReplyEndingNote } from './ReplyEndingNote'
 import type { Message, Thought } from '../../types'
 
 export interface MessageRowProps {
@@ -32,16 +33,19 @@ export interface MessageRowProps {
   /** Previous assistant message's cumulative cost (for token usage delta display) */
   previousCost?: number
 
-  /** Whether the thought panel should start expanded (e.g., user previously opened it) */
+  /** Whether the reply's work should start open (e.g., the user opened it before) */
   defaultThoughtsExpanded?: boolean
 
-  /** Whether the thought panel should start in full-height mode. Useful for debugging views. */
-  defaultThoughtsMaximized?: boolean
+  /** Show every operation of the work from the start. For trace views, where the full execution is the point. */
+  showOperations?: boolean
 
   /** Callback to lazily load separated thoughts (v2 format).
    *  Called with messageId. If not provided, LazyCollapsedThoughtProcess
    *  falls back to a no-op loader (graceful degradation). */
   onLoadThoughts?: (messageId: string) => Promise<Thought[]>
+
+  /** For the reply that just finished: the steps streamed for it, shown while its saved steps load. */
+  streamedThoughts?: Thought[]
 
   /** Hide the "View live feed" button in BrowserTaskCard.
    *  Set true where there is no live browser view to show for the conversation. */
@@ -83,6 +87,9 @@ export interface MessageRowProps {
 
   /** Where a team message sits among consecutive ones, so a run reads as one block. */
   teamRunPosition?: TeamRunPosition
+
+  /** The chat shows how this reply ended right below it (the notice after a stop), so the reply's own note steps aside. */
+  endingShownBelow?: boolean
 }
 
 export const MessageRow = memo(function MessageRow({
@@ -90,8 +97,9 @@ export const MessageRow = memo(function MessageRow({
   afterThoughts,
   previousCost,
   defaultThoughtsExpanded = false,
-  defaultThoughtsMaximized = false,
+  showOperations = false,
   onLoadThoughts,
+  streamedThoughts,
   hideBrowserLiveView = false,
   hideTerminalOpen = false,
   allowViewChanges = false,
@@ -103,6 +111,7 @@ export const MessageRow = memo(function MessageRow({
   className = '',
   senderName,
   teamRunPosition = 'single',
+  endingShownBelow = false,
 }: MessageRowProps) {
   const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
   const processThoughts = useMemo(() => hasInlineThoughts && arrivals?.length
@@ -171,13 +180,18 @@ export const MessageRow = memo(function MessageRow({
             <CollapsedThoughtProcess
               thoughts={processThoughts}
               messageId={message.id}
+              answer={message.content}
               defaultExpanded={defaultThoughtsExpanded}
-              defaultMaximized={defaultThoughtsMaximized}
+              showOperations={showOperations}
             />
           ) : (
             <LazyCollapsedThoughtProcess
               thoughtsSummary={message.thoughtsSummary!}
+              answer={message.content}
+              showOperations={showOperations}
               arrivals={arrivals}
+              messageId={message.id}
+              streamedThoughts={streamedThoughts}
               onLoadThoughts={
                 onLoadThoughts
                   ? () => onLoadThoughts(message.id)
@@ -188,7 +202,7 @@ export const MessageRow = memo(function MessageRow({
 
           {afterThoughts && <div className="my-3 space-y-3">{afterThoughts}</div>}
           {/* Empty tool/thinking output has no bubble; a persisted error still needs its existing error block. */}
-          {(message.content || message.error) && (
+          {(message.content || message.error) ? (
             <MessageItem
               message={message}
               previousCost={previousCost}
@@ -198,7 +212,10 @@ export const MessageRow = memo(function MessageRow({
               hideTerminalOpen={hideTerminalOpen}
               allowViewChanges={allowViewChanges}
               actionsOnHover={actionsOnHover}
+              hideEnding={endingShownBelow}
             />
+          ) : message.metadata?.ending && !endingShownBelow && (
+            <ReplyEndingNote ending={message.metadata.ending} hasAnswer={false} />
           )}
 
           {/* Injection annotation — permanently shows mid-turn user messages */}
@@ -226,6 +243,7 @@ export const MessageRow = memo(function MessageRow({
               hideTerminalOpen={hideTerminalOpen}
               allowViewChanges={allowViewChanges}
               actionsOnHover={actionsOnHover}
+              hideEnding={endingShownBelow}
               isInContainer
             />
             <InjectionAnnotation messages={injectionMessages} />
@@ -247,6 +265,7 @@ export const MessageRow = memo(function MessageRow({
         hideTerminalOpen={hideTerminalOpen}
         allowViewChanges={allowViewChanges}
         actionsOnHover={actionsOnHover}
+        hideEnding={endingShownBelow}
       />
       {trailingArrivals}
     </div>

@@ -1,7 +1,7 @@
 /**
  * ErrorContent — Production-grade error message renderer for thought timelines.
  *
- * Used by the thought panel (live and history alike) when rendering thoughts
+ * Used by a reply's work (live and saved alike) when rendering thoughts
  * of type 'error'. Provides:
  * - Generous default preview (errors are critical info, not chatter)
  * - Expand/collapse for very long errors

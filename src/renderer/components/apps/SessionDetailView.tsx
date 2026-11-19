@@ -290,7 +290,7 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
             hideBrowserLiveView
             hideTerminalOpen
             defaultThoughtsExpanded
-            defaultThoughtsMaximized
+            showOperations
             onAtBottomStateChange={handleAtBottomStateChange}
             footerExtra={footerExtra}
           />

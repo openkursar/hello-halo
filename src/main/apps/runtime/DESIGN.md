@@ -1189,6 +1189,23 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   Writers use `SessionWriter.writeTrigger(content, images, teamOrigin, provenance)`
   / `TurnSink.writeUserMessage(...)`, and write the text to *show*, not the
   framed text the model received.
+- **Reply endings.** When a turn ends before its answer was done (stopped,
+  cut off, or at the step limit — `services/agent` `replyEndingOf`, the same
+  decision as the end-of-turn notice), the chat sink appends a `reply_ending`
+  line and the reader sets `metadata.ending` on that turn's last reply, so the
+  chat still says so after a reload. The line also carries the text the reply
+  had shown (`content`): text cut off mid-block never reaches a complete
+  `assistant` line, so the reader makes those words the reply's (a reply
+  started for them when the turn wrote none; earlier saved words stay among
+  its steps). The line ends the native turn, so a later turn that fails before
+  it starts cannot take this reply as its own draft. A turn that showed and
+  wrote nothing marks nothing; a failure stays the reply's `error`. Automation
+  runs keep this on the run's own status instead. Office viewers receive the
+  ending with the member's serialized transcript (`ending`, the only metadata
+  that crosses), and accept only the values they know. Known limit: when a
+  large transcript is read a page at a time and a person's addition lies
+  between a reply and its `reply_ending` line exactly at the page boundary,
+  the earlier page shows that reply without its ending.
 - **Pushes.** A `push` line (§2.14a) reads as an assistant message with
   `source: 'push'`, `metadata.pushVia`, and the sender when it is not the chat's
   own digital human (`pushedByAppId` / `pushedByName`). Its writer never puts one among a

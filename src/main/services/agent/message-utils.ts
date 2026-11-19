@@ -9,6 +9,7 @@
 
 import type { Thought, ImageAttachment, CanvasContext } from './types'
 import { readSkillNotice, SKILL_NOTICE_TEXT } from '../../../shared/skill-notice'
+import { COMPACTION_STEP_TEXT, readCompaction } from '../../../shared/compaction-step'
 
 // ============================================
 // Canvas Context Formatting
@@ -117,6 +118,10 @@ export function parseSDKMessage(message: any, displayModel?: string): Thought | 
     const skillNotice = readSkillNotice(message)
     if (skillNotice) {
       return { id: generateThoughtId(), type: 'system', content: SKILL_NOTICE_TEXT[skillNotice], skillNotice, timestamp }
+    }
+    const compaction = readCompaction(message)
+    if (compaction) {
+      return { id: generateThoughtId(), type: 'system', content: COMPACTION_STEP_TEXT, compaction, timestamp }
     }
     if (message.subtype === 'init') {
       // Use displayModel (user's configured model) instead of SDK's internal model

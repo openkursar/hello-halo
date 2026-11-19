@@ -433,6 +433,12 @@ export interface SerializedHistoryMessage {
   thoughtsSummary?: SerializedThoughtsSummary
   /** epoch-ms timestamp; optional for messages that predate timestamping. */
   ts?: number
+  /**
+   * How a reply that ended before its answer was done ended ('stopped',
+   * 'interrupted', 'step-limit'), so a viewer shows what the owner does. Absent
+   * otherwise and from older owners; a viewer accepts only values it knows.
+   */
+  ending?: string
 }
 
 /** Viewer → owner: request a member's run history for an epoch. */
