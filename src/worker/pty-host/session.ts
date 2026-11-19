@@ -54,11 +54,10 @@ import {
   toPtyWrites
 } from './text-utils'
 
-// node-pty is a native addon that is intentionally NOT packaged on Linux
-// (afterPack excludes its prebuilds). Load it lazily via require so importing
-// this module never touches the native binding — only constructing a session
-// does, and the pty-host worker is only forked on platforms where
-// isTerminalAvailable() passed in the main process.
+// node-pty is a native addon whose prebuild afterPack packages per target
+// platform. Load it lazily via require so importing this module never touches
+// the native binding — only constructing a session does, and the pty-host
+// worker is only forked where isTerminalAvailable() passed in the main process.
 const nodeRequire = createRequire(import.meta.url)
 type NodePty = typeof import('node-pty')
 let ptyModule: NodePty | null = null

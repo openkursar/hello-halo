@@ -58,13 +58,13 @@ const CANVAS_TARGETS = {
 };
 
 // Maps platform-arch to the node-pty prebuilds directory name to KEEP.
-// node-pty ships prebuilds for mac and win in the npm package.
-// Linux is intentionally excluded: no public prebuilds available; the terminal
-// panel feature is disabled on Linux at runtime via a platform check.
+// node-pty ships prebuilds for mac and win in the npm package; linux-x64 is
+// vendored and installed by prepare-binaries.mjs.
 const NODE_PTY_PREBUILD_TARGETS = {
   'darwin-arm64': 'darwin-arm64',
   'darwin-x64':   'darwin-x64',
   'win32-x64':    'win32-x64',
+  'linux-x64':    'linux-x64',
 };
 
 // Maps platform-arch to the cloudflared binary variant stored by
@@ -293,8 +293,7 @@ function cleanNodePtyPrebuilds(context) {
   const targetDir = NODE_PTY_PREBUILD_TARGETS[key];
 
   if (!targetDir) {
-    // Linux: terminal panel is not supported, node-pty prebuilds are not included.
-    console.log(`[afterPack] ${key}: node-pty not included (terminal panel disabled on Linux)`);
+    console.warn(`[afterPack] No node-pty prebuild mapping for ${key}, skipping cleanup`);
     return;
   }
 
@@ -332,6 +331,14 @@ function cleanNodePtyPrebuilds(context) {
   if (removed.length > 0) {
     console.log(`[afterPack] ${key}: removed ${removed.length} non-target node-pty prebuild(s): ${removed.join(', ')}`);
   }
+
+  const targetBinary = path.join(prebuildsDir, targetDir, 'pty.node');
+  if (!fs.existsSync(targetBinary)) {
+    console.error(`[afterPack] ${key}: missing node-pty binary: ${targetBinary}`);
+    console.error(`[afterPack] Run "npm run prepare:all" before cross-platform packaging`);
+    throw new Error(`Missing node-pty prebuild for ${key}`);
+  }
+
   console.log(`[afterPack] ${key}: keeping node-pty prebuilds/${targetDir}`);
 
   // The ConPTY runtime ships one directory per Windows architecture; only the

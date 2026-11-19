@@ -1,9 +1,8 @@
 /**
  * Tests for the terminal platform-availability gate.
  *
- * Linux desktop is intentionally excluded (node-pty prebuilds not packaged);
- * the gate must keep the feature out of the capability index / toolset menu /
- * transport there. macOS and Windows are supported.
+ * The gate must keep the feature out of the capability index / toolset menu /
+ * transport on any platform whose node-pty prebuild is not packaged.
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
@@ -30,7 +29,10 @@ describe('isTerminalAvailable', () => {
   it('is available on Windows', async () => {
     expect(await availabilityFor('win32')).toBe(true)
   })
-  it('is NOT available on Linux (prebuilds excluded)', async () => {
-    expect(await availabilityFor('linux')).toBe(false)
+  it('is available on Linux', async () => {
+    expect(await availabilityFor('linux')).toBe(true)
+  })
+  it('is NOT available on platforms without a packaged prebuild', async () => {
+    expect(await availabilityFor('freebsd')).toBe(false)
   })
 })

@@ -67,6 +67,26 @@ const WATCHER_PACKAGES = {
   'linux': '@parcel/watcher-linux-x64-glibc'
 }
 
+// node-pty ships prebuilds for mac and win inside the npm package, but none for
+// Linux — node-pty expects `npm install` to run node-gyp on the target host,
+// which a cross-build from macOS never does. The binary is N-API (node-addon-api
+// ^7), so one build works across Electron/Node ABI versions and only needs
+// rebuilding when node-pty itself changes.
+//
+// To rebuild for a new node-pty version:
+//   docker run --rm -v "$PWD:/w" -w /w node:20-bookworm sh -c \
+//     'npm i -g node-gyp && cd node_modules/node-pty && node-gyp rebuild && \
+//      cp build/Release/pty.node /w/resources/prebuilds/node-pty/linux-x64/pty.node'
+// Build on Debian bookworm (glibc 2.36) or older — the resulting binary must not
+// require a newer glibc than the server image provides.
+//
+// spawn-helper is deliberately absent: node-pty only uses it on darwin.
+//
+// resources/prebuilds/ is a build input, not shipped content — package.json
+// `files` excludes it so the Linux binary does not ride along in mac/win builds.
+const NODE_PTY_VENDORED = 'resources/prebuilds/node-pty/linux-x64/pty.node'
+const NODE_PTY_DEST = 'node_modules/node-pty/prebuilds/linux-x64/pty.node'
+
 /**
  * Detect current platform
  */
@@ -440,6 +460,31 @@ function installRipgrep(platform) {
 }
 
 /**
+ * Install the vendored Linux node-pty binary into the prebuilds layout node-pty
+ * resolves at runtime. It must land before electron-builder packs: the asar
+ * header records unpacked entries at pack time, so a file added later is
+ * invisible to Electron's fs shim even if it sits in app.asar.unpacked.
+ */
+function installNodePtyLinux() {
+  const src = path.join(PROJECT_ROOT, NODE_PTY_VENDORED)
+  const dest = path.join(PROJECT_ROOT, NODE_PTY_DEST)
+
+  if (!fs.existsSync(src)) {
+    log.error(`Missing vendored node-pty binary: ${NODE_PTY_VENDORED}`)
+    throw new Error('Missing vendored node-pty linux-x64 binary')
+  }
+
+  const detected = detectBinaryPlatform(src)
+  if (detected !== 'linux') {
+    throw new Error(`Vendored node-pty binary is ${detected || 'unrecognized'}, expected linux ELF`)
+  }
+
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  fs.copyFileSync(src, dest)
+  log.success(`Installed node-pty linux-x64 prebuild (${(fs.statSync(dest).size / 1024).toFixed(0)} KB)`)
+}
+
+/**
  * Prepare all binaries for a platform
  */
 function preparePlatform(platform) {
@@ -486,9 +531,10 @@ function preparePlatform(platform) {
     }
   }
 
-  // node-pty: mac/win prebuilds ship with the npm package automatically.
-  // Linux terminal is not yet supported (no public prebuilds available);
-  // the terminal panel feature is disabled on Linux at runtime.
+  // node-pty: mac/win prebuilds ship with the npm package; Linux is vendored.
+  if (platform === 'linux') {
+    installNodePtyLinux()
+  }
 
   // cloudflared was checked above against its own, newer floor.
   if (platform.startsWith('mac-')) {
