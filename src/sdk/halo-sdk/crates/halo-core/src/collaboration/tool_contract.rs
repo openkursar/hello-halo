@@ -57,11 +57,57 @@ pub fn definitions_with_model_selection(
     Ok(tools)
 }
 
-pub fn parse_input(name: &str, input: &Value) -> Result<Value> {
+fn ignores_undeclared(tool: &str, key: &str) -> bool {
+    match tool {
+        // The prompt is the whole assignment, so these keys only label it.
+        "spawn_agent" => ["summary", "description", "title"].contains(&key),
+        // A dropped key could leave a record other than the one the caller wrote.
+        "team_post_task" | "team_update_task" | "team_post_finding" => false,
+        _ => true,
+    }
+}
+
+#[derive(Debug)]
+pub struct ParsedInput {
+    pub input: Value,
+    pub unfiltered_directory: bool,
+}
+
+fn display_keys(keys: &[&str]) -> Message {
+    // Tool input is untrusted; don't echo arbitrary text or an unbounded list.
+    let mut visible: Vec<_> = keys
+        .iter()
+        .copied()
+        .filter(|key| {
+            !key.is_empty() && key.len() <= 64
+                && key.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        })
+        .take(8)
+        .collect();
+    if visible.len() < keys.len() {
+        visible.push(TextId::CollaborationArgumentsUnlisted.default_text());
+    }
+    visible.join(", ").into()
+}
+
+fn accepted_keys(fields: &Map<String, Value>) -> Message {
+    fields.keys().map(String::as_str).collect::<Vec<_>>().join(", ").into()
+}
+
+pub fn parse_input(name: &str, input: &Value) -> Result<ParsedInput> {
     parse_input_with_model_selection(name, input, None)
 }
 
-pub fn parse_input_with_model_selection(name: &str, input: &Value, capability: Option<&Value>) -> Result<Value> {
+pub fn parse_input_with_model_selection(name: &str, input: &Value, capability: Option<&Value>) -> Result<ParsedInput> {
+    parse_tool_input(name, input, capability, true)
+}
+
+pub fn parse_tool_input(
+    name: &str,
+    input: &Value,
+    capability: Option<&Value>,
+    has_model_directory: bool,
+) -> Result<ParsedInput> {
     let invalid = |id: TextId, values: &[(&str, Message)]| {
         Error::new("COLLABORATION_ARGUMENTS", "").with_harness(id, values)
     };
@@ -83,13 +129,31 @@ pub fn parse_input_with_model_selection(name: &str, input: &Value, capability: O
         })?;
     let fields = definition["inputSchema"]["properties"].as_object().unwrap();
     let required = definition["inputSchema"]["required"].as_array().unwrap();
-    for key in supplied.keys() {
-        if !fields.contains_key(key) {
-            return Err(invalid(
-                TextId::CollaborationArgumentsUnexpected,
-                &[("key", key.as_str().into())],
-            ));
+    let rejected: Vec<_> = supplied.keys().map(String::as_str)
+        .filter(|key| !fields.contains_key(*key) && !ignores_undeclared(name, key))
+        .collect();
+    if !rejected.is_empty() {
+        let reason = Message::template(TextId::CollaborationArgumentsUnexpected, &[("key", display_keys(&rejected))]);
+        let values = [("reason", reason), ("accepted", accepted_keys(fields))];
+        if name != "spawn_agent" {
+            return Err(invalid(TextId::CollaborationArgumentsRecordRefused, &values));
         }
+        if rejected.contains(&"model") {
+            let recovery = if !fields.contains_key("model_profile") {
+                Some(TextId::CollaborationModelSelectionUnavailableInConversation)
+            } else if has_model_directory {
+                Some(TextId::CollaborationModelSelectionUseProfileReference)
+            } else {
+                None
+            };
+            if let Some(recovery) = recovery {
+                return Err(invalid(TextId::CollaborationArgumentsSpawnWithRecovery, &[
+                    ("refusal", Message::template(TextId::CollaborationArgumentsSpawnRefused, &values)),
+                    ("recovery", Message::template(recovery, &[])),
+                ]));
+            }
+        }
+        return Err(invalid(TextId::CollaborationArgumentsSpawnRefused, &values));
     }
     let mut parsed = Map::new();
     for (key, field) in fields {
@@ -152,7 +216,13 @@ pub fn parse_input_with_model_selection(name: &str, input: &Value, capability: O
             &[],
         ));
     }
-    Ok(Value::Object(parsed))
+    let ignored = supplied.keys().filter(|key| !fields.contains_key(*key)).count();
+    if ignored != 0 {
+        tracing::debug!(tool = name, count = ignored, "Ignored undeclared collaboration arguments");
+    }
+    let unfiltered_directory = name == "list_model_profiles"
+        && ["query", "limit", "cursor"].iter().any(|key| supplied.contains_key(*key));
+    Ok(ParsedInput { input: Value::Object(parsed), unfiltered_directory })
 }
 
 pub fn text(text: impl Into<String>, is_error: bool) -> Value {
@@ -197,24 +267,32 @@ mod tests {
             serde_json::json!({"prompt":"work","model_profile":"p1","reasoning_effort":"high"});
 
         assert_eq!(
-            parse_input_with_model_selection("spawn_agent", &input, Some(&default)).unwrap(),
+            parse_input_with_model_selection("spawn_agent", &input, Some(&default)).unwrap().input,
             input
         );
         let error =
             parse_input_with_model_selection("spawn_agent", &input, Some(&inherits)).unwrap_err();
         assert_eq!(error.code, "COLLABORATION_ARGUMENTS");
-        assert!(error.message.contains("reasoning_effort"));
+        assert_eq!(
+            error.message,
+            "No collaborator was created. Unsupported argument: reasoning_effort. Accepted arguments: prompt, name, cwd, isolation, model_profile."
+        );
         assert!(model_selection_guidance(&invalid).is_err());
     }
 
     #[test]
-    fn directory_takes_no_arguments() {
+    fn directory_discards_extras_and_distinguishes_filters_from_labels() {
         let capability = serde_json::json!({"policy":"inherit"});
-        let valid = serde_json::json!({});
-        for input in [serde_json::json!({"query":"Small"}), serde_json::json!({"limit":1}), serde_json::json!({"cursor":"old"})] {
-            assert!(parse_input_with_model_selection("list_model_profiles", &input, Some(&capability)).is_err());
+        for (input, unfiltered) in [
+            (serde_json::json!({}), false),
+            (serde_json::json!({"summary":"Find Small"}), false),
+            (serde_json::json!({"query":"Small","limit":1}), true),
+            (serde_json::json!({"cursor":"next"}), true),
+        ] {
+            let parsed = parse_input_with_model_selection("list_model_profiles", &input, Some(&capability)).unwrap();
+            assert_eq!(parsed.input, serde_json::json!({}));
+            assert_eq!(parsed.unfiltered_directory, unfiltered);
         }
-        assert_eq!(parse_input_with_model_selection("list_model_profiles", &valid, Some(&capability)).unwrap(), valid);
     }
 
     #[test]
@@ -230,8 +308,114 @@ mod tests {
         )
         .is_err());
         assert_eq!(
-            parse_input("spawn_agent", &serde_json::json!({"prompt":" x "})).unwrap()["prompt"],
+            parse_input("spawn_agent", &serde_json::json!({"prompt":" x "})).unwrap().input["prompt"],
             " x "
         );
+    }
+
+    #[test]
+    fn a_message_with_an_unknown_label_preserves_only_supported_input() {
+        let parsed = parse_input(
+            "team_send",
+            &serde_json::json!({"message":"Report back.","summary":"Ask for report","to":"reviewer"}),
+        )
+        .unwrap();
+        assert_eq!(parsed.input, serde_json::json!({"to":"reviewer","message":"Report back."}));
+        assert!(!parsed.unfiltered_directory);
+    }
+
+    #[test]
+    fn tolerated_arguments_never_replace_validation_of_the_ones_the_tool_defines() {
+        let extra = serde_json::json!({"summary":"x","priority":"high"});
+        for (tool, mut input) in [
+            ("team_send", serde_json::json!({"to":"reviewer","message":" "})),
+            ("team_read_board", serde_json::json!({"status":"finished"})),
+            ("team_read_member", serde_json::json!({"member":"reader","before":1.5})),
+            ("team_stop", serde_json::json!({})),
+        ] {
+            input.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            let error = parse_input(tool, &input).unwrap_err();
+            assert_eq!(error.code, "COLLABORATION_ARGUMENTS", "{tool}");
+            assert!(!error.message.contains("priority"), "{tool}: {}", error.message);
+        }
+        assert!(parse_input("team_send", &serde_json::json!({"to":"reviewer","summary":"x"})).is_err());
+    }
+
+    #[test]
+    fn recording_tools_refuse_undeclared_arguments_instead_of_dropping_them() {
+        for (tool, input, message) in [
+            (
+                "team_post_task",
+                serde_json::json!({"title":"Check logs","assignee":"reader","description":"Compare both runs."}),
+                "Nothing was recorded. Unsupported argument: description. Accepted arguments: title, assignee, parentId.",
+            ),
+            (
+                "team_update_task",
+                serde_json::json!({"taskId":"t1","status":"done","summary":"Verified both runs."}),
+                "Nothing was recorded. Unsupported argument: summary. Accepted arguments: taskId, status, resultRef, note.",
+            ),
+            (
+                "team_post_finding",
+                serde_json::json!({"content":"Both runs match.","title":"Result"}),
+                "Nothing was recorded. Unsupported argument: title. Accepted arguments: content, ref.",
+            ),
+        ] {
+            let error = parse_input(tool, &input).unwrap_err();
+            assert_eq!(error.code, "COLLABORATION_ARGUMENTS", "{tool}");
+            assert_eq!(error.message, message);
+        }
+        let note = serde_json::json!({"taskId":"t1","status":"done","note":"Verified both runs."});
+        assert_eq!(parse_input("team_update_task", &note).unwrap().input, note);
+    }
+
+    #[test]
+    fn creating_a_collaborator_tolerates_labels_but_refuses_anything_that_might_shape_it() {
+        let labelled = parse_input(
+            "spawn_agent",
+            &serde_json::json!({"prompt":"Review.","description":"Review","summary":"s","title":"t"}),
+        )
+        .unwrap();
+        assert_eq!(labelled.input, serde_json::json!({"prompt":"Review."}));
+        assert!(!labelled.unfiltered_directory);
+        let error = parse_input(
+            "spawn_agent",
+            &serde_json::json!({"prompt":"Review.","description":"Review","subagent_type":"explore","run_in_background":true}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "COLLABORATION_ARGUMENTS");
+        assert_eq!(
+            error.message,
+            "No collaborator was created. Unsupported argument: subagent_type, run_in_background. Accepted arguments: prompt, name, cwd, isolation."
+        );
+    }
+
+    #[test]
+    fn feedback_bounds_untrusted_keys_and_never_echoes_values() {
+        let mut input = serde_json::json!({"prompt":"Work","model":"PRIVATE_VALUE","bad\nkey":"x"});
+        for index in 0..12 {
+            input[format!("extra_{index}")] = Value::Null;
+        }
+        let error = parse_input("spawn_agent", &input).unwrap_err();
+        assert_eq!(error.message, "No collaborator was created. Unsupported argument: model, extra_0, extra_1, extra_2, extra_3, extra_4, extra_5, extra_6, other unsupported keys. Accepted arguments: prompt, name, cwd, isolation. Model selection is not available in this conversation.");
+    }
+
+    #[test]
+    fn existing_unexpected_argument_overrides_keep_their_slot() {
+        let configured = crate::harness::Harness::from_config(&serde_json::json!({"models":{"alternate":{"collaboration.arguments.unexpected":"Remove {key}."}}})).unwrap();
+        let error = parse_input("spawn_agent", &serde_json::json!({"prompt":"Work","model":"other"})).unwrap_err();
+        assert_eq!(error.render_for(&configured.for_model("alternate")), "No collaborator was created. Remove model. Accepted arguments: prompt, name, cwd, isolation. Model selection is not available in this conversation.");
+    }
+
+    #[test]
+    fn raw_model_recovery_matches_the_available_tools() {
+        let input = serde_json::json!({"prompt":"Work","model":"other"});
+        let capability = serde_json::json!({"policy":"inherit","reasoningPolicy":"inherit"});
+        let rejected = "No collaborator was created. Unsupported argument: model. Accepted arguments: prompt, name, cwd, isolation, model_profile.";
+        let enabled = parse_tool_input("spawn_agent", &input, Some(&capability), true).unwrap_err();
+        assert_eq!(enabled.message, format!("{rejected} To choose a model, call list_model_profiles and pass the returned profile reference as model_profile."));
+        let no_directory = parse_tool_input("spawn_agent", &input, Some(&capability), false).unwrap_err();
+        assert_eq!(no_directory.message, rejected);
+        let disabled = parse_input("spawn_agent", &input).unwrap_err();
+        assert_eq!(disabled.message, "No collaborator was created. Unsupported argument: model. Accepted arguments: prompt, name, cwd, isolation. Model selection is not available in this conversation.");
     }
 }

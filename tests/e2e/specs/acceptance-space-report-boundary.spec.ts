@@ -66,12 +66,12 @@ function boundaryScript(digitalHuman = false) {
         else delivered.add('member-milestone')
       }
       const result = request.toolResults.find(item => item.id === 'direct-report')
-      if (!result) return tool(request, 'team_send', { to: 'lead', message: combined }, 'direct-report')
+      if (!result) return tool(request, 'team_send', { to: 'lead', message: combined, ...(digitalHuman ? {} : { summary: 'Verification results' }) }, 'direct-report')
       if (result.error) errors.push(`direct-report: ${result.text}`)
       else delivered.add('direct-report')
       return { text: combined }
     }
-    if (!receipt(request, 'direct-spawn', 0)) return tool(request, 'spawn_agent', { name: 'Direct checker', prompt: directTask }, 'direct-spawn')
+    if (!receipt(request, 'direct-spawn', 0)) return tool(request, 'spawn_agent', { name: 'Direct checker', prompt: directTask, ...(digitalHuman ? {} : { description: 'Check the evidence' }) }, 'direct-spawn')
     if (!(request.text.includes(checked) && request.text.includes(blocked))) return { text: 'The delegated check is working.' }
     if (digitalHuman) {
       const saved = request.toolResults.find(item => item.id === 'digital-milestone')

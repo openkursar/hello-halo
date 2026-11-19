@@ -48,9 +48,12 @@ test('native standalone collaborator executes a file tool, borrows host MCP and 
         } else if (step === 3) {
           const verification = blocks(request).find(block => block.tool_use_id === 'child-mcp');
           assert.match(verification.content, /verified actual collaborator file/);
-          block = { type: 'tool_use', id: 'child-report', name: 'mcp__halo-team__team_send', input: { to: 'lead', message: 'The collaborator wrote and verified evidence.txt.' } };
+          block = { type: 'tool_use', id: 'child-report', name: 'mcp__halo-team__team_send', input: { to: 'lead', message: 'The collaborator wrote and verified evidence.txt.', summary: 'File verification' } };
         } else {
-          assert.ok(blocks(request).some(block => block.tool_use_id === 'child-report'));
+          const report = blocks(request).find(block => block.tool_use_id === 'child-report');
+          assert.ok(report);
+          assert.notEqual(report.is_error, true);
+          assert.ok(JSON.parse(report.content).messageId);
           childReplied();
           block = { type: 'text', text: '' };
         }

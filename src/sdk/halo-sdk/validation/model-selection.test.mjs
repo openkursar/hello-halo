@@ -247,7 +247,21 @@ test('standalone selected binding survives idle retirement and profile deletion 
     });
   };
   try {
-    const spawned = await binding.server.instance.callTool('spawn_agent', { name: 'retained', prompt: 'Write the evidence once.', model_profile: reference });
+    const call = (name, input) => binding.server.instance.callTool(name, input);
+    const refused = await call('spawn_agent', { name: 'retained', prompt: 'Write the evidence once.', model: 'restore-model' });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /^No collaborator was created\..*model_profile.*To choose a model, call list_model_profiles/);
+    assert.equal(step, 0);
+    assert.deepEqual(prepared, []);
+    const directory = await call('list_model_profiles', { query: 'not a matching profile' });
+    assert.notEqual(directory.isError, true, JSON.stringify(directory));
+    assert.equal(directory.content.length, 1);
+    const { notice, ...listed } = JSON.parse(directory.content[0].text);
+    assert.equal(notice, 'This is the full model directory; no filter was applied.');
+    const plain = await call('list_model_profiles', { summary: 'Find the profile' });
+    assert.deepEqual(JSON.parse(plain.content[0].text), listed);
+    assert.deepEqual(listed.profiles.map(profile => profile.selectionRef), [reference]);
+    const spawned = await call('spawn_agent', { name: 'retained', prompt: 'Write the evidence once.', model_profile: listed.profiles[0].selectionRef });
     assert.notEqual(spawned.isError, true, JSON.stringify(spawned));
     await idle();
     assert.equal(binding.residentCount, 0);

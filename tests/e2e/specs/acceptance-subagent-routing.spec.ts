@@ -9,7 +9,11 @@ import { parseModelDirectory } from '../fixtures/acceptance-subagent-wire'
 for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) {
   test.describe(`Assignment routing on ${sdkEngine}`, () => {
     test.use({ sdkEngine })
-    test('an explicit assignment reaches a different local endpoint without changing the parent', acceptance('models.subagent-profiles.owner-routing', { engine: sdkEngine, entry: 'space', choice: 'profile' }), async ({ model, window }, info) => {
+    const routing = acceptance('models.subagent-profiles.owner-routing', { engine: sdkEngine, entry: 'space', choice: 'profile' })
+    const annotations = sdkEngine === 'halo'
+      ? { annotation: [routing.annotation, acceptance('models.subagent-profiles.argument-recovery').annotation] }
+      : routing
+    test('an explicit assignment reaches a different local endpoint without changing the parent', annotations, async ({ model, window }, info) => {
       test.setTimeout(180000)
       const childEndpoint = await startAcceptanceModel()
       const errors: string[] = []
@@ -29,10 +33,24 @@ for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) {
       model.respond(request => {
         sourceRequests.push(request)
         if (!initialUserInput(request).includes(sourceMarker)) { errors.push('A child request reached the parent endpoint'); return { text: 'Unexpected actor.' } }
+        const verifyRecovery = sdkEngine === 'halo'
+        const directoryNotice = 'This is the full model directory; no filter was applied.'
+        if (verifyRecovery) {
+          const refused = request.toolResults.find(result => result.id === 'raw-model-spawn')
+          if (!refused) return call(request, 'spawn_agent', { name: 'Verifier worker', prompt: memberMarker, model: 'gpt-4o' }, 'raw-model-spawn')
+          if (!refused.text.startsWith('No collaborator was created.') || !refused.text.includes('pass the returned profile reference as model_profile.')) {
+            errors.push(`Missing safe model selection recovery: ${refused.text}`)
+            return { text: 'The invalid model argument was not safely refused.' }
+          }
+        }
         const catalog = request.toolResults.find(result => result.id === 'assignment-catalog')
-        if (!catalog) return call(request, 'list_model_profiles', {}, 'assignment-catalog')
+        if (!catalog) return call(request, 'list_model_profiles', verifyRecovery ? { query: 'No matching assignment' } : {}, 'assignment-catalog')
         try {
-          reference = parseModelDirectory(catalog.text).profiles.find(profile => profile.name === 'Verifier')?.selectionRef
+          if (verifyRecovery && (catalog.error || !catalog.text.endsWith(`\n${directoryNotice}`))) {
+            throw new Error(`Missing unfiltered-directory notice: ${catalog.text}`)
+          }
+          const directory = verifyRecovery ? catalog.text.slice(0, -directoryNotice.length).trimEnd() : catalog.text
+          reference = parseModelDirectory(directory).profiles.find(profile => profile.name === 'Verifier')?.selectionRef
           if (!reference) errors.push(`Directory did not expose a selectable verifier: ${catalog.text}`)
         } catch (error) { errors.push(String(error)) }
         if (!reference) return { text: 'No verifier was available.' }

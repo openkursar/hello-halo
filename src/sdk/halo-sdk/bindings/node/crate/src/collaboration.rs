@@ -44,12 +44,23 @@ impl NativeCollaborationValue {
                 };
                 definitions.into_iter().find(|definition| definition["name"] == input["name"]).unwrap_or(Value::Null)
             },
-            "parseInput" => tool_contract::parse_input_with_model_selection(
-                input["name"].as_str().unwrap_or(""),
-                input.get("input").unwrap_or(&Value::Null),
-                input.get("modelSelection"),
-            )
-            .map_err(|error| failure(error.with_details(json!({"name":"TypeError"}))))?,
+            "parseInput" | "parseArguments" => {
+                let parsed = tool_contract::parse_tool_input(
+                    input["name"].as_str().unwrap_or(""),
+                    input.get("input").unwrap_or(&Value::Null),
+                    input.get("modelSelection"),
+                    input["hasModelDirectory"].as_bool().unwrap_or(true),
+                )
+                .map_err(|error| failure(error.with_details(json!({"name":"TypeError"}))))?;
+                if name == "parseInput" {
+                    parsed.input
+                } else {
+                    let notice = parsed.unfiltered_directory.then(|| {
+                        halo_core::harness::TextId::CollaborationModelSelectionUnfilteredDirectory.default_text()
+                    });
+                    json!({"input":parsed.input,"notice":notice})
+                }
+            }
             "text" => tool_contract::text(
                 input["text"].as_str().unwrap_or(""),
                 input["isError"] == true,

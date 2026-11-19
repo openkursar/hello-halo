@@ -140,6 +140,20 @@ scenarios:
       - The real creation tool's selected profile reaches its own local endpoint and wire model; unqualified inheritance stays on the direct parent.
       - Actual requested and active engine identities agree; accepted creation is distinct from provider success and errors follow the original result path.
       - A legacy effort-only command is refused without starting a collaborator.
+  - id: models.subagent-profiles.argument-recovery
+    title:
+      en: Recover from unsupported model arguments without creating a duplicate collaborator
+      zh: 选模参数不受支持时可以纠正，而不会重复创建协作者
+    verifies: [selection, compatibility]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    expected:
+      - A raw model argument is refused before creation and the tool explains how to use a permitted model profile.
+      - A directory request with an unsupported filter returns the full directory with a clear notice; using its profile reference creates the intended collaborator and reaches the configured endpoint.
   - id: models.subagent-profiles.selected-reasoning
     title: A model assignment changes the model, not the parent's reasoning intent
     verifies: [selection, inheritance]
