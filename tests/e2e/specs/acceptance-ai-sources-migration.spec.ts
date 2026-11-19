@@ -32,9 +32,11 @@ async function inspectAccount(page: Page, profile: string, expected: ReturnType<
   expect(new Set(account.models).size).toBe(account.models.length)
   const catalog = await page.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.authGetBuiltinProviders())
   expect(catalog.success).toBe(true)
-  const providers = (catalog.data as Array<{ id: string; models: Array<{ id: string }> }>).filter(provider => provider.id === 'openai')
+  const providers = (catalog.data as Array<{ id: string; models?: Array<{ id: string }> }>).filter(provider => provider.id === 'openai')
   expect(providers).toHaveLength(1)
-  const builtinModels = providers[0].models.map(model => model.id).sort()
+  // The OpenAI entry also fronts compatible gateways and carries no vendor defaults;
+  // only models the account gained beyond the legacy list need a catalog entry.
+  const builtinModels = (providers[0].models ?? []).map(model => model.id).sort()
   const addedModels = account.models.filter((id: string) => !expected.account.availableModels.includes(id))
   expect(builtinModels).toEqual(expect.arrayContaining(addedModels))
   expect(account.id).toEqual(expect.any(String))

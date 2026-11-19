@@ -9,7 +9,7 @@ import { migrations } from '../../../../src/main/apps/team/migrations'
 import { TeamStore } from '../../../../src/main/apps/team/store'
 import {
   addFrozenTeamHistory, currentTeamVersion, expectedTeamRows, frozenLayout, installFrozenTeamSchema,
-  prepareLegacyTeam, readTeamMigration, teamHistory, teamTables,
+  legacyTeamVersion, prepareLegacyTeam, prepareLegacyTeamDatabase, readTeamMigration, teamHistory, teamTables,
 } from '../../../e2e/fixtures/acceptance-team-migration'
 
 function fixture() {
@@ -122,4 +122,30 @@ test('historical team preparation refuses an application whose exit has not been
   assert.throws(() => prepareLegacyTeam('/unopened-test-profile', { exitCode: null, signalCode: null }, {
     teamId: 'team', spaceId: 'space', leadId: 'lead', memberId: 'reviewer', epochId: 'epoch', conversationId: 'conversation',
   }), /owned process to have exited/)
+})
+
+test('rewinding a current profile drops the tables a v19 profile never had, so the replay reaches the current version', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'acceptance-team-rewind-'))
+  const file = path.join(directory, 'halo.db')
+  const manager = createDatabaseManager(file)
+  const db = manager.getAppDatabase()
+  try {
+    db.exec(`CREATE TABLE _migrations (namespace TEXT PRIMARY KEY, version INTEGER NOT NULL, applied_at INTEGER NOT NULL);
+      INSERT INTO _migrations VALUES ('app_manager', 10, 101);
+      CREATE TABLE installed_apps (id TEXT PRIMARY KEY, spec_json TEXT NOT NULL);
+      INSERT INTO installed_apps VALUES ('lead-person', '{"name":"Retained lead"}');`)
+    manager.runMigrations(db, 'app_team', migrations)
+    db.exec(`
+      INSERT INTO teams (id, name, owning_space_id, goal, lead_app_id, created_at, updated_at)
+      VALUES ('main-team', 'Retained team', 'owned-space', 'Retain team work', 'lead-person', 1000, 1000);
+      INSERT INTO team_epochs (id, team_id, started_at, ended_at, end_reason, lifecycle, chat_key, task_status, task_title, task_created_by, task_entry_app_id, task_updated_at)
+      VALUES ('old-task', 'main-team', 1000, 1100, 'completed', 'conversation', 'native:old-task', 'completed', 'Old completed work', 'retained-owner', 'lead-person', 1100);`)
+    const prepared = prepareLegacyTeamDatabase(db, {
+      teamId: 'main-team', spaceId: 'owned-space', leadId: 'lead-person', memberId: 'lead-person', epochId: 'old-task', conversationId: 'old-conversation',
+    }, 2000)
+    assert.equal(prepared.old.version, legacyTeamVersion)
+    manager.runMigrations(db, 'app_team', migrations)
+    assert.equal(readTeamMigration(file).version, currentTeamVersion)
+    assert.deepEqual(readTeamMigration(file).foreignKeyViolations, [])
+  } finally { manager.closeAll(); rmSync(directory, { recursive: true, force: true }) }
 })

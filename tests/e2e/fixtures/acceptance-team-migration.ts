@@ -105,20 +105,47 @@ function readState(db: Database.Database) {
 
 export type TeamMigrationState = ReturnType<typeof readState>
 
+/**
+ * Tables the current migrations add after the frozen checkpoint.
+ *
+ * A current profile carries them; a profile written at the frozen version does not.
+ * Leaving them behind makes the replayed upgrade collide on its own `CREATE TABLE`
+ * and roll back, which reads as a product migration failure. The source is parsed
+ * rather than imported because this fixture runs through a CommonJS transform that
+ * cannot load the product module's ESM-only SDK entry.
+ */
+function tablesAddedAfterFrozenCheckpoint() {
+  const source = readFileSync(new URL('../../../src/main/apps/team/migrations.ts', import.meta.url), 'utf8')
+  const sections = source.split(/\n\s*\{\s*\n\s*version:\s*(\d+),/)
+  const names = new Set<string>()
+  for (let index = 1; index < sections.length; index += 2) {
+    if (Number(sections[index]) <= legacyTeamVersion) continue
+    for (const match of sections[index + 1].matchAll(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?([A-Za-z_][A-Za-z0-9_]*)/gi)) names.add(match[1])
+  }
+  assert.ok(names.size > 0, 'The frozen team checkpoint must be older than at least one table-creating migration')
+  return [...names]
+}
+
 export function readTeamMigration(file: string) {
   const db = new Database(file, { readonly: true, fileMustExist: true })
   try { return readState(db) } finally { db.close() }
 }
 
 function namespaceControls(db: Database.Database) {
+  const teamNamespace = new Set<string>([...teamTables, ...tablesAddedAfterFrozenCheckpoint()])
   const tables = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{ name: string; sql: string }>
-  return tables.filter(table => !teamTables.includes(table.name as typeof teamTables[number]) && table.name !== '_migrations')
+  return tables.filter(table => !teamNamespace.has(table.name) && table.name !== '_migrations')
     .map(table => ({ ...table, sha256: createHash('sha256').update(JSON.stringify(rows(db, table.name))).digest('hex') }))
 }
 
 export function prepareLegacyTeam(profile: string, child: Pick<ChildProcess, 'exitCode' | 'signalCode'>, ids: TeamMigrationIdentity) {
   assert.ok(child.exitCode != null || child.signalCode != null, 'Historical team preparation requires the owned process to have exited')
   const db = new Database(teamProfileDatabase(profile), { fileMustExist: true })
+  try { return prepareLegacyTeamDatabase(db, ids, Date.now() - 600000) } finally { db.close() }
+}
+
+/** Rewinds an open current database to the frozen team namespace, keeping every other namespace intact. */
+export function prepareLegacyTeamDatabase(db: Database.Database, ids: TeamMigrationIdentity, timestamp: number) {
   const oldLayout = new Database(':memory:')
   try {
     installFrozenTeamSchema(oldLayout)
@@ -129,12 +156,13 @@ export function prepareLegacyTeam(profile: string, child: Pick<ChildProcess, 'ex
     assert.ok(before.tables.team_epochs.some(epoch => epoch.id === ids.epochId && epoch.task_status === 'completed'))
     for (const table of teamTables) assert.deepEqual(frozenLayout(db, table), oldLayout.pragma(`table_info(${table})`), `Review changed table layout: ${table}`)
     const controls = namespaceControls(db)
+    const addedTables = tablesAddedAfterFrozenCheckpoint()
     db.pragma('foreign_keys = OFF')
     db.transaction(() => {
-      for (const table of [...teamTables].reverse()) db.exec(`DROP TABLE ${table}`)
+      for (const table of [...teamTables, ...addedTables].reverse()) db.exec(`DROP TABLE "${table}"`)
       installFrozenTeamSchema(db)
       for (const table of teamTables) for (const record of before.tables[table]) insert(db, table, frozenRecord(table, record))
-      addFrozenTeamHistory(db, ids, Date.now() - 600000)
+      addFrozenTeamHistory(db, ids, timestamp)
       db.prepare("UPDATE _migrations SET version = ? WHERE namespace = 'app_team'").run(legacyTeamVersion)
     })()
     db.pragma('foreign_keys = ON')
@@ -145,7 +173,7 @@ export function prepareLegacyTeam(profile: string, child: Pick<ChildProcess, 'ex
     assert.deepEqual(old.foreignKeyViolations, [])
     assert.equal(old.integrity, 'ok')
     return { old, controls }
-  } finally { oldLayout.close(); db.close() }
+  } finally { oldLayout.close() }
 }
 
 export function expectedTeamRows(old: TeamMigrationState['tables']) {
