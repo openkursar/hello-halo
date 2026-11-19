@@ -1606,6 +1606,36 @@ export function getKBReferenceById(kbId: string): KBReference | null {
   return { id: kb.id, name: kb.name, indexContent }
 }
 
+/**
+ * Let a bound digital human's guest turns read this KB's extracted text, or
+ * stop them. Owner-only: the route is internal, so the model cannot open it.
+ */
+export function setKBGuestRead(kbId: string, allow: boolean): KnowledgeBaseEntry | null {
+  const entry = getRegistry().get(kbId)
+  if (!entry) return null
+  if (allow) entry.allowGuestRead = true
+  else delete entry.allowGuestRead
+  saveEntry(entry)
+  return entry
+}
+
+/**
+ * Extracted-text folders a strict (guest) turn of this digital human may read:
+ * bound, active, indexed KBs whose owner allowed guest reading. Read-only; the
+ * turn's file boundary still keeps closed folders closed.
+ */
+export function getKnowledgeReadDirsForApp(appId: string): string[] {
+  const dirs: string[] = []
+  for (const kb of getRegistry().values()) {
+    if (kb.allowGuestRead !== true) continue
+    if (kb.status !== 'active') continue
+    if (!kb.appIds.includes(appId)) continue
+    if (!readIndexMd(kb.id)) continue
+    dirs.push(getKBTextDir(kb.id))
+  }
+  return dirs
+}
+
 export function getKBReferencesForApp(appId: string): KBReference[] {
   const refs: KBReference[] = []
   for (const kb of getRegistry().values()) {

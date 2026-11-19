@@ -187,6 +187,7 @@ import { ReplyTextAccumulator } from './reply-accumulator'
 import { holdSupplementsAfterStop, getPendingSupplementInputIds } from './dispatch-inbound'
 import { getPendingConversationInputIds } from '../../services/conversation-interop'
 import { holdConversationAfterStop } from '../../services/conversation-interop'
+import { getKnowledgeReadDirsForApp } from '../../services/tlon'
 import { getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
 import { createAppChatDelivery, isPersonRequest } from './app-chat-delivery'
 import { awaitWorkspaceDrain, pendingWorkspaceChange, pendingWorkspaceRecovery } from './workspace-admission'
@@ -1201,11 +1202,17 @@ async function runAppChatTurn(
     spaceMemoryOffered: app.userOverrides?.spaceMemoryAccess === true && isSpaceMemoryEnabled(spaceId),
     workDir,
     attachedFiles: [...(request.attachedFiles ?? []), ...(imageFallback?.filePaths ?? [])],
+    // Bound knowledge bases whose owner allowed guest reading: their map is in
+    // the prompt, and these are the files it names. Off by default.
+    knowledgeFolders: getKnowledgeReadDirsForApp(appId),
   })
   const inheritedFiles = participant?.execution.fileAccess
   const turnFileAccess = inheritedFiles ? {
     ...currentFileAccess,
     memoryWritable: [], memoryReadable: [],
+    // A borrowed turn reads only what its lender could; this digital human's
+    // knowledge grant does not travel with it.
+    knowledgeFolders: inheritedFiles.knowledgeFolders ?? [],
     attachedFiles: [...new Set([...inheritedFiles.attachedFiles, ...currentFileAccess.attachedFiles])],
     workspaceRoots: inheritedFiles.workspaceRoots,
     closed: [...new Set([...currentFileAccess.closed, ...inheritedFiles.closed])],

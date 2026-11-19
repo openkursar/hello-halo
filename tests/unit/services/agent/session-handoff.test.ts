@@ -123,7 +123,7 @@ vi.mock('../../../../src/main/services/agent/toolsets', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/base', () => ({ buildBaseToolset: () => ({}) }))
 vi.mock('../../../../src/main/services/tlon', () => ({
-  getKBChatContext: () => null, getKBReferencesForApp: () => [],
+  getKBChatContext: () => null, getKBReferencesForApp: () => [], getKnowledgeReadDirsForApp: () => [],
   getKnowledgeBaseReference: () => null, resolveSourcesForReadPaths: () => [],
 }))
 vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({

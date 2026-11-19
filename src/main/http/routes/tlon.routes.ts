@@ -40,6 +40,12 @@ export function registerTlonRoutes(app: Express): void {
     res.json(tlonController.updateKB(req.params.kbId, req.body))
   })
 
+  // PUT /api/tlon/:kbId/guest-read — owner only (internal): may guests of a
+  // bound digital human read this knowledge base's text
+  app.put('/api/tlon/:kbId/guest-read', (req: Request, res: Response) => {
+    res.json(tlonController.setGuestRead(req.params.kbId, req.body?.allow))
+  })
+
   // DELETE /api/tlon/:kbId — delete a knowledge base and its data
   app.delete('/api/tlon/:kbId', async (req: Request, res: Response) => {
     res.json(await tlonController.deleteKB(req.params.kbId))

@@ -36,6 +36,10 @@ export const tlonApi = {
       if (isElectron()) return window.halo.tlonUpdate(kbId, updates)
       return httpRequest('PUT', `/api/tlon/${kbId}`, updates)
     },
+    setGuestRead: async (kbId: string, allow: boolean): Promise<ApiResponse> => {
+      if (isElectron()) return window.halo.tlonSetGuestRead(kbId, allow)
+      return httpRequest('PUT', `/api/tlon/${kbId}/guest-read`, { allow })
+    },
     delete: async (kbId: string): Promise<ApiResponse> => {
       if (isElectron()) return window.halo.tlonDelete(kbId)
       return httpRequest('DELETE', `/api/tlon/${kbId}`)

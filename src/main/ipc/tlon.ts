@@ -20,6 +20,7 @@ export function registerTlonHandlers(): void {
     tlonListForSpace: async (spaceId: string) => tlonController.listKBsForSpace(spaceId),
     tlonGet: async (kbId: string) => tlonController.getKB(kbId),
     tlonUpdate: async (kbId: string, updates: UpdateKBInput) => tlonController.updateKB(kbId, updates),
+    tlonSetGuestRead: async (kbId: string, allow: boolean) => tlonController.setGuestRead(kbId, allow),
     tlonDelete: async (kbId: string) => tlonController.deleteKB(kbId),
     tlonSetDefault: async (kbId: string | null) => tlonController.setDefaultKB(kbId),
     tlonBindSpace: async (kbId: string, spaceId: string) => tlonController.bindToSpace(kbId, spaceId),

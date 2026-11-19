@@ -137,6 +137,8 @@ interface TlonState {
   updateKB: (kbId: string, updates: UpdateKBInput) => Promise<boolean>
   deleteKB: (kbId: string) => Promise<boolean>
   setDefaultKB: (kbId: string | null) => Promise<void>
+  /** Let guests of bound digital humans read this KB's text (owner only). */
+  setGuestRead: (kbId: string, allow: boolean) => Promise<void>
 
   // ── Binding ───────────────────────────────
   bindSpace: (kbId: string, spaceId: string) => Promise<boolean>
@@ -340,6 +342,19 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     } catch (err) {
       console.error('[TlonStore] setDefaultKB error:', err)
       await get().loadKBs()
+    }
+  },
+
+  setGuestRead: async (kbId, allow) => {
+    set(state => ({
+      kbs: state.kbs.map(k => (k.id === kbId ? { ...k, allowGuestRead: allow || undefined } : k)),
+    }))
+    try {
+      const res = await api.tlon.setGuestRead(kbId, allow)
+      if (!res.success) await get().refreshKB(kbId)
+    } catch (err) {
+      console.error('[TlonStore] setGuestRead error:', err)
+      await get().refreshKB(kbId)
     }
   },
 

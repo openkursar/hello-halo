@@ -49,6 +49,8 @@ export {
   // conversation integration (hot path)
   getSeedKBIds,
   getKBReferencesForApp,
+  getKnowledgeReadDirsForApp,
+  setKBGuestRead,
   getKBReferenceById,
   isKBIndexReady,
   getKBChatContext,

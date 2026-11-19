@@ -62,6 +62,12 @@ export interface KnowledgeBaseEntry {
   isDefault?: boolean
   /** Per-KB source limits; absent fields use the built-in defaults. */
   options?: KBOptions
+  /**
+   * Whether a guest turn of a bound digital human may read this KB's extracted
+   * text. Off unless the owner turns it on (setKBGuestRead); binding alone only
+   * puts the document map in the prompt.
+   */
+  allowGuestRead?: boolean
 }
 
 /**

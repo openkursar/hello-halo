@@ -42,6 +42,7 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
   const removeLinkedDir = useTlonStore(s => s.removeLinkedDir)
   const retryLinkedDir = useTlonStore(s => s.retryLinkedDir)
   const setDefaultKB = useTlonStore(s => s.setDefaultKB)
+  const setGuestRead = useTlonStore(s => s.setGuestRead)
 
   const haloSpace = useSpaceStore(s => s.haloSpace)
   const spaces = useSpaceStore(s => s.spaces)
@@ -312,6 +313,16 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
             </div>
           </div>
         )}
+
+        <div className="flex items-center justify-between gap-4 pt-1">
+          <div className="min-w-0">
+            <p className="text-sm">{t('Let guests read its documents')}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {t('When on, people who chat with a digital human that uses this knowledge base, including people you do not know through a connected chat app, can have it read the full text of its documents. When off, the digital human only sees the list of documents.')}
+            </p>
+          </div>
+          <Switch checked={kb.allowGuestRead === true} onCheckedChange={next => setGuestRead(kb.id, next)} />
+        </div>
       </section>
 
       {/* Danger zone — its own card, so a destructive action never sits one

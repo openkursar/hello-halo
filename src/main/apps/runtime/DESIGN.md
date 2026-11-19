@@ -2360,6 +2360,13 @@ checks, file guards, execution and audit records.
   - the folder of each skill the turn may load is readable, read only, whatever
     the reading switches say: a skill reads its own instructions and references
     as it runs, and a global skill lives outside the workspace.
+  - the extracted text of a bound knowledge base is readable the same way, read
+    only, but only when its owner turned on "Let guests read its documents"
+    (`allowGuestRead`, off by default, set through the internal
+    `PUT /api/tlon/:kbId/guest-read`, which the model cannot call); without it
+    the turn sees the document map in its prompt and nothing more
+    (`getKnowledgeReadDirsForApp` → `knowledgeFolders`). A borrowed turn does
+    not carry this digital human's grant: it reads what its lender could.
   - a file tool (Write, Edit, MultiEdit, NotebookEdit) never writes what an
     engine, or git that it runs, reads as settings, hooks or standing
     instructions, granted Write or not, memory included: `.claude/`,
