@@ -546,7 +546,7 @@
           ]
         },
         "expected": {
-          "content": "Todo list updated:\n[ ] one\n[~] 3\n[x] x,y\n\nContinue to keep this list current as work progresses.",
+          "content": "Todo list updated:\n[ ] one\n[~] 3\n[x] x,y\n\nUpdate the list as needed.",
           "isError": false
         }
       },

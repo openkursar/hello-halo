@@ -201,7 +201,7 @@ mod tests {
         let check = open_work_check_text(&goal, &[serde_json::json!({"content":"Match January","status":"completed"}),serde_json::json!({"content":"Match February","status":"pending"})]).unwrap();
         assert!(check.contains("the goal \"Reconcile all invoices\" is not marked complete"));
         assert!(check.contains("1 of 2 todo items are unfinished (next: \"Match February\")"));
-        assert!(check.contains("This is a check, not an instruction to continue."));
+        assert!(check.ends_with("If you stopped on purpose, you can ignore this reminder. No response needed."));
         assert!(open_work_check_text(&Value::Null, &[serde_json::json!({"content":"A","status":"pending"}),serde_json::json!({"content":"B","status":"in_progress"})]).unwrap().contains("next: \"B\""));
         let pending = [serde_json::json!({"content":"A","status":"pending"})];
         let key = open_work_state_key(&goal, &pending);

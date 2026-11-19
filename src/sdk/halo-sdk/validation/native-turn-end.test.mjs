@@ -227,6 +227,7 @@ test('an empty check reply keeps the preceding answer and counts both responses 
   const events = await turn(session, 'Plan it.');
   assert.equal(resultOf(events), 'ORIGINAL ANSWER');
   assert.equal(requests.length, 3);
+  assert.match(requests[2], /No response needed\./);
   const result = events.find(event => event.type === 'result');
   assert.equal(result.usage.input_tokens, 3);
   assert.equal(result.usage.output_tokens, 3);

@@ -64,7 +64,7 @@
     "slots": []
   },
   "tools.todos.updated": {
-    "text": "Todo list updated:\n{list}\n\nContinue to keep this list current as work progresses.",
+    "text": "Todo list updated:\n{list}\n\nUpdate the list as needed.",
     "slots": [
       "list"
     ]
