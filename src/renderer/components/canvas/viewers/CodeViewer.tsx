@@ -41,6 +41,7 @@ interface CodeViewerProps {
   onSaveComplete?: (content: string) => void
   /** Discard unsaved edits (restore the file's text on disk). */
   onRevert?: () => void
+  onExitEditMode?: () => void
   onResolveDiskConflict?: (keep: 'disk' | 'mine') => void
 }
 
@@ -54,6 +55,7 @@ export function CodeViewer({
   onContentChange,
   onSaveComplete,
   onRevert,
+  onExitEditMode,
   onResolveDiskConflict,
 }: CodeViewerProps) {
   const { t } = useTranslation()
@@ -137,7 +139,8 @@ export function CodeViewer({
     onRevert?.()
     setIsEditing(false)
     setSaveError(null)
-  }, [onRevert])
+    onExitEditMode?.()
+  }, [onRevert, onExitEditMode])
 
   // Save changes
   const handleSave = useCallback(async () => {
@@ -148,6 +151,7 @@ export function CodeViewer({
     // Edits from before a remount are only known to the tab, not the editor.
     if (!tab.isDirty && !editorRef.current.hasChanges()) {
       setIsEditing(false)
+      onExitEditMode?.()
       return
     }
 
@@ -163,6 +167,7 @@ export function CodeViewer({
           onSaveComplete(newContent)
         }
         setIsEditing(false)
+        onExitEditMode?.()
       } else {
         setSaveError(result.error || t('Failed to save file'))
       }
@@ -172,7 +177,7 @@ export function CodeViewer({
     } finally {
       setIsSaving(false)
     }
-  }, [tab.path, tab.isDirty, onSaveComplete, t])
+  }, [tab.path, tab.isDirty, onSaveComplete, onExitEditMode, t])
 
   // Handle scroll
   const handleScroll = useCallback(

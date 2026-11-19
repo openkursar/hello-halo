@@ -125,6 +125,12 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
     if (activeTabId) revertTabContent(activeTabId)
   }, [activeTabId, revertTabContent])
 
+  // A no-change save skips onSaveComplete, so the exit is reported separately.
+  // Only markdown uses isEditMode to switch back to the preview viewer.
+  const handleExitEditMode = useCallback(() => {
+    if (activeTabId && activeTab?.type === 'markdown') setEditMode(activeTabId, false)
+  }, [activeTabId, activeTab?.type, setEditMode])
+
   const handleResolveDiskConflict = useCallback((keep: 'disk' | 'mine') => {
     if (activeTabId) resolveDiskConflict(activeTabId, keep)
   }, [activeTabId, resolveDiskConflict])
@@ -158,6 +164,7 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
             onContentChange={handleContentChange}
             onSaveComplete={handleSaveComplete}
             onRevert={handleRevert}
+            onExitEditMode={handleExitEditMode}
             onResolveDiskConflict={handleResolveDiskConflict}
             onEditRequest={handleEditRequest}
           />

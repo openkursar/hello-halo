@@ -89,6 +89,8 @@ export type BuiltinProviderId =
   | 'orcarouter'
   | 'cheaperinference'
   | 'atlascloud'
+  | 'runcrate'
+  | 'standardcompute'
   | 'requesty'
   | 'groq'
   | 'mistral'
