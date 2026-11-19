@@ -12,6 +12,7 @@ import { SearchIcon } from '../components/search/SearchIcon'
 import { useSearchStore } from '../stores/search.store'
 import { useTranslation } from '../i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { useServerBackend } from '../hooks/useServerBackend'
 
 // Import modular settings components
 import {
@@ -22,6 +23,7 @@ import {
   SystemSection,
   AdvancedSection,
   RemoteAccessSection,
+  FederationSection,
   AboutSection,
   MessageChannelsSection,
   RegistrySection,
@@ -34,6 +36,10 @@ export function SettingsPage() {
   const { openSearch } = useSearchStore()
   const isMobile = useIsMobile()
   const isRemoteMode = api.isRemoteMode()
+  // A headless server has no desktop window, so its web client also gets the
+  // node-level sections a desktop owner would change locally.
+  const serverBackend = useServerBackend()
+  const showNodeSettings = !isRemoteMode || serverBackend
 
   // Active navigation section (click-only, no scroll spy - standard settings page behavior)
   const settingsFocus = useAppStore(state => state.settingsFocus)
@@ -65,6 +71,7 @@ export function SettingsPage() {
         {!isMobile && (
           <SettingsNav
             isRemoteMode={isRemoteMode}
+            serverBackend={serverBackend}
             activeSection={activeSection}
             onSectionChange={handleNavClick}
           />
@@ -76,6 +83,7 @@ export function SettingsPage() {
           {isMobile && (
             <SettingsNav
               isRemoteMode={isRemoteMode}
+              serverBackend={serverBackend}
               activeSection={activeSection}
               onSectionChange={handleNavClick}
             />
@@ -104,14 +112,20 @@ export function SettingsPage() {
                 <SystemSection config={config} setConfig={setConfig} proxyFocused={settingsFocus === 'proxy'} />
               )}
 
-              {/* Advanced Section - Desktop only */}
-              {!isRemoteMode && (
+              {/* Advanced Section - desktop, or the web client of a headless server;
+                  its desktop-only parts gate themselves */}
+              {showNodeSettings && (
                 <AdvancedSection config={config} setConfig={setConfig} />
               )}
 
               {/* Remote Access Section - Desktop only */}
               {!isRemoteMode && (
-                <RemoteAccessSection config={config} setConfig={setConfig} />
+                <RemoteAccessSection />
+              )}
+
+              {/* Federation Gateway - desktop, or the web client of a headless server */}
+              {showNodeSettings && (
+                <FederationSection config={config} setConfig={setConfig} />
               )}
 
               {/* Recommend Section */}

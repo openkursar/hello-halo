@@ -42,14 +42,14 @@ vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
 
 const joinTeamOffice =
   vi.fn<[{ officeId: string; serverUrl: string; inviteToken: string; bringAppIds: string[] }], Promise<unknown>>()
-const leaveTeamOffice = vi.fn<[string], Promise<unknown>>()
+const leaveTeamOffice = vi.fn<[string, string[] | undefined], Promise<unknown>>()
 
 vi.mock('../../../../src/main/controllers/team-invite.controller', () => ({
   generateTeamInvite: vi.fn(),
   revokeTeamInvite: vi.fn(),
   joinTeamOffice: (input: { officeId: string; serverUrl: string; inviteToken: string; bringAppIds: string[] }) =>
     joinTeamOffice(input),
-  leaveTeamOffice: (officeId: string) => leaveTeamOffice(officeId),
+  leaveTeamOffice: (officeId: string, appIds?: string[]) => leaveTeamOffice(officeId, appIds),
 }))
 
 const getOfficePresence = vi.fn<[string], unknown>()
@@ -183,7 +183,24 @@ describe('POST /api/teams/:teamId/leave', () => {
       const body = await res.json()
       expect(body).toEqual({ success: true })
     })
-    expect(leaveTeamOffice).toHaveBeenCalledWith('office-9')
+    expect(leaveTeamOffice).toHaveBeenCalledWith('office-9', undefined)
+  })
+
+  it('passes appIds through so only those members leave', async () => {
+    await withServer(buildApp(), async (base) => {
+      const res = await postJson(base, '/api/teams/office-9/leave', { appIds: ['app-a', 7, 'app-b'] })
+      expect(res.status).toBe(200)
+    })
+    // Non-string entries are dropped rather than forwarded to the controller.
+    expect(leaveTeamOffice).toHaveBeenCalledWith('office-9', ['app-a', 'app-b'])
+  })
+
+  it('ignores a non-array appIds and leaves with the whole node', async () => {
+    await withServer(buildApp(), async (base) => {
+      const res = await postJson(base, '/api/teams/office-9/leave', { appIds: 'app-a' })
+      expect(res.status).toBe(200)
+    })
+    expect(leaveTeamOffice).toHaveBeenCalledWith('office-9', undefined)
   })
 })
 
