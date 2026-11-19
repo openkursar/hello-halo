@@ -13,7 +13,7 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Create a knowledge collection',
       body: '{"name":"Product Docs"}',
       returns: '{success:true,data:{id,name,icon,description,status:"active",createdAt,updatedAt,path,linkedDirs:[],spaceIds:[],appIds:[],stats:{...}}}',
-      notes: 'Optional fields: icon, description, linkedDirs (array of {path,label}).',
+      notes: 'Optional fields: icon, description, linkedDirs (array of {path,label}), options ({maxLinkedFiles?: 1-20000, extraExtensions?: up to 32 plain-text extensions like ".yaml", mapMaxDocs?: 1-2000}). An invalid option rejects the whole request.',
     },
     'GET /api/tlon': {
       expose: 'ai',
@@ -49,7 +49,7 @@ export const MODULE: RouteModuleMeta = {
       body: '{"name":"New name"}',
       returns: '{success:true,data:<updated entry>} or {success:false,error:"Knowledge base not found"}',
       impact: 'reversible',
-      notes: 'All fields optional: name, icon, description, status ("active"|"paused"|"error").',
+      notes: 'All fields optional: name, icon, description, status ("active"|"paused"|"error"), options (same shape as on create; replaces the current options, null restores the defaults). An invalid option rejects the whole update with nothing changed. Changing options rescans the collection; text of an extension no longer accepted leaves it.',
     },
     'DELETE /api/tlon/:kbId': {
       expose: 'ai',
@@ -114,7 +114,7 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Stop watching a linked directory',
       returns: '{success:true,data:<removal result>}',
       impact: 'reversible',
-      notes: 'Only removes the watch registration — the target folder and its files are untouched, and can be re-linked.',
+      notes: 'Only removes the watch registration — the target folder and its files are untouched, and can be re-linked. By default what was learned from it stays searchable. Add ?forget=true to also retire that text: it leaves together with the next indexing batch (or after about 10 seconds if none starts), so unlinking an old release and linking its replacement right after never leaves the collection empty. Linking the same path again before then cancels the forget.',
     },
     'POST /api/tlon/:kbId/linked-dirs/:linkId/retry': {
       expose: 'ai',
@@ -162,7 +162,7 @@ export const MODULE: RouteModuleMeta = {
       group: 'knowledge-base',
       summary: 'Map paths read from a collection back to their source documents',
       body: '{"readPaths":["/absolute/path/inside/the/collection"]}',
-      returns: '{success:true,data:[{name:string,path:string}]}  — deduped, absolute, files that still exist',
+      returns: '{success:true,data:[{name:string,path:string,version?:string}]}  — deduped, absolute, files that still exist; version is the content version of the watched folder the document came from (its VERSION.md first line, else its git commit)',
       notes: 'Turns the copies a collection holds into citable originals. Paths that no longer exist are dropped silently, so a shorter list than you sent is normal. 400 when readPaths is not an array; an empty array is accepted and returns nothing.',
     },
     'POST /api/tlon/:kbId/ingest': {

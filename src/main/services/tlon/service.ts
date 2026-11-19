@@ -47,6 +47,8 @@ import type {
   CreateKBInput,
   UpdateKBInput,
   AddRawFilesResult,
+  KBOptions,
+  RemoveLinkedDirOptions,
 } from '../../../shared/types/tlon'
 import {
   getTlonRoot,
@@ -69,6 +71,7 @@ import {
 } from './defaults'
 import { isExtractable } from './extract'
 import { isExtractionCurrent, ownedTextPath, unchangedProtection } from './extraction-revision'
+import { resolveFolderVersion } from './version'
 import { CPP_LEVEL_IGNORE_DIRS } from '../../../shared/constants/ignore-patterns'
 import { isDiskRoot } from '../../../shared/disk-paths'
 
@@ -146,9 +149,79 @@ function isJunkSourceName(filePath: string): boolean {
  * True when a file can become a source: plain text, or an extractable document
  * (PDF / PPTX / DOCX / XLSX — text is pulled out at ingest time, see extract.ts).
  */
-export function isAcceptedSourceFile(filePath: string): boolean {
+export function isAcceptedSourceFile(filePath: string, extraExtensions?: ReadonlySet<string>): boolean {
   if (isJunkSourceName(filePath)) return false
-  return isAcceptedTextFile(filePath) || isExtractable(filePath)
+  if (isAcceptedTextFile(filePath) || isExtractable(filePath)) return true
+  if (!extraExtensions || extraExtensions.size === 0) return false
+  return extraExtensions.has(extensionOf(filePath))
+}
+
+function extensionOf(filePath: string): string {
+  const base = (filePath.split(/[\\/]/).pop() || filePath).toLowerCase()
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(dot) : ''
+}
+
+// ============================================================================
+// Per-KB options — larger, still bounded limits for curated document sets
+// ============================================================================
+
+/** Highest value each option accepts. */
+export const KB_OPTION_LIMITS = { maxLinkedFiles: 20000, mapMaxDocs: 2000, extraExtensions: 32 } as const
+
+export const DEFAULT_MAP_MAX_DOCS = 200
+
+/** Never learned as plain text, even when asked for. */
+const NEVER_TEXT_EXTENSIONS = new Set([
+  '.exe', '.dll', '.so', '.dylib', '.zip', '.gz', '.tgz', '.tar', '.7z', '.rar', '.jar', '.class', '.bin',
+])
+
+export interface EffectiveKBOptions {
+  maxLinkedFiles: number
+  extraExtensions: ReadonlySet<string>
+  mapMaxDocs: number
+}
+
+export function effectiveKBOptions(entry: Pick<KnowledgeBaseEntry, 'options'> | null | undefined): EffectiveKBOptions {
+  const o = entry?.options
+  return {
+    maxLinkedFiles: o?.maxLinkedFiles ?? MAX_LINKED_DIR_FILES,
+    extraExtensions: new Set(o?.extraExtensions ?? []),
+    mapMaxDocs: o?.mapMaxDocs ?? DEFAULT_MAP_MAX_DOCS,
+  }
+}
+
+/** Validate options from a caller. Throws on any bad value, so nothing partial is stored. */
+export function normalizeKBOptions(input: unknown): KBOptions | undefined {
+  if (input === null || input === undefined) return undefined
+  if (typeof input !== 'object' || Array.isArray(input)) throw new Error('options must be an object')
+  const src = input as Record<string, unknown>
+  const out: KBOptions = {}
+  for (const key of ['maxLinkedFiles', 'mapMaxDocs'] as const) {
+    const v = src[key]
+    if (v === undefined || v === null) continue
+    const max = KB_OPTION_LIMITS[key]
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > max) {
+      throw new Error(`options.${key} must be an integer between 1 and ${max}`)
+    }
+    out[key] = v
+  }
+  const ext = src.extraExtensions
+  if (ext !== undefined && ext !== null) {
+    if (!Array.isArray(ext) || ext.length > KB_OPTION_LIMITS.extraExtensions) {
+      throw new Error(`options.extraExtensions must be an array of at most ${KB_OPTION_LIMITS.extraExtensions} extensions`)
+    }
+    const list: string[] = []
+    for (const e of ext) {
+      if (typeof e !== 'string') throw new Error('options.extraExtensions must hold strings')
+      const norm = (e.startsWith('.') ? e : '.' + e).toLowerCase()
+      if (!/^\.[a-z0-9_+-]{1,16}$/.test(norm)) throw new Error(`options.extraExtensions: invalid extension ${e}`)
+      if (NEVER_TEXT_EXTENSIONS.has(norm)) throw new Error(`options.extraExtensions: ${norm} is not a text format`)
+      if (!list.includes(norm)) list.push(norm)
+    }
+    if (list.length > 0) out.extraExtensions = list
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /** True if the first 8KB of a buffer contains a NUL byte (binary guard). */
@@ -282,6 +355,8 @@ function persistIndex(map: Map<KnowledgeBaseId, KnowledgeBaseEntry>): void {
 // ============================================================================
 
 export function createKB(input: CreateKBInput): KnowledgeBaseEntry {
+  // Validated before anything is written: bad options reject the whole request.
+  const options = normalizeKBOptions(input.options)
   const id = uuidv4()
   const now = new Date().toISOString()
   const dir = getKBDir(id)
@@ -318,6 +393,7 @@ export function createKB(input: CreateKBInput): KnowledgeBaseEntry {
     spaceIds: [],
     appIds: [],
     stats: { rawFileCount: 0, indexedCount: 0, rawSizeBytes: 0 },
+    ...(options ? { options } : {}),
   }
 
   writeFileSync(getKBMetaPath(id), JSON.stringify(entry, null, 2), 'utf-8')
@@ -401,12 +477,23 @@ function persistEntry(entry: KnowledgeBaseEntry): void {
 export function updateKB(kbId: string, updates: UpdateKBInput): KnowledgeBaseEntry | null {
   const entry = getRegistry().get(kbId)
   if (!entry) return null
+  // Validated before anything changes: a bad option rejects the whole update.
+  const nextOptions = updates.options !== undefined ? normalizeKBOptions(updates.options) : undefined
   const wasActive = entry.status === 'active'
+  const before = effectiveKBOptions(entry)
   if (updates.name !== undefined) entry.name = updates.name
   if (updates.icon !== undefined) entry.icon = updates.icon
   if (updates.description !== undefined) entry.description = updates.description
   if (updates.status !== undefined) entry.status = updates.status
+  let optionsChanged = false
+  if (updates.options !== undefined) {
+    optionsChanged = JSON.stringify(nextOptions) !== JSON.stringify(entry.options)
+    if (nextOptions) entry.options = nextOptions
+    else delete entry.options
+  }
   saveEntry(entry)
+
+  if (optionsChanged) applyOptionsChange(entry, before)
 
   // Paused stops learning: nothing watches the KB until it is turned back on.
   const isActive = entry.status === 'active'
@@ -417,6 +504,31 @@ export function updateKB(kbId: string, updates: UpdateKBInput): KnowledgeBaseEnt
       .catch(err => console.error(`[Tlon] updateKB ${isActive ? 'resume' : 'pause'} watch failed:`, err))
   }
   return entry
+}
+
+/**
+ * New limits change which files are sources. Text of an extension no longer
+ * accepted leaves the corpus now; files a raised cap admits are learned by
+ * a scan; the map is rebuilt for its new size.
+ */
+function applyOptionsChange(entry: KnowledgeBaseEntry, before: EffectiveKBOptions): void {
+  const kbId = entry.id
+  const after = effectiveKBOptions(entry)
+  const dropped = [...before.extraExtensions].filter(e => !after.extraExtensions.has(e))
+  if (dropped.length > 0) retireUnacceptedSources(kbId, dropped, after.extraExtensions)
+  for (const linked of entry.linkedDirs) lastCapWarnStatus.delete(linked.path)
+  import('./ingest')
+    .then(({ rebuildIndexMd, notifyStatsUpdated }) => {
+      if (!getRegistry().get(kbId)) return
+      rebuildIndexMd(kbId)
+      notifyStatsUpdated(kbId)
+    })
+    .catch(err => console.error('[Tlon] updateKB index rebuild failed:', err))
+  if (entry.status === 'active') {
+    import('./watcher')
+      .then(({ rescanKB }) => rescanKB(kbId))
+      .catch(err => console.error('[Tlon] updateKB rescan failed:', err))
+  }
 }
 
 export async function deleteKB(kbId: string): Promise<boolean> {
@@ -532,7 +644,7 @@ export type AddLinkedDirResult =
 
 const lastCapWarnStatus = new Map<string, string>()
 
-function warnLinkedDirIgnored(linkedPath: string, status: 'too-many-files' | 'truncated'): void {
+function warnLinkedDirIgnored(linkedPath: string, status: 'too-many-files' | 'truncated', limit = MAX_LINKED_DIR_FILES): void {
   // Learned-status listing runs at up to 1Hz during ingest; warn once per path
   // per status so a later status change still gets its own warning.
   if (lastCapWarnStatus.get(linkedPath) === status) return
@@ -543,7 +655,7 @@ function warnLinkedDirIgnored(linkedPath: string, status: 'too-many-files' | 'tr
     )
   } else {
     console.warn(
-      `[Tlon] Watched folder is over the ${MAX_LINKED_DIR_FILES}-file cap, ignoring it: ${linkedPath}`
+      `[Tlon] Watched folder is over the ${limit}-file cap, ignoring it: ${linkedPath}`
     )
   }
 }
@@ -576,15 +688,15 @@ type LinkedSourcesOutcome =
  * rejection and every runtime read. Resolves symlinks first so all consumers
  * (add, ingest, listing, stats) classify the same physical tree.
  */
-function walkLinkedSources(linkedPath: string): LinkedSourcesOutcome {
+function walkLinkedSources(linkedPath: string, opts: EffectiveKBOptions): LinkedSourcesOutcome {
   let resolved = linkedPath
   try {
     resolved = realpathSync(linkedPath)
   } catch { /* keep the original path */ }
   const walk = walkFiles(resolved, { skipDir: name => CPP_IGNORED_DIR_NAMES.has(name) })
   if (walk.truncated) return { status: 'truncated' }
-  const files = walk.files.filter(isAcceptedSourceFile)
-  if (files.length > MAX_LINKED_DIR_FILES) {
+  const files = walk.files.filter(f => isAcceptedSourceFile(f, opts.extraExtensions))
+  if (files.length > opts.maxLinkedFiles) {
     return { status: 'too-many-files', count: files.length }
   }
   return { status: 'ok', files }
@@ -598,14 +710,15 @@ function walkLinkedSources(linkedPath: string): LinkedSourcesOutcome {
  * settings say why the folder is not learned.
  */
 function listLinkedSourceFiles(entry: KnowledgeBaseEntry, linked: LinkedDirectory): string[] | null {
-  const outcome = walkLinkedSources(linked.path)
+  const opts = effectiveKBOptions(entry)
+  const outcome = walkLinkedSources(linked.path, opts)
   noteLearningPause(entry, linked, outcome.status === 'ok'
     ? undefined
     : outcome.status === 'too-many-files'
-      ? { reason: 'too-many-files', count: outcome.count, limit: MAX_LINKED_DIR_FILES }
+      ? { reason: 'too-many-files', count: outcome.count, limit: opts.maxLinkedFiles }
       : { reason: 'too-large' })
   if (outcome.status === 'ok') return outcome.files
-  warnLinkedDirIgnored(linked.path, outcome.status)
+  warnLinkedDirIgnored(linked.path, outcome.status, opts.maxLinkedFiles)
   return null
 }
 
@@ -684,16 +797,17 @@ export function addLinkedDir(
   if (entry.linkedDirs.some(d => d.path === dir.path)) {
     return { ok: true, linked: entry.linkedDirs.find(d => d.path === dir.path) as LinkedDirectory }
   }
-  const outcome = walkLinkedSources(resolved)
+  const opts = effectiveKBOptions(entry)
+  const outcome = walkLinkedSources(resolved, opts)
   if (outcome.status === 'truncated') {
     console.warn(`[Tlon] addLinkedDir: folder too large to walk: ${dir.path}`)
     return { ok: false, reason: 'folder-too-large' }
   }
   if (outcome.status === 'too-many-files') {
     console.warn(
-      `[Tlon] addLinkedDir: folder over the ${MAX_LINKED_DIR_FILES}-file cap: ${dir.path}`
+      `[Tlon] addLinkedDir: folder over the ${opts.maxLinkedFiles}-file cap: ${dir.path}`
     )
-    return { ok: false, reason: 'too-many-files', count: outcome.count, limit: MAX_LINKED_DIR_FILES }
+    return { ok: false, reason: 'too-many-files', count: outcome.count, limit: opts.maxLinkedFiles }
   }
   const linked: LinkedDirectory = {
     id: uuidv4(),
@@ -703,6 +817,8 @@ export function addLinkedDir(
   }
   entry.linkedDirs.push(linked)
   saveEntry(entry)
+  // Linked again before a pending forget applied: what it taught stays.
+  updateForgetList(kbId, list => list.filter(p => p !== dir.path))
 
   // Start watching + initial scan (best-effort, lazy import to avoid cycle).
   import('./watcher')
@@ -712,7 +828,12 @@ export function addLinkedDir(
   return { ok: true, linked }
 }
 
-export function removeLinkedDir(kbId: string, linkId: string): boolean {
+/**
+ * Stop watching a folder. What it taught stays learned unless `forget` is set;
+ * then it leaves with the next learning batch, so a folder swapped for another
+ * (unlink the old release, link the new) is never searched half-empty.
+ */
+export function removeLinkedDir(kbId: string, linkId: string, options: RemoveLinkedDirOptions = {}): boolean {
   const entry = getRegistry().get(kbId)
   if (!entry) return false
   const linked = entry.linkedDirs.find(d => d.id === linkId)
@@ -720,12 +841,38 @@ export function removeLinkedDir(kbId: string, linkId: string): boolean {
   entry.linkedDirs = entry.linkedDirs.filter(d => d.id !== linkId)
   saveEntry(entry)
   lastCapWarnStatus.delete(linked.path)
+  if (options.forget) {
+    updateForgetList(kbId, list => list.includes(linked.path) ? list : [...list, linked.path])
+  }
 
   import('./watcher')
-    .then(({ stopLinkedDirWatch }) => stopLinkedDirWatch(kbId, linked))
+    .then(async ({ stopLinkedDirWatch, rescanKB }) => {
+      await stopLinkedDirWatch(kbId, linked)
+      // A replacement linked within the grace period reschedules this scan
+      // sooner and is learned in the same batch; otherwise the forget applies alone.
+      if (options.forget && entry.status === 'active') rescanKB(kbId, FORGET_GRACE_MS)
+    })
     .catch(err => console.error('[Tlon] removeLinkedDir watch stop failed:', err))
 
   return true
+}
+
+/** How long a forget waits for a replacement folder before applying on its own. */
+export const FORGET_GRACE_MS = 10_000
+
+function updateForgetList(kbId: string, update: (list: string[]) => string[]): void {
+  const hashes = readHashes(kbId)
+  const current = hashes.forget ?? []
+  const next = update(current)
+  if (next.length === current.length && next.every((p, i) => p === current[i])) return
+  if (next.length > 0) hashes.forget = next
+  else delete hashes.forget
+  writeHashes(kbId, hashes)
+}
+
+/** Unlinked folders waiting to be forgotten. */
+export function pendingForgets(kbId: string, hashes: IngestHashesV1 = readHashes(kbId)): string[] {
+  return hashes.forget ?? []
 }
 
 // ============================================================================
@@ -744,6 +891,7 @@ export function addRawFiles(kbId: string, inputPaths: string[]): AddRawFilesResu
 
   const rawDir = getKBRawDir(kbId)
   if (!existsSync(rawDir)) mkdirSync(rawDir, { recursive: true })
+  const { extraExtensions } = effectiveKBOptions(entry)
 
   for (const src of inputPaths) {
     let st
@@ -758,10 +906,10 @@ export function addRawFiles(kbId: string, inputPaths: string[]): AddRawFilesResu
       const folderName = src.split(/[\\/]/).filter(Boolean).pop() || 'imported'
       const walk = walkFiles(src, { skipDir: name => IGNORED_IMPORT_DIRS.has(name) })
       for (const rel of walk.files) {
-        copyRawFile(rawDir, join(src, rel), join(folderName, rel), result)
+        copyRawFile(rawDir, join(src, rel), join(folderName, rel), result, extraExtensions)
       }
     } else if (st.isFile()) {
-      copyRawFile(rawDir, src, src.split(/[\\/]/).pop() || src, result)
+      copyRawFile(rawDir, src, src.split(/[\\/]/).pop() || src, result, extraExtensions)
     }
   }
 
@@ -778,9 +926,10 @@ function copyRawFile(
   rawDir: string,
   src: string,
   destRel: string,
-  result: AddRawFilesResult
+  result: AddRawFilesResult,
+  extraExtensions: ReadonlySet<string>
 ): void {
-  if (!isAcceptedSourceFile(destRel)) {
+  if (!isAcceptedSourceFile(destRel, extraExtensions)) {
     result.rejected.push(destRel)
     return
   }
@@ -959,7 +1108,8 @@ class Retirement {
     else this.failures.set(kind, { count: 1, first: error instanceof Error ? error.message : String(error) })
   }
 
-  constructor(readonly entry: KnowledgeBaseEntry) {}
+  /** `forced` keys count as removed even though their files are still there. */
+  constructor(readonly entry: KnowledgeBaseEntry, private readonly forced: ReadonlySet<string> = new Set()) {}
 
   keep(reason: RetainReason): void {
     this.retained.set(reason, (this.retained.get(reason) ?? 0) + 1)
@@ -989,6 +1139,7 @@ class Retirement {
    * watched — unlinking stops watching but keeps what was learned.
    */
   presence(key: string, sourceDev: number | undefined): 'present' | 'gone' | 'unknown' {
+    if (this.forced.has(key)) return 'gone'
     if (!isAbsolute(key)) {
       const rawDir = getKBRawDir(this.entry.id)
       const abs = resolveWithinDir(rawDir, key)
@@ -1147,6 +1298,42 @@ export function retireRemovedSources(kbId: string, removedPaths: string[]): numb
 }
 
 /**
+ * Retire sources whose files are still there but are no longer wanted, under
+ * the same rules as a removal: owner-maintained text moves out of search and
+ * edited text stays.
+ */
+function retireUnwanted(kbId: string, keys: string[]): number {
+  const entry = getRegistry().get(kbId)
+  if (!entry || keys.length === 0) return 0
+  return commitRetirement(kbId, new Retirement(entry, new Set(keys)), keys, [])
+}
+
+/** Retire sources of extensions the KB stopped accepting. */
+export function retireUnacceptedSources(kbId: string, dropped: string[], accepted: ReadonlySet<string>): number {
+  const drop = new Set(dropped)
+  const keys = Object.keys(readHashes(kbId).files)
+    .filter(key => drop.has(extensionOf(key)) && !isAcceptedSourceFile(key, accepted))
+  return retireUnwanted(kbId, keys)
+}
+
+/**
+ * Apply pending forgets: retire what each forgotten folder taught, unless a
+ * current link still covers it. Run by the batch commit, right after the
+ * batch's own text lands.
+ */
+export function retireForgottenSources(kbId: string): number {
+  const entry = getRegistry().get(kbId)
+  const hashes = readHashes(kbId)
+  const forget = hashes.forget ?? []
+  if (!entry || forget.length === 0) return 0
+  const keys = Object.keys(hashes.files)
+    .filter(key => isAbsolute(key) && forget.some(dir => isWithin(dir, key)) && !entryWatches(entry, key))
+  const retired = retireUnwanted(kbId, keys)
+  updateForgetList(kbId, list => list.filter(dir => !forget.includes(dir)))
+  return retired
+}
+
+/**
  * Full reconciliation: every record plus generated text left without a
  * record by earlier removals. Probes run in batches that yield to the event
  * loop; deletion is re-verified in one synchronous commit. For an explicit
@@ -1279,6 +1466,7 @@ export function isKBIndexReady(kbId: string): boolean {
  * Filters to sources that map to a real, existing file; dedupes by source.
  */
 export function resolveSources(kbId: string, readPaths: string[]): KBSource[] {
+  const entry = getRegistry().get(kbId)
   const hashes = readHashes(kbId)
   const rawDir = getKBRawDir(kbId)
   const bySource = new Map<string, string>()
@@ -1295,7 +1483,9 @@ export function resolveSources(kbId: string, readPaths: string[]): KBSource[] {
     const openPath = isAbsolute(sourcePath) ? sourcePath : join(rawDir, sourcePath)
     if (!existsSync(openPath)) continue
     seen.add(sourcePath)
-    out.push({ name: sourcePath.split(/[\\/]/).pop() || sourcePath, path: openPath })
+    const dir = entry ? linkedDirForSource(entry, sourcePath) : undefined
+    const version = (dir && hashes.versions?.[dir.path]) || hashes.files[sourcePath].version
+    out.push({ name: sourcePath.split(/[\\/]/).pop() || sourcePath, path: openPath, ...(version ? { version } : {}) })
   }
   return out
 }
@@ -1666,12 +1856,13 @@ export function scanIngestSources(kbId: string): { candidates: IngestCandidate[]
   const candidates: IngestCandidate[] = []
   const seen = new Set<string>()
   const listedRoots: string[] = []
+  const { extraExtensions } = effectiveKBOptions(entry)
 
   let backfilled = 0
 
   const consider = (sourcePath: string, absolutePath: string, sourceType: 'raw' | 'linked') => {
     seen.add(sourcePath)
-    if (!isAcceptedSourceFile(absolutePath)) return
+    if (!isAcceptedSourceFile(absolutePath, extraExtensions)) return
     let current: string
     let dev: number
     try {
@@ -1722,4 +1913,30 @@ export function scanIngestSources(kbId: string): { candidates: IngestCandidate[]
   const unseen = Object.keys(hashes.files).filter(key => !seen.has(key)
     && (isAbsolute(key) ? listedRoots.some(root => isWithin(root, key)) : rawListed))
   return { candidates, unseen }
+}
+
+/**
+ * Content version of each watched folder that has one (see version.ts), keyed
+ * by its configured path. A folder unreachable right now keeps its previous
+ * version: its learned text is kept too, so the map and citations go on
+ * naming the version that text came from.
+ */
+export function collectLinkedVersions(kbId: string, previous: Record<string, string> = {}): Record<string, string> {
+  const entry = getRegistry().get(kbId)
+  const out: Record<string, string> = {}
+  for (const dir of entry?.linkedDirs ?? []) {
+    if (!existsSync(dir.path)) {
+      if (previous[dir.path]) out[dir.path] = previous[dir.path]
+      continue
+    }
+    const version = resolveFolderVersion(dir.path)
+    if (version) out[dir.path] = version
+  }
+  return out
+}
+
+/** The watched folder (configured path) a linked source key belongs to, if any. */
+export function linkedDirForSource(entry: KnowledgeBaseEntry, sourcePath: string): LinkedDirectory | undefined {
+  if (!isAbsolute(sourcePath)) return undefined
+  return entry.linkedDirs.find(d => isWithin(d.path, sourcePath))
 }

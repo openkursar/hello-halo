@@ -9,9 +9,12 @@
  * index.md is rebuilt programmatically as a document map (name → absolute text
  * path) injected into agent prompts. Learned status is persisted only on
  * success (hashes.json: textPath per source).
+ *
+ * A batch stages its text and records and commits them together at the end,
+ * so a KB is never searched half-updated.
  */
 
-import { join, sep } from 'path'
+import { isAbsolute, join, relative, sep } from 'path'
 import { setImmediate as yieldToMain } from 'node:timers/promises'
 import {
   readFileSync,
@@ -24,6 +27,9 @@ import {
   closeSync,
   lstatSync,
   statSync,
+  renameSync,
+  rmSync,
+  copyFileSync,
 } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import { sendToRenderer } from '../../foundation/window.service'
@@ -37,6 +43,7 @@ import {
   getKBLogPath,
   getKBIndexMdPath,
   getKBTextDir,
+  getKBStagingDir,
 } from './paths'
 import {
   getKB,
@@ -55,6 +62,11 @@ import {
   generatedTextName,
   generatedTextHeader,
   sha256,
+  effectiveKBOptions,
+  collectLinkedVersions,
+  linkedDirForSource,
+  pendingForgets,
+  retireForgottenSources,
 } from './service'
 import { extractText } from './extract'
 import { DEFAULT_INDEX_MD } from './defaults'
@@ -67,6 +79,8 @@ import { upgradeXlsxSource } from './xlsx-upgrade'
 
 const queues = new Map<string, IngestJob[]>()
 const processing = new Set<string>()
+/** The batch each KB is running, so a mid-batch scan does not queue what it already extracted. */
+const activeBatches = new Map<string, IngestBatch>()
 const progress = new Map<string, IngestProgressEvent>()
 
 function emitProgress(event: IngestProgressEvent): void {
@@ -112,7 +126,9 @@ export function enqueueFiles(
   options: { automatic?: boolean } = {}
 ): void {
   const queue = queues.get(kbId) || []
+  const batch = activeBatches.get(kbId)
   for (const e of entries) {
+    if (batch && extractedUnchanged(batch, e.sourcePath, e.absolutePath)) continue
     const existing = queue.find(j => j.sourcePath === e.sourcePath)
     if (existing) {
       if (!options.automatic) existing.automatic = false
@@ -139,6 +155,18 @@ export async function triggerFullIngest(kbId: string): Promise<void> {
   const kb = getKB(kbId)
   if (!kb) return
 
+  // A watched folder reached through a symlink may point elsewhere since it
+  // was subscribed (a release switched); re-aim its watch first. Lazy import:
+  // watcher.ts imports this module.
+  if (kb.status === 'active' && kb.linkedDirs.length > 0) {
+    try {
+      const { refreshLinkedWatches } = await import('./watcher')
+      await refreshLinkedWatches(kbId)
+    } catch (error) {
+      console.error(`[Tlon] Refreshing watches failed for ${kbId}:`, error)
+    }
+  }
+
   await sweepRemovedSourcesAndIndex(kbId)
   if (!getKB(kbId)) return
   markRetirementMigrated(kbId)
@@ -146,14 +174,15 @@ export async function triggerFullIngest(kbId: string): Promise<void> {
   enqueueFiles(kbId, candidates)
 
   const queue = queues.get(kbId) || []
+  const pending = queue.length > 0 || hasPendingCommit(kbId)
   emitProgress({
     kbId,
     total: queue.length,
     completed: 0,
-    phase: queue.length > 0 ? 'running' : 'done',
+    phase: pending ? 'running' : 'done',
   })
 
-  if (queue.length === 0) {
+  if (!pending) {
     emitStatsUpdated(kbId)
     return
   }
@@ -239,24 +268,76 @@ export async function migrateKBsToTextIndex(): Promise<void> {
   }
 }
 
-/**
- * Process the queue: extract each pending file to text/ one at a time. Kept
- * sequential so progress is monotonic and writes stay simple; each step is
- * cheap (no model call).
- */
 function fileName(sourcePath: string): string {
   return sourcePath.split(sep).pop() || sourcePath
 }
 
+/**
+ * True when a batch must commit even with nothing to extract: a forgotten
+ * folder is waiting to leave, or a watched folder's version moved.
+ */
+export function hasPendingCommit(kbId: string): boolean {
+  const hashes = readHashes(kbId)
+  if (pendingForgets(kbId, hashes).length > 0) return true
+  return !sameVersions(hashes.versions, collectLinkedVersions(kbId, hashes.versions))
+}
+
+function sameVersions(a: Record<string, string> | undefined, b: Record<string, string>): boolean {
+  const keys = Object.keys(a ?? {})
+  return keys.length === Object.keys(b).length && keys.every(k => a?.[k] === b[k])
+}
+
+type IngestRecord = IngestHashesV1['files'][string]
+
+/**
+ * One batch's pending writes. Extracted text is staged and records are held
+ * until the batch commits, so a chat reading the KB mid-batch sees the
+ * previous complete set, not a mix of old and new documents.
+ */
+interface IngestBatch {
+  stagingDir: string
+  /** Source key → its new record, its staged text (if any), the file identity read, and its job. */
+  records: Map<string, { record: IngestRecord; staged?: string; read: TextStamp; job: IngestJob }>
+  /** Folder versions at batch start, recorded on each learned source. */
+  versions: Record<string, string>
+}
+
+/** Extracted by this batch and not changed since. */
+function extractedUnchanged(batch: IngestBatch, sourcePath: string, absolutePath: string): boolean {
+  const done = batch.records.get(sourcePath)
+  if (!done) return false
+  try {
+    return sameTextStamp(done.read, stampOf(statSync(absolutePath)))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Process the queue: extract each pending file one at a time into the batch,
+ * then commit the batch. Kept sequential so progress is monotonic; each step
+ * is cheap (no model call).
+ */
 export async function processQueue(kbId: string): Promise<void> {
   if (processing.has(kbId)) return
-  const queue = queues.get(kbId)
-  if (!queue || queue.length === 0) return
+  const queue = queues.get(kbId) || []
+  if (queue.length === 0 && !hasPendingCommit(kbId)) return
+  // Registered so the watcher enqueues into the array this batch drains.
+  queues.set(kbId, queue)
 
   processing.add(kbId)
   let completed = 0
   let pausedJobs = 0
   const errors: Array<{ file: string; message: string }> = []
+  const stagingDir = getKBStagingDir(kbId)
+  // Left by an interrupted batch: never committed, so never visible.
+  rmSync(stagingDir, { recursive: true, force: true })
+  const batch: IngestBatch = {
+    stagingDir,
+    records: new Map(),
+    versions: collectLinkedVersions(kbId, readHashes(kbId).versions),
+  }
+  activeBatches.set(kbId, batch)
 
   emitProgress({
     kbId,
@@ -264,7 +345,7 @@ export async function processQueue(kbId: string): Promise<void> {
     // mid-batch, so a total captured once would go stale (e.g. "7/5").
     total: completed + queue.length,
     completed,
-    current: fileName(queue[0].sourcePath),
+    current: queue[0] ? fileName(queue[0].sourcePath) : undefined,
     phase: 'running',
   })
 
@@ -275,7 +356,7 @@ export async function processQueue(kbId: string): Promise<void> {
         if (job.automatic && getKB(kbId)?.status === 'paused') {
           job.status = 'skipped'
           pausedJobs++
-        } else await extractSource(kbId, job)
+        } else await extractSource(kbId, job, batch)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         console.error(`[Tlon] Extract failed for ${job.sourcePath}:`, message)
@@ -296,7 +377,11 @@ export async function processQueue(kbId: string): Promise<void> {
         errors: errors.length > 0 ? [...errors] : undefined,
       })
     }
+    // A KB deleted mid-batch has nothing to commit into.
+    if (getKB(kbId)) commitBatch(kbId, batch)
   } finally {
+    activeBatches.delete(kbId)
+    rmSync(stagingDir, { recursive: true, force: true })
     processing.delete(kbId)
     queues.delete(kbId)
   }
@@ -347,17 +432,26 @@ function sourceChangedDuringExtraction(job: IngestJob, read: TextStamp): boolean
 }
 
 /**
- * Extract one source to text/, then record its learned status and rebuild the
- * index. The original bytes are hashed for learned-status; the extracted text
- * (prefixed with a source marker for citation) is what queries grep/read.
+ * Extract one source into the batch: its text is staged and its record held
+ * until commitBatch. The original bytes are hashed for learned-status; the
+ * extracted text (prefixed with a source marker for citation) is what queries
+ * grep/read.
  */
-async function extractSource(kbId: string, job: IngestJob): Promise<void> {
+async function extractSource(kbId: string, job: IngestJob, batch: IngestBatch): Promise<void> {
   job.status = 'running'
   job.startedAt = new Date().toISOString()
   const textPath = generatedTextName(job.sourcePath)
+  // Legacy spreadsheet upgrades keep writing in place: they replace text with
+  // an equivalent rendering, not a new document set.
   if (await upgradeXlsxSource(job, textPath, () => appendLog(job, textPath))) return
   const revision = extractionRevision(job.absolutePath)
-  const version = revision === undefined ? {} : { extractorRevision: revision }
+  const kb = getKB(kbId)
+  const dir = kb && job.sourceType === 'linked' ? linkedDirForSource(kb, job.sourcePath) : undefined
+  const folderVersion = dir ? batch.versions[dir.path] : undefined
+  const version = {
+    ...(revision === undefined ? {} : { extractorRevision: revision }),
+    ...(folderVersion ? { version: folderVersion } : {}),
+  }
 
   let buf: Buffer
   let read: TextStamp
@@ -382,9 +476,11 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
   } catch (error) {
     if (sourceChangedDuringExtraction(job, read)) return
     const message = error instanceof Error ? error.message : String(error)
-    const hashes: IngestHashesV1 = readHashes(kbId)
-    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), lastError: message, ...identity }
-    writeHashes(kbId, hashes)
+    batch.records.set(job.sourcePath, {
+      record: { hash: contentHash, ingestedAt: new Date().toISOString(), lastError: message, ...identity },
+      read,
+      job,
+    })
     throw error
   }
   if (sourceChangedDuringExtraction(job, read)) return
@@ -392,35 +488,72 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
     console.warn(`[Tlon] No text extracted from ${job.sourcePath}, skipping`)
     // Record the attempt so a text-less source (e.g. an image with no text) is
     // not re-extracted on every launch; it retries only when its bytes change.
-    const hashes: IngestHashesV1 = readHashes(kbId)
-    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), empty: true, ...identity }
-    writeHashes(kbId, hashes)
+    batch.records.set(job.sourcePath, {
+      record: { hash: contentHash, ingestedAt: new Date().toISOString(), empty: true, ...identity },
+      read,
+      job,
+    })
     job.status = 'skipped'
     return
   }
 
-  const textDir = getKBTextDir(kbId)
-  if (!existsSync(textDir)) mkdirSync(textDir, { recursive: true })
-  writeFileSync(
-    join(textDir, textPath),
-    `${generatedTextHeader(job.sourcePath)}\n\n${fileContent}`,
-    'utf-8'
-  )
-
-  appendLog(job, textPath)
-
-  const hashes: IngestHashesV1 = readHashes(kbId)
-  hashes.files[job.sourcePath] = {
-    hash: contentHash,
-    ingestedAt: new Date().toISOString(),
-    textPath,
-    ...identity,
-  }
-  writeHashes(kbId, hashes)
+  if (!existsSync(batch.stagingDir)) mkdirSync(batch.stagingDir, { recursive: true })
+  const staged = join(batch.stagingDir, textPath)
+  writeFileSync(staged, `${generatedTextHeader(job.sourcePath)}\n\n${fileContent}`, 'utf-8')
+  batch.records.set(job.sourcePath, {
+    record: { hash: contentHash, ingestedAt: new Date().toISOString(), textPath, ...identity },
+    staged,
+    read,
+    job,
+  })
 
   job.status = 'completed'
   job.completedAt = new Date().toISOString()
   job.contentHash = contentHash
+}
+
+/**
+ * Make a batch visible: staged text moves into text/ first, then every record
+ * is merged into the current hashes in one write (records changed meanwhile
+ * by a retirement or another writer are kept), then pending forgets apply.
+ * A source replaced or removed since it was read is left out.
+ */
+function commitBatch(kbId: string, batch: IngestBatch): void {
+  const textDir = getKBTextDir(kbId)
+  const accepted: Array<[string, IngestRecord]> = []
+  for (const [sourcePath, entry] of batch.records) {
+    if (sourceChangedDuringExtraction(entry.job, entry.read)) continue
+    if (entry.staged) {
+      try {
+        if (!existsSync(textDir)) mkdirSync(textDir, { recursive: true })
+        moveFile(entry.staged, join(textDir, entry.record.textPath as string))
+      } catch (error) {
+        // Unrecorded, so the source is extracted again on the next scan.
+        console.error(`[Tlon] Failed to commit text for ${sourcePath}:`, error)
+        continue
+      }
+      appendLog(entry.job, entry.record.textPath as string)
+    }
+    accepted.push([sourcePath, entry.record])
+  }
+  const hashes: IngestHashesV1 = readHashes(kbId)
+  for (const [sourcePath, record] of accepted) hashes.files[sourcePath] = record
+  const versions = collectLinkedVersions(kbId, hashes.versions)
+  if (Object.keys(versions).length > 0) hashes.versions = versions
+  else delete hashes.versions
+  writeHashes(kbId, hashes)
+  retireForgottenSources(kbId)
+}
+
+/** Rename within one volume; copy then remove when staging and text/ differ. */
+function moveFile(from: string, to: string): void {
+  try {
+    renameSync(from, to)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
+    copyFileSync(from, to)
+    rmSync(from, { force: true })
+  }
 }
 
 // ============================================================================
@@ -448,15 +581,30 @@ export function rebuildIndexMd(kbId: string): void {
   }
   const textDir = getKBTextDir(kbId)
   const hashes = readHashes(kbId)
+  const { mapMaxDocs } = effectiveKBOptions(kb)
 
-  const docs = Object.entries(hashes.files)
-    .flatMap(([sourcePath, info]) => {
-      const absPath = info.textPath ? ownedTextPath(textDir, info.textPath) : null
-      return absPath ? [{ name: sourcePath.split(/[\\/]/).pop() || sourcePath, absPath }] : []
-    })
-    .sort((a, b) => a.name.localeCompare(b.name))
+  // Grouped by watched folder (in configured order, named relative to it and
+  // tagged with its version), then added files, then anything else learned.
+  const groups = kb.linkedDirs.map(dir => ({
+    heading: `${mapLabel(dir.label || dir.path)}${hashes.versions?.[dir.path] ? ` (version ${mapLabel(hashes.versions[dir.path])})` : ''}`,
+    docs: [] as MapDoc[],
+  }))
+  const added: MapDoc[] = []
+  const other: MapDoc[] = []
+  for (const [sourcePath, info] of Object.entries(hashes.files)) {
+    const absPath = info.textPath ? ownedTextPath(textDir, info.textPath) : null
+    if (!absPath) continue
+    if (!isAbsolute(sourcePath)) {
+      added.push({ name: sourcePath.split(/[\\/]/).join('/'), absPath })
+      continue
+    }
+    const at = kb.linkedDirs.findIndex(d => isWithinDir(d.path, sourcePath))
+    if (at >= 0) groups[at].docs.push({ name: relative(kb.linkedDirs[at].path, sourcePath).split(sep).join('/'), absPath })
+    else other.push({ name: sourcePath.split(/[\\/]/).pop() || sourcePath, absPath })
+  }
 
-  if (docs.length === 0) {
+  const total = groups.reduce((n, g) => n + g.docs.length, 0) + added.length + other.length
+  if (total === 0) {
     writeFileSync(getKBIndexMdPath(kbId), DEFAULT_INDEX_MD, 'utf-8')
     return
   }
@@ -464,22 +612,54 @@ export function rebuildIndexMd(kbId: string): void {
   let md = `# ${kb.name}\n\n`
   md += `The source documents in this knowledge base. To answer, Grep/Glob and `
   md += `Read the document files below for exact passages, then cite the document by name.\n\n`
-  for (const doc of docs.slice(0, INDEX_MAX_DOCS)) {
-    let synopsis = ''
-    try {
-      synopsis = firstProseLine(readFileHead(doc.absPath))
-    } catch { /* ignore */ }
-    md += `- **${doc.name}**${synopsis ? ` — ${synopsis}` : ''} — \`${doc.absPath}\`\n`
+  let listed = 0
+  const list = (docs: MapDoc[]): void => {
+    for (const doc of docs.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (listed >= mapMaxDocs) return
+      listed++
+      let synopsis = ''
+      try {
+        synopsis = firstProseLine(readFileHead(doc.absPath))
+      } catch { /* ignore */ }
+      md += `- **${doc.name}**${synopsis ? ` — ${synopsis}` : ''} — \`${doc.absPath}\`\n`
+    }
   }
-  if (docs.length > INDEX_MAX_DOCS) {
-    md += `\n…and ${docs.length - INDEX_MAX_DOCS} more documents — Glob \`${textDir}\` to list all.\n`
+  if (kb.linkedDirs.length === 0) {
+    // No watched folders: one flat list, as before.
+    list([...added.map(d => ({ ...d, name: d.name.split('/').pop() || d.name })), ...other])
+  } else {
+    const sections: Array<{ heading: string; docs: MapDoc[] }> = [
+      ...groups,
+      { heading: 'Added files', docs: added },
+      { heading: 'Other documents', docs: other },
+    ]
+    for (const section of sections) {
+      if (section.docs.length === 0 || listed >= mapMaxDocs) continue
+      md += `## ${section.heading}\n\n`
+      list(section.docs)
+      md += '\n'
+    }
+  }
+  if (total > listed) {
+    md += `\n…and ${total - listed} more documents — Glob \`${textDir}\` to list all.\n`
   }
   md += '\n'
   writeFileSync(getKBIndexMdPath(kbId), md, 'utf-8')
 }
 
-/** Keeps the injected document map bounded for large KBs. */
-const INDEX_MAX_DOCS = 200
+interface MapDoc { name: string; absPath: string }
+
+/** A label or version as one safe line of the map. */
+function mapLabel(text: string): string {
+  const line = text.replace(/[\r\n]+/g, ' ').replace(/[#`]/g, '').trim()
+  return line.length > 80 ? line.slice(0, 80) : line
+}
+
+function isWithinDir(dir: string, path: string): boolean {
+  const rel = relative(dir, path)
+  return !!rel && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
 const SYNOPSIS_READ_BYTES = 4096
 
 /** Read only the first bytes of a text file — synopses never need the whole document. */
@@ -494,13 +674,28 @@ function readFileHead(path: string): string {
   }
 }
 
-/** First non-empty prose line of extracted text (skips the source marker), capped. */
+/**
+ * One-line synopsis of extracted text: a front-matter description/summary when
+ * present, else the first non-empty prose line (skipping the source marker), capped.
+ */
 function firstProseLine(content: string): string {
-  for (const raw of content.split('\n')) {
-    const line = raw.trim()
-    if (!line) continue
-    if (line.startsWith('<!--')) continue
-    return line.length > 160 ? line.slice(0, 157).trimEnd() + '…' : line
+  const cap = (line: string): string => line.length > 160 ? line.slice(0, 157).trimEnd() + '…' : line
+  const lines = content.split('\n')
+  let i = 0
+  while (i < lines.length && (!lines[i].trim() || lines[i].trim().startsWith('<!--'))) i++
+  if (lines[i]?.trim() === '---') {
+    let summary = ''
+    for (i = i + 1; i < lines.length && lines[i].trim() !== '---'; i++) {
+      const m = /^(description|summary)\s*:\s*(.+)$/.exec(lines[i].trim())
+      if (m && !summary) summary = m[2].replace(/^['"]|['"]$/g, '').trim()
+    }
+    i++ // past the closing ---
+    if (summary) return cap(summary)
+  }
+  for (; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line || line.startsWith('<!--')) continue
+    return cap(line)
   }
   return ''
 }
