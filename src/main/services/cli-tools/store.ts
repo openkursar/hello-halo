@@ -26,7 +26,28 @@ import { assertManifestSupported, parseCliManifest, type CliManifest } from './m
 import { inspectPayload, integrityOf, integrityShortHex, scanPayload } from './payload'
 import { ARGV_PRELOAD_FILE, launcherFiles, renderArgvPreload } from './shims'
 
-export type CliToolSource = 'preset' | 'catalog' | 'user-import'
+/**
+ * Where an installed version came from. `external` is a program already on the
+ * computer that the user registered: Halo keeps only a record of it.
+ */
+export type CliToolSource = 'preset' | 'catalog' | 'user-import' | 'external'
+
+/** Version key of a registered existing program; a tool has at most one. */
+export const EXTERNAL_VERSION = 'external'
+
+/** A registered program Halo does not manage: never copied, changed or deleted. */
+export interface CliExternalRecord {
+  /** Absolute path of the executable or script. */
+  path: string
+  /** `halo-node` runs a .js/.mjs/.cjs script on the bundled runtime; null runs the file itself. */
+  interpreter: 'halo-node' | null
+  sha256: string
+  size: number
+  mtimeMs: number
+  registeredAt: string
+  /** Set when the file went missing or changed since it was confirmed; excluded from new executions. */
+  changed?: 'missing' | 'modified'
+}
 
 /** Which surface started an execution; recorded for diagnosis only. */
 export type CliExecutionEntry = 'chat' | 'app-chat' | 'im' | 'automation' | 'team' | 'terminal' | 'other'
@@ -45,17 +66,72 @@ export interface CliToolVersionRecord {
   guide?: string
   sideEffects?: CliManifest['sideEffects']
   auth?: NonNullable<CliManifest['auth']>['method']
+  /** Display name and description from the manifest (or the registration). */
+  name?: string
+  description?: string
+  /** A catalog version the catalog no longer lists. Informational: it stays usable. */
+  withdrawn?: boolean
+  /** Present only for `source: 'external'`; `dir` is then empty. */
+  external?: CliExternalRecord
 }
 
 export interface CliToolRecord {
   current: string | null
+  /** Set by an administrator catalog; keeps the tool out of new executions. */
   revoked: boolean
+  /** Set by the user; kept apart from `revoked` so neither overrides the other. */
+  disabled?: boolean
+  /** The catalog no longer lists this catalog-sourced tool at all. */
+  delisted?: boolean
+  /** Highest approved catalog version above every installed one; never downloaded on its own. */
+  catalogUpdate?: string
   versions: Record<string, CliToolVersionRecord>
 }
 
 export interface CliToolState {
   schema: 1
   tools: Record<string, CliToolRecord>
+  /**
+   * Store directories (relative to root) whose records were removed while a
+   * running execution still pinned them; deleted by `collectPendingCleanup`.
+   */
+  pendingCleanup?: string[]
+}
+
+/** What a package would install, read in staging without running any of it. */
+export interface PackagePreview {
+  id: string
+  version: string
+  name?: string
+  description?: string
+  commands: string[]
+  platforms: string[]
+  minNode?: string
+  sideEffects?: CliManifest['sideEffects']
+  auth?: NonNullable<CliManifest['auth']>['method']
+  archiveSha256: string
+  integrity: string
+  archiveBytes: number
+  payloadBytes: number
+  files: number
+}
+
+export interface RegisterExternalOptions {
+  path: string
+  interpreter: 'halo-node' | null
+  command: string
+  name: string
+  description?: string
+  /** Attach to an installed tool instead of creating `external.<command>`. */
+  toolId?: string
+}
+
+/** Catalog facts about one tool, as `applyCatalogStatus` consumes them. */
+export interface CatalogToolStatus {
+  id: string
+  revoked: boolean
+  /** Approved versions the catalog lists now. */
+  versions: string[]
 }
 
 export interface CliToolStoreOptions {
@@ -150,6 +226,57 @@ export interface PinnedExecution {
 }
 
 const STATE_MAX_BYTES = 1024 * 1024
+/** Same rule as manifest command names: bare, lowercase, never the reserved `halo-` prefix. */
+export const COMMAND_NAME_PATTERN = /^(?!halo-)[a-z0-9][a-z0-9._-]{0,63}$/
+const TOOL_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/
+const SCRIPT_EXTENSIONS = /\.(c|m)?js$/i
+const WINDOWS_EXECUTABLE = /\.(exe|cmd|bat|com)$/i
+
+/** Compare dotted numeric versions (semver core, prerelease ignored); non-numeric parts count as 0. */
+export function compareVersions(a: string, b: string): number {
+  const core = (v: string) => v.split(/[-+]/)[0].split('.').map(n => Number.parseInt(n, 10) || 0)
+  const pa = core(a)
+  const pb = core(b)
+  for (let i = 0; i < Math.max(pa.length, pb.length, 3); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  // Same core: a release sorts above its prereleases.
+  const preA = a.includes('-')
+  const preB = b.includes('-')
+  if (preA !== preB) return preA ? -1 : 1
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/**
+ * Whether a tool may enter a new execution, and why not. Withdrawn versions
+ * stay usable; everything else listed here keeps the tool out.
+ */
+export function toolBlock(tool: CliToolRecord): 'no-current' | 'revoked' | 'delisted' | 'external-changed' | 'disabled' | null {
+  const record = tool.current ? tool.versions[tool.current] : undefined
+  if (!tool.current || !record) return 'no-current'
+  if (tool.revoked) return 'revoked'
+  if (tool.delisted && record.source === 'catalog') return 'delisted'
+  if (record.external?.changed) return 'external-changed'
+  if (tool.disabled) return 'disabled'
+  return null
+}
+
+async function fileSha256(path: string): Promise<string> {
+  const hash = createHash('sha256')
+  const handle = await fsp.open(path, 'r')
+  try {
+    const buffer = Buffer.alloc(1024 * 1024)
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null)
+      if (bytesRead === 0) break
+      hash.update(buffer.subarray(0, bytesRead))
+    }
+  } finally {
+    await handle.close()
+  }
+  return hash.digest('hex')
+}
 const MAX_PATH_ENTRIES = 256
 const EXECUTION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/
 
@@ -282,6 +409,96 @@ export class CliToolStore {
     return this.serialize(() => this.importLocked(archivePath, options))
   }
 
+  /**
+   * Extract into `staging` and run every check an import runs: digests,
+   * manifest, host support, paths, the pure-JS rule, entries and guide. Files
+   * are only read and hashed; nothing in the package is executed.
+   */
+  private async stagePackage(
+    archivePath: string,
+    staging: string,
+    options: Pick<ImportOptions, 'expectedArchiveSha256' | 'expectedIntegrity' | 'expectedTool'>,
+    onStage: (stage: string) => void = () => undefined,
+    onLabel: (label: string) => void = () => undefined,
+  ) {
+    onStage('extract')
+    const archive = await extractPackageArchive(archivePath, staging, this.limits)
+    if (options.expectedArchiveSha256 && options.expectedArchiveSha256.toLowerCase() !== archive.archiveSha256) {
+      throw new CliToolError('DIGEST_MISMATCH', 'package archive digest differs from the expected digest')
+    }
+
+    onStage('manifest')
+    const manifest = parseCliManifest(await fsp.readFile(join(staging, 'manifest.json'), 'utf-8'))
+    const label = `${manifest.id}@${manifest.version}`
+    onLabel(label)
+    const expected = options.expectedTool
+    if (expected && (expected.id !== manifest.id || expected.version !== manifest.version)) {
+      throw new CliToolError('PACKAGE_INVALID', `package declares ${label}, expected ${expected.id}@${expected.version}`)
+    }
+    assertManifestSupported(manifest, {
+      platform: this.platform,
+      arch: this.arch,
+      nodeVersion: this.runtimeNodeVersion,
+    })
+
+    onStage('payload')
+    const payloadDir = join(staging, 'payload')
+    if (!existsSync(payloadDir)) throw new CliToolError('PACKAGE_INVALID', 'package has no payload directory')
+    const inspection = await inspectPayload(payloadDir)
+    if (inspection.integrity !== manifest.integrity) {
+      throw new CliToolError('DIGEST_MISMATCH', 'payload content differs from the manifest integrity')
+    }
+    if (options.expectedIntegrity && options.expectedIntegrity !== inspection.integrity) {
+      throw new CliToolError('DIGEST_MISMATCH', 'payload content differs from the expected integrity')
+    }
+    for (const command of manifest.commands) {
+      const stat = await fsp.lstat(join(payloadDir, command.entry)).catch(() => null)
+      if (!stat?.isFile()) {
+        throw new CliToolError('MANIFEST_INVALID', `entry of command "${command.name}" is not a packaged file`)
+      }
+    }
+    if (manifest.guide) {
+      const stat = await fsp.lstat(join(staging, manifest.guide)).catch(() => null)
+      if (!stat?.isFile()) throw new CliToolError('MANIFEST_INVALID', 'guide is not a packaged file')
+    }
+    return { archive, manifest, inspection }
+  }
+
+  /**
+   * Validate a package exactly as an import would and describe it, then
+   * discard the staging copy. Nothing is installed and nothing in the package
+   * runs; a non-compliant package throws the same typed error an import would.
+   */
+  previewPackage(archivePath: string): Promise<PackagePreview> {
+    return this.serialize(async () => {
+      const staging = this.path('staging', randomUUID())
+      try {
+        await fsp.mkdir(staging, { recursive: true })
+        const { archive, manifest, inspection } = await this.stagePackage(archivePath, staging, {})
+        const archiveBytes = (await fsp.stat(archivePath)).size
+        return {
+          id: manifest.id,
+          version: manifest.version,
+          ...(manifest.name ? { name: manifest.name } : {}),
+          ...(manifest.description ? { description: manifest.description } : {}),
+          commands: manifest.commands.map(c => c.name),
+          platforms: manifest.platforms,
+          ...(manifest.runtime.minNode ? { minNode: manifest.runtime.minNode } : {}),
+          ...(manifest.sideEffects ? { sideEffects: manifest.sideEffects } : {}),
+          ...(manifest.auth ? { auth: manifest.auth.method } : {}),
+          archiveSha256: archive.archiveSha256,
+          integrity: inspection.integrity,
+          archiveBytes,
+          payloadBytes: inspection.bytes,
+          files: inspection.files,
+        }
+      } finally {
+        await setTreeReadOnly(staging, false, this.platform).catch(() => undefined)
+        await fsp.rm(staging, { recursive: true, force: true }).catch(() => undefined)
+      }
+    })
+  }
+
   private async importLocked(archivePath: string, options: ImportOptions): Promise<ImportResult> {
     const started = Date.now()
     const txid = randomUUID()
@@ -295,45 +512,11 @@ export class CliToolStore {
       await fsp.rm(stagingRoot, { recursive: true, force: true })
       await fsp.mkdir(staging, { recursive: true })
 
-      stage = 'extract'
-      const archive = await extractPackageArchive(archivePath, staging, this.limits)
-      if (options.expectedArchiveSha256 && options.expectedArchiveSha256.toLowerCase() !== archive.archiveSha256) {
-        throw new CliToolError('DIGEST_MISMATCH', 'package archive digest differs from the expected digest')
-      }
-
-      stage = 'manifest'
-      const manifest = parseCliManifest(await fsp.readFile(join(staging, 'manifest.json'), 'utf-8'))
-      label = `${manifest.id}@${manifest.version}`
-      const expected = options.expectedTool
-      if (expected && (expected.id !== manifest.id || expected.version !== manifest.version)) {
-        throw new CliToolError('PACKAGE_INVALID', `package declares ${label}, expected ${expected.id}@${expected.version}`)
-      }
-      assertManifestSupported(manifest, {
-        platform: this.platform,
-        arch: this.arch,
-        nodeVersion: this.runtimeNodeVersion,
+      const { archive, manifest, inspection } = await this.stagePackage(archivePath, staging, options, s => {
+        stage = s
+      }, l => {
+        label = l
       })
-
-      stage = 'payload'
-      const payloadDir = join(staging, 'payload')
-      if (!existsSync(payloadDir)) throw new CliToolError('PACKAGE_INVALID', 'package has no payload directory')
-      const inspection = await inspectPayload(payloadDir)
-      if (inspection.integrity !== manifest.integrity) {
-        throw new CliToolError('DIGEST_MISMATCH', 'payload content differs from the manifest integrity')
-      }
-      if (options.expectedIntegrity && options.expectedIntegrity !== inspection.integrity) {
-        throw new CliToolError('DIGEST_MISMATCH', 'payload content differs from the expected integrity')
-      }
-      for (const command of manifest.commands) {
-        const stat = await fsp.lstat(join(payloadDir, command.entry)).catch(() => null)
-        if (!stat?.isFile()) {
-          throw new CliToolError('MANIFEST_INVALID', `entry of command "${command.name}" is not a packaged file`)
-        }
-      }
-      if (manifest.guide) {
-        const stat = await fsp.lstat(join(staging, manifest.guide)).catch(() => null)
-        if (!stat?.isFile()) throw new CliToolError('MANIFEST_INVALID', 'guide is not a packaged file')
-      }
 
       stage = 'publish'
       const state = await this.readState()
@@ -389,7 +572,16 @@ export class CliToolStore {
         ...(manifest.guide ? { guide: manifest.guide } : {}),
         ...(manifest.sideEffects ? { sideEffects: manifest.sideEffects } : {}),
         ...(manifest.auth ? { auth: manifest.auth.method } : {}),
+        ...(manifest.name ? { name: manifest.name } : {}),
+        ...(manifest.description ? { description: manifest.description } : {}),
       }
+      // Reinstalling content a pending cleanup still lists must not lose it later.
+      if (state.pendingCleanup) {
+        state.pendingCleanup = state.pendingCleanup.filter(d => d !== dirRel)
+        if (state.pendingCleanup.length === 0) delete state.pendingCleanup
+      }
+      // The offered update is now installed (or overtaken): stop offering it until the next catalog read.
+      if (tool.catalogUpdate && compareVersions(manifest.version, tool.catalogUpdate) >= 0) delete tool.catalogUpdate
       if (activate || tool.current === null) tool.current = manifest.version
       state.tools[manifest.id] = tool
       stage = 'state'
@@ -456,35 +648,294 @@ export class CliToolStore {
     })
   }
 
+  /** Exclude (or re-admit) a tool for new executions by the user's choice. Running pins are unaffected. */
+  setDisabled(id: string, disabled: boolean): Promise<void> {
+    return this.serialize(async () => {
+      const state = await this.readState()
+      const tool = state.tools[id]
+      if (!tool) throw new CliToolError('NOT_FOUND', `${id} is not installed`)
+      if (disabled) tool.disabled = true
+      else delete tool.disabled
+      await this.writeState(state)
+      this.log.log('[CliTools] User disable changed', { tool: id, disabled })
+    })
+  }
+
   /**
-   * Delete an installed version. Refused (IN_USE) while it is current or any
-   * execution lock pins it, so a running task never loses its files.
+   * Delete one installed version's record. The current version is refused
+   * (IN_USE: choose another first, or remove the whole tool), and so is a
+   * version shipped with the build (PRESET_PROTECTED: disable it instead).
+   * Files a running execution still pins are kept and listed for cleanup at
+   * the next start; a registered program's file is never touched.
    */
-  removeVersion(id: string, version: string): Promise<void> {
+  removeVersion(id: string, version: string): Promise<{ deferred: boolean }> {
     return this.serialize(async () => {
       const state = await this.readState()
       const tool = state.tools[id]
       const record = tool?.versions[version]
       if (!tool || !record) throw new CliToolError('NOT_FOUND', `${id}@${version} is not installed`)
+      if (record.source === 'preset') {
+        throw new CliToolError('PRESET_PROTECTED', `${id}@${version} ships with Halo; disable it instead`)
+      }
       if (tool.current === version) {
         throw new CliToolError('IN_USE', `${id}@${version} is the current version`)
       }
-      const pinnedBy = (await this.listExecutionLocks()).filter(lock =>
-        lock.tools.some(t => t.id === id && t.version === version))
-      if (pinnedBy.length > 0) {
-        throw new CliToolError('IN_USE', `${id}@${version} is pinned by ${pinnedBy.length} running execution(s)`)
-      }
       delete tool.versions[version]
       if (Object.keys(tool.versions).length === 0) delete state.tools[id]
-      // State first: a crash after this leaves an orphan directory, never a
-      // state entry pointing at deleted files.
-      await this.writeState(state)
-      const dir = this.path(...record.dir.split('/'))
-      if (existsSync(dir)) {
-        await setTreeReadOnly(dir, false, this.platform)
-        await fsp.rm(dir, { recursive: true, force: true })
+      const deferred = await this.dropFiles(state, [{ id, version, record }])
+      this.log.log('[CliTools] Removed version', { tool: `${id}@${version}`, deferred: deferred.length > 0 })
+      return { deferred: deferred.length > 0 }
+    })
+  }
+
+  /**
+   * Remove a tool and every version of it. Refused while it holds a version
+   * shipped with the build. Same reference rule as `removeVersion`.
+   */
+  removeTool(id: string): Promise<{ deferred: number }> {
+    return this.serialize(async () => {
+      const state = await this.readState()
+      const tool = state.tools[id]
+      if (!tool) throw new CliToolError('NOT_FOUND', `${id} is not installed`)
+      if (Object.values(tool.versions).some(v => v.source === 'preset')) {
+        throw new CliToolError('PRESET_PROTECTED', `${id} ships with Halo; disable it instead`)
       }
-      this.log.log('[CliTools] Removed version', { tool: `${id}@${version}` })
+      const victims = Object.entries(tool.versions).map(([version, record]) => ({ id, version, record }))
+      delete state.tools[id]
+      const deferred = await this.dropFiles(state, victims)
+      this.log.log('[CliTools] Removed tool', { tool: id, versions: victims.length, deferred: deferred.length })
+      return { deferred: deferred.length }
+    })
+  }
+
+  /**
+   * Write `state` (whose records no longer name `victims`), then delete the
+   * victims' store directories that no lock pins. Pinned ones go to
+   * `pendingCleanup`. State is written first: a crash afterwards leaves an
+   * orphan directory, never a record pointing at deleted files.
+   */
+  private async dropFiles(
+    state: CliToolState,
+    victims: Array<{ id: string; version: string; record: CliToolVersionRecord }>,
+  ): Promise<string[]> {
+    const locks = await this.listExecutionLocks()
+    const now: string[] = []
+    const deferred: string[] = []
+    for (const { id, version, record } of victims) {
+      if (record.external || !record.dir) continue
+      const pinned = locks.some(lock => lock.tools.some(t => t.id === id && t.version === version && t.integrity === record.integrity))
+      if (pinned) deferred.push(record.dir)
+      else now.push(record.dir)
+    }
+    if (deferred.length > 0) {
+      state.pendingCleanup = [...new Set([...(state.pendingCleanup ?? []), ...deferred])]
+    }
+    await this.writeState(state)
+    for (const rel of now) await this.deleteStoreDir(rel)
+    return deferred
+  }
+
+  private async deleteStoreDir(rel: string): Promise<void> {
+    const dir = this.path(...rel.split('/'))
+    if (!existsSync(dir)) return
+    await setTreeReadOnly(dir, false, this.platform)
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+
+  /**
+   * Delete directories waiting in `pendingCleanup` that no record and no lock
+   * refers to any more. Run after earlier processes' locks are released.
+   * Returns the number deleted.
+   */
+  collectPendingCleanup(): Promise<number> {
+    return this.serialize(async () => {
+      const state = await this.readState()
+      const pending = state.pendingCleanup ?? []
+      if (pending.length === 0) return 0
+      const recorded = new Set<string>()
+      for (const tool of Object.values(state.tools)) for (const v of Object.values(tool.versions)) if (v.dir) recorded.add(v.dir)
+      const pinned = new Set<string>()
+      for (const lock of await this.listExecutionLocks()) {
+        for (const t of lock.tools) pinned.add(`store/${t.id}/${t.version}-${integrityShortHex(t.integrity)}`)
+      }
+      const keep: string[] = []
+      let removed = 0
+      for (const rel of pending) {
+        if (recorded.has(rel)) continue
+        if (pinned.has(rel)) { keep.push(rel); continue }
+        await this.deleteStoreDir(rel)
+        removed += 1
+      }
+      if (keep.length > 0) state.pendingCleanup = keep
+      else delete state.pendingCleanup
+      await this.writeState(state)
+      if (removed > 0) this.log.log('[CliTools] Cleaned up removed versions', { removed, waiting: keep.length })
+      return removed
+    })
+  }
+
+  // ── registered existing programs ─────────────────────────────────────
+
+  /** Fingerprint a program file; EXTERNAL_INVALID when it is not a usable file. */
+  private async fingerprint(path: string, interpreter: 'halo-node' | null) {
+    if (!isAbsolute(path) || /[\r\n\0]/.test(path)) throw new CliToolError('EXTERNAL_INVALID', 'program path must be absolute')
+    const stat = await fsp.stat(path).catch(() => null)
+    if (!stat?.isFile()) throw new CliToolError('EXTERNAL_INVALID', 'program path is not a file')
+    if (interpreter === 'halo-node') {
+      if (!SCRIPT_EXTENSIONS.test(path)) throw new CliToolError('EXTERNAL_INVALID', 'only .js, .mjs or .cjs scripts run on the bundled Node')
+    } else if (this.platform === 'win32') {
+      if (!WINDOWS_EXECUTABLE.test(path)) throw new CliToolError('EXTERNAL_INVALID', 'program is not an executable file')
+    } else if ((stat.mode & 0o111) === 0) {
+      throw new CliToolError('EXTERNAL_INVALID', 'program is not executable')
+    }
+    return { sha256: await fileSha256(path), size: stat.size, mtimeMs: Math.trunc(stat.mtimeMs) }
+  }
+
+  /**
+   * Register a program already on this computer. Only a record is stored —
+   * path, interpreter, fingerprint and time; the file is never copied or
+   * changed. The tool becomes current only when it had no current version.
+   */
+  registerExternal(options: RegisterExternalOptions): Promise<{ id: string; current: string | null }> {
+    return this.serialize(async () => {
+      if (!COMMAND_NAME_PATTERN.test(options.command)) {
+        throw new CliToolError('EXTERNAL_INVALID', 'command name must be lowercase letters, digits, . _ - and not start with halo-')
+      }
+      const name = options.name.trim()
+      if (!name || name.length > 128) throw new CliToolError('EXTERNAL_INVALID', 'display name is required (max 128)')
+      const description = options.description?.trim().slice(0, 1024)
+      const id = options.toolId ?? `external.${options.command.replace(/[._]+/g, '-').replace(/^-+|-+$/g, '')}`
+      if (!TOOL_ID_PATTERN.test(id) || id.length > 128) throw new CliToolError('EXTERNAL_INVALID', 'tool id is not valid')
+      const fp = await this.fingerprint(options.path, options.interpreter)
+      const state = await this.readState()
+      if (options.toolId && !state.tools[id]) throw new CliToolError('NOT_FOUND', `${id} is not installed`)
+      const tool: CliToolRecord = state.tools[id] ?? { current: null, revoked: false, versions: {} }
+      if (tool.versions[EXTERNAL_VERSION]) {
+        throw new CliToolError('VERSION_CONFLICT', `${id} already has a registered program; remove it first`)
+      }
+      tool.versions[EXTERNAL_VERSION] = {
+        integrity: `sha256-${Buffer.from(fp.sha256, 'hex').toString('base64')}`,
+        archiveSha256: '',
+        dir: '',
+        source: 'external',
+        importedAt: new Date().toISOString(),
+        commands: [{ name: options.command, entry: options.path }],
+        name,
+        ...(description ? { description } : {}),
+        external: {
+          path: options.path,
+          interpreter: options.interpreter,
+          ...fp,
+          registeredAt: new Date().toISOString(),
+        },
+      }
+      if (tool.current === null) tool.current = EXTERNAL_VERSION
+      state.tools[id] = tool
+      await this.writeState(state)
+      this.log.log('[CliTools] Registered existing program', { tool: id, interpreter: options.interpreter ?? 'direct' })
+      return { id, current: tool.current }
+    })
+  }
+
+  /** The user re-confirms a changed program: take its fingerprint again and re-admit it. */
+  reconfirmExternal(id: string): Promise<void> {
+    return this.serialize(async () => {
+      const state = await this.readState()
+      const record = state.tools[id]?.versions[EXTERNAL_VERSION]
+      if (!record?.external) throw new CliToolError('NOT_FOUND', `${id} has no registered program`)
+      const fp = await this.fingerprint(record.external.path, record.external.interpreter)
+        .catch(err => {
+          throw isCliToolError(err) && err.code === 'EXTERNAL_INVALID'
+            ? new CliToolError('NOT_FOUND', 'the registered program is missing or unusable')
+            : err
+        })
+      record.external = { ...record.external, ...fp }
+      delete record.external.changed
+      record.integrity = `sha256-${Buffer.from(fp.sha256, 'hex').toString('base64')}`
+      await this.writeState(state)
+      this.log.log('[CliTools] Registered program re-confirmed', { tool: id })
+    })
+  }
+
+  /**
+   * Check the current registered programs before a pin: size and mtime
+   * first, the hash only when they moved. A missing or different file is
+   * marked changed (and so excluded); an identical one just refreshes its
+   * stamp. Returns true when state changed and was written.
+   */
+  private async checkExternals(state: CliToolState): Promise<boolean> {
+    let dirty = false
+    for (const [id, tool] of Object.entries(state.tools)) {
+      const record = tool.current ? tool.versions[tool.current] : undefined
+      const ext = record?.external
+      if (!ext || ext.changed) continue
+      const stat = await fsp.stat(ext.path).catch(() => null)
+      if (!stat?.isFile()) {
+        ext.changed = 'missing'
+        dirty = true
+        this.log.error('[CliTools] Registered program is missing; held back until re-confirmed', { tool: id })
+        continue
+      }
+      if (stat.size === ext.size && Math.trunc(stat.mtimeMs) === ext.mtimeMs) continue
+      const sha = await fileSha256(ext.path).catch(() => null)
+      if (sha === ext.sha256) {
+        ext.size = stat.size
+        ext.mtimeMs = Math.trunc(stat.mtimeMs)
+      } else {
+        ext.changed = 'modified'
+        this.log.error('[CliTools] Registered program changed; held back until re-confirmed', { tool: id })
+      }
+      dirty = true
+    }
+    if (dirty) await this.writeState(state)
+    return dirty
+  }
+
+  // ── catalog status ───────────────────────────────────────────────────
+
+  /**
+   * Apply what a freshly read administrator catalog says. For every listed
+   * tool: its revocation flag (any source). For tools with catalog-sourced
+   * versions: `delisted` when the catalog has neither an approved version
+   * nor a revocation entry for it, `withdrawn` per version the catalog no
+   * longer lists, and `catalogUpdate` when an approved version is above
+   * every installed one. Nothing is downloaded. Returns the ids that changed.
+   */
+  applyCatalogStatus(catalog: CatalogToolStatus[]): Promise<string[]> {
+    return this.serialize(async () => {
+      const state = await this.readState()
+      const byId = new Map(catalog.map(t => [t.id, t]))
+      const changed: string[] = []
+      for (const [id, tool] of Object.entries(state.tools)) {
+        const before = JSON.stringify(tool)
+        const entry = byId.get(id)
+        if (entry) tool.revoked = entry.revoked
+        const catalogVersions = Object.entries(tool.versions).filter(([, v]) => v.source === 'catalog')
+        if (catalogVersions.length > 0) {
+          const gone = !entry || (!entry.revoked && entry.versions.length === 0)
+          if (gone) tool.delisted = true
+          else delete tool.delisted
+          for (const [version, record] of catalogVersions) {
+            if (entry && !entry.versions.includes(version)) record.withdrawn = true
+            else delete record.withdrawn
+          }
+        }
+        const installed = Object.keys(tool.versions).filter(v => v !== EXTERNAL_VERSION)
+        const best = entry && !entry.revoked
+          ? [...entry.versions].sort(compareVersions).pop()
+          : undefined
+        if (best && installed.length > 0 && installed.every(v => compareVersions(best, v) > 0)) {
+          tool.catalogUpdate = best
+        } else {
+          delete tool.catalogUpdate
+        }
+        if (JSON.stringify(tool) !== before) changed.push(id)
+      }
+      if (changed.length > 0) {
+        await this.writeState(state)
+        this.log.log('[CliTools] Catalog status applied', { changed })
+      }
+      return changed
     })
   }
 
@@ -513,6 +964,7 @@ export class CliToolStore {
   private async pinLocked(options: PinExecutionOptions): Promise<PinnedExecution> {
     const existing = await this.readExecutionLock(options.executionId)
     const state = await this.readState()
+    if (!existing) await this.checkExternals(state)
     if (existing) {
       const binDir = existing.commands.length > 0 ? await this.ensureView(existing, state) : null
       return { binDir, lock: existing, reused: true }
@@ -534,7 +986,8 @@ export class CliToolStore {
   pinCurrent(options: PinCurrentOptions): Promise<PinnedExecution | null> {
     return this.serialize(async () => {
       const state = await this.readState()
-      if (!Object.values(state.tools).some(tool => tool.current && !tool.revoked)) return null
+      if (!Object.values(state.tools).some(tool => toolBlock(tool) === null)) return null
+      await this.checkExternals(state)
       const draft = this.composeLock({ ...options, executionId: options.holder }, state)
       if (draft.commands.length === 0) return null
       const executionId = `${options.holder}-${draft.viewKey}`
@@ -596,7 +1049,7 @@ export class CliToolStore {
     const viewsDir = this.path('views')
     for (const id of Object.keys(state.tools).sort()) {
       const tool = state.tools[id]
-      if (tool.revoked || !tool.current) continue
+      if (toolBlock(tool) !== null || !tool.current) continue
       const record = tool.versions[tool.current]
       if (!record) continue
       tools.push({ id, version: tool.current, integrity: record.integrity, ...(record.guide ? { guide: record.guide } : {}) })
@@ -630,11 +1083,23 @@ export class CliToolStore {
     return lock
   }
 
-  private launcherTargets(lock: CliExecutionLock, state: CliToolState): Array<{ exposedAs: string; entry: string }> {
+  private launcherTargets(
+    lock: CliExecutionLock,
+    state: CliToolState,
+  ): Array<{ exposedAs: string; entry: string; direct?: true; fingerprint?: string }> {
     return lock.commands.map(command => {
       const record = state.tools[command.toolId]?.versions[command.version]
       if (!record) {
         throw new CliToolError('NOT_FOUND', `${command.toolId}@${command.version} pinned by an execution is missing`)
+      }
+      if (record.external) {
+        // The fingerprint keys the view, so a re-confirmed program gets a new view and session.
+        return {
+          exposedAs: command.exposedAs,
+          entry: record.external.path,
+          ...(record.external.interpreter === null ? { direct: true as const } : {}),
+          fingerprint: record.external.sha256,
+        }
       }
       const entry = record.commands.find(c => c.name === command.command)?.entry
       if (!entry) throw new CliToolError('NOT_FOUND', `command "${command.command}" is missing`)
@@ -664,7 +1129,7 @@ export class CliToolStore {
       await fsp.writeFile(join(tmp, ARGV_PRELOAD_FILE), renderArgvPreload(), 'utf-8')
       const preloadPath = join(viewDir, ARGV_PRELOAD_FILE)
       for (const target of this.launcherTargets(lock, state)) {
-        const paths = { runtimePath: this.runtimePath, preloadPath, entryPath: target.entry }
+        const paths = { runtimePath: this.runtimePath, preloadPath, entryPath: target.entry, direct: target.direct === true }
         for (const file of launcherFiles(this.platform, target.exposedAs, paths)) {
           const path = join(tmp, 'bin', file.name)
           await fsp.writeFile(path, file.content, { encoding: 'utf-8', mode: file.executable ? 0o755 : 0o644 })
@@ -702,6 +1167,10 @@ export class CliToolStore {
     ]
     for (const command of lock.commands) {
       const record = state.tools[command.toolId]?.versions[command.version]
+      if (record?.external) {
+        lines.push(`| \`${command.exposedAs}\` | ${command.toolId} (existing program, not managed by Halo) | - | unknown | unknown | - |`)
+        continue
+      }
       const guide = record?.guide ? join(this.path(...record.dir.split('/')), ...record.guide.split('/')) : ''
       lines.push(`| \`${command.exposedAs}\` | ${command.toolId} | ${command.version} | ${record?.sideEffects ?? 'unknown'} | ${record?.auth ?? 'unknown'} | ${guide ? `\`${guide}\`` : '-'} |`)
     }

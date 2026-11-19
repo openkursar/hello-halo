@@ -431,8 +431,22 @@ a service), and the store stays the only owner of source transport.
   `sync-cli-catalog` does one read per launch when someone is signed in; the
   catalog view and installs read it again. A revoked tool is excluded from new
   executions; running ones finish. A tool that disappears from the catalog
-  (every version withdrawn) is not revoked locally, and a withdrawn version
-  stays installed.
+  is not revoked; it is marked delisted (below). A withdrawn version stays
+  installed.
+- **Status beyond revocation.** A full catalog read calls cli-tools
+  `applyCatalogStatus` with every listed tool and its versions. That sets
+  `delisted` (installed from the catalog, now unlisted or listed with no
+  version: excluded from new executions), `withdrawn` per version (advice only;
+  the version stays usable and an update is suggested) and `catalogUpdate`
+  (a newer listed version; nothing is downloaded until the user confirms).
+  Parsing keeps zero-version tools for this purpose. `fetchCliCatalog` drops
+  them from the view, and a failed read applies nothing.
+- **Signatures.** Each version's `signature` (`{alg: 'ed25519', keyId,
+  value}`) is parsed and passed with the expectation. When the build ships
+  `cli-preset/trusted-keys.json` with keys, `installCliTool` refuses a missing
+  or invalid signature **before** downloading. cli-tools checks again at
+  install. Without the file, verification is off and the UI says so. See
+  `services/cli-tools/DESIGN.md` → Signatures.
 - **Renderer view.** `CliCatalog` carries no URL, digest or token. The entry is
   gated on `capabilities.cliTools` (handshake `features.cliTools` and an
   identity provider in this build), per §3.1 the handshake gates the surface,

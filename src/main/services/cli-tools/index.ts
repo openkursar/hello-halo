@@ -3,17 +3,32 @@
  * the bundled runtime. Public surface only; see DESIGN.md.
  */
 
-export { CliToolStore, commandOnPath } from './store'
+export { CliToolStore, COMMAND_NAME_PATTERN, EXTERNAL_VERSION, commandOnPath, compareVersions, toolBlock } from './store'
 export {
   CLI_TOOLS_BIN_ENV,
   applyCatalogRevocations,
+  applyCatalogStatus,
   applyCliToolsEnv,
+  buildToolViews,
+  catalogSignatureMode,
+  getCliToolsOverview,
+  importUserPackage,
+  previewUserPackage,
+  reconfirmExternalProgram,
+  registerExternalProgram,
+  removeCliTool,
+  removeCliToolVersion,
+  setCliToolCurrent,
+  setCliToolDisabled,
+  verifyCatalogSignature,
   initCliTools,
   installCatalogPackage,
   prepareCliTools,
   readCliToolState,
 } from './host'
-export type { CatalogPackageExpectation, CliToolsHostOptions } from './host'
+export type { CatalogPackageExpectation, CliToolsHostOptions, UserPackagePreview } from './host'
+export { parseCatalogSignature, signedBytes, TRUSTED_KEYS_FILE } from './signature'
+export type { CatalogSignature, TrustMode } from './signature'
 export type {
   CliExecutionEntry,
   CliExecutionLock,
@@ -22,6 +37,10 @@ export type {
   CliToolState,
   CliToolStoreOptions,
   CliToolVersionRecord,
+  CliExternalRecord,
+  CatalogToolStatus,
+  PackagePreview,
+  RegisterExternalOptions,
   ExposedCommand,
   ImportOptions,
   ImportResult,

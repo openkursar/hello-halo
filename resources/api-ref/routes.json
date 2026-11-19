@@ -1616,5 +1616,49 @@
   {
     "method": "GET",
     "path": "/api/ai-browser/live-pages"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/overview"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/set-current"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/set-disabled"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/remove-version"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/remove-tool"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/reconfirm-external"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/pick-package"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/confirm-import"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/cancel-import"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/pick-external"
+  },
+  {
+    "method": "POST",
+    "path": "/api/cli-tools/register-external"
   }
 ]

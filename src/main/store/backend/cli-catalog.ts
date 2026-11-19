@@ -7,10 +7,13 @@
  * store. Nothing is downloaded until the user installs a version; listing the
  * catalog never fetches a package.
  *
- * Every catalog read applies the catalog's revocation flags to installed tools
- * (`applyCatalogRevocations`), so a revoked tool leaves new executions as soon
- * as this device learns of it. Installing re-reads the catalog first and
- * refuses a revoked tool or a version the catalog no longer lists, then checks
+ * Every successful catalog read applies the catalog's status to installed
+ * tools (`applyCatalogStatus`): revocation, delisting of catalog tools it no
+ * longer lists, withdrawn versions and available updates. A revoked or
+ * delisted tool leaves new executions as soon as this device learns of it;
+ * an update is only flagged, never downloaded. Installing re-reads the catalog first and
+ * refuses a revoked tool or a version the catalog no longer lists, checks the
+ * version's signature when the build ships trusted keys, then checks
  * the archive sha256 here and hands the file to cli-tools, which checks the
  * payload integrity, id and version before publishing it.
  *
@@ -26,11 +29,13 @@ import { getAdapter } from '../adapters'
 import { getStoreIdentityToken } from './identity'
 import {
   DEFAULT_ARCHIVE_LIMITS,
-  applyCatalogRevocations,
+  applyCatalogStatus,
   installCatalogPackage,
+  parseCatalogSignature,
   readCliToolState,
+  verifyCatalogSignature,
 } from '../../services/cli-tools'
-import type { CliToolState } from '../../services/cli-tools'
+import type { CatalogSignature, CliToolState } from '../../services/cli-tools'
 import { STORE_NOT_SIGNED_IN } from '../../../shared/store/store-types'
 import type {
   CliCatalog,
@@ -53,6 +58,8 @@ interface CatalogVersionRecord {
   archiveSha256: string
   integrity: string
   downloadUrl: string
+  /** Null when the catalog carries none (or one of an unknown shape). */
+  signature: CatalogSignature | null
 }
 
 interface CatalogToolRecord {
@@ -60,6 +67,7 @@ interface CatalogToolRecord {
   displayName: string
   source: string
   revoked: boolean
+  /** Empty when the tool has no approved version (a status-only entry). */
   latest: string
   versions: CatalogVersionRecord[]
 }
@@ -126,7 +134,7 @@ function parseVersion(raw: unknown): CatalogVersionRecord | null {
   if (auth === 'none' || auth === 'env-ref' || auth === 'external-login') view.auth = auth
   const publishedAt = readString(v.publishedAt, 64)
   if (publishedAt) view.publishedAt = publishedAt
-  return { view, archiveSha256, integrity, downloadUrl }
+  return { view, archiveSha256, integrity, downloadUrl, signature: parseCatalogSignature(v.signature) }
 }
 
 function parseTool(raw: unknown): CatalogToolRecord | null {
@@ -137,14 +145,15 @@ function parseTool(raw: unknown): CatalogToolRecord | null {
   const versions = Array.isArray(t.versions)
     ? t.versions.map(parseVersion).filter((v): v is CatalogVersionRecord => v !== null)
     : []
-  if (versions.length === 0) return null
+  // A tool without approved versions is kept: its revocation (or absence of
+  // one) still tells installed copies what to do.
   const latest = readString(t.latest, 64)
   return {
     id,
     displayName: readString(t.displayName) ?? id,
     source: readString(t.source, 32) ?? '',
     revoked: t.revoked === true,
-    latest: latest && versions.some(v => v.view.version === latest) ? latest : versions[0].view.version,
+    latest: latest && versions.some(v => v.view.version === latest) ? latest : versions[0]?.view.version ?? '',
     versions,
   }
 }
@@ -186,8 +195,9 @@ function toView(tool: CatalogToolRecord, state: CliToolState | null): CliCatalog
 }
 
 /**
- * Fetch the catalog and apply its revocation flags. Null when the primary
- * source has no catalog endpoint or does not serve one.
+ * Fetch the catalog and apply its status to installed tools. Null when the
+ * primary source has no catalog endpoint or does not serve one — then nothing
+ * is applied, so an unavailable catalog never marks tools delisted.
  */
 async function loadCatalog(): Promise<CatalogToolRecord[] | null> {
   const endpoint = primaryEndpoint('fetchCliCatalog')
@@ -195,10 +205,10 @@ async function loadCatalog(): Promise<CatalogToolRecord[] | null> {
   const raw = await endpoint.call(endpoint.source, await requireAuth())
   if (raw == null) return null
   const tools = parseCliCatalog(raw)
-  const changed = await applyCatalogRevocations(
-    Object.fromEntries(tools.map(tool => [tool.id, tool.revoked])),
+  const changed = await applyCatalogStatus(
+    tools.map(tool => ({ id: tool.id, revoked: tool.revoked, versions: tool.versions.map(v => v.view.version) })),
   )
-  if (changed.length > 0) console.log('[CliCatalog] Revocation updated for', changed)
+  if (changed.length > 0) console.log('[CliCatalog] Catalog status updated for', changed)
   return tools
 }
 
@@ -207,7 +217,8 @@ export async function fetchCliCatalog(): Promise<CliCatalog> {
   const tools = await loadCatalog()
   if (!tools) return { tools: [] }
   const state = await readCliToolState()
-  return { tools: tools.map(tool => toView(tool, state)) }
+  // Status-only entries (no approved version) have nothing to offer here.
+  return { tools: tools.filter(tool => tool.versions.length > 0).map(tool => toView(tool, state)) }
 }
 
 /**
@@ -224,6 +235,15 @@ export async function installCliTool(request: { id: string; version: string }): 
   const entry = tool.versions.find(v => v.view.version === request.version)
   if (!entry) throw new Error('This CLI version is no longer available from the store')
   if (!entry.view.supported) throw new Error('This CLI version does not support this device')
+  const expectation = {
+    id: tool.id,
+    version: entry.view.version,
+    archiveSha256: entry.archiveSha256,
+    integrity: entry.integrity,
+    signature: entry.signature,
+  }
+  // Checked before downloading: a refused signature costs no transfer.
+  await verifyCatalogSignature(expectation)
 
   const endpoint = primaryEndpoint('downloadCliPackage')
   if (!endpoint) throw new Error('This store does not offer CLI tools')
@@ -242,12 +262,7 @@ export async function installCliTool(request: { id: string; version: string }): 
   try {
     const archive = join(dir, 'package.hcli')
     await writeFile(archive, bytes)
-    await installCatalogPackage(archive, {
-      id: tool.id,
-      version: entry.view.version,
-      archiveSha256: entry.archiveSha256,
-      integrity: entry.integrity,
-    })
+    await installCatalogPackage(archive, expectation)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

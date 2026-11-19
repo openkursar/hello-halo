@@ -280,6 +280,116 @@ version pin never freezes.
   safe. `readCliToolState` gives callers the installed state to compare with
   a catalog. All three wait for prepare.
 
+## Local management (F03–F05, F08, F09)
+
+The renderer manages tools through `cliToolsRpc`
+(`src/shared/rpc/contracts/cli-tools.contract.ts`), served by
+`controllers/cli-tools.controller.ts` over IPC. The HTTP routes are all
+`internal`. Picking files, confirming an import and registering a program
+answer 403 `DESKTOP_ONLY`, because they need a native file dialog and a person
+at the device.
+
+**No path comes from the renderer.** `pick-package` and `pick-external` open
+the dialog in main and return a `pickId`. The controller keeps the chosen path
+for 10 minutes. `preview` and `register` take that id.
+
+**Preview, then confirm (F03).**
+- `previewUserPackage` stages the archive in private staging and returns what
+  the import would do: `existing`, `sameVersion` (identical/conflict) and
+  `clashes`. It runs every import check — archive limits, paths, manifest,
+  platform, runtime, integrity and the pure-JS rule — then deletes the staging
+  copy. Nothing in the package is executed or installed.
+- `importUserPackage(path, { archiveSha256, makeCurrent })` re-imports from
+  the file, and requires the archive digest to equal the previewed one. A file
+  replaced between preview and confirm fails with `DIGEST_MISMATCH`.
+- Import never takes over a current version unless the user ticks
+  "make current". The tool must have no current version for an import to
+  become current without that.
+- User packages carry no signature. The dialog says so.
+
+**Current, disable, delete.**
+- `setCliToolCurrent` uses the existing `activateVersion`. The change applies
+  to new sessions only, through the view fingerprint (see Version timing).
+- `disabled` is the user's switch. `revoked` is the catalog's and is never
+  touched by the user's action, and vice versa. Either one keeps the tool out
+  of new pins.
+- `removeVersion` refuses the current version and preset versions
+  (`PRESET_PROTECTED`). A preset can only be disabled, because the next launch
+  would reinstall it anyway. `removeTool` refuses a tool that holds a preset
+  version.
+- **Reference-safe deletion.** The record is removed first. A store directory
+  still named by a live execution lock or a view is written to
+  `state.pendingCleanup` instead of being deleted, and the call returns
+  `{ deferred }`. `prepare` runs `collectPendingCleanup` at the next start,
+  after the locks of earlier processes are released. A re-import of the same
+  directory takes it out of the list. An empty list is removed from the state,
+  so a state that never deleted anything is byte-identical to before.
+
+**Registered existing programs (F04).**
+- A program is stored as a version named `external` with `external: { path,
+  interpreter, size, mtimeMs, sha256 }` and no store directory. It is never
+  copied, modified or deleted; removing it only drops the record.
+- It can be a tool of its own (`external.<command>`) or an extra version of an
+  installed tool (`toolId`).
+- `interpreter` is `halo-node` for `.js/.mjs/.cjs` (run with the bundled Node,
+  like packaged tools). Otherwise it is `null` and the file must be executable;
+  the launcher `exec`s it directly. The command name follows the manifest rules
+  and may not start with `halo-`. The path must be absolute and a regular file.
+- Every new pin checks the fingerprint first (`checkExternals`). Size and mtime
+  are compared, and the file is re-hashed only when they differ. A touched but
+  identical file stays usable. A changed or missing file is marked `changed:
+  modified|missing` and is kept out of new pins until `reconfirmExternal`
+  records the new fingerprint. The fingerprint is part of the view key, so a
+  re-confirmed program gets a new launcher set.
+- TOOLS.md marks the command "existing program, not managed by Halo", and the
+  UI shows the same warning.
+
+**Catalog status.** `applyCatalogStatus` replaces `applyCatalogRevocations`
+for full catalog reads (the old call still exists for revocation-only data).
+For each tool with a catalog version installed:
+- `revoked` is as before.
+- `delisted` is set when the catalog no longer lists the tool, or lists it
+  with no version and no revocation. It is excluded from new pins. Tools that
+  never came from the catalog are never delisted.
+- Each catalog version that is no longer listed gets `withdrawn`. This is
+  advice only: it does not disable the version, and the UI suggests updating.
+- `catalogUpdate` holds the newest listed version that is higher than every
+  installed one. A revoked tool gets none. Nothing is downloaded until the
+  user confirms; the UI then calls the store's `installCliTool`.
+- A failed catalog read changes nothing.
+
+**Signatures (A07).** `signature.ts` checks catalog versions with Ed25519 over
+the bytes
+`"halo.cli.sig/1\n" + id + "\n" + version + "\n" + archiveSha256 (lowercase hex) + "\n" + integrity + "\n"`.
+Trust comes from `<presetDir>/trusted-keys.json` (`halo.cli.trust/1`, raw
+32-byte base64 public keys), which the main build ships with the presets. A
+private deployment only injects the file.
+
+| Trust file | Mode | Catalog install |
+|---|---|---|
+| absent, or `keys: []` | `off` | not verified. UI shows "signature verification not enabled" |
+| at least one valid key | `on` | needs a valid signature from a listed key, otherwise `SIGNATURE_MISSING` / `SIGNATURE_INVALID` |
+| unreadable, wrong schema, bad key | `broken` | every signed install fails (`SIGNATURE_INVALID`) — fail closed |
+
+Verification runs before download, inside `installCatalogPackage`, so a
+caller that skips the store layer is still checked. Presets and user imports
+are not catalog packages and are not signature-checked. The real backend
+sample (key id `halo-test-2026-11`) is a unit-test fixture.
+
+**State compatibility.** All new fields are optional, and `schema` stays 1.
+An older build reads the state, ignores `disabled`, `delisted`, `withdrawn`,
+`catalogUpdate` and `pendingCleanup`, and would treat an `external` version as
+a broken store version: it fails that tool's pin, not the session. A
+downgrade therefore loses disables, and a registered program stops working
+until the newer build is back.
+
+**UI entry point.** Capability library (`AppsPage` → Library) gets a third
+segment, "Command-line tools", next to Skills and MCP connections. Tools are
+capabilities an agent uses, like skills and MCP servers. The library works
+with or without a store, while the catalog is a store surface. Catalog
+installs stay in the store; the library shows installed tools from every
+source, plus their catalog status and updates.
+
 ## Relation to external-runtime
 
 `external-runtime` manages the engine runtimes (Claude Code, Codex): a closed

@@ -7,8 +7,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHash } from 'crypto'
-import { mkdirSync, readdirSync, readFileSync } from 'fs'
+import { createHash, generateKeyPairSync, sign } from 'crypto'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { STORE_NOT_SIGNED_IN } from '../../../src/shared/store/store-types'
@@ -28,7 +28,7 @@ let pkgs: string
 /** The source driver methods under test; any other method is absent. */
 type Driver = Record<string, (...args: never[]) => unknown>
 
-async function load(driver: Driver | null) {
+async function load(driver: Driver | null, presetDir: string | null = null) {
   vi.resetModules()
   const registry = await import('../../../src/main/store/registry.service')
   const adapters = await import('../../../src/main/store/adapters')
@@ -37,7 +37,7 @@ async function load(driver: Driver | null) {
   vi.mocked(adapters.getAdapter).mockReturnValue((driver ?? {}) as never)
   vi.mocked(identity.getStoreIdentityToken).mockResolvedValue('tok')
   const host = await import('../../../src/main/services/cli-tools/host')
-  host.initCliTools({ root: join(dir, 'cli'), runtimePath: process.execPath, presetDir: null })
+  host.initCliTools({ root: join(dir, 'cli'), runtimePath: process.execPath, presetDir })
   const catalog = await import('../../../src/main/store/backend/cli-catalog')
   return { catalog, host, identity: vi.mocked(identity.getStoreIdentityToken) }
 }
@@ -108,7 +108,9 @@ describe('cli catalog: parsing', () => {
       tool([{ ...good, downloadUrl: '' }], { id: 'com.example.nourl' }),
       tool([good], { displayName: 'Duplicate' }),
     ]))
-    expect(tools.map(t => t.id)).toEqual([ID])
+    // A tool keeps its entry (its revocation still applies) but malformed versions are dropped.
+    expect(tools.map(t => t.id)).toEqual([ID, 'com.example.badsha', 'com.example.badint', 'com.example.badver', 'com.example.nourl'])
+    expect(tools.slice(1).every(t => t.versions.length === 0)).toBe(true)
     expect(tools[0].displayName).toBe('Example tool')
   })
 
@@ -266,5 +268,72 @@ describe('cli catalog: install and revocation', () => {
     const failing = await load({ fetchCliCatalog: vi.fn(async () => { throw new Error('cli-catalog failed: 503') }) })
     await expect(failing.catalog.syncCliCatalogRevocations()).resolves.toBeUndefined()
     expect(console.warn).toHaveBeenCalledWith('[CliCatalog] Revocation sync skipped:', 'cli-catalog failed: 503')
+  })
+})
+
+describe('cli catalog: status and signatures', () => {
+  it('marks an installed catalog tool delisted, flags withdrawn versions and updates without downloading', async () => {
+    const bytes1 = packageBytes('1.0.0')
+    let body = catalogBody([tool([versionEntry('1.0.0', bytes1)])])
+    const downloadCliPackage = vi.fn(async () => bytes1)
+    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => body), downloadCliPackage })
+    await catalog.installCliTool({ id: ID, version: '1.0.0' })
+    expect(downloadCliPackage).toHaveBeenCalledTimes(1)
+
+    body = catalogBody([tool([versionEntry('2.0.0', new Uint8Array([2]))], { latest: '2.0.0' })])
+    await catalog.fetchCliCatalog()
+    let record = (await host.readCliToolState())!.tools[ID]
+    expect(record.versions['1.0.0'].withdrawn).toBe(true)
+    expect(record.catalogUpdate).toBe('2.0.0')
+    expect(record.delisted).toBeUndefined()
+    expect(downloadCliPackage).toHaveBeenCalledTimes(1)
+
+    body = catalogBody([])
+    const { tools } = await catalog.fetchCliCatalog()
+    expect(tools).toEqual([])
+    record = (await host.readCliToolState())!.tools[ID]
+    expect(record.delisted).toBe(true)
+    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
+    expect(await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })).toBeNull()
+  })
+
+  it('does not delist anything when the catalog cannot be read', async () => {
+    const bytes = packageBytes('1.0.0')
+    let fail = false
+    const fetchCliCatalog = vi.fn(async () => { if (fail) throw new Error('503'); return catalogBody([tool([versionEntry('1.0.0', bytes)])]) })
+    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
+    await catalog.installCliTool({ id: ID, version: '1.0.0' })
+    fail = true
+    await catalog.syncCliCatalogRevocations()
+    expect((await host.readCliToolState())!.tools[ID].delisted).toBeUndefined()
+  })
+
+  it('refuses a missing or invalid signature before downloading when the build ships keys', async () => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+    const presetDir = join(dir, 'preset')
+    mkdirSync(presetDir)
+    writeFileSync(join(presetDir, 'trusted-keys.json'), JSON.stringify({
+      schema: 'halo.cli.trust/1',
+      keys: [{ keyId: 'k1', alg: 'ed25519', publicKey: Buffer.from(publicKey.export({ format: 'jwk' }).x as string, 'base64url').toString('base64') }],
+    }))
+    const bytes = packageBytes('1.0.0')
+    const fields = { version: '1.0.0', integrity: buildManifest({ version: '1.0.0' }).integrity as string, archiveSha256: sha256(bytes) }
+    const value = (version: string) => sign(null, Buffer.from(`halo.cli.sig/1\n${ID}\n${version}\n${fields.archiveSha256}\n${fields.integrity}\n`), privateKey).toString('base64')
+    let signature: unknown = null
+    const downloadCliPackage = vi.fn(async () => bytes)
+    const { catalog, host } = await load({
+      fetchCliCatalog: vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes, { signature })])])),
+      downloadCliPackage,
+    }, presetDir)
+
+    await expect(catalog.installCliTool({ id: ID, version: '1.0.0' })).rejects.toMatchObject({ code: 'SIGNATURE_MISSING' })
+    signature = { alg: 'ed25519', keyId: 'k1', value: value('9.9.9') }
+    await expect(catalog.installCliTool({ id: ID, version: '1.0.0' })).rejects.toMatchObject({ code: 'SIGNATURE_INVALID' })
+    expect(downloadCliPackage).not.toHaveBeenCalled()
+    expect((await host.readCliToolState())!.tools[ID]).toBeUndefined()
+
+    signature = { alg: 'ed25519', keyId: 'k1', value: value('1.0.0') }
+    await catalog.installCliTool({ id: ID, version: '1.0.0' })
+    expect((await host.readCliToolState())!.tools[ID].current).toBe('1.0.0')
   })
 })

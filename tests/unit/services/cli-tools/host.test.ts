@@ -268,3 +268,57 @@ function rmPreset(name?: string): void {
     if (!name || file === name) removeTree(join(presetDir, file))
   }
 }
+
+describe('cli-tools host: local management', () => {
+  it('previews against what is installed and imports without preempting the current choice', async () => {
+    preset('1.0.0')
+    const host = await startHost()
+    const file = writePackage(pkgs, { version: '2.0.0' })
+    const preview = await host.previewUserPackage(file)
+    expect(preview).toMatchObject({
+      id: ID,
+      version: '2.0.0',
+      existing: { current: '1.0.0', currentSource: 'preset' },
+      sameVersion: null,
+      clashes: { tool: null },
+    })
+    expect((await host.readCliToolState())!.tools[ID].versions['2.0.0']).toBeUndefined()
+
+    await host.importUserPackage(file, { archiveSha256: preview.archiveSha256, makeCurrent: false })
+    let state = await host.readCliToolState()
+    expect(state!.tools[ID].current).toBe('1.0.0')
+    expect(state!.tools[ID].versions['2.0.0'].source).toBe('user-import')
+
+    await host.setCliToolCurrent(ID, '2.0.0')
+    state = await host.readCliToolState()
+    expect(state!.tools[ID].current).toBe('2.0.0')
+
+    // A later bundled upgrade does not take over the user's choice.
+    preset('1.5.0')
+    const next = await startHost()
+    await next.prepareCliTools()
+    expect((await next.readCliToolState())!.tools[ID].current).toBe('2.0.0')
+
+    const same = await next.previewUserPackage(file)
+    expect(same.sameVersion).toBe('identical')
+    const overview = await next.getCliToolsOverview()
+    expect(overview).toMatchObject({ available: true, signature: 'off', pendingCleanup: 0 })
+    expect(overview.tools[0].versions.map(v => v.source)).toEqual(['user-import', 'preset', 'preset'])
+  })
+
+  it('reclaims files deferred by an earlier process at the next start', async () => {
+    const host = await startHost({ presetDir: null })
+    const file = writePackage(pkgs)
+    const preview = await host.previewUserPackage(file)
+    await host.importUserPackage(file, { archiveSha256: preview.archiveSha256, makeCurrent: true })
+    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
+    expect(await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })).toBeTruthy()
+    expect(await host.removeCliTool(ID)).toEqual({ deferred: 1 })
+    expect(readdirSync(join(root, 'store', ID))).toHaveLength(1)
+
+    const next = await startHost({ presetDir: null })
+    await next.prepareCliTools()
+    expect(existsSync(join(root, 'store', ID)) ? readdirSync(join(root, 'store', ID)) : []).toEqual([])
+    expect((await next.getCliToolsOverview()).pendingCleanup).toBe(0)
+  })
+})

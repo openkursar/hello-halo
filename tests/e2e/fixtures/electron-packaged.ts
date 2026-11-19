@@ -16,10 +16,12 @@ export function packagedAppPath(): string {
   return path.join(projectRoot, 'dist/linux-unpacked/halo')
 }
 
-export const test = base.extend<{ hostCommands: HostCommandPolicy; explicitClaudeCode: boolean }>({
+export const test = base.extend<{ hostCommands: HostCommandPolicy; explicitClaudeCode: boolean; seedAiSources: Array<Record<string, unknown>> }>({
   hostCommands: ['inherit', { option: true }],
   explicitClaudeCode: [false, { option: true }],
-  electronApp: async ({ sdkEngine, hostCommands, explicitClaudeCode }, use, testInfo) => {
+  /** Accounts written into the isolated profile before launch — for signed-in states (e.g. a simulated store identity) that the UI only creates through a real login. */
+  seedAiSources: [[], { option: true }],
+  electronApp: async ({ sdkEngine, hostCommands, explicitClaudeCode, seedAiSources }, use, testInfo) => {
     const executablePath = packagedAppPath()
     if (!fs.existsSync(executablePath)) throw new Error(`Packaged app missing: ${executablePath}`)
     const selectedPath = explicitClaudeCode ? process.env.HALO_ACCEPTANCE_CLAUDE_CLI : undefined
@@ -33,6 +35,13 @@ export const test = base.extend<{ hostCommands: HostCommandPolicy; explicitClaud
       const configFile = path.join(profile, '.halo', 'config.json')
       const config = JSON.parse(fs.readFileSync(configFile, 'utf8'))
       config.agent = { ...config.agent, ccRuntime: { selectedPath, selectionOrigin: 'user' } }
+      fs.writeFileSync(configFile, JSON.stringify(config))
+    }
+    if (seedAiSources.length > 0) {
+      const configFile = path.join(profile, '.halo', 'config.json')
+      const config = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+      const sources = [...(config.aiSources?.sources ?? []), ...seedAiSources]
+      config.aiSources = { ...config.aiSources, sources }
       fs.writeFileSync(configFile, JSON.stringify(config))
     }
     const instance = await electron.launch({

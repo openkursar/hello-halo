@@ -1,9 +1,9 @@
 {
-  "totalRoutes": 348,
+  "totalRoutes": 359,
   "expose": {
     "ai": 215,
     "wrapped": 11,
-    "internal": 122,
+    "internal": 133,
     "unlabeled": 0
   },
   "groups": {
@@ -39,6 +39,7 @@
     "code-review",
     "skills",
     "canvas",
-    "ai-browser"
+    "ai-browser",
+    "cli-tools"
   ]
 }

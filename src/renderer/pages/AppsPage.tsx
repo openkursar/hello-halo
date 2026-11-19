@@ -32,6 +32,7 @@ import { SkillDetailSwitcher } from '../components/apps/SkillDetailSwitcher'
 import { PersonTeams } from '../components/apps/PersonTeams'
 import { SkillCardWall } from '../components/apps/SkillCardWall'
 import { McpCardWall } from '../components/apps/McpCardWall'
+import { CliToolsWall } from '../components/apps/CliToolsWall'
 import { usePeopleViewStore } from '../stores/people-view.store'
 import { AutomationHeader } from '../components/apps/AutomationHeader'
 import { AppBotSessionsView } from '../components/apps/AppBotSessionsView'
@@ -334,7 +335,7 @@ export function AppsPage() {
           onClick={() => setCurrentTab('team')}
         />
         <TabButton
-          active={currentTab === 'my-skills' || currentTab === 'my-mcp'}
+          active={currentTab === 'my-skills' || currentTab === 'my-mcp' || currentTab === 'my-cli'}
           label={t('Capability library')}
           onClick={() => setCurrentTab('my-skills')}
         />
@@ -359,7 +360,7 @@ export function AppsPage() {
             <div className={`min-h-0 flex-1 ${isFullBleedDetail ? 'overflow-hidden' : 'overflow-y-auto'}`}>{renderDetail()}</div>
           </div>
         </div> : <PeopleDirectory spaceMap={spaceMap} onCreate={() => setShowInstallDialog(true)} />
-      ) : (currentTab === 'my-skills' || currentTab === 'my-mcp') ? (
+      ) : (currentTab === 'my-skills' || currentTab === 'my-mcp' || currentTab === 'my-cli') ? (
         selectedSkill && currentTab === 'my-skills' ? (
           <div className="flex min-h-0 flex-1">
             <div className="hidden md:flex">
@@ -427,8 +428,8 @@ export function AppsPage() {
             <div className="px-6 sm:px-10 pt-4">
               {/* Equal-width segments: the grid's 1fr tracks both resolve to
                   the widest label, so switching doesn't shift the control. */}
-              <div className="inline-grid grid-cols-2 gap-1 rounded-lg bg-secondary p-0.5">
-                {(['my-skills', 'my-mcp'] as const).map(tab => (
+              <div className="inline-grid grid-cols-3 gap-1 rounded-lg bg-secondary p-0.5">
+                {(['my-skills', 'my-mcp', 'my-cli'] as const).map(tab => (
                   <button
                     key={tab}
                     onClick={() => setCurrentTab(tab)}
@@ -439,7 +440,7 @@ export function AppsPage() {
                         : 'text-muted-foreground hover:text-foreground'
                     }`}
                   >
-                    {tab === 'my-skills' ? t('Skills') : t('MCP connections')}
+                    {tab === 'my-skills' ? t('Skills') : tab === 'my-mcp' ? t('MCP connections') : t('Command-line tools')}
                   </button>
                 ))}
               </div>
@@ -454,6 +455,8 @@ export function AppsPage() {
                   onOpen={(group, spaceId) => { clearSelection(); setSelectedSkill({ group, spaceId }) }}
                   onOpenLegacy={skill => setLegacySkills([skill])}
                 />
+              ) : currentTab === 'my-cli' ? (
+                <CliToolsWall />
               ) : (
                 <McpCardWall
                   spaceMap={spaceMap}

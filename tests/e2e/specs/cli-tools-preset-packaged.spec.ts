@@ -141,7 +141,8 @@ for (const sdkEngine of ['halo', 'anthropic', 'dsh'] as const) {
       }))
       const cliRoot = path.join(runtime.userData, 'cli')
       const shellBefore = Object.fromEntries(SHELL_FILES.map(name => [name, fs.existsSync(path.join(runtime.home, name))]))
-      const packaged = fs.readdirSync(path.join(runtime.resources, 'cli-preset')).sort()
+      // The trust file ships next to the packages; it is not a tool.
+      const packaged = fs.readdirSync(path.join(runtime.resources, 'cli-preset')).filter(name => name.endsWith('.hcli')).sort()
       expect(packaged).toEqual(['com.github.nodeca.js-yaml-5.5.0.hcli', 'io.prettier.cli-3.9.10.hcli', 'org.typescriptlang.tsc-5.9.3.hcli'])
 
       const model = await startScriptedModel()

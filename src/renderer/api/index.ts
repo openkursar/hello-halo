@@ -35,6 +35,7 @@ import { codeReviewApi } from './code-review.api'
 import { ccRuntimeApi } from './cc-runtime.api'
 import { externalRuntimeApi } from './external-runtime.api'
 import { skillsApi } from './skills.api'
+import { cliToolsApi } from './cli-tools.api'
 
 /**
  * Unified api object — drop-in replacement for window.halo, transport-agnostic.
@@ -69,6 +70,7 @@ export const api = {
   ...ccRuntimeApi,
   ...externalRuntimeApi,
   ...skillsApi,
+  ...cliToolsApi,
 }
 
 // Export type for the API

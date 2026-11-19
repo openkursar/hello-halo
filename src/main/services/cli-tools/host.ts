@@ -9,8 +9,28 @@
 
 import { existsSync, promises as fsp } from 'fs'
 import { delimiter, join } from 'path'
-import { CliToolStore, type CliExecutionEntry, type CliToolState, type ImportResult } from './store'
+import {
+  CliToolStore,
+  EXTERNAL_VERSION,
+  commandOnPath,
+  compareVersions,
+  toolBlock,
+  type CatalogToolStatus,
+  type CliExecutionEntry,
+  type CliToolState,
+  type ImportResult,
+  type PackagePreview,
+  type RegisterExternalOptions,
+} from './store'
 import { CliToolError, isCliToolError } from './errors'
+import {
+  TRUSTED_KEYS_FILE,
+  assertCatalogSignature,
+  loadTrustStore,
+  type CatalogSignature,
+  type TrustMode,
+} from './signature'
+import type { CliToolView, CliToolsOverview, CliToolVersionView } from '../../../shared/types/cli-tools'
 
 /** Launcher directory of the tool set an environment was given; also tells the agent where TOOLS.md is. */
 export const CLI_TOOLS_BIN_ENV = 'HALO_CLI_TOOLS_BIN'
@@ -63,6 +83,8 @@ async function runPrepare(): Promise<void> {
     // A previous process's sessions are gone, so its pins protect nothing now.
     await cliStore.releaseOtherHolders(holder)
     await cliStore.pruneViews()
+    // Versions removed while an earlier process still ran them.
+    await cliStore.collectPendingCleanup()
     if (options.presetDir) await importPresets(cliStore, options.presetDir, options.root)
   } catch (err) {
     console.error('[CliTools] Preparing the tool store failed; sessions continue without changes', {
@@ -134,6 +156,27 @@ export interface CatalogPackageExpectation {
   archiveSha256: string
   /** Payload integrity, `sha256-<base64>`. */
   integrity: string
+  /** The catalog's signature for this version; required when the build ships trusted keys. */
+  signature?: CatalogSignature | null
+}
+
+function trustFile(): string | null {
+  return options?.presetDir ? join(options.presetDir, TRUSTED_KEYS_FILE) : null
+}
+
+/** Whether catalog signatures are checked on this build (see signature.ts). */
+export async function catalogSignatureMode(): Promise<TrustMode> {
+  return (await loadTrustStore(trustFile())).mode
+}
+
+/**
+ * Enforce the signature policy for one catalog version; throws
+ * SIGNATURE_MISSING / SIGNATURE_INVALID. Callers may run it before
+ * downloading; `installCatalogPackage` runs it again regardless.
+ */
+export async function verifyCatalogSignature(expected: CatalogPackageExpectation): Promise<void> {
+  const trust = await loadTrustStore(trustFile())
+  assertCatalogSignature(trust, expected, expected.signature ?? null)
 }
 
 /** Installed tools once the store is prepared; null when the host has no store. */
@@ -157,6 +200,7 @@ export async function installCatalogPackage(
   const cliStore = getStore()
   if (!cliStore) throw new CliToolError('RUNTIME_MISSING', 'the CLI tool store is not available in this process')
   await prepareCliTools()
+  await verifyCatalogSignature(expected)
   return cliStore.importPackage(archivePath, {
     source: 'catalog',
     expectedArchiveSha256: expected.archiveSha256,
@@ -185,6 +229,175 @@ export async function applyCatalogRevocations(flags: Record<string, boolean>): P
     changed.push(id)
   }
   return changed
+}
+
+/**
+ * Apply a freshly read catalog: revocation, delisting, withdrawn versions and
+ * available updates (see `CliToolStore.applyCatalogStatus`). Returns the ids
+ * that changed. Call only with a catalog that was actually read.
+ */
+export async function applyCatalogStatus(catalog: CatalogToolStatus[]): Promise<string[]> {
+  const cliStore = getStore()
+  if (!cliStore) return []
+  await prepareCliTools()
+  return cliStore.applyCatalogStatus(catalog)
+}
+
+function requireStore(): CliToolStore {
+  const cliStore = getStore()
+  if (!cliStore) throw new CliToolError('RUNTIME_MISSING', 'the CLI tool store is not available in this process')
+  return cliStore
+}
+
+/** The installed tools as the management view shows them. */
+export async function getCliToolsOverview(): Promise<CliToolsOverview> {
+  const cliStore = getStore()
+  const signature = await catalogSignatureMode()
+  if (!cliStore) return { available: false, tools: [], signature, pendingCleanup: 0 }
+  await prepareCliTools()
+  const state = await cliStore.readState()
+  const locks = await cliStore.listExecutionLocks()
+  return { available: true, tools: buildToolViews(state, locks), signature, pendingCleanup: state.pendingCleanup?.length ?? 0 }
+}
+
+/** Pure projection of state + locks; exported for tests. */
+export function buildToolViews(
+  state: CliToolState,
+  locks: Array<{ tools: Array<{ id: string; version: string }> }>,
+): CliToolView[] {
+  const pinned = new Set(locks.flatMap(lock => lock.tools.map(t => `${t.id}@${t.version}`)))
+  return Object.entries(state.tools).map(([id, tool]): CliToolView => {
+    const block = toolBlock(tool)
+    const current = tool.current ? tool.versions[tool.current] : undefined
+    const versions: CliToolVersionView[] = Object.entries(tool.versions)
+      .sort(([a], [b]) => (a === EXTERNAL_VERSION ? 1 : b === EXTERNAL_VERSION ? -1 : compareVersions(b, a)))
+      .map(([version, record]) => ({
+        version,
+        source: record.source,
+        current: tool.current === version,
+        commands: record.commands.map(c => c.name),
+        importedAt: record.importedAt,
+        ...(record.minNode ? { minNode: record.minNode } : {}),
+        ...(record.sideEffects ? { sideEffects: record.sideEffects } : {}),
+        ...(record.auth ? { auth: record.auth } : {}),
+        ...(record.withdrawn ? { withdrawn: true } : {}),
+        inUse: pinned.has(`${id}@${version}`),
+        removable: tool.current !== version && record.source !== 'preset',
+        ...(record.external
+          ? {
+              external: {
+                path: record.external.path,
+                interpreter: record.external.interpreter,
+                registeredAt: record.external.registeredAt,
+                ...(record.external.changed ? { changed: record.external.changed } : {}),
+              },
+            }
+          : {}),
+      }))
+    const named = current ?? Object.values(tool.versions).find(v => v.name)
+    return {
+      id,
+      name: named?.name ?? id,
+      ...(named?.description ? { description: named.description } : {}),
+      current: tool.current,
+      status: block ?? 'available',
+      disabled: tool.disabled === true,
+      revoked: tool.revoked,
+      delisted: tool.delisted === true,
+      ...(tool.catalogUpdate ? { catalogUpdate: tool.catalogUpdate } : {}),
+      hasPreset: Object.values(tool.versions).some(v => v.source === 'preset'),
+      commands: current?.commands.map(c => c.name) ?? [],
+      versions,
+    }
+  }).sort((a, b) => a.name.localeCompare(b.name))
+}
+
+export interface UserPackagePreview extends PackagePreview {
+  existing: { current: string | null; currentSource: CliToolView['versions'][number]['source'] | null } | null
+  sameVersion: 'identical' | 'conflict' | null
+  clashes: Record<string, 'tool' | 'path' | null>
+}
+
+/**
+ * Validate a user's package in staging and describe it, relative to what is
+ * installed. Nothing is installed or executed.
+ */
+export async function previewUserPackage(archivePath: string): Promise<UserPackagePreview> {
+  const cliStore = requireStore()
+  await prepareCliTools()
+  const preview = await cliStore.previewPackage(archivePath)
+  const state = await cliStore.readState()
+  const tool = state.tools[preview.id]
+  const same = tool?.versions[preview.version]
+  const clashes: Record<string, 'tool' | 'path' | null> = {}
+  for (const name of preview.commands) {
+    const usedByTool = Object.entries(state.tools).some(([id, other]) =>
+      id !== preview.id && other.current && other.versions[other.current]?.commands.some(c => c.name === name))
+    clashes[name] = usedByTool ? 'tool' : commandOnPath(name, process.env.PATH ?? '', process.platform) ? 'path' : null
+  }
+  return {
+    ...preview,
+    existing: tool
+      ? { current: tool.current, currentSource: tool.current ? tool.versions[tool.current]?.source ?? null : null }
+      : null,
+    sameVersion: same ? (same.integrity === preview.integrity ? 'identical' : 'conflict') : null,
+    clashes,
+  }
+}
+
+/**
+ * Import a user's package after they confirmed its preview. The archive must
+ * still have the digest that was previewed. It becomes current only when
+ * asked to or when the tool has no current version: an existing choice from
+ * any source is kept.
+ */
+export async function importUserPackage(
+  archivePath: string,
+  request: { archiveSha256: string; makeCurrent: boolean },
+): Promise<ImportResult> {
+  const cliStore = requireStore()
+  await prepareCliTools()
+  return cliStore.importPackage(archivePath, {
+    source: 'user-import',
+    expectedArchiveSha256: request.archiveSha256,
+    activate: request.makeCurrent,
+  })
+}
+
+export async function setCliToolCurrent(id: string, version: string): Promise<void> {
+  const cliStore = requireStore()
+  await prepareCliTools()
+  await cliStore.activateVersion(id, version)
+}
+
+export async function setCliToolDisabled(id: string, disabled: boolean): Promise<void> {
+  const cliStore = requireStore()
+  await prepareCliTools()
+  await cliStore.setDisabled(id, disabled)
+}
+
+export async function removeCliToolVersion(id: string, version: string): Promise<{ deferred: boolean }> {
+  const cliStore = requireStore()
+  await prepareCliTools()
+  return cliStore.removeVersion(id, version)
+}
+
+export async function removeCliTool(id: string): Promise<{ deferred: number }> {
+  const cliStore = requireStore()
+  await prepareCliTools()
+  return cliStore.removeTool(id)
+}
+
+export async function registerExternalProgram(request: RegisterExternalOptions): Promise<{ id: string; current: string | null }> {
+  const cliStore = requireStore()
+  await prepareCliTools()
+  return cliStore.registerExternal(request)
+}
+
+export async function reconfirmExternalProgram(id: string): Promise<void> {
+  const cliStore = requireStore()
+  await prepareCliTools()
+  await cliStore.reconfirmExternal(id)
 }
 
 /** Whether a bundled version may replace a tool's current version. */

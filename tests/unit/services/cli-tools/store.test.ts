@@ -312,7 +312,9 @@ describe('cli-tools store: pins held by a process', () => {
     expect(next?.lock.tools[0].version).toBe('2.0.0')
     expect(next?.binDir).not.toBe(first?.binDir)
     expect(readdirSync(join(root, 'locks'))).toHaveLength(2)
-    expect(await codeOf(store.removeVersion(ID, '1.0.0'))).toBe('IN_USE')
+    // The earlier set is still pinned: its record goes, its files wait for cleanup.
+    expect(await store.removeVersion(ID, '1.0.0')).toEqual({ deferred: true })
+    expect(storeEntries()).toHaveLength(2)
   })
 
   it('releases the locks of other holders only', async () => {
@@ -343,18 +345,26 @@ describe('cli-tools store: pins held by a process', () => {
 })
 
 describe('cli-tools store: removal, rollback and verification', () => {
-  it('protects current and pinned versions, then removes after release', async () => {
+  it('refuses the current version, defers pinned files, and cleans them once released', async () => {
     const store = newStore()
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
     await store.pinExecution({ executionId: 'run-1', entry: 'chat', engine: 'claude' })
     await store.importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'catalog' })
 
     expect(await codeOf(store.removeVersion(ID, '2.0.0'))).toBe('IN_USE')
-    expect(await codeOf(store.removeVersion(ID, '1.0.0'))).toBe('IN_USE')
-    expect(await store.releaseExecution('run-1')).toBe(true)
-    await store.removeVersion(ID, '1.0.0')
+    expect(await store.removeVersion(ID, '1.0.0')).toEqual({ deferred: true })
     expect(Object.keys((await store.readState()).tools[ID].versions)).toEqual(['2.0.0'])
+    // Still pinned by run-1: the files stay and the pin still resolves.
+    expect(storeEntries()).toHaveLength(2)
+    expect((await store.readState()).pendingCleanup).toHaveLength(1)
+    expect((await store.pinExecution({ executionId: 'run-1', entry: 'chat', engine: 'claude' })).reused).toBe(true)
+    expect(await store.collectPendingCleanup()).toBe(0)
+    expect(storeEntries()).toHaveLength(2)
+
+    expect(await store.releaseExecution('run-1')).toBe(true)
+    expect(await store.collectPendingCleanup()).toBe(1)
     expect(storeEntries()).toHaveLength(1)
+    expect((await store.readState()).pendingCleanup).toBeUndefined()
     expect(await codeOf(store.removeVersion(ID, '1.0.0'))).toBe('NOT_FOUND')
   })
 

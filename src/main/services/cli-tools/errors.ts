@@ -30,6 +30,14 @@ export type CliToolErrorCode =
   | 'IN_USE'
   /** state.json exists but cannot be parsed; it is never silently reset. */
   | 'STATE_CORRUPT'
+  /** A version shipped with the build can be disabled but not deleted. */
+  | 'PRESET_PROTECTED'
+  /** An existing program cannot be registered: path, interpreter or command name is unusable. */
+  | 'EXTERNAL_INVALID'
+  /** Signature checking is on and the catalog version carries no signature. */
+  | 'SIGNATURE_MISSING'
+  /** The catalog signature is malformed, from an untrusted key, or does not verify. */
+  | 'SIGNATURE_INVALID'
 
 export class CliToolError extends Error {
   readonly code: CliToolErrorCode

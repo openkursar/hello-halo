@@ -65,6 +65,7 @@ import { feishuBotRpc } from '../shared/rpc/contracts/feishu-bot.contract'
 import { gitBashRpc } from '../shared/rpc/contracts/git-bash.contract'
 import { appRpc } from '../shared/rpc/contracts/app.contract'
 import { skillsRpc } from '../shared/rpc/contracts/skills.contract'
+import { cliToolsRpc } from '../shared/rpc/contracts/cli-tools.contract'
 import { TEAM_IPC, TEAM_EVENTS } from '../shared/apps/team-types'
 import type {
   CreateTeamInput,
@@ -96,6 +97,7 @@ type GitRpcClient = RpcClient<typeof gitRpc>
 type CodeReviewRpcClient = RpcClient<typeof codeReviewRpc>
 type AuthRpcClient = RpcClient<typeof authRpc>
 type SkillsRpcClient = RpcClient<typeof skillsRpc>
+type CliToolsRpcClient = RpcClient<typeof cliToolsRpc>
 
 // Seed --display-scale before the renderer's first paint. The main process
 // passes the persisted scale via additionalArguments at window creation;
@@ -647,6 +649,19 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   skillsRestoreLegacy: SkillsRpcClient['skillsRestoreLegacy']
   skillsDeleteLegacy: SkillsRpcClient['skillsDeleteLegacy']
 
+  // Local command-line tools
+  cliToolsOverview: CliToolsRpcClient['cliToolsOverview']
+  cliToolsSetCurrent: CliToolsRpcClient['cliToolsSetCurrent']
+  cliToolsSetDisabled: CliToolsRpcClient['cliToolsSetDisabled']
+  cliToolsRemoveVersion: CliToolsRpcClient['cliToolsRemoveVersion']
+  cliToolsRemoveTool: CliToolsRpcClient['cliToolsRemoveTool']
+  cliToolsPickPackage: CliToolsRpcClient['cliToolsPickPackage']
+  cliToolsConfirmImport: CliToolsRpcClient['cliToolsConfirmImport']
+  cliToolsCancelImport: CliToolsRpcClient['cliToolsCancelImport']
+  cliToolsPickExternal: CliToolsRpcClient['cliToolsPickExternal']
+  cliToolsRegisterExternal: CliToolsRpcClient['cliToolsRegisterExternal']
+  cliToolsReconfirmExternal: CliToolsRpcClient['cliToolsReconfirmExternal']
+
   // App Import / Export
   appExportSpec: (appId: string) => Promise<IpcResponse<{ yaml: string; filename: string }>>
   appImportSpec: (input: { spaceId: string; yamlContent: string; userConfig?: Record<string, unknown> }) => Promise<IpcResponse>
@@ -1159,6 +1174,7 @@ const api: HaloAPI = {
   // Apps Management + Import/Export + Chat (all derived from appRpc contract)
   ...bindRpc(appRpc),
   ...bindRpc(skillsRpc),
+  ...bindRpc(cliToolsRpc),
 
   // App Event Listeners
   onAppStatusChanged: (callback) => createEventListener('app:status_changed', callback),
