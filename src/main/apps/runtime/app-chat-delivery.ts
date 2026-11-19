@@ -251,7 +251,6 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
     },
   }, {
     getCoalescingKey: job => job.messages.length === 1 ? job.messages[0].request.coalescingKey : undefined,
-    describeJob: job => `messages=${job.messages.length}`,
     onDiscard: (job, reason) => {
       for (const message of job.messages) {
         if (reason === 'superseded' || reason === 'no longer valid' || reason === STOPPED_UNREAD) message.resolve()
