@@ -636,11 +636,19 @@ describe('deliverToConversation', () => {
     // Three failures exhaust the bound; a fourth attempt would succeed and show up in the count.
     for (let i = 0; i < 3; i++) sendMessage.mockRejectedValueOnce(new Error('working folder missing'))
     const flush = () => new Promise<void>(resolve => setImmediate(resolve))
-    for (let i = 0; i < 6; i++) {
+    const turnEnds = async (): Promise<void> => {
       await releaseConversationTurn('tgt-retry')
       drainConversationTurn('tgt-retry')
       for (let j = 0; j < 5; j++) await flush()
     }
+    // The native gate learns of each failed start a variable number of
+    // event-loop turns later, so turn ends repeat until the bound is spent.
+    await vi.waitFor(async () => {
+      await turnEnds()
+      expect(sendMessage).toHaveBeenCalledTimes(3)
+    }, { timeout: 5000 })
+    const until = Date.now() + 300
+    while (Date.now() < until) await turnEnds()
     expect(sendMessage).toHaveBeenCalledTimes(3)
   })
 

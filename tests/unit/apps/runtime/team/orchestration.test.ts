@@ -901,7 +901,7 @@ describe('TeamOrchestration', () => {
       // Re-engage: wake the epoch, then the lead delegates wait=true to a member.
       orch.noteEpochTurn(TEAM_ID, epoch.id)
       const pending = bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'still there?', wait: true })
-      await flush()
+      await vi.waitFor(() => expect(pendings.some((p) => p.conversationId === buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))).toBe(true))
       const memberWake = pendings.find((p) => p.conversationId === buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))
       expect(memberWake).toBeTruthy()
       memberWake!.resolve('yep, still here')
@@ -956,7 +956,7 @@ describe('TeamOrchestration', () => {
         teamId: TEAM_ID, epochId: epoch.id, fromAppId: null, to: 'researcher',
         message: 'how is it going?', wait: true,
       })
-      await flush()
+      await sentCount(deps, 1)
       const req = (deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls[0][0]
       expect(req.message).toBe('how is it going?')
       pendings[0].resolve('fine')
@@ -975,7 +975,7 @@ describe('TeamOrchestration', () => {
         teamId: TEAM_ID, epochId: epoch.id, fromAppId: null, to: 'researcher',
         message: '最近什么时候团建？', wait: true,
       })
-      await flush()
+      await sentCount(deps, 1)
       const req = (deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls[0][0]
       expect(req.message).toBe('最近什么时候团建？')
       expect(req.message).not.toContain('[Team message from')
@@ -1126,6 +1126,7 @@ describe('TeamOrchestration', () => {
         message: 'hold on a second', wait: true,
       })
 
+      await vi.waitFor(() => expect(injected).toHaveLength(1))
       expect(injected[0].message).toBe('hold on a second')
       expect(injected[0].messages?.[0].recorded.provenance).toBeUndefined()
       // Delivered, but it started no turn — so the receipt says exactly that
@@ -1489,6 +1490,7 @@ describe('TeamOrchestration', () => {
         let ended = false
         held.set(sessionKey, (held.get(sessionKey) ?? 0) + 1)
         const hold = {
+          signal: new AbortController().signal,
           cancelled: false,
           stoppedBy: undefined as 'user' | 'internal' | undefined,
           reset: false,
@@ -1691,7 +1693,7 @@ describe('TeamOrchestration', () => {
 
       await wakeMember(orch, epoch.id, RESEARCHER_APP, 'c1')
       const receiptOf = bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: null, to: 'tester', message: 'my own words', wait: true })
-      await flush()
+      await vi.waitFor(() => expect(holds).toHaveLength(2))
       bus.holdSession(testerKey)
       holds[1].cancelled = true
       holds[1].stoppedBy = 'user'
@@ -1856,7 +1858,7 @@ describe('TeamOrchestration', () => {
       pendings[0].resolve()
       await flush()
 
-      orch.resumeFromEscalation({
+      await orch.resumeFromEscalation({
         teamId: TEAM_ID,
         epochId: epoch.id,
         appId: RESEARCHER_APP,
@@ -2424,4 +2426,12 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 5; i++) await Promise.resolve()
   await new Promise((r) => setTimeout(r, 0))
   for (let i = 0; i < 5; i++) await Promise.resolve()
+}
+
+/**
+ * The native bus reaches the target of a waiting send through a queued
+ * callback, a variable number of event-loop turns later than flush() covers.
+ */
+async function sentCount(deps: OrchestrationSessionDeps, count: number): Promise<void> {
+  await vi.waitFor(() => expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(count))
 }

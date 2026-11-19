@@ -76,6 +76,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   resolveClaudeConfigDir: vi.fn(() => path.join(globalThis.__HALO_TEST_DIR__, 'claude-config')),
   onNetworkConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
+  onAiSourcesConfigChange: vi.fn(),
 }))
 
 // createKB (used by the Knowledge-section test below) fires a fire-and-forget

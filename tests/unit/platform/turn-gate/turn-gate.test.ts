@@ -68,6 +68,9 @@ function makeHooks(options: MakeHooksOptions = {}) {
   return { hooks, dispatched, midTurnDelivered, busy, setMidTurn }
 }
 
+/** Recheck and watchdog timers run in the native runtime, so tests wait on real time. */
+const elapse = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
 describe('createTurnGate', () => {
   it('projects only buffered jobs without changing the queue or retaining them after removal', async () => {
     const { hooks, busy } = makeHooks()
@@ -362,55 +365,43 @@ describe('createTurnGate', () => {
 
   describe('drain on a busy session', () => {
     it('re-arms the recheck instead of dropping the buffered entry', async () => {
-      vi.useFakeTimers()
-      try {
-        const { hooks, dispatched, busy } = makeHooks()
-        busy.add('s1')
-        const gate = createTurnGate<Job>(hooks, { recheckMs: 1000 })
+      const { hooks, dispatched, busy } = makeHooks()
+      busy.add('s1')
+      const gate = createTurnGate<Job>(hooks, { recheckMs: 20 })
 
-        await gate.deliver('s1', { body: 'held' })
-        expect(dispatched).toHaveLength(0)
+      await gate.deliver('s1', { body: 'held' })
+      expect(dispatched).toHaveLength(0)
 
-        // Explicit drain while still busy must not discard the mail — it
-        // re-arms its own backstop.
-        gate.drain('s1')
-        await vi.advanceTimersByTimeAsync(1500) // one recheck fires, still busy → re-arms
-        expect(dispatched).toHaveLength(0)
-        expect(gate.hasBuffered('s1')).toBe(true)
+      // Explicit drain while still busy must not discard the mail — it
+      // re-arms its own backstop.
+      gate.drain('s1')
+      await elapse(70) // rechecks fire, still busy → re-arm
+      expect(dispatched).toHaveLength(0)
+      expect(gate.hasBuffered('s1')).toBe(true)
 
-        busy.delete('s1')
-        await vi.advanceTimersByTimeAsync(1000) // the re-armed recheck fires
-        expect(dispatched).toHaveLength(1)
-        expect(dispatched[0].job.body).toBe('held')
-      } finally {
-        vi.useRealTimers()
-      }
+      busy.delete('s1')
+      await vi.waitFor(() => expect(dispatched).toHaveLength(1)) // the re-armed recheck fires
+      expect(dispatched[0].job.body).toBe('held')
     })
 
     it('the recheck keeps re-arming for as long as the target stays busy', async () => {
-      vi.useFakeTimers()
-      try {
-        const { hooks, dispatched, busy } = makeHooks()
-        busy.add('s1')
-        const gate = createTurnGate<Job>(hooks, { recheckMs: 1000 })
+      const { hooks, dispatched, busy } = makeHooks()
+      busy.add('s1')
+      const gate = createTurnGate<Job>(hooks, { recheckMs: 20 })
 
-        await gate.deliver('s1', { body: 'held' })
-        await vi.advanceTimersByTimeAsync(5000) // several rechecks, all still busy
-        expect(dispatched).toHaveLength(0)
+      await gate.deliver('s1', { body: 'held' })
+      await elapse(120) // several rechecks, all still busy
+      expect(dispatched).toHaveLength(0)
 
-        busy.delete('s1')
-        await vi.advanceTimersByTimeAsync(1000)
-        expect(dispatched).toHaveLength(1)
+      busy.delete('s1')
+      await vi.waitFor(() => expect(dispatched).toHaveLength(1))
 
-        // Drained mailbox → no recheck left. The drained job now holds the slot,
-        // so its reservation watchdog is the one timer still armed; releasing the
-        // slot (what a turn ending does) leaves nothing running.
-        gate.release('s1')
-        await vi.advanceTimersByTimeAsync(5000)
-        expect(vi.getTimerCount()).toBe(0)
-      } finally {
-        vi.useRealTimers()
-      }
+      // Drained mailbox: releasing the slot (what a turn ending does) leaves it
+      // free and starts nothing more.
+      gate.release('s1')
+      await elapse(120)
+      expect(dispatched).toHaveLength(1)
+      expect(gate.isOccupied('s1')).toBe(false)
     })
   })
 
@@ -458,21 +449,18 @@ describe('createTurnGate', () => {
     })
 
     it('clears a pending recheck timer for a discarded session', async () => {
-      vi.useFakeTimers()
-      try {
-        const { hooks, busy } = makeHooks()
-        busy.add('s1')
-        const gate = createTurnGate<Job>(hooks, { recheckMs: 1000 })
+      const { hooks, dispatched, busy } = makeHooks()
+      busy.add('s1')
+      const gate = createTurnGate<Job>(hooks, { recheckMs: 20 })
 
-        await gate.deliver('s1', { body: 'x' })
-        gate.discard((key) => key === 's1', 'reset')
+      await gate.deliver('s1', { body: 'x' })
+      gate.discard((key) => key === 's1', 'reset')
 
-        // No leftover timer to fire.
-        await vi.advanceTimersByTimeAsync(5000)
-        expect(vi.getTimerCount()).toBe(0)
-      } finally {
-        vi.useRealTimers()
-      }
+      // No leftover recheck fires for the discarded mail once the session is idle.
+      busy.delete('s1')
+      await elapse(120)
+      expect(dispatched).toHaveLength(0)
+      expect(gate.isOccupied('s1')).toBe(false)
     })
   })
 
@@ -614,53 +602,40 @@ describe('createTurnGate', () => {
 
   describe('reservation watchdog', () => {
     it('reclaims a reservation whose turn never reported an ending, and drains the mail', async () => {
-      vi.useFakeTimers()
-      try {
-        const { hooks, dispatched } = makeHooks()
-        const gate = createTurnGate<Job>(hooks, { reservationTtlMs: 10_000, recheckMs: 60_000 })
+      const { hooks, dispatched } = makeHooks()
+      const gate = createTurnGate<Job>(hooks, { reservationTtlMs: 50, recheckMs: 60_000 })
 
-        // Dispatched, then the caller loses the completion: no release ever comes.
-        await gate.deliver('s1', { body: 'first' })
-        expect(dispatched).toHaveLength(1)
+      // Dispatched, then the caller loses the completion: no release ever comes.
+      await gate.deliver('s1', { body: 'first' })
+      expect(dispatched).toHaveLength(1)
 
-        // Everything after it can only queue, and the session reads occupied.
-        expect(await gate.deliver('s1', { body: 'stranded' })).toBe('buffered')
-        expect(gate.isOccupied('s1')).toBe(true)
+      // Everything after it can only queue, and the session reads occupied.
+      expect(await gate.deliver('s1', { body: 'stranded' })).toBe('buffered')
+      expect(gate.isOccupied('s1')).toBe(true)
 
-        await vi.advanceTimersByTimeAsync(11_000)
-
-        expect(gate.hasBuffered('s1')).toBe(false)
-        expect(dispatched.map((d) => d.job.body)).toEqual(['first', 'stranded'])
-      } finally {
-        vi.useRealTimers()
-      }
+      await vi.waitFor(() => expect(dispatched.map((d) => d.job.body)).toEqual(['first', 'stranded']))
+      expect(gate.hasBuffered('s1')).toBe(false)
     })
 
     it('never reclaims a slot while a turn is actually streaming', async () => {
-      vi.useFakeTimers()
-      try {
-        const { hooks, dispatched, busy } = makeHooks()
-        const gate = createTurnGate<Job>(hooks, { reservationTtlMs: 10_000, recheckMs: 60_000 })
+      const { hooks, dispatched, busy } = makeHooks()
+      const gate = createTurnGate<Job>(hooks, { reservationTtlMs: 30, recheckMs: 60_000 })
 
-        await gate.deliver('s1', { body: 'long-turn' })
-        busy.add('s1') // the session layer registered the turn
-        await gate.deliver('s1', { body: 'behind-it' })
+      await gate.deliver('s1', { body: 'long-turn' })
+      busy.add('s1') // the session layer registered the turn
+      await gate.deliver('s1', { body: 'behind-it' })
 
-        // Far past the TTL: freeing the slot here would start a second turn on a
-        // session the first is still streaming on.
-        await vi.advanceTimersByTimeAsync(100_000)
-        expect(dispatched).toHaveLength(1)
-        expect(gate.hasBuffered('s1')).toBe(true)
+      // Far past the TTL: freeing the slot here would start a second turn on a
+      // session the first is still streaming on.
+      await elapse(200)
+      expect(dispatched).toHaveLength(1)
+      expect(gate.hasBuffered('s1')).toBe(true)
 
-        // The turn ends and the caller reports it — normal path, mail flows.
-        busy.delete('s1')
-        gate.release('s1')
-        gate.drain('s1')
-        await vi.advanceTimersByTimeAsync(0)
-        expect(dispatched.map((d) => d.job.body)).toEqual(['long-turn', 'behind-it'])
-      } finally {
-        vi.useRealTimers()
-      }
+      // The turn ends and the caller reports it — normal path, mail flows.
+      busy.delete('s1')
+      gate.release('s1')
+      gate.drain('s1')
+      await vi.waitFor(() => expect(dispatched.map((d) => d.job.body)).toEqual(['long-turn', 'behind-it']))
     })
 
     it('is not armed at all unless the caller asked for it', async () => {

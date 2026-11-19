@@ -5,7 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { createGroupPlanResolver, toRouterBackend } from '../../../../src/main/services/ai-sources/group-plan'
-import type { AIGroup, AISource, AISourcesConfig, BackendRequestConfig } from '../../../../src/shared/types/ai-sources'
+import { DEFAULT_MODEL, type AIGroup, type AISource, type AISourcesConfig, type BackendRequestConfig } from '../../../../src/shared/types/ai-sources'
 import type { GroupPlan } from '../../../../src/main/openai-compat-router'
 
 const wiring = vi.hoisted(() => ({
@@ -209,7 +209,7 @@ describe('a member in the form the router needs', () => {
 
   it('maps a retired Anthropic model id as a single account does, and leaves OpenAI-style ids alone', () => {
     const passthrough = toRouterBackend(account('a'), backend({ apiType: 'anthropic_passthrough', model: 'claude-mythos-preview' }), 'x')
-    expect(passthrough.model).toBe('claude-sonnet-5')
+    expect(passthrough.model).toBe(DEFAULT_MODEL)
     expect(toRouterBackend(account('a'), backend({ apiType: 'chat_completions', model: 'claude-mythos-preview' }), 'x').model).toBe('claude-mythos-preview')
   })
 

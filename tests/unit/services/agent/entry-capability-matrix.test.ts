@@ -76,6 +76,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   onApiConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
   onNetworkConfigChange: vi.fn(),
+  onAiSourcesConfigChange: vi.fn(),
   resolveClaudeConfigDir: () => (state.config.agent?.configDirMode === 'cc' ? state.ccConfigDir : state.haloConfigDir),
 }))
 

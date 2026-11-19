@@ -32,6 +32,7 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   buildUserSessionSdkOptions: async (options: Record<string, unknown>) => ({ mcpServers: options.mcpServers }),
   toEngineSystemPrompt: (prompt: string) => prompt,
   getEngineCapabilities: () => ({ features: { permissionRules: true, hooks: true } }),
+  createDelegatedModelEndpoint: () => undefined,
 }))
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   closeV2Session: vi.fn(), getConsumerHandle: () => null, getRunningConsumerIds: () => [],

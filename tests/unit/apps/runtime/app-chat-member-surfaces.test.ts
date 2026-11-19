@@ -284,6 +284,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   onApiConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
   onNetworkConfigChange: vi.fn(),
+  onAiSourcesConfigChange: vi.fn(),
 }))
 vi.mock('../../../../src/main/services/space.service', () => ({
   getSpace: () => ({ id: 'space-1', path: '/tmp/halo-test/space' }),

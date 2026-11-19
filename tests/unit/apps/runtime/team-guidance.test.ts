@@ -128,15 +128,17 @@ describe('the standing teams a digital human is given', () => {
 
 describe('daily collaboration guidance', () => {
   it('offers independent work and context isolation without an organization choice', () => {
-    expect(TEAM_TOOLSET_GUIDE).toContain('work can progress independently')
-    expect(TEAM_TOOLSET_GUIDE).toContain('separate context')
+    expect(TEAM_TOOLSET_GUIDE).toContain('parts that can proceed in parallel')
+    expect(TEAM_TOOLSET_GUIDE).toContain('separate agents that work in their own context')
     expect(TEAM_TOOLSET_GUIDE).toContain('independent review')
-    expect(TEAM_TOOLSET_GUIDE).toContain('A direct read or search is often enough for a small question')
+    expect(TEAM_TOOLSET_GUIDE).toContain('Direct tools fit better for a specific file, symbol or lookup')
     expect(TEAM_TOOLSET_GUIDE).not.toContain('standing team')
   })
 
   it('requires self-contained assignments and reports sent to the requester', () => {
-    expect(TEAM_TOOLSET_GUIDE).toContain('permitted actions and the evidence you need back')
+    expect(TEAM_TOOLSET_GUIDE).toContain('The collaborator knows only what you write')
+    expect(TEAM_TOOLSET_GUIDE).toContain('scope and permitted actions')
+    expect(TEAM_TOOLSET_GUIDE).toContain('what to send back, such as conclusions with evidence')
     expect(TEAM_TOOLSET_GUIDE).toContain('Use team_send for requests, questions and replies')
     expect(TEAM_TOOLSET_GUIDE).toContain('turn-end notification is not a delivered reply')
   })
@@ -145,7 +147,6 @@ describe('daily collaboration guidance', () => {
     expect(TEAM_TOOLSET_GUIDE).toContain('resume the conversation when you are idle')
     expect(TEAM_TOOLSET_GUIDE).toContain('No wait or team-completion call is required')
     expect(TEAM_TOOLSET_GUIDE).toContain('Respect explicit stops')
-    expect(TEAM_TOOLSET_GUIDE).toContain('Findings are not messages')
   })
 
   it('consults saved teams only for an explicit reference, without guessing the latest work', () => {
