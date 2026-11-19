@@ -6,6 +6,7 @@
 
 import { nativeImage } from 'electron'
 import type { BrowserContext } from '../context'
+import { CREDENTIAL_WAIT_MS, requestCredential } from '../credential-broker'
 import { checkFill, type FillCheck } from '../fill-check'
 
 // ============================================
@@ -130,3 +131,83 @@ export async function fillFormElement(
 
   return checkFill(value, await ctx.fillElement(uid, value))
 }
+
+/** How long the fill-and-submit leg may take once the user has answered. */
+const SECRET_FILL_TIMEOUT = 30_000
+
+/** The http(s) origin of a page, or null for anything that has none. */
+function webOrigin(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Ask the user to type into the named fields, then fill and submit them.
+ *
+ * Three properties the caller depends on:
+ *  - the wait happens between page operations, not inside one, so a prompt the
+ *    user leaves sitting does not hold the page's frame lease open;
+ *  - the origin is re-read after the wait and the fill is abandoned if the page
+ *    moved, so text typed for one site cannot be delivered to another;
+ *  - filling and submitting are one leg, so the model gets no turn while a
+ *    field still holds the value.
+ */
+export async function fillSecretFields(
+  ctx: BrowserContext,
+  uids: string[],
+  purpose: string,
+  submitUid: string | undefined
+): Promise<{ status: 'submitted' | 'declined' | 'expired' | 'moved'; detail?: string }> {
+  const viewId = ctx.getActiveViewId()
+  if (!viewId) throw new Error('No active browser page')
+
+  const fields = uids.map(uid => {
+    const element = ctx.getElementByUid(uid)
+    if (!element) throw new Error(`Element not found: ${uid}. Take a browser_snapshot and use its uids.`)
+    return { uid, label: element.name || element.description || element.role }
+  })
+
+  // The user is asked to trust a named origin, so a page without one (blank,
+  // about:, a local file) cannot be the destination: they would be shown
+  // "null" and asked to type a code into it.
+  const origin = webOrigin(ctx.getPageUrl())
+  if (!origin) throw new Error('This page has no web address to show the user, so nothing can be typed into it')
+
+  const outcome = await requestCredential({
+    conversationId: ctx.conversationId,
+    spaceId: ctx.spaceId,
+    viewId,
+    origin,
+    title: ctx.getLastSnapshot()?.title ?? null,
+    fields,
+    purpose,
+  })
+  if (outcome.status !== 'provided') return { status: outcome.status === 'declined' ? 'declined' : 'expired' }
+
+  if (ctx.getActiveViewId() !== viewId || webOrigin(ctx.getPageUrl()) !== origin) {
+    return { status: 'moved', detail: `the page is no longer on ${origin}, so nothing was typed` }
+  }
+
+  const problems: string[] = []
+  for (const field of fields) {
+    const value = outcome.values.get(field.uid)
+    if (value === undefined) continue
+    const check = checkFill(value, await withTimeout(ctx.fillElementWithUserText(field.uid, value), SECRET_FILL_TIMEOUT, 'browser_fill_secret'), true)
+    if (check.status !== 'match') problems.push(`${field.uid}: ${check.detail}`)
+  }
+
+  await withTimeout(
+    submitUid ? ctx.clickElement(submitUid) : ctx.pressKey('Enter'),
+    SECRET_FILL_TIMEOUT,
+    'browser_fill_secret(submit)'
+  )
+
+  return { status: 'submitted', detail: problems.length ? problems.join('\n') : undefined }
+}
+
+/** Longest a single browser_fill_secret call can run: the user's think time plus both page legs. */
+export const SECRET_TOOL_TIMEOUT = CREDENTIAL_WAIT_MS + 2 * SECRET_FILL_TIMEOUT

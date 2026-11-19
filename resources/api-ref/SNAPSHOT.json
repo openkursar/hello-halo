@@ -1,9 +1,9 @@
 {
-  "totalRoutes": 341,
+  "totalRoutes": 345,
   "expose": {
     "ai": 214,
     "wrapped": 11,
-    "internal": 116,
+    "internal": 120,
     "unlabeled": 0
   },
   "groups": {
@@ -25,6 +25,7 @@
     "space",
     "agent",
     "terminal",
+    "browser",
     "artifact",
     "notify",
     "im",

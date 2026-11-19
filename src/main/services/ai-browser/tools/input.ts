@@ -1,10 +1,14 @@
 /**
- * Input Tools (5 tools)
+ * Input Tools (5 tools, plus browser_fill_secret in server mode)
  *
  * User interaction simulation: click, fill, hover, key press, file upload.
  *
  * browser_click — Click or drag-and-drop (absorbs browser_drag via dragTo param).
  * browser_fill — Single field or batch form fill (absorbs browser_fill_form via elements param).
+ * browser_fill_secret — Fill fields with text the user types; the value never reaches the model.
+ *   Server mode only: a server's pages are watched from a remote client, where the
+ *   user cannot type into the page itself. On the desktop the user types into the
+ *   visible browser, so the tool list stays as it was.
  * browser_hover — Hover to reveal menus/tooltips.
  * browser_press_key — Keyboard keys and shortcuts.
  * browser_upload_file — File upload (single or multi-file).
@@ -17,7 +21,8 @@ import fs from 'node:fs'
 import { z } from 'zod'
 import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
-import { textResult, withTimeout, fillFormElement, TOOL_TIMEOUT } from './helpers'
+import { isServerMode } from '../../../foundation/runtime-mode'
+import { textResult, withTimeout, fillFormElement, fillSecretFields, SECRET_TOOL_TIMEOUT, TOOL_TIMEOUT } from './helpers'
 
 export function buildInputTools(ctx: BrowserContext) {
 
@@ -176,6 +181,57 @@ If filling doesn't work (e.g., custom dropdowns that aren't real <select> elemen
   }
 )
 
+const browser_fill_secret = tool(
+  'browser_fill_secret',
+  `Fill fields with text the user types in themselves — a password, a PIN, a one-time code, an authenticator token.
+
+Use this instead of browser_fill whenever the value is a credential you were not already given. Never ask the user to type a credential into the chat: anything said there is kept in the transcript, and you would be handling it yourself.
+
+You do not supply or receive the text. Halo prompts the user, showing them the page's origin and the fields you named; what they type goes straight into the page. You get back only whether it was typed and submitted.
+
+The fields are filled and the form is submitted in this one call, so fill every non-secret field (username, account) with browser_fill first. Afterwards take a browser_snapshot to see what the page did — the value itself stays hidden there too.
+
+If the user declines, stop and ask them how they want to proceed. Do not retry and do not ask them for the value.`,
+  {
+    uids: z.array(z.string()).min(1).describe(
+      'The uids of the fields the user should type into, from the latest browser_snapshot. A code split across single-character boxes takes one uid per box, in order.'
+    ),
+    purpose: z.string().describe(
+      'One short sentence telling the user what the page is asking for, e.g. "the 6-digit code from your authenticator app". Shown to them as your words.'
+    ),
+    submit_uid: z.string().optional().describe(
+      'The uid of the button that submits the form. Omit to press Enter in the last filled field.'
+    )
+  },
+  async (args) => {
+    if (!ctx.getActiveViewId()) {
+      return textResult('No active browser page.', true)
+    }
+
+    try {
+      const result = await withTimeout(
+        fillSecretFields(ctx, args.uids, args.purpose, args.submit_uid),
+        SECRET_TOOL_TIMEOUT,
+        'browser_fill_secret'
+      )
+      if (result.status === 'declined') {
+        return textResult('The user declined to provide this. Nothing was typed. Ask them how they want to proceed instead of retrying, and do not ask them for the value.', true)
+      }
+      if (result.status === 'expired') {
+        return textResult('The prompt expired with no answer. Nothing was typed. Ask the user whether they still want to go on before trying again.', true)
+      }
+      if (result.status === 'moved') {
+        return textResult(`Nothing was typed: ${result.detail}. Take a browser_snapshot to see where the page is now.`, true)
+      }
+      return result.detail
+        ? textResult(`Submitted, but a field may not hold what the user typed:\n${result.detail}`)
+        : textResult('The user filled the fields and the form was submitted. Take a browser_snapshot to see the result.')
+    } catch (error) {
+      return textResult(`Secret fill failed: ${(error as Error).message}`, true)
+    }
+  }
+)
+
 const browser_hover = tool(
   'browser_hover',
   `Move the mouse over an element without clicking. Use this to:
@@ -294,6 +350,7 @@ All files must exist on the local filesystem. After uploading, take a browser_sn
 return [
   browser_click,
   browser_fill,
+  ...(isServerMode() ? [browser_fill_secret] : []),
   browser_hover,
   browser_press_key,
   browser_upload_file

@@ -9,6 +9,11 @@
  *                                     for a renderer that missed the live events
  *  - ai-browser:stop-page           — request: tray stop, refused unless the page is
  *                                     the named conversation's alone
+ *  - ai-browser:credential-request  — a page waits on text the model must not hold
+ *  - ai-browser:credential-resolved — that wait ended; open prompts must close
+ *  - ai-browser:list-credential-requests / :submit-credential / :decline-credential
+ *                                     — the user's answer, carrying values the
+ *                                     model never sees
  *
  * Mirrors ipc/terminal.ts: subscribe once at startup (before any AI view
  * exists) and fan events out to the BrowserWindow and WebSocket clients. The
@@ -17,7 +22,18 @@
  */
 
 import { ipcMain } from 'electron'
-import { onBrowserActiveView, onBrowserViewGone, onBrowserConversationReleased, listLivePages, stopLivePage } from '../services/ai-browser'
+import {
+  onBrowserActiveView,
+  onBrowserViewGone,
+  onBrowserConversationReleased,
+  onBrowserCredentialRequest,
+  onBrowserCredentialResolved,
+  listLivePages,
+  stopLivePage,
+  listPendingCredentialRequests,
+  submitCredential,
+  declineCredential,
+} from '../services/ai-browser'
 import { getMainWindow } from '../foundation/window.service'
 import { broadcastToAll } from '../http/websocket'
 
@@ -48,6 +64,12 @@ export function registerAIBrowserHandlers(): void {
   subscriptions.push(onBrowserConversationReleased((e) => {
     forward('ai-browser:conversation-released', e as unknown as Record<string, unknown>)
   }))
+  subscriptions.push(onBrowserCredentialRequest((e) => {
+    forward('ai-browser:credential-request', e as unknown as Record<string, unknown>)
+  }))
+  subscriptions.push(onBrowserCredentialResolved((e) => {
+    forward('ai-browser:credential-resolved', e as unknown as Record<string, unknown>)
+  }))
 
   ipcMain.handle('ai-browser:list-live-pages', () => ({
     success: true,
@@ -57,11 +79,29 @@ export function registerAIBrowserHandlers(): void {
     success: true,
     data: stopLivePage(viewId, conversationId),
   }))
+
+  // The values travel one way: into the page the request named. Nothing here
+  // returns them, so a client cannot read back what another client typed.
+  ipcMain.handle('ai-browser:list-credential-requests', () => ({
+    success: true,
+    data: listPendingCredentialRequests(),
+  }))
+  ipcMain.handle('ai-browser:submit-credential', (_event, { requestId, values }: { requestId: string; values: Record<string, string> }) => {
+    const result = submitCredential(requestId, values)
+    return result.accepted ? { success: true } : { success: false, error: result.error }
+  })
+  ipcMain.handle('ai-browser:decline-credential', (_event, { requestId }: { requestId: string }) => {
+    const result = declineCredential(requestId)
+    return result.accepted ? { success: true } : { success: false, error: result.error }
+  })
 }
 
 export function cleanupAIBrowserHandlers(): void {
   ipcMain.removeHandler('ai-browser:list-live-pages')
   ipcMain.removeHandler('ai-browser:stop-page')
+  ipcMain.removeHandler('ai-browser:list-credential-requests')
+  ipcMain.removeHandler('ai-browser:submit-credential')
+  ipcMain.removeHandler('ai-browser:decline-credential')
   for (const unsub of subscriptions) unsub()
   subscriptions.length = 0
 }

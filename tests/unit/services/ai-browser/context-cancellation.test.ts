@@ -24,6 +24,8 @@ vi.mock('../../../../src/main/services/browser-view.service', () => ({
     getState: (id: string) => pages.has(id) ? { id, url: `https://example.test/${id}`, title: id } : null,
     getWebContents: (id: string) => pages.get(id) ?? null,
     isRevealed: () => false,
+    onViewStateChanged: () => () => {},
+    onUserInput: () => () => {},
     onViewDestroyed: (listener: (viewId: string, contentsId?: number) => void) => {
       destroyedListeners.add(listener)
       return () => destroyedListeners.delete(listener)

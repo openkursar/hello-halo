@@ -76,6 +76,8 @@ vi.mock('../../../../src/main/services/browser-view.service', () => ({
       destroyedListeners.add(listener)
       return () => destroyedListeners.delete(listener)
     },
+    onViewStateChanged: () => () => {},
+    onUserInput: () => () => {},
   },
 }))
 

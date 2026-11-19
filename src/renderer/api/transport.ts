@@ -505,6 +505,8 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'ai-browser:active-view-changed': 'onAIBrowserActiveViewChanged',
       'ai-browser:view-gone': 'onAIBrowserViewGone',
       'ai-browser:conversation-released': 'onAIBrowserConversationReleased',
+      'ai-browser:credential-request': 'onAIBrowserCredentialRequest',
+      'ai-browser:credential-resolved': 'onAIBrowserCredentialResolved',
       'artifact:tree-update': 'onArtifactTreeUpdate',
       'artifact:changed-batch': 'onArtifactChangedBatch',
       'perf:snapshot': 'onPerfSnapshot',

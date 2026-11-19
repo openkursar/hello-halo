@@ -23,6 +23,7 @@
  */
 
 import type { BrowserContext } from '../context'
+import { isServerMode } from '../../../foundation/runtime-mode'
 import { buildNavigationTools } from './navigation'
 import { buildInputTools } from './input'
 import { buildSnapshotTools } from './snapshot'
@@ -37,13 +38,33 @@ import { buildDownloadTools } from './download'
  * (scoped activeViewId) while sharing the same browserViewManager session.
  */
 export function buildAllTools(ctx: BrowserContext) {
-  return [
+  const tools = [
     ...buildNavigationTools(ctx),  // 2 tools: navigate, wait_for
-    ...buildInputTools(ctx),       // 5 tools: click, fill, hover, press_key, upload_file
+    ...buildInputTools(ctx),       // 5 tools: click, fill, hover, press_key, upload_file (+ fill_secret on a server)
     ...buildSnapshotTools(ctx),    // 3 tools: snapshot, screenshot, evaluate
     ...buildScriptTools(ctx),      // 1 tool:  run
     ...buildTabTools(ctx),         // 1 tool:  tab
     ...buildInspectTools(ctx),     // 1 tool:  inspect
     ...buildDownloadTools(ctx),    // 1 tool:  download
   ]
+  // Only a remote live view (server mode) lets a person operate a page from
+  // outside its window, so only there can a tool result need the notice.
+  return isServerMode() ? tools.map(definition => withUserInputNotice(ctx, definition)) : tools
+}
+
+interface ToolDefinition {
+  handler: (args: unknown, extra: unknown) => Promise<{ content?: unknown[] } | undefined>
+}
+
+/** Whatever tool the AI calls next carries the news that a person changed the page under it. */
+function withUserInputNotice<T extends ToolDefinition>(ctx: BrowserContext, definition: T): T {
+  return {
+    ...definition,
+    handler: async (args: unknown, extra: unknown) => {
+      const result = await definition.handler(args, extra)
+      const notice = ctx.takeUserInputNotice()
+      if (!notice || !result) return result
+      return { ...result, content: [...(result.content ?? []), { type: 'text', text: notice }] }
+    },
+  }
 }

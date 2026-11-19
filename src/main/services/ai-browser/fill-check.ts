@@ -106,7 +106,13 @@ function editableText(text: string): string {
   return text.replace(/[\u200b\ufeff]/g, '').replace(/\s+/g, ' ').trim()
 }
 
-export function checkFill(expected: string, filled: FieldReadBack | undefined): FillCheck {
+/**
+ * `typedByUser` marks text that came from the user through the credential
+ * broker rather than from the model. The field is then reported by length
+ * alone, whatever its input type: the point of that path is that the model
+ * never learns the value, and a mismatch report is still a report.
+ */
+export function checkFill(expected: string, filled: FieldReadBack | undefined, typedByUser: boolean = false): FillCheck {
   if (!filled || filled.kind === 'unreadable' || typeof filled.value !== 'string') {
     return {
       status: 'unreadable',
@@ -115,10 +121,15 @@ export function checkFill(expected: string, filled: FieldReadBack | undefined): 
   }
   const normalize = filled.kind === 'editable' ? editableText : fieldText
   if (normalize(filled.value) === normalize(expected)) return { status: 'match' }
-  // A password's text never goes back to the model.
-  const holds = filled.kind === 'field' && filled.secret
-    ? `the password field does not hold the requested text (it has ${Array.from(filled.value).length} characters, ${Array.from(expected).length} were requested)`
-    : `the field reads ${quoted(filled.value)}, not the requested ${quoted(expected)}`
+  // A password's text, and anything the user typed, never goes back to the model.
+  let holds: string
+  if (typedByUser) {
+    holds = `the field does not hold the text the user typed (it has ${Array.from(filled.value).length} characters, ${Array.from(expected).length} were typed)`
+  } else if (filled.kind === 'field' && filled.secret) {
+    holds = `the password field does not hold the requested text (it has ${Array.from(filled.value).length} characters, ${Array.from(expected).length} were requested)`
+  } else {
+    holds = `the field reads ${quoted(filled.value)}, not the requested ${quoted(expected)}`
+  }
   return {
     status: 'different',
     detail: `${holds}. The page may have reformatted, cut short or refused the input, or kept earlier text. If this is only the page's formatting of the same value, the field is filled; otherwise fix it before submitting.`,

@@ -18,7 +18,7 @@ import type { AgentInjectRequest, AgentSendRequest } from '../shared/types/agent
 import type { Thought, TranscriptPage } from '../shared/types/transcript'
 import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } from '../shared/types/artifact'
 import type { MemoryPressureEvent } from '../shared/types/memory-pressure'
-import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
+import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserCredentialRequest, AIBrowserCredentialResolved, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import type { SpaceDetailsRequestOptions } from '../shared/types/space'
 import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
@@ -472,6 +472,11 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   listAIBrowserLivePages: () => Promise<IpcResponse<AIBrowserLivePage[]>>
   onAIBrowserConversationReleased: (callback: (data: AIBrowserConversationReleased) => void) => () => void
   stopAIBrowserPage: (viewId: string, conversationId: string) => Promise<IpcResponse<AIBrowserStopResult>>
+  onAIBrowserCredentialRequest: (callback: (data: AIBrowserCredentialRequest) => void) => () => void
+  onAIBrowserCredentialResolved: (callback: (data: AIBrowserCredentialResolved) => void) => () => void
+  listAIBrowserCredentialRequests: () => Promise<IpcResponse<AIBrowserCredentialRequest[]>>
+  submitAIBrowserCredential: (requestId: string, values: Record<string, string>) => Promise<IpcResponse>
+  declineAIBrowserCredential: (requestId: string) => Promise<IpcResponse>
 
   // Performance Monitoring (Developer Tools)
   perfStart: (config?: { sampleInterval?: number; maxSamples?: number }) => Promise<IpcResponse>
@@ -1077,6 +1082,11 @@ const api: HaloAPI = {
   listAIBrowserLivePages: () => ipcRenderer.invoke('ai-browser:list-live-pages'),
   onAIBrowserConversationReleased: (callback) => createEventListener('ai-browser:conversation-released', callback),
   stopAIBrowserPage: (viewId, conversationId) => ipcRenderer.invoke('ai-browser:stop-page', { viewId, conversationId }),
+  onAIBrowserCredentialRequest: (callback) => createEventListener('ai-browser:credential-request', callback),
+  onAIBrowserCredentialResolved: (callback) => createEventListener('ai-browser:credential-resolved', callback),
+  listAIBrowserCredentialRequests: () => ipcRenderer.invoke('ai-browser:list-credential-requests'),
+  submitAIBrowserCredential: (requestId, values) => ipcRenderer.invoke('ai-browser:submit-credential', { requestId, values }),
+  declineAIBrowserCredential: (requestId) => ipcRenderer.invoke('ai-browser:decline-credential', { requestId }),
 
   // Performance Monitoring (Developer Tools)
   ...bindRpc(perfRpc),

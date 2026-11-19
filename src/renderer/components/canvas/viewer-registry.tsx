@@ -15,7 +15,8 @@ import { MarkdownViewer } from './viewers/MarkdownViewer'
 import { ImageViewer } from './viewers/ImageViewer'
 import { HtmlViewer } from './viewers/HtmlViewer'
 import { CsvViewer } from './viewers/CsvViewer'
-import { BrowserViewer, BrowserViewerFallback } from './viewers/BrowserViewer'
+import { BrowserViewer } from './viewers/BrowserViewer'
+import { BrowserLiveViewer } from './viewers/BrowserLiveViewer'
 import { TerminalViewer } from './viewers/TerminalViewer'
 import { TeamViewer } from './viewers/TeamViewer'
 
@@ -55,7 +56,9 @@ function MarkdownEntry(props: ViewerProps) {
 }
 
 // A desktop gets a webview guest (Chromium's own renderer, PDFs included); a
-// remote client has none, so PDFs render with pdfjs and pages fall back to a link.
+// remote client has none, so PDFs render with pdfjs and a page is watched as
+// paced frames instead of hosted (server only; otherwise BrowserLiveViewer
+// shows the link fallback).
 const remote = api.isRemoteMode()
 
 export const VIEWERS: Record<ContentType, ViewerSpec> = {
@@ -70,7 +73,7 @@ export const VIEWERS: Record<ContentType, ViewerSpec> = {
   docx: { Component: DocxViewer, ownsError: true },
   pptx: { Component: PptxViewer, ownsError: true },
   pdf: remote ? { Component: PdfViewer, ownsError: true } : { Component: BrowserViewer, ownsLoading: true },
-  browser: { Component: remote ? BrowserViewerFallback : BrowserViewer, ownsLoading: true },
+  browser: { Component: remote ? BrowserLiveViewer : BrowserViewer, ownsLoading: true },
   terminal: { Component: TerminalViewer },
   team: { Component: TeamViewer },
   goal: { Component: GoalEditor },

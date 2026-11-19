@@ -14,6 +14,7 @@ import { registerSubagentModelsRoutes } from './subagent-models.routes'
 import { registerSpaceRoutes } from './space.routes'
 import { registerAgentRoutes } from './agent.routes'
 import { registerTerminalRoutes } from './terminal.routes'
+import { registerBrowserRoutes } from './browser.routes'
 import { registerArtifactRoutes } from './artifact.routes'
 import { registerNotifyRoutes } from './notify.routes'
 import { registerImRoutes } from './im.routes'
@@ -38,6 +39,7 @@ export function registerApiRoutes(app: Express, options: { assistant?: boolean }
   registerSpaceRoutes(app)
   registerAgentRoutes(app)
   registerTerminalRoutes(app)
+  registerBrowserRoutes(app)
   registerArtifactRoutes(app)
   registerNotifyRoutes(app)
   registerImRoutes(app)
