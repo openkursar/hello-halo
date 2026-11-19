@@ -42,6 +42,7 @@ import { assertDelegatedAuthReady } from './cli-auth'
 import { waitForSdkInitialization } from './initialization'
 import { getDeviceIdentity } from '../../foundation/device-identity'
 import { applyOfficeRuntimeEnv } from '../office-runtime'
+import { applyCliToolsEnv, CLI_TOOLS_BIN_ENV } from '../cli-tools'
 import { applyProxyEnv, mcpServerUrls } from '../proxy-policy'
 import { WorkingDirectoryUnavailableError } from './working-dir'
 import { createMemoryWriteHooks, type MemoryWriteGuardConfig } from '../../platform/memory'
@@ -469,6 +470,11 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
     // So is the picked level baked into the router key. It can change while
     // the level above does not: picking the value Model Config already has.
     String(sdkOptions.pickedReasoningEffort ?? ''),
+    // The installed CLI tool set is fixed in the spawned process's PATH. Its
+    // directory changes with any version, so an idle session picks up an
+    // update and a busy one keeps its tools until the turn ends. Absent
+    // without tools, which leaves earlier fingerprints unchanged.
+    ...(env[CLI_TOOLS_BIN_ENV] ? [`cli:${String(env[CLI_TOOLS_BIN_ENV])}`] : []),
   ].join('|')
   return createHash('sha256').update(material).digest('hex').slice(0, 16)
 }
@@ -967,7 +973,11 @@ const unpricedModelsLogged = new Set<string>()
 export async function buildUserSessionSdkOptions(
   params: UserSessionSdkOptionsParams
 ): Promise<Record<string, any>> {
-  return assembleSdkOptions(params, readUserAgentSettings())
+  const sdkOptions = await assembleSdkOptions(params, readUserAgentSettings())
+  // Installed CLI tools are for the user's own sessions; internal tasks never
+  // get them. Appended to PATH, so no command the user has is shadowed.
+  await applyCliToolsEnv(sdkOptions.env, { entry: 'other', engine: String(sdkOptions.engineId) })
+  return sdkOptions
 }
 
 /**

@@ -62,6 +62,11 @@ export interface DshLaunchOptions {
    * in-process servers arrive here as loopback URLs; see `../options.ts`.
    */
   mcpServers?: Record<string, ExternalMcpServer>
+  /**
+   * Launcher directory of the session's CLI tools (`HALO_CLI_TOOLS_BIN` of the
+   * assembled options). Appended to PATH like every other engine gets it.
+   */
+  cliToolsBinDir?: string
 }
 
 /**
@@ -134,6 +139,11 @@ export function buildDshLaunchSpec(options: DshLaunchOptions): DshRuntimeLaunchS
       '[Dsh][runtime] no bash found; the bash and terminal tools will fall back to PowerShell. ' +
         'Install Git Bash from Halo settings to run shell commands.'
     )
+  }
+
+  if (options.cliToolsBinDir) {
+    env.PATH = env.PATH ? `${env.PATH}${path.delimiter}${options.cliToolsBinDir}` : options.cliToolsBinDir
+    env.HALO_CLI_TOOLS_BIN = options.cliToolsBinDir
   }
 
   console.log(

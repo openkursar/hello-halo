@@ -13,18 +13,13 @@ There is one store for every source. A tool may be bundled with the build
 the user (`user-import`). The host records the source from the import path and
 never trusts a source declared inside a package.
 
-The module is pure Node. The caller passes in the store root, runtime
-executable, runtime Node version and platform. The module imports no Electron,
-agent or app code, and it starts no work at startup.
+The module is pure Node. `store.ts` takes the store root, runtime executable,
+runtime Node version and platform from its caller. `host.ts` is the one place
+the app wires it: bootstrap passes the paths in, and session and terminal code
+call `applyCliToolsEnv`. The module imports no Electron, agent or app code.
 
-Not part of this module yet:
-
-- adding launcher directories to an engine's environment;
-- binding pins to sessions, to the DSH engine or to the AI terminal;
-- delivering guides as skills;
-- download, catalog sync and UI.
-
-Those callers depend only on `index.ts`.
+Not part of this module yet: catalog download and sync, user import, and UI.
+Callers depend only on `index.ts`.
 
 ## Package contract (`halo.cli/1`)
 
@@ -147,9 +142,52 @@ version is current or pinned by any lock. `pruneViews` deletes views that no
 lock references. Deciding when executions end, and clearing locks left by a
 crashed process, is the caller's job.
 
+`pinCurrent` is the form the host uses. It pins the current tool set for a
+`holder` (one per app process) under the id `<holder>-<viewKey>`, so every
+environment built with the same tool set shares one lock and a changed set
+gets a new one. It returns `null` and writes nothing when no tool is usable.
+`releaseOtherHolders` deletes every lock whose holder is not the given one,
+including locks without a holder.
+
+Every view also holds `TOOLS.md`: a table of each command with its tool,
+version, side effects, sign-in method and the absolute path of its guide, plus
+the meaning of a `halo-` name and the rule not to replay a write whose outcome
+is unknown. The built-in `halo-cli-tools` skill tells the AI to read it from
+`$HALO_CLI_TOOLS_BIN/../TOOLS.md`, so the guide matches the pinned set.
+
 Revocation excludes a tool from new pins. It is not credential revocation: a
 tool's authorization is checked when the tool uses its identity, which a
 version pin never freezes.
+
+## Host wiring (`host.ts`)
+
+- **Init.** Bootstrap calls `initCliTools` after the SDK runtime is set up, with
+  root `<userData>/cli`, the headless Electron runtime and the bundled preset
+  directory (`<resources>/cli-preset`, or `resources/cli-preset` in
+  development). It only stores the paths.
+- **Prepare, once per process.** The first of the idle task
+  `prepare-cli-tools` or the first environment request runs it: release the
+  locks of earlier processes, prune views, then import bundled packages.
+- **Bundled tools.** Every `*.hcli` in the preset directory is imported with
+  source `preset`. It becomes current only when the tool has no current version
+  or the current one is itself a preset, so a version the user or a catalog
+  chose is kept. `preset-stamp.json` records the file names, sizes and mtimes;
+  an unchanged directory is skipped. Any failure leaves the stamp unwritten so
+  the next launch retries.
+- **Environments.** `applyCliToolsEnv(env, { entry, engine })` removes any
+  inherited `HALO_CLI_TOOLS_BIN`, pins the current set, appends the launcher
+  directory to the end of the env's PATH (`Path` on Windows, matched
+  case-insensitively) and sets `HALO_CLI_TOOLS_BIN`. Any failure is logged and
+  the env is left without tools; a session never fails because of a tool.
+- **Callers.** `buildUserSessionSdkOptions` applies it for every user session,
+  whatever the engine; internal tasks get no tools. The DSH launch spec copies
+  the directory into its own child env. The AI terminal applies it when a
+  terminal opens.
+- **Version timing.** A session or terminal keeps the directory it was built
+  with. A new tool set changes the directory, which changes the credentials
+  fingerprint, so the next request rebuilds the session with the new set while
+  a running turn finishes on the old one. Old sets stay pinned until the
+  process exits and are released at the next start.
 
 ## Relation to external-runtime
 
@@ -170,12 +208,17 @@ share it rather than copy it.
 
 ## Cost
 
-Nothing runs at startup or in the background, and there is no watcher or scan.
+Nothing runs on the startup path. Bootstrap only stores paths; the work runs
+once in an idle task or on the first session that asks. There is no watcher or
+scan. fflate is loaded only when an archive is extracted.
 
-- **Import:** an explicit action. Hashing is proportional to the package (tens
+- **Prepare:** reads the lock directory, the views and the preset directory
+  listing. Bundled packages are imported only when the directory changed.
+- **Import:** hashing is proportional to the package (tens
   of MB for the tested tools), and extraction is synchronous inside fflate,
   bounded by the limits above.
-- **Pinning:** reads `state.json` and one lock file, checks bounded PATH
+- **Pinning:** once per session build or terminal open. Reads `state.json`
+  and one lock file, checks bounded PATH
   entries (at most 256) for each command, and writes launchers only when a new
   tool set appears.
 - **Verification:** `verifyVersion` re-hashes a version on request only.
@@ -189,3 +232,7 @@ Nothing runs at startup or in the background, and there is no watcher or scan.
 - Paths containing `"` or line breaks are refused for launchers.
 - Windows behavior has unit-test coverage only, until it is verified on a real
   machine.
+- Pins are released per process, not per session: a tool set used once stays
+  pinned until the app restarts.
+- Lock `entry` is `other` for every session (the builder does not know which
+  entry called it) and `terminal` for terminals. It is diagnostic only.

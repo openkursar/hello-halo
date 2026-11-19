@@ -320,3 +320,14 @@ describe('SDK source markers and request-local routing', () => {
     if (kind === 'delegated') expect(env).not.toHaveProperty('ANTHROPIC_API_KEY')
   })
 })
+
+describe('computeCredentialsFingerprint: CLI tools', () => {
+  it('changes with the CLI tool set and stays as before without one', () => {
+    const base = sdkOptionsWithEncodedKey()
+    const withTools = (bin: string) => ({ ...base, env: { ...(base.env as object), HALO_CLI_TOOLS_BIN: bin } })
+    expect(computeCredentialsFingerprint(base)).toBe(computeCredentialsFingerprint(sdkOptionsWithEncodedKey()))
+    expect(computeCredentialsFingerprint(withTools('/cli/views/a/bin'))).not.toBe(computeCredentialsFingerprint(base))
+    expect(computeCredentialsFingerprint(withTools('/cli/views/a/bin'))).toBe(computeCredentialsFingerprint(withTools('/cli/views/a/bin')))
+    expect(computeCredentialsFingerprint(withTools('/cli/views/b/bin'))).not.toBe(computeCredentialsFingerprint(withTools('/cli/views/a/bin')))
+  })
+})

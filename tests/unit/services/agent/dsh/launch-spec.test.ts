@@ -118,6 +118,29 @@ describe('buildDshLaunchSpec', () => {
     expect(env.PATH).toBe('/opt/homebrew/bin:/usr/bin')
   })
 
+  it('appends the CLI tool launchers after the shell directory and the inherited PATH', () => {
+    setPlatform('win32')
+    process.env.PATH = 'C:\\Windows\\System32'
+    const bash = 'C:\\Git\\bin\\bash.exe'
+    detectGitBash.mockReturnValue({ found: true, path: bash, source: 'system' })
+
+    const env = build({ cliToolsBinDir: 'C:\\cli\\views\\v\\bin' })
+
+    expect(env.PATH).toBe([path.dirname(bash), 'C:\\Windows\\System32', 'C:\\cli\\views\\v\\bin'].join(path.delimiter))
+    expect(env.HALO_CLI_TOOLS_BIN).toBe('C:\\cli\\views\\v\\bin')
+  })
+
+  it('adds no CLI tool variable without tools', () => {
+    setPlatform('darwin')
+    process.env.PATH = '/usr/bin'
+    detectGitBash.mockReturnValue({ found: true, path: '/bin/bash', source: 'system' })
+
+    const env = build()
+
+    expect(env.PATH).toBe('/usr/bin')
+    expect(env.HALO_CLI_TOOLS_BIN).toBeUndefined()
+  })
+
   it('omits the shell variable when none was found, leaving the config to fall back', () => {
     setPlatform('win32')
     detectGitBash.mockReturnValue({ found: false, path: null, source: null })

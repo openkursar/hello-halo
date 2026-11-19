@@ -4,6 +4,8 @@
  */
 
 export { CliToolStore, commandOnPath } from './store'
+export { CLI_TOOLS_BIN_ENV, applyCliToolsEnv, initCliTools, prepareCliTools } from './host'
+export type { CliToolsHostOptions } from './host'
 export type {
   CliExecutionEntry,
   CliExecutionLock,
@@ -16,6 +18,7 @@ export type {
   ImportOptions,
   ImportResult,
   PinExecutionOptions,
+  PinCurrentOptions,
   PinnedExecution,
 } from './store'
 export { CliToolError, isCliToolError } from './errors'

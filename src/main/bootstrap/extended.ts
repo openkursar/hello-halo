@@ -27,7 +27,8 @@ import { registerRemoteHandlers } from '../ipc/remote'
 import { registerAiGroupsHandlers } from '../ipc/ai-groups'
 import { registerSubagentModelsHandlers } from '../ipc/subagent-models'
 import { GROUP_ROUTE_EVENT } from '../../shared/types/ai-groups-runtime'
-import { powerMonitor } from 'electron'
+import { app, powerMonitor } from 'electron'
+import { join } from 'path'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess, enableTunnel } from '../services/remote'
 import { getConfig, getFederationGatewayUrl, migrateCredentialEncryption, setCredentialFailureNotifier, getTeamFolderRoot } from '../foundation/config.service'
@@ -61,7 +62,8 @@ import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '.
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
-import { closeAllV2Sessions, initializeSdkRuntime, closeSdkRuntime, requestSessionRebuild } from '../services/agent'
+import { closeAllV2Sessions, initializeSdkRuntime, closeSdkRuntime, requestSessionRebuild, getHeadlessElectronPath } from '../services/agent'
+import { initCliTools, prepareCliTools } from '../services/cli-tools'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
@@ -1477,6 +1479,8 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
   registerIdleTask('prune-team-folders', () => getActiveTeamRuntime()?.teamFolders.prune())
   registerIdleTask('seed-builtin-skills', () => seedBuiltinSkills(appManager))
   registerIdleTask('verify-office-runtime', () => verifyOfficeRuntime())
+  // Imports the CLI tools shipped with this build; the first session waits for it if earlier.
+  registerIdleTask('prepare-cli-tools', () => prepareCliTools())
   // The knowledge base chat's conversations left by a run that quit mid-chat;
   // only those created before this process started, so none is in use now.
   registerIdleTask('delete-ephemeral-conversations', () => { deleteEphemeralConversations(performance.timeOrigin) })
@@ -1497,6 +1501,14 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
  */
 export function initializeExtendedServices(): void {
   void initializeSdkRuntime().catch(error => console.error('[Bootstrap] SDK worker prewarm failed:', error))
+  // Paths only; the store is read when a session or terminal first asks for tools.
+  initCliTools({
+    root: join(app.getPath('userData'), 'cli'),
+    runtimePath: getHeadlessElectronPath(),
+    presetDir: app.isPackaged
+      ? join(process.resourcesPath, 'cli-preset')
+      : join(app.getAppPath(), 'resources', 'cli-preset'),
+  })
   const start = performance.now()
   console.log('[Bootstrap] Extended services starting...')
 

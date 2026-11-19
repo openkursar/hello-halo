@@ -12,7 +12,7 @@
 import { createHash } from 'crypto'
 import { promises as fsp } from 'fs'
 import { dirname, join } from 'path'
-import { unzipSync, type UnzipFileInfo } from 'fflate'
+import type { UnzipFileInfo } from 'fflate'
 import { CliToolError } from './errors'
 import { isSafeRelativePath } from './manifest'
 
@@ -68,6 +68,8 @@ export async function extractPackageArchive(
   if (size > limits.maxArchiveBytes) {
     throw new CliToolError('PACKAGE_INVALID', `package archive is ${size} bytes (max ${limits.maxArchiveBytes})`)
   }
+  // Loaded on first import: sessions read this module long before any package arrives.
+  const { unzipSync } = await import('fflate')
   const bytes = await fsp.readFile(archivePath)
   const archiveSha256 = createHash('sha256').update(bytes).digest('hex')
 

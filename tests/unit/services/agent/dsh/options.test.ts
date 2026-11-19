@@ -238,3 +238,15 @@ describe('resolveDshOptions selected model limits', () => {
     expect(resolved.init.maxTokens).toBe(2_048)
   })
 })
+
+describe('resolveDshOptions CLI tools', () => {
+  it('hands the session\'s CLI tool directory to the launch spec', async () => {
+    await resolveDshOptions({ cwd: '/work', apiCredentials: credentials(), env: { HALO_CLI_TOOLS_BIN: '/cli/views/v/bin' } })
+    expect(buildDshLaunchSpec.mock.calls[0][0].cliToolsBinDir).toBe('/cli/views/v/bin')
+  })
+
+  it('passes none without tools', async () => {
+    await resolveDshOptions({ cwd: '/work', apiCredentials: credentials(), env: {} })
+    expect(buildDshLaunchSpec.mock.calls[0][0]).not.toHaveProperty('cliToolsBinDir')
+  })
+})

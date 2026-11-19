@@ -157,8 +157,10 @@ src/
 │       ├── browser-live/              # Live AI browser for remote owners. See browser-live/DESIGN.md
 │       ├── cli-tools/                 # Pure-JS command-line tools on the bundled runtime: `.hcli`
 │       │                              #   import transaction, immutable content-addressed versions,
-│       │                              #   per-execution pins and launchers. Pure Node, not wired into
-│       │                              #   startup or engines yet. See cli-tools/DESIGN.md
+│       │                              #   per-execution pins and launchers. Pure Node. host.ts imports
+│       │                              #   bundled tools (resources/cli-preset) in an idle task and
+│       │                              #   appends launchers to user sessions (every engine) and
+│       │                              #   AI terminals. See cli-tools/DESIGN.md
 │       ├── analytics/                 # Usage analytics
 │       ├── api-ref/                   # `halo_api_ref` toolset — the manual for Halo's own
 │       │                              #   HTTP API, generated at build time into
@@ -1247,7 +1249,7 @@ When touching a module, read its design doc first:
 - `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer; the AI's terminals as canvas tabs, closing them, "operating" and "a person typed")
 - `src/main/services/browser-live/DESIGN.md` — Remote AI browser on desktop and Server: owner-only access, on-demand streaming, frame pacing, and stop reasons
 - `src/main/services/git/DESIGN.md` — Git for the changes view: how git is run and located (Windows included), the request gate, compare scopes, snapshots, writes, measured costs
-- `src/main/services/cli-tools/DESIGN.md` — CLI tools: the `halo.cli/1` package contract, the pure-JS rule, the import transaction, and how executions pin versions and get launchers
+- `src/main/services/cli-tools/DESIGN.md` — CLI tools: the `halo.cli/1` package contract, the pure-JS rule, the import transaction, how executions pin versions and get launchers, and how bundled tools and sessions are wired
 - `src/main/services/code-review/DESIGN.md` — Starting an AI review of a repository's changes as a background conversation, its built-in task, and the latest review per repository
 - `src/main/services/conversation-interop/DESIGN.md` — Cross-conversation read/send/wait: delivery rules, circuit breaker, and the `ConversationSource` contract (space conversations built in, digital-human chats registered by `apps/runtime`)
 - `src/main/apps/spec/DESIGN.md`

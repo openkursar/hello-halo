@@ -141,6 +141,9 @@ export async function resolveDshOptions(
       disallowedTools,
       mcpServers,
       ...(limits.contextWindow ? { contextWindow: limits.contextWindow } : {}),
+      ...(typeof sdkOptions.env?.HALO_CLI_TOOLS_BIN === 'string'
+        ? { cliToolsBinDir: sdkOptions.env.HALO_CLI_TOOLS_BIN }
+        : {}),
     })
 
     return {

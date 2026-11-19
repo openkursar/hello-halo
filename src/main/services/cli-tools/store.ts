@@ -7,6 +7,7 @@
  *   store/<id>/<version>-<digest12>/   immutable, read-only installed package
  *   staging/<txid>/                    one import transaction; removed on exit
  *   views/<viewKey>/bin/               launchers for one exact tool set
+ *   views/<viewKey>/TOOLS.md           what those launchers are, for the agent
  *   locks/<executionId>.json           the tool set an execution is pinned to
  *   state.json                         versions, current choice, revocation
  *
@@ -102,6 +103,8 @@ export interface CliExecutionLock {
   executionId: string
   entry: CliExecutionEntry
   engine: string
+  /** Process that owns a pin taken with `pinCurrent`; absent for `pinExecution`. */
+  holder?: string
   viewKey: string
   runtimeNodeVersion: string
   tools: Array<{ id: string; version: string; integrity: string; guide?: string }>
@@ -118,6 +121,18 @@ export interface PinExecutionOptions {
    * there is exposed as `halo-<name>` instead, so the user's own tool keeps
    * its name. Omit to skip the check.
    */
+  basePath?: string
+}
+
+export interface PinCurrentOptions {
+  /**
+   * Owner of the pin, e.g. one app process. Every caller with the same holder
+   * and the same current tool set shares one lock; `releaseOtherHolders`
+   * clears the locks of holders that are gone.
+   */
+  holder: string
+  entry: CliExecutionEntry
+  engine: string
   basePath?: string
 }
 
@@ -490,7 +505,72 @@ export class CliToolStore {
       const binDir = existing.commands.length > 0 ? await this.ensureView(existing, state) : null
       return { binDir, lock: existing, reused: true }
     }
+    const lock = this.composeLock(options, state)
+    const binDir = lock.commands.length > 0 ? await this.ensureView(lock, state) : null
+    await this.writeLock(lock)
+    return { binDir, lock, reused: false }
+  }
 
+  /**
+   * Pin the tool set that is current right now on behalf of `holder`. The
+   * same holder and tool set map to one lock (`<holder>-<viewKey>`), so a
+   * caller that assembles an environment per request can call this every
+   * time: it gets the current set, and a set it used earlier stays pinned
+   * until the holder's locks are released. Nothing is written when no tool
+   * is usable.
+   */
+  pinCurrent(options: PinCurrentOptions): Promise<PinnedExecution | null> {
+    return this.serialize(async () => {
+      const state = await this.readState()
+      if (!Object.values(state.tools).some(tool => tool.current && !tool.revoked)) return null
+      const draft = this.composeLock({ ...options, executionId: options.holder }, state)
+      if (draft.commands.length === 0) return null
+      const executionId = `${options.holder}-${draft.viewKey}`
+      const existing = await this.readExecutionLock(executionId)
+      if (existing && existing.viewKey === draft.viewKey) {
+        return { binDir: await this.ensureView(existing, state), lock: existing, reused: true }
+      }
+      const lock: CliExecutionLock = { ...draft, executionId, holder: options.holder }
+      const binDir = await this.ensureView(lock, state)
+      await this.writeLock(lock)
+      return { binDir, lock, reused: false }
+    })
+  }
+
+  /** Release every lock not taken by `holder`, e.g. those of a previous app process. */
+  releaseOtherHolders(holder: string): Promise<number> {
+    return this.serialize(async () => {
+      let names: string[]
+      try {
+        names = await fsp.readdir(this.path('locks'))
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0
+        throw err
+      }
+      let released = 0
+      for (const name of names.filter(n => n.endsWith('.json'))) {
+        const file = this.path('locks', name)
+        let owner: string | undefined
+        try {
+          owner = (JSON.parse(await fsp.readFile(file, 'utf-8')) as CliExecutionLock).holder
+        } catch {
+          owner = undefined
+        }
+        if (owner === holder) continue
+        await fsp.rm(file, { force: true })
+        released += 1
+      }
+      if (released > 0) this.log.log('[CliTools] Released locks of earlier holders', { released })
+      return released
+    })
+  }
+
+  private async writeLock(lock: CliExecutionLock): Promise<void> {
+    await fsp.mkdir(this.path('locks'), { recursive: true })
+    await writeFileAtomic(this.path('locks', lockFileName(lock.executionId)), `${JSON.stringify(lock, null, 2)}\n`)
+  }
+
+  private composeLock(options: PinExecutionOptions, state: CliToolState): CliExecutionLock {
     if (!existsSync(this.runtimePath)) {
       this.log.error('[CliTools] Runtime executable is missing; no tools exposed', {
         execution: options.executionId,
@@ -535,10 +615,7 @@ export class CliToolStore {
       createdAt: new Date().toISOString(),
     }
     lock.viewKey = this.viewKeyOf(lock, state)
-    const binDir = commands.length > 0 ? await this.ensureView(lock, state) : null
-    await fsp.mkdir(this.path('locks'), { recursive: true })
-    await writeFileAtomic(this.path('locks', lockFileName(options.executionId)), `${JSON.stringify(lock, null, 2)}\n`)
-    return { binDir, lock, reused: false }
+    return lock
   }
 
   private launcherTargets(lock: CliExecutionLock, state: CliToolState): Array<{ exposedAs: string; entry: string }> {
@@ -555,7 +632,7 @@ export class CliToolStore {
 
   private viewKeyOf(lock: CliExecutionLock, state: CliToolState): string {
     const targets = this.launcherTargets(lock, state)
-    return sha256(JSON.stringify({ v: 1, platform: this.platform, runtime: this.runtimePath, targets })).slice(0, 20)
+    return sha256(JSON.stringify({ v: 2, platform: this.platform, runtime: this.runtimePath, targets })).slice(0, 20)
   }
 
   /**
@@ -577,6 +654,7 @@ export class CliToolStore {
           await fsp.writeFile(path, file.content, { encoding: 'utf-8', mode: file.executable ? 0o755 : 0o644 })
         }
       }
+      await fsp.writeFile(join(tmp, 'TOOLS.md'), this.renderToolsGuide(lock, state), 'utf-8')
       await fsp.writeFile(join(tmp, 'view.json'), `${JSON.stringify({ viewKey: lock.viewKey, commands: lock.commands }, null, 2)}\n`)
       if (existsSync(viewDir)) await fsp.rm(viewDir, { recursive: true, force: true })
       await fsp.rename(tmp, viewDir)
@@ -590,6 +668,36 @@ export class CliToolStore {
       })
       throw err
     }
+  }
+
+  /**
+   * The agent-facing index of a view: which commands it has, what they are,
+   * and where each tool's guide is. A skill points the agent here.
+   */
+  private renderToolsGuide(lock: CliExecutionLock, state: CliToolState): string {
+    const lines = [
+      '# Command-line tools in this session',
+      '',
+      'Run these commands from the shell. Halo installed them and runs them on its bundled runtime;',
+      'do not install, update or remove them yourself.',
+      '',
+      '| Command | Tool | Version | Side effects | Sign-in | Guide |',
+      '|---|---|---|---|---|---|',
+    ]
+    for (const command of lock.commands) {
+      const record = state.tools[command.toolId]?.versions[command.version]
+      const guide = record?.guide ? join(this.path(...record.dir.split('/')), ...record.guide.split('/')) : ''
+      lines.push(`| \`${command.exposedAs}\` | ${command.toolId} | ${command.version} | ${record?.sideEffects ?? 'unknown'} | ${record?.auth ?? 'unknown'} | ${guide ? `\`${guide}\`` : '-'} |`)
+    }
+    lines.push(
+      '',
+      'Read a tool\'s guide before its first use in a task.',
+      'A command shown as `halo-<name>` has that prefix because another `<name>` already exists on this',
+      'computer; plain `<name>` runs that other program, not this tool.',
+      'If a tool that writes data fails with an unknown outcome, check the result before running it again.',
+      '',
+    )
+    return lines.join('\n')
   }
 
   /** Release an execution's pin. Its versions become removable once no pin remains. */

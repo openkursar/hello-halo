@@ -149,6 +149,12 @@ export default defineConfig({
       use: { actionTimeout: 10000 }
     },
     {
+      // Needs a package built with the preset .hcli files in resources/cli-preset.
+      name: 'cli-tools-preset-packaged',
+      testMatch: '**/cli-tools-preset-packaged.spec.ts',
+      use: { actionTimeout: 10000 }
+    },
+    {
       name: 'settings',
       testMatch: '**/settings.spec.ts',
       use: {

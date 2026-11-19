@@ -20,6 +20,7 @@
 
 import { EventEmitter } from 'events'
 import { resolveShell } from './shell'
+import { applyCliToolsEnv } from '../cli-tools'
 import { TerminalSessionProxy } from './session-proxy'
 import { TerminalFlowController } from './flow-control'
 import {
@@ -72,6 +73,8 @@ export class TerminalContext extends EventEmitter {
   async create(opts: CreateTerminalOptions): Promise<TerminalSessionProxy> {
     // Shell policy is resolved HERE (main): the worker executes specs verbatim.
     const shell = resolveShell(opts.shell)
+    // A terminal gets the CLI tools current when it opens and keeps them.
+    await applyCliToolsEnv(shell.env, { entry: 'terminal', engine: 'terminal' })
     const { info } = await ptyHostRequest({
       type: 'create',
       spec: {

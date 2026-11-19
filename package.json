@@ -314,6 +314,13 @@
       {
         "from": "resources/office-runtime/node_modules",
         "to": "office-runtime/node_modules"
+      },
+      {
+        "from": "resources/cli-preset",
+        "to": "cli-preset",
+        "filter": [
+          "*.hcli"
+        ]
       }
     ],
     "asarUnpack": [

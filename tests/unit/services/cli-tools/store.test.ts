@@ -290,6 +290,58 @@ describe('cli-tools store: execution pins', () => {
   })
 })
 
+describe('cli-tools store: pins held by a process', () => {
+  it('pins nothing when no tool is usable', async () => {
+    const store = newStore()
+    expect(await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'claude' })).toBeNull()
+    expect(existsSync(join(root, 'locks'))).toBe(false)
+  })
+
+  it('reuses one lock per tool set and keeps the earlier set pinned after an update', async () => {
+    const store = newStore()
+    await store.importPackage(writePackage(pkgs), { source: 'catalog' })
+    const first = await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'claude' })
+    const again = await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'codex' })
+    expect(first?.reused).toBe(false)
+    expect(again?.reused).toBe(true)
+    expect(again?.binDir).toBe(first?.binDir)
+    expect(first?.lock).toMatchObject({ holder: 'p1', executionId: `p1-${first?.lock.viewKey}` })
+
+    await store.importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'catalog' })
+    const next = await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'claude' })
+    expect(next?.lock.tools[0].version).toBe('2.0.0')
+    expect(next?.binDir).not.toBe(first?.binDir)
+    expect(readdirSync(join(root, 'locks'))).toHaveLength(2)
+    expect(await codeOf(store.removeVersion(ID, '1.0.0'))).toBe('IN_USE')
+  })
+
+  it('releases the locks of other holders only', async () => {
+    const store = newStore()
+    await store.importPackage(writePackage(pkgs), { source: 'catalog' })
+    await store.pinCurrent({ holder: 'old', entry: 'other', engine: 'claude' })
+    await store.pinExecution({ executionId: 'legacy', entry: 'chat', engine: 'claude' })
+    await store.pinCurrent({ holder: 'now', entry: 'terminal', engine: 'terminal' })
+    expect(await store.releaseOtherHolders('now')).toBe(2)
+    const left = readdirSync(join(root, 'locks')).map(name => JSON.parse(readFileSync(join(root, 'locks', name), 'utf-8')).holder)
+    expect(left).toEqual(['now'])
+    expect(await store.releaseOtherHolders('now')).toBe(0)
+  })
+
+  it('writes TOOLS.md describing each command of the view', async () => {
+    const store = newStore()
+    await store.importPackage(writePackage(pkgs, {
+      extra: { 'guide/README.md': '# guide\n' },
+      manifest: { guide: 'guide/README.md', sideEffects: 'read-only', auth: { method: 'none' } },
+    }), { source: 'catalog' })
+    const pin = await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'claude' })
+    const guide = readFileSync(join(pin!.binDir!, '..', 'TOOLS.md'), 'utf-8')
+    expect(guide).toContain('| `tool` | com.example.tool | 1.0.0 | read-only | none |')
+    const guidePath = /\| `([^`]+README\.md)` \|/.exec(guide)?.[1]
+    expect(guidePath && readFileSync(guidePath, 'utf-8')).toBe('# guide\n')
+    expect(guide).toContain('halo-<name>')
+  })
+})
+
 describe('cli-tools store: removal, rollback and verification', () => {
   it('protects current and pinned versions, then removes after release', async () => {
     const store = newStore()
