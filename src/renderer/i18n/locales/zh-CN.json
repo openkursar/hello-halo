@@ -3445,6 +3445,7 @@
   "The same reach it has when you work with it yourself, including running commands. Operating Halo itself stays yours.": "与你自己使用它时相同的能力范围，包括运行命令。操作 Halo 本身的权限始终归你。",
   "The scan ended before every location could be checked. You can choose a file or enter its path directly.": "扫描已结束，但部分位置尚未检查。你可以选择文件或直接输入路径。",
   "The security review could not be completed. Please try again later.": "安全审核无法完成。请稍后重试。",
+  "The server returned a non-JSON response (HTTP {{status}}). Check the server deployment and reverse proxy configuration.": "服务器返回了非 JSON 响应（HTTP {{status}}）。请检查服务器部署和反向代理配置。",
   "The session is still running, but its view could not be opened. Try again.": "会话仍在运行，但无法打开其视图。请重试。",
   "The session may still be running. Try again.": "会话可能仍在运行中,请重试。",
   "The skill file could not be found. Check its folder or import the skill again.": "找不到技能文件。请检查其文件夹，或重新导入该技能。",

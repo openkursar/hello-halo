@@ -3445,6 +3445,7 @@
   "The same reach it has when you work with it yourself, including running commands. Operating Halo itself stays yours.": "ご自身が使用する場合と同じ範囲で動作でき、コマンドの実行も含まれます。ただし、Halo自体の操作は引き続きご自身のみが行えます。",
   "The scan ended before every location could be checked. You can choose a file or enter its path directly.": "すべての場所を確認する前にスキャンが終了しました。ファイルを選択するか、パスを直接入力できます。",
   "The security review could not be completed. Please try again later.": "セキュリティレビューを完了できませんでした。後でもう一度お試しください。",
+  "The server returned a non-JSON response (HTTP {{status}}). Check the server deployment and reverse proxy configuration.": "サーバーが JSON 以外の応答を返しました（HTTP {{status}}）。サーバーのデプロイとリバースプロキシの設定を確認してください。",
   "The session is still running, but its view could not be opened. Try again.": "セッションは引き続き実行されていますが、そのビューを開けませんでした。もう一度お試しください。",
   "The session may still be running. Try again.": "セッションがまだ実行中の可能性があります。もう一度お試しください。",
   "The skill file could not be found. Check its folder or import the skill again.": "スキルファイルが見つかりませんでした。フォルダーを確認するか、スキルを再インポートしてください。",

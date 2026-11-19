@@ -181,7 +181,6 @@ export async function httpRequest<T>(
   }
 
   const url = `${baseUrl}${path}`
-  console.log(`[HTTP] ${method} ${path} - token: ${token ? 'present' : 'missing'}`)
 
   try {
     const response = await fetch(url, {
@@ -225,8 +224,18 @@ export async function httpRequest<T>(
       }
     }
 
+    // A proxy or SPA fallback can answer an API path with HTML. Parsing that as
+    // JSON throws a SyntaxError that says nothing about the cause.
+    const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? ''
+    if (contentType !== 'application/json' && !/^application\/[^\s/;]+\+json$/.test(contentType)) {
+      console.warn(`[HTTP] ${method} ${path.split('?')[0]} - expected JSON, received ${contentType || 'no content type'} (HTTP ${response.status})`)
+      return {
+        success: false,
+        error: i18n.t('The server returned a non-JSON response (HTTP {{status}}). Check the server deployment and reverse proxy configuration.', { status: response.status }),
+      }
+    }
+
     const data = await response.json()
-    console.log(`[HTTP] ${method} ${path} - status: ${response.status}, success: ${data.success}`)
 
     if (!response.ok) {
       console.warn(`[HTTP] ${method} ${path} - error:`, data.error)

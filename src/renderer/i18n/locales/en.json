@@ -3445,6 +3445,7 @@
   "The same reach it has when you work with it yourself, including running commands. Operating Halo itself stays yours.": "The same reach it has when you work with it yourself, including running commands. Operating Halo itself stays yours.",
   "The scan ended before every location could be checked. You can choose a file or enter its path directly.": "The scan ended before every location could be checked. You can choose a file or enter its path directly.",
   "The security review could not be completed. Please try again later.": "The security review could not be completed. Please try again later.",
+  "The server returned a non-JSON response (HTTP {{status}}). Check the server deployment and reverse proxy configuration.": "The server returned a non-JSON response (HTTP {{status}}). Check the server deployment and reverse proxy configuration.",
   "The session is still running, but its view could not be opened. Try again.": "The session is still running, but its view could not be opened. Try again.",
   "The session may still be running. Try again.": "The session may still be running. Try again.",
   "The skill file could not be found. Check its folder or import the skill again.": "The skill file could not be found. Check its folder or import the skill again.",

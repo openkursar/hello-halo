@@ -12,7 +12,12 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { gitApi } from '../../../src/renderer/api/git.api'
 import { teamApi } from '../../../src/renderer/api/team.api'
 
-vi.mock('../../../src/renderer/i18n', () => ({ default: { t: (text: string) => text } }))
+vi.mock('../../../src/renderer/i18n', () => ({
+  default: {
+    t: (text: string, values?: Record<string, unknown>) =>
+      text.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values?.[name])),
+  },
+}))
 import {
   isElectron,
   isCapacitor,
@@ -56,7 +61,7 @@ describe('work roster API routing', () => {
     setGlobal('document', { baseURI: 'https://remote.example.com/halo/' })
     setGlobal('localStorage', { getItem: () => 'test-token' })
     const response = { success: true, data: { members: [], roster: [] } }
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(response)))
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(response))
     expect(await teamApi.teamEpochRoster('team/x', 'work y')).toEqual(response)
     expect(fetchSpy).toHaveBeenCalledWith('https://remote.example.com/halo/api/teams/team%2Fx/epochs/work%20y/roster', {
       method: 'GET', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-token' },
@@ -88,7 +93,7 @@ describe('Git repository API routing', () => {
       setGlobal('localStorage', { getItem: () => 'test-token' })
       if (mode === 'capacitor') setServerUrl('https://desktop.example.com')
       const response = { success: false, code: 'GIT_NOT_A_REPOSITORY', error: 'Not a repository' }
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(response)))
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(response))
       expect(await gitApi[method]('s', '/host/repo with spaces')).toEqual(response)
       const base = mode === 'capacitor' ? 'https://desktop.example.com' : 'https://remote.example.com/halo'
       expect(fetchSpy).toHaveBeenCalledTimes(1)
@@ -213,5 +218,56 @@ describe('HTTP error responses', () => {
     vi.stubGlobal('fetch', fetch)
     expect(await httpRequest('POST', '/api/agent/message', { message: 'hello' })).toEqual({ success: true, data: { sent: true } })
     expect(await httpRequest('POST', '/api/agent/message', {})).toEqual({ success: false, code: 'INVALID_JSON', error: 'Invalid JSON request body' })
+  })
+})
+
+describe('HTTP response validation', () => {
+  function prepare(response: Response) {
+    setGlobal('window', {})
+    setGlobal('document', { baseURI: 'https://host.example.com/mounted/' })
+    const fetcher = vi.fn().mockResolvedValue(response)
+    vi.stubGlobal('fetch', fetcher)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    return fetcher
+  }
+
+  it.each([200, 404, 502])('reports HTML at HTTP %s without parsing or exposing its body', async status => {
+    const response = new Response('<!DOCTYPE html><body>private-page-content</body>', {
+      status, headers: { 'content-type': 'text/html; charset=utf-8' },
+    })
+    const parser = vi.spyOn(response, 'json')
+    prepare(response)
+    const result = await httpRequest('GET', '/api/store/apps?search=private-query')
+    expect(result.success).toBe(false)
+    expect(result.error).toContain(`non-JSON response (HTTP ${status})`)
+    expect(result.error).not.toContain('private-page-content')
+    expect(parser).not.toHaveBeenCalled()
+    // The warning names the endpoint but not its query string.
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('GET /api/store/apps - expected JSON, received text/html'))
+    expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining('private-query'))
+  })
+
+  it('reports a response without a content type', async () => {
+    prepare(new Response(null, { status: 204 }))
+    expect((await httpRequest('DELETE', '/api/example')).error).toContain('non-JSON response (HTTP 204)')
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('received no content type'))
+  })
+
+  it.each(['application/json; charset=utf-8', 'application/problem+json'])('preserves JSON responses with content type %s', async contentType => {
+    const value = { success: false, error: 'App not found' }
+    const fetcher = prepare(new Response(JSON.stringify(value), { status: 404, headers: { 'content-type': contentType } }))
+    expect(await httpRequest('GET', '/api/store/apps?search=x')).toEqual(value)
+    expect(fetcher).toHaveBeenCalledWith('https://host.example.com/mounted/api/store/apps?search=x', expect.any(Object))
+  })
+
+  it('still handles unauthorized responses before content-type validation', async () => {
+    prepare(new Response('Unauthorized', { status: 401 }))
+    const reload = vi.fn()
+    const removeItem = vi.fn()
+    setGlobal('window', { location: { reload } })
+    setGlobal('localStorage', { getItem: () => null, removeItem })
+    expect(await httpRequest('GET', '/api/store/apps')).toEqual({ success: false, error: 'Token expired, please login again' })
+    expect(reload).toHaveBeenCalledOnce()
+    expect(removeItem).toHaveBeenCalledWith('halo_remote_token')
   })
 })
