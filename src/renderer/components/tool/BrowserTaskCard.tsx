@@ -24,6 +24,7 @@ import { useCanvasStore } from '../../stores/canvas.store'
 import { useAIBrowserStore, useActiveConversationBrowserView } from '../../stores/ai-browser.store'
 import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
 import { trackToolOpen } from '../../services/tool-session-telemetry'
+import { api } from '../../api'
 import type { ToolCall } from '../../types'
 import { useTranslation } from '../../i18n'
 
@@ -158,6 +159,8 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
   const conversationId = useChatStore(selectActiveConversationId)
   const view = useActiveConversationBrowserView()
   const activeViewId = view?.viewId ?? null
+  const remoteLive = useAIBrowserStore(state => state.remoteLive)
+  const canOpenView = showViewButton && (!api.isRemoteMode() || remoteLive)
   const setOperating = useAIBrowserStore(state => state.setOperating)
 
   const { t } = useTranslation()
@@ -337,7 +340,7 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
           {/* Hidden in contexts without the Canvas browser (e.g. automation apps). Enabled only
               once the AI's live view id is known, so it always reveals the exact view the AI
               drives (never a divergent copy). */}
-          {showViewButton && (
+          {canOpenView && (
             <button
               onClick={handleViewLive}
               disabled={!activeViewId}

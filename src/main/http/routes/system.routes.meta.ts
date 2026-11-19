@@ -26,6 +26,9 @@ export const MODULE: RouteModuleMeta = {
       returns: '{"success":true,"data":"2.1.15"}',
     },
 
+    // Drives which settings the web client renders; nothing an agent acts on.
+    'GET /api/system/runtime': { expose: 'internal' },
+
     // Product telemetry ingestion. An agent-generated event is indistinguishable
     // from a real one downstream, so this stays a renderer-only door.
     'POST /api/analytics/report': { expose: 'internal' },

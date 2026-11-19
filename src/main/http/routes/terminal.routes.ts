@@ -9,8 +9,8 @@
  * as sensitive. Two constraints beyond the shared auth middleware:
  *   - remote callers may NOT choose the shell executable (no arbitrary-binary
  *     spawn); the platform default shell is always used.
- *   - the surface is gated on isTerminalAvailable() so unsupported hosts (Linux)
- *     never expose it.
+ *   - the surface is gated on isTerminalAvailable() so hosts without a packaged
+ *     node-pty prebuild never expose it.
  */
 import type { Express, Request, Response } from 'express'
 import { isTerminalAvailable } from '../../services/ai-terminal/available'

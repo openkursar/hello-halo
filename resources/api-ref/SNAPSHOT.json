@@ -1,9 +1,9 @@
 {
-  "totalRoutes": 338,
+  "totalRoutes": 345,
   "expose": {
-    "ai": 213,
+    "ai": 214,
     "wrapped": 11,
-    "internal": 114,
+    "internal": 120,
     "unlabeled": 0
   },
   "groups": {
@@ -14,7 +14,7 @@
     "knowledge-base": 22,
     "channels": 22,
     "settings": 23,
-    "store": 39,
+    "store": 40,
     "terminal": 6
   },
   "files": [
@@ -25,6 +25,7 @@
     "space",
     "agent",
     "terminal",
+    "browser",
     "artifact",
     "notify",
     "im",

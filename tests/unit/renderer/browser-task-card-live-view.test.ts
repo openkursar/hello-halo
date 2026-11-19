@@ -13,6 +13,8 @@ const env = vi.hoisted(() => ({
   runner: null as any,
   activeConversationId: null as string | null,
   views: {} as Record<string, { viewId: string; url: string | null }>,
+  remote: false,
+  remoteLive: false,
   attach: vi.fn(),
   setOperating: vi.fn(),
 }))
@@ -24,6 +26,8 @@ vi.mock('react', async original => ({
   useMemo: (fn: any) => fn(),
 }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
+vi.mock('../../../src/renderer/api', () => ({ api: { isRemoteMode: () => env.remote } }))
+vi.mock('../../../src/renderer/services/tool-session-telemetry', () => ({ trackToolOpen: vi.fn() }))
 vi.mock('../../../src/renderer/stores/canvas.store', () => ({
   useCanvasStore: (select: any) => select({ attachAIBrowserView: env.attach }),
 }))
@@ -32,7 +36,7 @@ vi.mock('../../../src/renderer/stores/chat.store', () => ({
   selectActiveConversationId: () => null,
 }))
 vi.mock('../../../src/renderer/stores/ai-browser.store', () => ({
-  useAIBrowserStore: (select: any) => select({ setOperating: env.setOperating }),
+  useAIBrowserStore: (select: any) => select({ setOperating: env.setOperating, remoteLive: env.remoteLive }),
   useActiveConversationBrowserView: () => (env.activeConversationId ? env.views[env.activeConversationId] ?? null : null),
 }))
 
@@ -73,6 +77,8 @@ describe('BrowserTaskCard live view', () => {
   beforeEach(() => {
     env.activeConversationId = DH_KEY
     env.views = {}
+    env.remote = false
+    env.remoteLive = false
     env.attach.mockReset().mockResolvedValue('tab-1')
     env.setOperating.mockReset()
   })
@@ -104,6 +110,14 @@ describe('BrowserTaskCard live view', () => {
     viewButton(render()).props.onClick()
 
     expect(env.attach).toHaveBeenCalledWith('ai-browser-42', 'https://example.com/a', '🤖 AI Browser')
+  })
+
+  it('only offers the live page to a remote client whose backend supports it', () => {
+    env.views[DH_KEY] = { viewId: 'ai-browser-42', url: null }
+    env.remote = true
+    expect(viewButton(render())).toBeUndefined()
+    env.remoteLive = true
+    expect(viewButton(render()).props.disabled).toBe(false)
   })
 
   it('has no button where live view is switched off (IM, team, automation views)', () => {

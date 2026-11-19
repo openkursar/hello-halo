@@ -12,7 +12,7 @@ import { create } from 'zustand'
 import { api } from '../api'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 import { useChatStore, selectActiveConversationId } from './chat.store'
-import type { AIBrowserActiveView, AIBrowserLivePage } from '../../shared/types/ai-browser'
+import type { AIBrowserActiveView, AIBrowserCredentialRequest, AIBrowserLivePage } from '../../shared/types/ai-browser'
 
 // ============================================
 // Types
@@ -43,6 +43,13 @@ interface AIBrowserState {
   pages: Record<string, AIBrowserPage>
   /** Conversations whose browser card has a step running right now. */
   operating: Record<string, boolean>
+  remoteLive: boolean
+  /**
+   * Pages waiting for text the model must not hold, by request id. Kept here
+   * and not in the prompt component so a request outlives a remount and is
+   * still answerable after the user navigates away and back.
+   */
+  credentialRequests: Record<string, AIBrowserCredentialRequest>
 
   /** Apply an active-view event from the main process. */
   applyActiveView: (event: AIBrowserActiveView) => void
@@ -55,6 +62,12 @@ interface AIBrowserState {
   /** A conversation's browser context ended: it points at nothing and owns no page. */
   handleConversationReleased: (conversationId: string) => void
   setOperating: (conversationId: string, isOperating: boolean) => void
+  /** A page started waiting for text the user must type in themselves. */
+  addCredentialRequest: (request: AIBrowserCredentialRequest) => void
+  /** That wait ended — answered here, answered on another client, declined, or expired. */
+  removeCredentialRequest: (requestId: string) => void
+  /** Seed from the main process for a client that joined after the event. */
+  applyCredentialSnapshot: (requests: AIBrowserCredentialRequest[]) => void
 }
 
 // ============================================
@@ -65,18 +78,27 @@ export const useAIBrowserStore = create<AIBrowserState>()((set) => ({
   views: {},
   pages: {},
   operating: {},
+  remoteLive: false,
+  credentialRequests: {},
 
   applyActiveView: ({ conversationId, spaceId, viewId, owned, url, title }) => {
     // The user's own singleton browser has no conversation and no live-view entry.
     if (!conversationId) return
-    const lastActivityAt = Date.now()
-    set(state => ({
-      views: { ...state.views, [conversationId]: { viewId, url, title, lastActivityAt } },
-      // A page it only selected stays whoever opened it (the user, another conversation).
-      pages: owned
-        ? { ...state.pages, [viewId]: { viewId, conversationId, spaceId, url, title, lastActivityAt } }
-        : state.pages,
-    }))
+    const now = Date.now()
+    set(state => {
+      // Re-announcing the same page refreshes what it shows, not when it was picked.
+      const previous = state.views[conversationId]
+      const lastActivityAt = previous?.viewId === viewId ? previous.lastActivityAt : now
+      const page = state.pages[viewId]
+      const pageActivityAt = page?.conversationId === conversationId ? page.lastActivityAt : now
+      return {
+        views: { ...state.views, [conversationId]: { viewId, url, title, lastActivityAt } },
+        // A page it only selected stays whoever opened it (the user, another conversation).
+        pages: owned
+          ? { ...state.pages, [viewId]: { viewId, conversationId, spaceId, url, title, lastActivityAt: pageActivityAt } }
+          : state.pages,
+      }
+    })
   },
 
   applyPageMetadata: (viewId, metadata) => {
@@ -157,6 +179,27 @@ export const useAIBrowserStore = create<AIBrowserState>()((set) => ({
       return { operating }
     })
   },
+
+  addCredentialRequest: (request) => {
+    set(state => ({ credentialRequests: { ...state.credentialRequests, [request.requestId]: request } }))
+  },
+
+  removeCredentialRequest: (requestId) => {
+    set(state => {
+      if (!state.credentialRequests[requestId]) return state
+      const credentialRequests = { ...state.credentialRequests }
+      delete credentialRequests[requestId]
+      return { credentialRequests }
+    })
+  },
+
+  applyCredentialSnapshot: (requests) => {
+    set(state => {
+      const credentialRequests = { ...state.credentialRequests }
+      for (const request of requests) credentialRequests[request.requestId] = request
+      return { credentialRequests }
+    })
+  },
 }))
 
 // ============================================
@@ -176,6 +219,21 @@ export function useActiveConversationBrowserView(): AIBrowserView | null {
 export function isPageInUseByOthers(state: Pick<AIBrowserState, 'views' | 'pages'>, viewId: string): boolean {
   const owner = state.pages[viewId]?.conversationId
   return Object.entries(state.views).some(([id, view]) => id !== owner && view.viewId === viewId)
+}
+
+/**
+ * The credential prompt to show, oldest first. One at a time: each one asks the
+ * user to type a secret for a named origin, and two open at once is how the
+ * wrong code reaches the wrong site.
+ */
+export function useOldestCredentialRequest(): AIBrowserCredentialRequest | null {
+  return useAIBrowserStore(state => {
+    let oldest: AIBrowserCredentialRequest | null = null
+    for (const request of Object.values(state.credentialRequests)) {
+      if (!oldest || request.expiresAt < oldest.expiresAt) oldest = request
+    }
+    return oldest
+  })
 }
 
 /** The conversation holding page `viewId` (identity by view, never by URL). */
@@ -200,38 +258,78 @@ export function selectViewOwner(state: AIBrowserState, viewId: string | undefine
  * @returns Cleanup function to unsubscribe from events
  */
 export function initAIBrowserStoreListeners(): () => void {
-  const unsubActive = api.onAIBrowserActiveViewChanged((data) => {
-    useAIBrowserStore.getState().applyActiveView(data)
-  })
+  const remote = api.isRemoteMode()
+  const store = useAIBrowserStore
+  const receivesPages = () => !remote || store.getState().remoteLive
+  let pending: {
+    gone: Set<string>
+    released: Set<string>
+    resolved: Set<string>
+  } | null = null
 
+  const unsubActive = api.onAIBrowserActiveViewChanged(data => {
+    if (receivesPages()) store.getState().applyActiveView(data)
+  })
   const unsubMetadata = api.onBrowserStateChange((data: unknown) => {
     const event = data as { viewId: string; state: Partial<Pick<AIBrowserView, 'url' | 'title'>> }
-    useAIBrowserStore.getState().applyPageMetadata(event.viewId, event.state)
+    if (receivesPages()) store.getState().applyPageMetadata(event.viewId, event.state)
   })
-
-  const unsubGone = api.onAIBrowserViewGone((data) => {
-    useAIBrowserStore.getState().handleViewGone(data.viewId)
-    // Its session ended (chat deleted, app uninstalled, tray stop): a tab left
-    // pointing at it would show an empty page.
+  const unsubGone = api.onAIBrowserViewGone(data => {
+    if (!receivesPages()) return
+    pending?.gone.add(data.viewId)
+    store.getState().handleViewGone(data.viewId)
     void canvasLifecycle.closeTabsOfGoneView(data.viewId)
   })
-
-  const unsubReleased = api.onAIBrowserConversationReleased((data) => {
-    useAIBrowserStore.getState().handleConversationReleased(data.conversationId)
+  const unsubReleased = api.onAIBrowserConversationReleased(data => {
+    if (!receivesPages()) return
+    pending?.released.add(data.conversationId)
+    store.getState().handleConversationReleased(data.conversationId)
   })
 
-  let disposed = false
-  api.listAIBrowserLivePages()
-    .then((pages) => {
-      if (!disposed) useAIBrowserStore.getState().applySnapshot(pages)
-    })
-    .catch((error) => console.warn('[AI Browser Store] Failed to load live pages:', error))
+  const seed = async (withCredentials: boolean) => {
+    const current = { gone: new Set<string>(), released: new Set<string>(), resolved: new Set<string>() }
+    pending = current
+    const pages = api.listAIBrowserLivePages().then(list => {
+      if (pending !== current) return
+      store.getState().applySnapshot(list.filter(page =>
+        !current.gone.has(page.viewId) && !current.released.has(page.conversationId ?? '')))
+    }).catch(() => console.warn('[AI Browser Store] Failed to load live pages'))
+    const credentials = withCredentials ? api.listAIBrowserCredentialRequests().then(list => {
+      if (pending !== current) return
+      store.getState().applyCredentialSnapshot(list.filter(request =>
+        request.expiresAt > Date.now() && !current.resolved.has(request.requestId)))
+    }).catch(() => console.warn('[AI Browser Store] Failed to load pending requests')) : null
+    await Promise.all([pages, credentials])
+    if (pending === current) pending = null
+  }
+
+  function syncRemote() {
+    const remoteLive = api.supportsBrowserLive()
+    pending = null
+    store.setState({ remoteLive, views: {}, pages: {}, operating: {}, credentialRequests: {} })
+    if (remoteLive) void seed(true)
+  }
+
+  const unsubCredentialRequest = remote ? api.onAIBrowserCredentialRequest(data => {
+    if (receivesPages() && data.expiresAt > Date.now()) store.getState().addCredentialRequest(data)
+  }) : null
+  const unsubCredentialResolved = remote ? api.onAIBrowserCredentialResolved(data => {
+    if (!receivesPages()) return
+    pending?.resolved.add(data.requestId)
+    store.getState().removeCredentialRequest(data.requestId)
+  }) : null
+  const unsubWs = remote ? api.onWsStateChange(syncRemote) : null
+  if (remote) syncRemote()
+  else void seed(false)
 
   return () => {
-    disposed = true
+    pending = null
+    unsubWs?.()
     unsubActive()
     unsubMetadata()
     unsubGone()
     unsubReleased()
+    unsubCredentialRequest?.()
+    unsubCredentialResolved?.()
   }
 }

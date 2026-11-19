@@ -6,6 +6,7 @@
  */
 
 import { proxyFetch } from '../../proxy-fetch'
+import { isServerMode } from '../../../foundation/runtime-mode'
 import type { AnalyticsEvent, AnalyticsProvider, UserContext } from '../types'
 
 /**
@@ -50,7 +51,7 @@ export abstract class BaseProvider implements AnalyticsProvider {
   async init(userId: string): Promise<void> {
     this._userId = userId
     this._initialized = true
-    this.log(`initialized with userId: ${userId.slice(0, 8)}...`)
+    this.log('initialized')
   }
 
   /**
@@ -73,7 +74,7 @@ export abstract class BaseProvider implements AnalyticsProvider {
       const response = await proxyFetch(url, {
         ...options,
         signal: controller.signal
-      })
+      }, { privateDiagnostics: isServerMode() })
 
       clearTimeout(timeoutId)
 
@@ -89,7 +90,7 @@ export abstract class BaseProvider implements AnalyticsProvider {
 
       // Retry on timeout or network error if retries remaining
       if (retries > 0) {
-        this.log(`request error: ${error}, retrying... (${retries} left)`)
+        this.log(`request error, retrying (${retries} left)`)
         return this.fetchWithRetry(url, options, retries - 1)
       }
 
@@ -106,8 +107,7 @@ export abstract class BaseProvider implements AnalyticsProvider {
     try {
       await trackFn()
     } catch (error) {
-      // Silent failure, only log
-      this.log(`track failed: ${error}`)
+      this.log(`track failed: ${error instanceof Error ? error.name : 'unknown error'}`)
     }
   }
 

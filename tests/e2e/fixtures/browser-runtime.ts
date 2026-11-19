@@ -43,7 +43,7 @@ export const test = base.extend<{ browserPolicy: BrowserPolicy | undefined; brow
     const preload = path.join(outputRoot, 'preload/index.cjs')
     const script = path.join(projectRoot, 'out/renderer', `.e2e-browser-runtime-${identity}.js`)
     const html = path.join(projectRoot, 'out/renderer', `.e2e-browser-runtime-${identity}.html`)
-    const bundledPackages = new Set(['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent'])
+    const bundledPackages = new Set(['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent', '@hello-halo/agent-sdk/collaboration/protocol'])
     await esbuild.build({
       entryPoints: [path.join(directory, browserServerMode ? 'browser-server-runtime-main.ts' : 'browser-runtime-main.ts')],
       bundle: true, platform: 'node', format: 'cjs', outfile: main, logLevel: 'silent',
@@ -52,7 +52,10 @@ export const test = base.extend<{ browserPolicy: BrowserPolicy | undefined; brow
         setup(build) {
           build.onResolve({ filter: /^[^./]/ }, args => {
             if (args.path === 'electron' || args.path.startsWith('node:')) return { path: args.path, external: true }
-            if (bundledPackages.has(args.path) || args.path.startsWith('@hello-halo/agent-sdk/collaboration') || args.importer.includes('/node_modules/')) return
+            if (args.path === '@hello-halo/agent-sdk' || (args.path.startsWith('@hello-halo/agent-sdk/') && args.path !== '@hello-halo/agent-sdk/collaboration/protocol')) {
+              return { path: args.path, external: true }
+            }
+            if (bundledPackages.has(args.path) || args.importer.includes('/node_modules/')) return
             return { path: args.path, external: true }
           })
           build.onLoad({ filter: /node_modules.*\.[cm]?js$/ }, args => {

@@ -30,7 +30,7 @@ operations on this page:
   GET    /api/teams/<teamId>/epochs/<epochId>/board                  Get the tasks, findings and members of one run
   GET    /api/teams/<teamId>/epochs/<epochId>/roster                 Read the members and live status of one work item without its history
   GET    /api/teams/<teamId>/federation/presence                     See which computers of a shared team are online
-  POST   /api/teams/<teamId>/leave                                   Leave a team hosted on someone else's computer   !! destructive
+  POST   /api/teams/<teamId>/leave                                   Withdraw selected local members or leave a team hosted on another computer   !! destructive
   POST   /api/teams/<teamId>/members                                 Add an existing digital human to a team
   PATCH  /api/teams/<teamId>/members/<appId>                         Rewrite what a member is responsible for in this team
   DELETE /api/teams/<teamId>/members/<appId>                         Remove a member from a team   !! destructive
@@ -169,15 +169,16 @@ GET    /api/teams/<teamId>/federation/presence                     See which com
      # out: {success:true,data:{officeId,role:"host"|"joined",nodes:[{nodeId,displayName,status,lastSeen}],authority} | null}
      # note: null means the team is not shared with other computers.
 
-POST   /api/teams/<teamId>/leave                                   Leave a team hosted on someone else's computer
+POST   /api/teams/<teamId>/leave                                   Withdraw selected local members or leave a team hosted on another computer
      !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
      curl -sX POST "$HALO_API_URL/api/teams/<teamId>/leave" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
           -H "Content-Type: application/json" \
-          -d '{}'
-     # body: {}
+          -d '{"appIds":["local-app-id"]}'
+     # body: {"appIds":["local-app-id"]} or {}
      # out: {success:true} | {success:false,error}
-     # note: Only for a team joined from another computer (hostNodeId set in GET /api/teams). All of this computer's digital humans in it leave with it; their duties there are kept on this computer and come back if they join the same team again, which needs a new invite from the host. Confirm with the user first.
+     # note: Confirm which members should leave first. Provide their local appIds as a non-empty list of non-blank strings. Other local members stay. With no members left, this computer leaves the office. With no body or {}, the entire computer and all of its members leave. A malformed selection returns 400; do not retry it as {}.
+     # note: Only for a team joined from elsewhere (hostNodeId set in GET /api/teams). Duties are kept on this computer; rejoining requires a new invitation from the host.
      # err: NOT_JOINED: this computer has no team joined from elsewhere with that id; nothing changed. A team it hosts is not left but dissolved (DELETE /api/teams/:teamId), which deletes much more — ask the user, never switch to it on your own.
 
 POST   /api/teams/<teamId>/members                                 Add an existing digital human to a team

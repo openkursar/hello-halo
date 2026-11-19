@@ -4,14 +4,13 @@
  * reply's process, or on its own when the reply has no process to join.
  */
 
-import { Send, Users } from 'lucide-react'
 import type { Message } from '../../types'
 import { TeamMemberMessage, isTeamMessage } from './team-collab'
 import { CrossConversationMessage } from './cross-conversation'
 
 interface ArrivalCardProps {
   message: Message
-  /** Row of the process timeline, which already draws the kind icon and the spacing. */
+  /** A line of the reply's work, shaped like the operations around it. */
   inProcess?: boolean
 }
 
@@ -19,9 +18,4 @@ export function ArrivalCard({ message, inProcess = false }: ArrivalCardProps) {
   return isTeamMessage(message)
     ? <TeamMemberMessage message={message} inProcess={inProcess} />
     : <CrossConversationMessage message={message} inProcess={inProcess} />
-}
-
-/** Icon the process timeline shows for an arrival of this kind. */
-export function arrivalIcon(message: Message): typeof Users {
-  return isTeamMessage(message) ? Users : Send
 }

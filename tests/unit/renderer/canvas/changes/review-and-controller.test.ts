@@ -40,8 +40,8 @@ describe('review card state', () => {
 
   it('follows a running review, from the record when the conversation has no start yet', () => {
     const todos = [{ content: 'Read the rules', status: 'completed' as const }]
-    const state = reviewCardState(record, { ...EMPTY_REVIEW_PROGRESS, status: 'running', todos, activity: { key: 'Thinking...' } }, 0)
-    expect(state).toEqual({ kind: 'running', variant: 'quick', startedAt: 1_000, todos, activity: { key: 'Thinking...' }, members: null })
+    const state = reviewCardState(record, { ...EMPTY_REVIEW_PROGRESS, status: 'running', todos, activity: { key: 'Working...' } }, 0)
+    expect(state).toEqual({ kind: 'running', variant: 'quick', startedAt: 1_000, todos, activity: { key: 'Working...' }, members: null })
   })
 
   it('shows the report with its timing, cost and staleness once done', () => {

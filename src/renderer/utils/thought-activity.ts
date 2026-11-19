@@ -1,8 +1,8 @@
 /**
  * What an agent is doing right now, read from its steps: the one-line activity
- * the thought panel shows while a turn runs ("Reading config.json..."), and the
+ * a reply's work shows while a turn runs ("Reading config.json..."), and the
  * todo list its todo tool keeps. Shared so every surface that reports agent
- * progress (the chat's thought panel, a review card) says the same thing.
+ * progress (the chat's work line, a review card) says the same thing.
  *
  * Returns i18n keys and parameters, never translated text.
  */
@@ -17,7 +17,7 @@ void function _i18nActionKeys(t: (k: string) => string) {
   t('Executing {{command}}...'); t('Fetching {{url}}...'); t('Searching {{query}}...');
   t('Updating tasks...'); t('Executing {{task}}...'); t('Waiting for user response...');
   t('Setting goal...'); t('Updating goal...'); t('Completing goal...'); t('Abandoning goal...');
-  t('Processing...'); t('Thinking...');
+  t('Processing...'); t('Working...');
 }
 
 export interface ThoughtActivity {
@@ -76,8 +76,8 @@ function goalActionKey(action: unknown): string {
 
 /**
  * The most recent main-agent action, searched from the end (sub-agent steps
- * are skipped). 'Thinking...' when the latest step is reasoning or nothing
- * has happened yet.
+ * are skipped). 'Working...' when the latest step is reasoning or nothing
+ * has happened yet: reasoning is part of the work, not what the person sees it do.
  */
 export function describeThoughtActivity(thoughts: readonly Thought[]): ThoughtActivity {
   for (let i = thoughts.length - 1; i >= 0; i--) {
@@ -109,9 +109,9 @@ export function describeThoughtActivity(thoughts: readonly Thought[]): ThoughtAc
         default: return { key: 'Processing...' }
       }
     }
-    if (th.type === 'thinking') return { key: 'Thinking...' }
+    if (th.type === 'thinking') return { key: 'Working...' }
   }
-  return { key: 'Thinking...' }
+  return { key: 'Working...' }
 }
 
 /** The items of a TodoWrite call's input. */

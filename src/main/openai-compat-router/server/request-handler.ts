@@ -119,8 +119,9 @@ async function fetchUpstream(
       }
     }
     headers['Content-Type'] = 'application/json'
-    // Only add Authorization if not provided in custom headers
-    if (!headers['Authorization']) {
+    // Only add Authorization if not provided in custom headers, under any case:
+    // fetch would send both spellings as one comma-joined value.
+    if (!Object.keys(headers).some(key => key.toLowerCase() === 'authorization')) {
       headers['Authorization'] = `Bearer ${apiKey}`
     }
 

@@ -198,16 +198,18 @@ BrowserWindow + remote WebSocket clients:
 
 | Event | Channel | Meaning | Renderer effect |
 |-------|---------|---------|-----------------|
-| active-view | `ai-browser:active-view-changed` | a conversation's AI created/selected a view; payload `{conversationId, spaceId, viewId, url, title}` | renderer store keeps the active view per conversation ("View live feed" and the operating indicator of the conversation on screen) and every page per viewId (the tray) |
+| active-view | `ai-browser:active-view-changed` | a conversation's AI created/selected a view, or that active view's url/title changed (a page is picked before it loads; the manager's `onViewStateChanged` fires in server mode too); payload `{conversationId, spaceId, viewId, url, title}` | renderer store keeps the active view per conversation ("View live feed" and the operating indicator of the conversation on screen) and every page per viewId (the tray) |
 | gone | `ai-browser:view-gone` | a view a UI context held — its active page or any other it opened — was destroyed; payload `{viewId}` | store drops the page and any active entry pointing at it; canvas tabs attached to it close |
 | conversation-released | `ai-browser:conversation-released` | a UI context ended (`release()` or `destroy()`); payload `{conversationId}` | store drops that conversation's views, operating state and owned pages, so a page it only selected (now the user's) is not left listed or stoppable as its own |
 
 Payload types live in `shared/types/ai-browser.ts`. The renderer filters by the
-active conversation; events go out with `broadcastToAll` (browser pages are
-desktop-only, so remote clients ignore them). An event only fires on change, so a
-renderer that starts late (reload) seeds itself with the request
-`ai-browser:list-live-pages` (`listLivePages()`: every owned or active page of a
-UI context, `active` marking the one it acts on).
+active conversation; events go out with `broadcastToAll` (remote clients cannot
+host a page and watch it through the live view instead). An event only fires on
+change, so a renderer that starts late (reload, late connect) seeds itself with
+`listLivePages()` — the request `ai-browser:list-live-pages` on the desktop,
+`GET /api/browser/live-pages` remotely, re-requested on every WebSocket reconnect
+since events broadcast while the socket was down are lost. It returns every owned
+or active page of a UI context, `active` marking the one it acts on.
 
 Page titles and URLs keep changing after creation, including on inactive pages.
 The existing desktop `browser:state-change` stream carries those updates by
@@ -317,6 +319,30 @@ its `preventDefault`. Its paste fallback delivers a synthetic clipboard event
 and guest-local DOM insertion, including rich HTML; it does not provide a
 trusted native paste event. The browser-host design records this distinction.
 
+### The user operating the AI's page
+
+A person watching through `browser-live` can click, scroll and type on the page
+the AI drives. `browserViewManager.onUserInput` reports it (hover does not
+count); a context whose `activeViewId` is that page holds one pending notice,
+and invalidates its previous snapshot. The next browser call gets the notice
+before acting: if it is not a snapshot, the call returns without running and
+asks for a fresh snapshot. A snapshot itself may run and includes the notice.
+No separate takeover, lock or hand-back mode interrupts a running turn.
+
+### Text the model must not hold (server mode)
+
+`browser_fill_secret` is registered only in server mode, where the person is not
+at the page and would otherwise type a password or one-time code into the chat.
+The model names fields by uid; `credential-broker.ts` emits
+`ai-browser:credential-request` (origin, field labels, the model's stated
+purpose), and the remote owner answers through internal HTTP routes. There is
+no desktop IPC for credentials. The request is bound to the snapshot and page;
+main-frame navigation or tool cancellation ends the wait. If field reads do
+not confirm a fill, Halo does not submit. This keeps the submitted text out of
+the chat and redacts the identified fields in later accessibility snapshots.
+It is not an isolation boundary against the receiving website or everything
+that can subsequently be read on that page.
+
 ## File Map
 
 | File | Responsibility |
@@ -328,6 +354,7 @@ trusted native paste event. The browser-host design records this distinction.
 | `context.ts` | BrowserContext class (state, CDP, element ops, downloads); emits view lifecycle |
 | `snapshot.ts` | Accessibility tree snapshot creation |
 | `fill-check.ts` | Reads back what a fill left in the field and compares it with the requested text |
+| `credential-broker.ts` | Pending user-typed values for `browser_fill_secret` (server mode): one fill each, never persisted or logged |
 | `download-handler.ts` | Session-level `will-download` handler for silent AI downloads |
 | `types.ts` | Type definitions |
 | `tools/` | Tool implementations by category (14 active tools) |

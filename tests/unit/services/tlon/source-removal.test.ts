@@ -16,6 +16,8 @@ vi.mock('../../../../src/main/services/tlon/watcher', () => ({
   stopWatchersForKB: vi.fn(async () => {}),
   startLinkedDirWatch: vi.fn(async () => {}),
   stopLinkedDirWatch: vi.fn(async () => {}),
+  refreshLinkedWatches: vi.fn(async () => {}),
+  rescanKB: vi.fn(),
 }))
 vi.mock('../../../../src/main/foundation/window.service', () => ({ sendToRenderer: vi.fn() }))
 vi.mock('../../../../src/main/http/websocket', () => ({ broadcastToAll: vi.fn() }))

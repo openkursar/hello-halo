@@ -1480,7 +1480,7 @@ async function getOrCreateV2SessionInner(
 
   const sdkEnv = ((sdkOptions as Record<string, unknown>).env || {}) as Record<string, string | undefined>
   console.log(`[Agent] session_create conv=${conversationId} pid=${pid ?? ''} model=${sdkOptions.model || ''} base_url=${sdkEnv.ANTHROPIC_BASE_URL || ''}`)
-  console.log(`[SDK Config] session_env conv=${conversationId} ANTHROPIC_BASE_URL=${sdkEnv.ANTHROPIC_BASE_URL || ''} ANTHROPIC_API_KEY=${maskSecretForLog(sdkEnv.ANTHROPIC_API_KEY)} HTTP_PROXY=${sdkEnv.HTTP_PROXY || ''} HTTPS_PROXY=${sdkEnv.HTTPS_PROXY || ''} NO_PROXY=${sdkEnv.NO_PROXY || ''}`)
+  console.log(`[SDK Config] session_env conv=${conversationId} ANTHROPIC_BASE_URL=${sdkEnv.ANTHROPIC_BASE_URL || ''} ANTHROPIC_API_KEY=${maskSecretForLog(sdkEnv.ANTHROPIC_API_KEY)} has_http_proxy=${Boolean(sdkEnv.HTTP_PROXY)} has_https_proxy=${Boolean(sdkEnv.HTTPS_PROXY)} has_no_proxy=${Boolean(sdkEnv.NO_PROXY)}`)
 
   // Register with health system for orphan detection
   const instanceId = getCurrentInstanceId()

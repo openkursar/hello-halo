@@ -23,6 +23,7 @@ import { nativeChatAppId, parseRunSenderKey } from '../../../../shared/apps/im-k
 import { navigateToAppChat, navigateToConversation } from '../../../utils/conversation-navigation'
 import { formatTimeAgo } from '../../../utils/format-time'
 import { readProvenance } from './message-source'
+import { clipSubject, PROCESS_CUE, PROCESS_DETAIL, PROCESS_LINE } from '../process-line'
 
 /**
  * A delivery this recent is treated as still unhandled by this conversation's
@@ -34,8 +35,8 @@ const FRESH_DELIVERY_MS = 5_000
 interface CrossConversationMessageProps {
   message: Message
   /**
-   * Received while a reply was being written: drawn as a row of that reply's
-   * process timeline, which supplies the icon and the row spacing.
+   * Received while a reply was being written: drawn as a line of that reply's
+   * work, shaped like the operations around it.
    */
   inProcess?: boolean
 }
@@ -91,7 +92,7 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
   }
 
   const body = isExpanded && (
-    <div className={`px-2.5 pb-2 ${inProcess ? '' : 'animate-slide-down'}`}>
+    <div className={inProcess ? PROCESS_DETAIL : 'px-2.5 pb-2 animate-slide-down'}>
       <div className="text-[13px] leading-[1.7] text-foreground/[0.88] whitespace-pre-wrap break-words">
         {message.content}
       </div>
@@ -99,8 +100,8 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
           carries "sent by that conversation's AI", the only visual statement that this
           message is not the user's. Measured at /55 it lands near 3:1 in dark mode,
           under the 4.5:1 floor — too weak for the one line that has to be read. */}
-      <div className="mt-2 pt-1.5 border-t border-dashed border-border-faint
-        flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] text-muted-foreground/80">
+      <div className={`flex flex-wrap items-center gap-x-1 gap-y-0.5 text-muted-foreground/80 ${
+        inProcess ? 'mt-1 min-h-6 text-[11px]' : 'mt-2 border-t border-dashed border-border-faint pt-1.5 text-[10px]'}`}>
         <span>{t('From conversation')}</span>
         {fromRun ? (
           <span>{displayTitle}</span>
@@ -123,24 +124,14 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
 
   if (inProcess) {
     return (
-      <div className="w-full min-w-0" data-message-id={message.id}>
-        <button
-          onClick={() => setIsExpanded(v => !v)}
-          aria-expanded={isExpanded}
-          className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors hover:bg-muted/25"
-        >
-          <ChevronRight
-            size={12}
-            className={`shrink-0 text-muted-foreground/60 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-          />
-          <span className="max-w-[55%] truncate text-xs font-medium text-muted-foreground">
-            {t('From @{{title}}:', { title: displayTitle })}
-          </span>
+      <div className="min-w-0" data-message-id={message.id}>
+        <button type="button" onClick={() => setIsExpanded(v => !v)} aria-expanded={isExpanded} className={PROCESS_LINE}>
+          <Send size={14} aria-hidden="true" className="shrink-0" />
+          <span className="max-w-[45%] shrink-0 truncate">{t('From @{{title}}:', { title: displayTitle })}</span>
           {provenance.summary && (
-            <span className="text-xs text-muted-foreground truncate min-w-0">{provenance.summary}</span>
+            <span className="min-w-0 truncate text-[13px] text-muted-foreground">{clipSubject(provenance.summary).text}</span>
           )}
-          <span className="hidden sm:inline shrink-0 text-muted-foreground/40 text-[10px]">·</span>
-          <span className="hidden sm:inline shrink-0 text-[10px] text-muted-foreground/55">{time}</span>
+          <span aria-hidden="true" className={PROCESS_CUE}>{isExpanded ? t('Collapse') : t('View')}</span>
         </button>
         {body}
       </div>

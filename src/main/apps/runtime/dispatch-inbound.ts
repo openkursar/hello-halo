@@ -357,7 +357,6 @@ const supplementGate = createTurnGate<SupplementEntry[]>({
       .finally(release)
   },
 }, {
-  describeJob: entries => `IM messages=${entries.length}`,
   onDiscard: (entries, reason) => {
     for (const entry of entries) {
       try { entry.reply.streaming?.dispose?.() } catch (error) {

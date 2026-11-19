@@ -17,7 +17,16 @@
  */
 
 import { ipcMain } from 'electron'
-import { onBrowserActiveView, onBrowserViewGone, onBrowserConversationReleased, listLivePages, stopLivePage } from '../services/ai-browser'
+import {
+  onBrowserActiveView,
+  onBrowserViewGone,
+  onBrowserConversationReleased,
+  onBrowserCredentialRequest,
+  onBrowserCredentialResolved,
+  listLivePages,
+  stopLivePage,
+} from '../services/ai-browser'
+import { isServerMode } from '../foundation/runtime-mode'
 import { getMainWindow } from '../foundation/window.service'
 import { broadcastToAll } from '../http/websocket'
 
@@ -48,6 +57,14 @@ export function registerAIBrowserHandlers(): void {
   subscriptions.push(onBrowserConversationReleased((e) => {
     forward('ai-browser:conversation-released', e as unknown as Record<string, unknown>)
   }))
+  if (isServerMode()) {
+    subscriptions.push(onBrowserCredentialRequest(event => {
+      broadcastToAll('ai-browser:credential-request', { ...event })
+    }))
+    subscriptions.push(onBrowserCredentialResolved(event => {
+      broadcastToAll('ai-browser:credential-resolved', { ...event })
+    }))
+  }
 
   ipcMain.handle('ai-browser:list-live-pages', () => ({
     success: true,
@@ -57,6 +74,7 @@ export function registerAIBrowserHandlers(): void {
     success: true,
     data: stopLivePage(viewId, conversationId),
   }))
+
 }
 
 export function cleanupAIBrowserHandlers(): void {

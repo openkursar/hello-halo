@@ -26,6 +26,7 @@ import { createTelemetryProvider } from './providers/telemetry'
 import { getConfig, saveConfig } from '../../foundation/config.service'
 import { getAnalyticsConfig, getIdentitySource, getTelemetryConfig } from '../../foundation/product-config'
 import { getHostIdentity, type HostIdentity } from '../../foundation/host-identity'
+import { getInstanceId, isServerMode } from '../../foundation/runtime-mode'
 import { getCurrentSource } from '../../../shared/types'
 import { deriveErrorCode } from './error-code'
 
@@ -36,7 +37,16 @@ import { deriveErrorCode } from './error-code'
  * per-variant configuration committed in the variant repo, not secrets.
  * Missing/empty values disable the corresponding provider (open-source
  * builds omit both blocks entirely).
+ *
+ * In server mode the telemetry endpoint and key also accept an environment
+ * override, so one container image can be deployed against different backends
+ * — the same reason HALO_REMOTE_PASSWORD is not a product.json field. The
+ * desktop never reads them.
  */
+function fromServerEnv(name: 'HALO_TELEMETRY_ENDPOINT' | 'HALO_TELEMETRY_API_KEY'): string {
+  return isServerMode() ? (process.env[name] ?? '') : ''
+}
+
 function loadProviderConfig() {
   const analytics = getAnalyticsConfig()
   const telemetry = getTelemetryConfig()
@@ -49,8 +59,8 @@ function loadProviderConfig() {
       apiSecret: analytics?.ga?.apiSecret ?? ''
     },
     telemetry: {
-      endpoint: telemetry?.endpoint ?? '',
-      apiKey: telemetry?.apiKey ?? ''
+      endpoint: fromServerEnv('HALO_TELEMETRY_ENDPOINT') || telemetry?.endpoint || '',
+      apiKey: fromServerEnv('HALO_TELEMETRY_API_KEY') || telemetry?.apiKey || ''
     }
   }
 }
@@ -346,7 +356,8 @@ class AnalyticsService {
    */
   private buildUserContext(): UserContext {
     return {
-      userId: this.config!.userId,
+      userId: getInstanceId() ?? this.config!.userId,
+      ...(isServerMode() ? { runtimeMode: 'server' as const } : {}),
       appVersion: app.getVersion(),
       platform: process.platform,
       arch: process.arch,
@@ -466,7 +477,7 @@ class AnalyticsService {
    * Initialize all providers
    */
   private async initProviders(): Promise<void> {
-    const userId = this.config!.userId
+    const userId = this.userContext!.userId
     const PROVIDER_CONFIG = loadProviderConfig()
 
     // Create and initialize providers
@@ -554,7 +565,7 @@ class AnalyticsService {
    * Get user ID (for future account binding)
    */
   getUserId(): string | null {
-    return this.config?.userId || null
+    return this.userContext?.userId || null
   }
 
   /**

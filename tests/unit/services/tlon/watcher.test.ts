@@ -39,6 +39,7 @@ vi.mock('../../../../src/main/services/tlon/ingest', async () => {
     enqueueFiles: (...args: unknown[]) => enqueueFiles(...args),
     processQueue: (...args: unknown[]) => processQueue(...args),
     rebuildIndexMd: (...args: unknown[]) => rebuildIndexMd(...args),
+    hasPendingCommit: () => false,
     collectCandidatesRetiringRemoved: (kbId: string) => {
       scans(kbId)
       return service.collectIngestCandidates(kbId)
@@ -60,6 +61,8 @@ import {
   stopLinkedDirWatch,
   initTlonWatchers,
   shutdownTlon,
+  refreshLinkedWatches,
+  rescanKB,
 } from '../../../../src/main/services/tlon/watcher'
 import { getKBRawDir } from '../../../../src/main/services/tlon/paths'
 import { initializeApp } from '../../../../src/main/foundation/config.service'
@@ -352,6 +355,60 @@ describe('Tlon Watcher', () => {
 
       await startWatchersForKB(kb.id)
       expect(subscriptions.has(getKBRawDir(kb.id))).toBe(true)
+    })
+  })
+
+  describe('symlinked folders and rescans', () => {
+    it('re-aims the watch of a symlinked folder once it points at a new target', async () => {
+      const base = makeScratchDir()
+      const v1 = path.join(base, 'v1')
+      const v2 = path.join(base, 'v2')
+      fs.mkdirSync(v1)
+      fs.mkdirSync(v2)
+      const current = path.join(base, 'current')
+      fs.symlinkSync(v1, current)
+      const kb = await createKbAndSettle('Symlink', [{ path: current, label: 'docs' }])
+      const first = subscriptions.get(current)!
+      const before = subscribeMock.mock.calls.filter(c => c[0] === current).length
+      expect(before).toBe(1)
+
+      await refreshLinkedWatches(kb.id)
+      expect(subscribeMock.mock.calls.filter(c => c[0] === current).length).toBe(1)
+
+      fs.unlinkSync(current)
+      fs.symlinkSync(v2, current)
+      await refreshLinkedWatches(kb.id)
+      expect(first.unsubscribe).toHaveBeenCalled()
+      expect(subscribeMock.mock.calls.filter(c => c[0] === current).length).toBe(2)
+      expect(subscriptions.has(current)).toBe(true)
+    })
+
+    it('leaves the watch of a folder that is currently missing alone', async () => {
+      const base = makeScratchDir()
+      const kb = await createKbAndSettle('GoneLink', [{ path: base, label: 'docs' }])
+      const handle = subscriptions.get(base)!
+      fs.rmSync(base, { recursive: true })
+      await refreshLinkedWatches(kb.id)
+      expect(handle.unsubscribe).not.toHaveBeenCalled()
+    })
+
+    it('a delayed rescan is replaced by a sooner one', async () => {
+      const kb = await createKbAndSettle('Rescan')
+      vi.useFakeTimers()
+      scans.mockClear()
+      rescanKB(kb.id, 10_000)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(scans).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(scans).toHaveBeenCalledTimes(1)
+
+      scans.mockClear()
+      rescanKB(kb.id, 10_000)
+      rescanKB(kb.id)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(scans).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(scans).toHaveBeenCalledTimes(1)
     })
   })
 })

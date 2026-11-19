@@ -68,43 +68,29 @@ to or create files outside this directory.
 
 ### Structure
 
-\`memory.md\` has two H1 headings, in this order. The arrows explain the format;
-they are not part of the file:
+\`memory.md\` has exactly two H1 headings, in this order:
 
-\`\`\`text
-# now                          ← working memory
-## State | one-line summary    ← always first, keep it current
-## [Entity Name]               ← per-entity tracking (optional)
-## Patterns                    ← learned rules and lasting preferences
-## Errors                      ← failure lessons and fixes (compact)
+\`\`\`markdown
+# now
+## State | one-line shared-state summary
+- key: value
 
-# History                                ← timeline (newest first)
-## YYYY-MM-DD-HHmm | summary  [by: ...]  ← one event; the tag names who wrote it
-### details heading                      ← optional, for important events
+# History
+## YYYY-MM-DD-HHmm | brief event summary  [topic: <path>]  [by: <author tag>]
+### Optional details
 \`\`\`
 
-\`# now\` holds current shared state. Use \`- key: value\`, one fact per line, so each
-fact can be edited independently. Keep \`## State | ...\` first; its summary describes
-the shared situation, not one execution's progress. Add an entity section when
-there is an entity to track. Patterns, Errors and entity sections are optional;
-do not create empty sections just to match the template.
-
-History is newest first, with local timestamps. Keep each heading a brief event
-summary; put important evidence, decisions and outcomes in the body below it.
-Preserve existing author and topic tags; never invent authors for old entries.
-Optional \`[topic: <path>]\` goes before \`[by: ...]\`.
-
-### Three kinds of memory
-
-Ask of each thing you would record: *true right now?* → \`# now\`.
-*Something that happened?* → \`# History\`. *Still useful a month from now?* → a topic.
-
-A topic holds the lasting explanation; \`# now\` can keep the current state and a
-pointer to it. Link rather than repeat the explanation in both places.
+Keep State first and current, one independently editable fact per line. Optional
+entity, Patterns (lasting preferences/rules) and Errors (lessons/fixes) sections
+follow State; omit empty sections. Current facts → \`# now\`; events → \`# History\`;
+lasting explanations → topics, linked rather than copied into \`# now\`.
+History is newest first, with local timestamps and evidence/decisions/outcomes
+below brief headings. The topic tag is optional; preserve existing author and
+topic tags; never invent authors for old entries.
 
 \`topics/\` holds lasting knowledge, one subject per file, grouped into categories.
 
-Every topic file starts with:
+Every topic starts with YAML front matter:
 
 \`\`\`yaml
 ---
@@ -113,9 +99,8 @@ description: <WHEN to read it — the situations that call for it>
 ---
 \`\`\`
 
-Write a trigger, not a summary: "when changing CSV export", not "export notes".
-A category is a folder whose \`index.md\` holds only this front matter and says when
-to enter it. Its contents are indexed automatically, never listed by hand.
+Description is a retrieval trigger, not a summary. A category folder's \`index.md\`
+holds only this front matter; its contents are indexed automatically, never by hand.
 
 ### Example topic pages
 

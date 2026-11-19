@@ -32,6 +32,7 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   buildUserSessionSdkOptions: async (options: Record<string, unknown>) => ({ mcpServers: options.mcpServers }),
   toEngineSystemPrompt: (prompt: string) => prompt,
   getEngineCapabilities: () => ({ features: { permissionRules: true, hooks: true } }),
+  createDelegatedModelEndpoint: () => undefined,
 }))
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   closeV2Session: vi.fn(), getConsumerHandle: () => null, getRunningConsumerIds: () => [],
@@ -126,6 +127,11 @@ vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({ getPendin
 vi.mock('../../../../src/main/apps/runtime/delegation-gate', () => ({
   beginDelegatedTurn: vi.fn(), createDelegationAuditHooks: () => ({}), createSkillGateHooks: () => ({}),
   createTurnFileAccessHooks: () => ({}), turnFileExportRefusal: () => undefined,
+}))
+// The turn asks which bound knowledge bases its guests may read; none here.
+vi.mock('../../../../src/main/services/tlon', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/services/tlon')>()),
+  getKnowledgeReadDirsForApp: vi.fn(() => []),
 }))
 vi.mock('../../../../src/main/apps/runtime/prompt/identity', () => ({ buildIdentityFragments: () => [] }))
 vi.mock('../../../../src/main/apps/runtime/prompt/capabilities', () => ({ buildDisabledCapabilitiesGuidance: () => '', buildUnconfiguredCapabilitiesGuidance: () => '' }))

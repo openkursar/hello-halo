@@ -81,6 +81,8 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn().mockReturnValue({ agent: {}, notificationChannels: {} }),
   onAgentConfigChange: vi.fn(),
+  onNetworkConfigChange: vi.fn(),
+  onAiSourcesConfigChange: vi.fn(),
   resolveClaudeConfigDir: vi.fn().mockReturnValue('/tmp/cc-config'),
 }))
 

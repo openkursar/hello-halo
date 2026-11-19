@@ -42,14 +42,14 @@ vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
 
 const joinTeamOffice =
   vi.fn<[{ officeId: string; serverUrl: string; inviteToken: string; bringAppIds: string[] }], Promise<unknown>>()
-const leaveTeamOffice = vi.fn<[string], Promise<unknown>>()
+const leaveTeamOffice = vi.fn<[string, string[] | undefined], Promise<unknown>>()
 
 vi.mock('../../../../src/main/controllers/team-invite.controller', () => ({
   generateTeamInvite: vi.fn(),
   revokeTeamInvite: vi.fn(),
   joinTeamOffice: (input: { officeId: string; serverUrl: string; inviteToken: string; bringAppIds: string[] }) =>
     joinTeamOffice(input),
-  leaveTeamOffice: (officeId: string) => leaveTeamOffice(officeId),
+  leaveTeamOffice: (officeId: string, appIds?: string[]) => leaveTeamOffice(officeId, appIds),
 }))
 
 const getOfficePresence = vi.fn<[string], unknown>()
@@ -183,7 +183,33 @@ describe('POST /api/teams/:teamId/leave', () => {
       const body = await res.json()
       expect(body).toEqual({ success: true })
     })
-    expect(leaveTeamOffice).toHaveBeenCalledWith('office-9')
+    expect(leaveTeamOffice).toHaveBeenCalledWith('office-9', undefined)
+  })
+
+  it('passes appIds through so only those members leave', async () => {
+    await withServer(buildApp(), async (base) => {
+      const res = await postJson(base, '/api/teams/office-9/leave', { appIds: ['app-a', 'app-b'] })
+      expect(res.status).toBe(200)
+    })
+    expect(leaveTeamOffice).toHaveBeenCalledWith('office-9', ['app-a', 'app-b'])
+  })
+
+  it('rejects malformed selections without withdrawing anyone', async () => {
+    await withServer(buildApp(), async base => {
+      for (const body of [{ appIds: 'app-a' }, { appIds: ['a', 7] }, { appIds: [] }, { appIds: null }, { appIds: [' '] }, { appId: 'a' }, []]) {
+        const res = await postJson(base, '/api/teams/office-9/leave', body)
+        expect(res.status).toBe(400)
+      }
+      expect((await fetch(`${base}/api/teams/office-9/leave`, { method: 'POST', body: 'appIds=a' })).status).toBe(400)
+    })
+    expect(leaveTeamOffice).not.toHaveBeenCalled()
+  })
+
+  it('retains the bodyless whole-node operation', async () => {
+    await withServer(buildApp(), async base => {
+      expect((await fetch(`${base}/api/teams/office-9/leave`, { method: 'POST' })).status).toBe(200)
+    })
+    expect(leaveTeamOffice).toHaveBeenCalledWith('office-9', undefined)
   })
 })
 

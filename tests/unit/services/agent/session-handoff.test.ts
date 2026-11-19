@@ -44,7 +44,7 @@ vi.mock('../../../../src/main/openai-compat-router', async () => ({
 vi.mock('../../../../src/main/services/ai-sources', async () => {
   const { getConfig } = await import('../../../../src/main/foundation/config.service')
   const getSource = (id: string) => getConfig().aiSources?.sources.find(source => source.id === id) ?? null
-  return { getGroup: () => null, getAISourceManager: () => ({
+  return { ...await import('../../../../src/main/services/ai-sources/subagent-models'), getGroup: () => null, getAISourceManager: () => ({
     ensureInitialized: async () => {},
     getCurrentSourceConfig: () => getSource(getConfig().aiSources!.currentId!),
     getSourceConfig: getSource,
@@ -123,7 +123,7 @@ vi.mock('../../../../src/main/services/agent/toolsets', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/base', () => ({ buildBaseToolset: () => ({}) }))
 vi.mock('../../../../src/main/services/tlon', () => ({
-  getKBChatContext: () => null, getKBReferencesForApp: () => [],
+  getKBChatContext: () => null, getKBReferencesForApp: () => [], getKnowledgeReadDirsForApp: () => [],
   getKnowledgeBaseReference: () => null, resolveSourcesForReadPaths: () => [],
 }))
 vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({

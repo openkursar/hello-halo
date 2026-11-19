@@ -22,7 +22,7 @@ export { createAIBrowserMcpServer }
 export { createScopedBrowserContext }
 export { getInteractiveBrowserContext, releaseInteractiveBrowserContext } from './context'
 // Every page a conversation holds, for a client that missed the live events.
-export { listLivePages } from './context'
+export { isLiveConversationPage, listLivePages } from './context'
 // A tray stop, refused unless the page is the named conversation's alone.
 export { stopLivePage } from './context'
 export type { BrowserContext } from './context'
@@ -32,10 +32,22 @@ export {
   onBrowserActiveView,
   onBrowserViewGone,
   onBrowserConversationReleased,
+  onBrowserCredentialRequest,
+  onBrowserCredentialResolved,
   type BrowserActiveViewEvent,
   type BrowserViewGoneEvent,
   type BrowserConversationReleasedEvent,
+  type BrowserCredentialRequestEvent,
+  type BrowserCredentialResolvedEvent,
 } from './events'
+
+// A page waiting on a credential the model must not hold; answered by the user
+// through the transport layer (ipc/ai-browser.ts, http/routes/browser.routes.ts).
+export {
+  submitCredential,
+  declineCredential,
+  listPendingCredentialRequests,
+} from './credential-broker'
 
 export { AI_BROWSER_DESCRIPTION, AI_BROWSER_INSTRUCTIONS, AI_BROWSER_SYSTEM_PROMPT } from './guidance'
 

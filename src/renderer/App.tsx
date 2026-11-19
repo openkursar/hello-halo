@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, useCallback, Suspense, lazy } from 'react'
 import { useAppStore } from './stores/app.store'
 import { useChatStore, initChatMemoryPressureListener } from './stores/chat.store'
 import { useOnboardingStore } from './stores/onboarding.store'
-import { initAIBrowserStoreListeners } from './stores/ai-browser.store'
+import { initAIBrowserStoreListeners, useOldestCredentialRequest } from './stores/ai-browser.store'
 import { initTerminalStoreListeners } from './stores/terminal.store'
 import { initGoalStoreListeners } from './stores/goal.store'
 import { initPerfStoreListeners } from './stores/perf.store'
@@ -66,6 +66,12 @@ const AppsPage = lazy(() => import('./pages/AppsPage').then(m => ({ default: m.A
 const TlonPage = lazy(() => import('./pages/TlonPage').then(m => ({ default: m.TlonPage })))
 const StorePage = lazy(() => import('./pages/StorePage').then(m => ({ default: m.StorePage })))
 const SpacesPage = lazy(() => import('./pages/SpacesPage').then(m => ({ default: m.SpacesPage })))
+const BrowserCredentialPrompt = lazy(() => import('./components/tool/BrowserCredentialPrompt').then(m => ({ default: m.BrowserCredentialPrompt })))
+
+function RemoteBrowserPrompt() {
+  const request = useOldestCredentialRequest()
+  return request ? <Suspense fallback={null}><BrowserCredentialPrompt request={request} /></Suspense> : null
+}
 
 // Views that render inside the persistent shell (rail visible). Pre-app
 // screens (setup/server connect/...) render full-bleed without it.
@@ -1129,6 +1135,7 @@ export default function App() {
       <UpdateNotification />
       {/* Unified in-app toast notifications */}
       <NotificationToast />
+      {!isElectron() && <RemoteBrowserPrompt />}
       {/* At-rest credential decode failure alert (enterprise builds only).
           Offset below the reconnection bar when it is showing so they stack. */}
       <CredentialAlertBanner topOffset={showReconnectBanner ? 32 : 0} />

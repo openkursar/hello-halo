@@ -99,12 +99,26 @@ const STRUCTURAL_ROLES = new Set([
 ])
 
 /**
+ * Stands in for the value of a field the user typed into themselves. Blink
+ * already masks `type=password`, but not a plain text input — and a PIN or a
+ * one-time token is routinely one of those, down to a row of single-character
+ * boxes — so the tree would otherwise hand the model the very text that was
+ * kept out of its hands.
+ */
+export const REDACTED_VALUE = '(hidden)'
+
+/**
  * Create an accessibility snapshot from a WebContents
+ *
+ * `redactedNodeIds` names DOM nodes whose value must not reach the model. It is
+ * keyed on backendNodeId because a uid is minted per snapshot and so means
+ * nothing to the next one.
  */
 export async function createAccessibilitySnapshot(
   webContents: WebContents,
   send: SnapshotCommandSender,
-  verbose: boolean = false
+  verbose: boolean = false,
+  redactedNodeIds?: ReadonlySet<number>
 ): Promise<AccessibilitySnapshot> {
   const snapshotId = `snap_${++snapshotCounter}`
   const idToNode = new Map<string, AccessibilityNode>()
@@ -218,7 +232,7 @@ export async function createAccessibilitySnapshot(
 
       // Extract value
       if (cdpNode.value?.value !== undefined) {
-        node.value = String(cdpNode.value.value)
+        node.value = redactedNodeIds?.has(node.backendNodeId) ? REDACTED_VALUE : String(cdpNode.value.value)
       }
 
       // Extract description

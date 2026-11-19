@@ -96,16 +96,26 @@ test('standalone native collaboration factory creates only children and resumes 
   const idle = async () => { for (let attempt = 0; attempt < 1000 && binding.activeCount > 0; attempt++) await delay(5); assert.equal(binding.activeCount, 0); };
   try {
     assert.equal(JSON.parse(loadBinding().runtimeDiagnostics()).activeSessions, 0);
-    const created = await binding.server.instance.callTool('spawn_agent', { name: 'reader', prompt: 'Write evidence.txt, reply to lead, then finish.' });
+    const assignment = { name: 'reader', prompt: 'Write evidence.txt, reply to lead, then finish.' };
+    const rejected = await binding.server.instance.callTool('spawn_agent', { ...assignment, subagent_type: 'explore' });
+    assert.equal(rejected.isError, true);
+    assert.equal(rejected.content[0].text, 'No collaborator was created. Unsupported argument: subagent_type. Accepted arguments: prompt, name, cwd, isolation.');
+    assert.equal(binding.activeCount, 0);
+    assert.equal(calls, 0);
+    const created = await binding.server.instance.callTool('spawn_agent', { ...assignment, description: 'Verify a file' });
     assert.notEqual(created.isError, true, JSON.stringify(created));
+    assert.equal(created.content.length, 1);
+    assert.match(created.content[0].text, /^Collaborator created: reader\./);
     await idle();
     assert.equal(calls, 3);
     assert.equal(starts, 1);
     assert.equal(binding.residentCount, 0);
     assert.equal(binding.retainedCount, 1);
     assert.ok(delivered.some(envelope => envelope.body.includes('The standalone child wrote evidence.txt.')));
-    const continued = await binding.server.instance.callTool('team_send', { to: 'reader', message: 'Continue from your retained history.' });
+    const continued = await binding.server.instance.callTool('team_send', { to: 'reader', message: 'Continue from your retained history.', summary: 'Resume' });
     assert.notEqual(continued.isError, true, JSON.stringify(continued));
+    assert.equal(continued.content.length, 1);
+    assert.ok(JSON.parse(continued.content[0].text).messageId);
     await idle();
     assert.equal(calls, 4);
     assert.equal(starts, 2);

@@ -10,6 +10,22 @@ export async function captureBrowserPage(contents: WebContents, rect?: Rectangle
     Math.min(5000, timeoutMs), { ...options, deadline })
 }
 
+/**
+ * One capture attempt inside an already-held frame lease. Null while the
+ * compositor has not committed anything to read — an unshown window reports no
+ * display surface (or an UnknownVizError) until its first commit, which is not
+ * a failure.
+ */
+export async function capturePageFrame(contents: WebContents, rect?: Rectangle): Promise<NativeImage | null> {
+  try {
+    const image = await contents.capturePage(rect, { stayHidden: true, stayAwake: true })
+    return image.isEmpty() ? null : image
+  } catch (error) {
+    if (error instanceof Error && /display surface.*(?:available|capture)|UnknownVizError/i.test(error.message)) return null
+    throw error
+  }
+}
+
 async function framesReadyPage(contents: WebContents, rect: Rectangle | undefined, timeoutMs: number, signal?: AbortSignal): Promise<NativeImage> {
   let cancelled = false
   let deadlineTimer: NodeJS.Timeout | undefined
@@ -39,12 +55,8 @@ async function framesReadyPage(contents: WebContents, rect: Rectangle | undefine
   const capture = async (): Promise<NativeImage> => {
     while (!cancelled) {
       if (contents.isDestroyed()) throw new Error('Browser page closed during capture')
-      try {
-        const image = await contents.capturePage(rect, { stayHidden: true, stayAwake: true })
-        if (!image.isEmpty()) return image
-      } catch (error) {
-        if (!(error instanceof Error) || !/display surface.*(?:available|capture)/i.test(error.message)) throw error
-      }
+      const image = await capturePageFrame(contents, rect)
+      if (image) return image
       if (!cancelled) await new Promise<void>(resolve => {
         finishRetry = resolve
         retryTimer = setTimeout(resolve, 25)

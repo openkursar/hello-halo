@@ -15,9 +15,18 @@
  * entries as written and reads them by its own rules, some of which also count
  * example.com for ".example.com" — so ".example.com" plus "example.com" means
  * the same everywhere.
+ *
+ * A server deployment on a split network (an intranet reached directly, a few
+ * public services reachable only through an egress proxy) can also name the
+ * eligible hosts for main-process requests (`proxyOnly`, same syntax), subject
+ * to guarded-account requirements. Chromium does not implement this list.
+ * Children get NO_PROXY entries only for known model/MCP endpoint host:ports;
+ * other traffic follows the child's own proxy implementation.
  */
 
 import { BlockList, isIP } from 'node:net'
+import { getNetworkPolicy } from '../foundation/product-config'
+import { isServerMode } from '../foundation/runtime-mode'
 
 /** Reached directly by every route: the loopback router and other local services. */
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]']
@@ -33,6 +42,8 @@ export interface ProxySettings {
   proxy?: string
   /** Hosts that bypass the proxy, as the user typed them. */
   noProxy?: string
+  /** The only hosts that take the proxy (server mode only); see effectiveProxyOnly. */
+  proxyOnly?: string[]
 }
 
 const SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i
@@ -56,6 +67,16 @@ export function parseBypassList(value: string | undefined): string[] {
 function urlHost(url: string): string {
   try {
     return new URL(url).host
+  } catch {
+    return ''
+  }
+}
+
+function endpointHostPort(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const port = parsed.port || DEFAULT_PORTS[parsed.protocol]
+    return port ? `${parsed.hostname}:${port}` : ''
   } catch {
     return ''
   }
@@ -139,23 +160,65 @@ export function chromiumBypassRules(list: readonly string[]): string {
 }
 
 /**
+ * The hosts that alone take the proxy, empty when every host may. Only a
+ * server deployment applies them — the config value, else the product
+ * default; on the desktop a non-empty list would silently take everything
+ * else, the model API included, off a proxy the user set for all traffic.
+ */
+export function effectiveProxyOnly(configured: readonly string[] | undefined): string[] {
+  if (!isServerMode()) return []
+  return [...(configured ?? getNetworkPolicy()?.proxyOnly ?? [])]
+}
+
+/** Deployment proxy credentials stay in the process environment, never in config snapshots. */
+export function serverProxyUrl(): string | undefined {
+  if (!isServerMode()) return undefined
+  for (const name of ['HALO_PROXY', 'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) {
+    const value = process.env[name]?.trim()
+    if (value) return value
+  }
+  return undefined
+}
+
+/** The endpoints of the remote servers in an MCP server map; local ones have no URL. */
+export function mcpServerUrls(servers: Record<string, unknown> | null | undefined): string[] {
+  return Object.values(servers ?? {}).flatMap(server => {
+    const url = (server as { url?: unknown } | null)?.url
+    return typeof url === 'string' ? [url] : []
+  })
+}
+
+/**
  * The proxy part of a child process environment: the Settings proxy where the
  * inherited environment names none, the bypass list as NO_PROXY, and a scheme
  * for proxy URLs written without one (the CLI's HTTP client parses them with
  * `new URL()`, which rejects "127.0.0.1:7890").
+ *
+ * `sessionUrls` are the endpoints the process is known to reach (model API,
+ * remote MCP servers). Under `proxyOnly`, the hosts of those it excludes are
+ * added to NO_PROXY; without `proxyOnly` they change nothing.
  */
 export function applyProxyEnv(
   env: Record<string, string | number | undefined>,
-  settings: ProxySettings | undefined
+  settings: ProxySettings | undefined,
+  sessionUrls: ReadonlyArray<string | undefined> = []
 ): void {
-  const proxy = settings?.proxy?.trim()
+  const deploymentProxy = serverProxyUrl()
+  const proxy = deploymentProxy ?? settings?.proxy?.trim()
   if (proxy) {
     for (const key of PROXY_URL_KEYS) {
-      if (!env[key]) env[key] = proxy
+      if (deploymentProxy || !env[key]) env[key] = proxy
     }
   }
 
-  const noProxy = proxyBypassList(settings, [env.NO_PROXY, env.no_proxy].map(value => value?.toString())).join(',')
+  const proxyOnly = effectiveProxyOnly(settings?.proxyOnly)
+  const proxied = proxyOnly.length > 0 ? compileBypassList(proxyOnly) : null
+  const excluded = proxied ? sessionUrls.flatMap(url => (url && !proxied(url) ? [endpointHostPort(url)] : [])) : []
+
+  const noProxy = proxyBypassList(
+    { noProxy: [settings?.noProxy, ...excluded].filter(Boolean).join(',') },
+    [env.NO_PROXY, env.no_proxy].map(value => value?.toString())
+  ).join(',')
   env.NO_PROXY = noProxy
   env.no_proxy = noProxy
 

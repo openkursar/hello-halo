@@ -7,13 +7,17 @@ import { ensureExtendedServicesReady } from './bootstrap-ready'
  * Split from the monolithic api/index.ts; transport branch (IPC vs HTTP) preserved.
  */
 import {
+  httpRequest,
   isElectron,
   onEvent,
+  sendWsMessage,
+  supportsBrowserLive,
 } from './_shared'
 import type {
   ApiResponse,
 } from './_shared'
-import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../../shared/types/ai-browser'
+import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserCredentialRequest, AIBrowserCredentialResolved, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../../shared/types/ai-browser'
+import type { BrowserLiveDetailScope, BrowserLiveFrame, BrowserLiveInput, BrowserLiveStopped } from '../../shared/types/browser-live'
 
 export const browserApi = {
   clearBrowserData: (async () => {
@@ -215,13 +219,78 @@ export const browserApi = {
   },
 
   // Every page AI conversations hold, for a renderer that missed the live
-  // events (reload). Desktop only: remote clients cannot present browser guests.
+  // events (reload, late connect). Remote clients watch them through the live view.
   listAIBrowserLivePages: async (): Promise<AIBrowserLivePage[]> => {
-    if (!isElectron()) return []
-    await ensureExtendedServicesReady()
-    const result = await window.halo.listAIBrowserLivePages()
+    if (isElectron()) await ensureExtendedServicesReady()
+    const result = isElectron()
+      ? await window.halo.listAIBrowserLivePages()
+      : await httpRequest<AIBrowserLivePage[]>('GET', '/api/browser/live-pages')
     return result.success && result.data ? result.data : []
   },
+
+  // A page is waiting for text the model must not hold — a PIN, a one-time
+  // code. Unlike the page-lifecycle calls above these work in remote mode too:
+  // the person answering may not be sitting at the desktop app.
+  onAIBrowserCredentialRequest: (callback: (data: AIBrowserCredentialRequest) => void) =>
+    onEvent('ai-browser:credential-request', callback as (data: unknown) => void),
+
+  // That wait ended (answered elsewhere, declined, or expired) — close the prompt
+  onAIBrowserCredentialResolved: (callback: (data: AIBrowserCredentialResolved) => void) =>
+    onEvent('ai-browser:credential-resolved', callback as (data: unknown) => void),
+
+  // Requests still waiting, for a client that joined after the event
+  listAIBrowserCredentialRequests: async (): Promise<AIBrowserCredentialRequest[]> => {
+    if (!supportsBrowserLive()) return []
+    const result = await httpRequest<AIBrowserCredentialRequest[]>('GET', '/api/browser/credential-requests')
+    return result.success && result.data ? result.data : []
+  },
+
+  // The values go straight to the waiting page fill and are never stored
+  submitAIBrowserCredential: async (requestId: string, values: Record<string, string>): Promise<ApiResponse> => {
+    if (!supportsBrowserLive()) return { success: false }
+    return httpRequest('POST', '/api/browser/credential-requests/submit', { requestId, values })
+  },
+
+  declineAIBrowserCredential: async (requestId: string): Promise<ApiResponse> => {
+    if (!supportsBrowserLive()) return { success: false }
+    return httpRequest('POST', '/api/browser/credential-requests/decline', { requestId })
+  },
+
+  supportsBrowserLive,
+
+  // ===== Browser live view (remote clients only) =====
+  // A client that cannot host a page watches it as paced frames instead. The
+  // desktop app owns the real page and never needs this, so the control
+  // messages are WebSocket-only — there is no IPC counterpart to fall back to.
+
+  attachBrowserLive: (viewId: string): boolean =>
+    sendWsMessage('browser-live-attach', { viewId }),
+
+  detachBrowserLive: (viewId: string): void => {
+    sendWsMessage('browser-live-detach', { viewId })
+  },
+
+  // Rendered up to `seq`; the stream sends the next frame only after this.
+  ackBrowserLive: (viewId: string, seq: number): void => {
+    sendWsMessage('browser-live-ack', { viewId, seq })
+  },
+
+  // One still outside the stream: the screen at full resolution (a QR code the
+  // stream's bitrate destroys) or the whole page (to pick a spot to jump to).
+  requestBrowserLiveDetail: (viewId: string, scope: BrowserLiveDetailScope = 'screen'): void => {
+    sendWsMessage('browser-live-detail', { viewId, scope })
+  },
+
+  // Operate the watched page; ignored by the server unless this client is its owner.
+  sendBrowserLiveInput: (viewId: string, input: BrowserLiveInput): void => {
+    sendWsMessage('browser-live-input', { viewId, input })
+  },
+
+  onBrowserLiveFrame: (callback: (data: BrowserLiveFrame) => void) =>
+    onEvent('browser:live-frame', callback as (data: unknown) => void),
+
+  onBrowserLiveStopped: (callback: (data: BrowserLiveStopped) => void) =>
+    onEvent('browser:live-stopped', callback as (data: unknown) => void),
 
   // ===== Browser Policy (user-extensible allowlist — desktop only) =====
   getBrowserPolicy: async (): Promise<ApiResponse> => {

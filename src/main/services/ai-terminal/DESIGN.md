@@ -16,9 +16,11 @@ A pty-backed terminal subsystem, modeled on `services/ai-browser`:
   or UI window: a task keeps running across model switches, session rebuilds,
   and canvas open/close.
 
-Platform: macOS + Windows only. Linux is excluded at packaging (node-pty
-prebuilds omitted); `isTerminalAvailable()` gates the whole feature so it never
-appears in the capability index, toolset menu, or transport on Linux.
+Platform: macOS, Windows, Linux x64. node-pty ships mac/win prebuilds in the npm
+package; the Linux binary is vendored at `resources/prebuilds/node-pty/` and
+installed by `scripts/prepare-binaries.mjs` (see that file for the linux/amd64 rebuild recipe). Unlike the upstream mac/win binaries, this Linux addon was supplied separately, not downloaded from the npm tarball. Its source package version and reviewed binary digest are pinned in `scripts/lib/node-pty-prebuild.cjs`; prepare and packaging check the digest and ELF architecture. A digest detects substitution, not build provenance; reviewing or rebuilding the addon from the locked source remains part of updating that pin.
+`isTerminalAvailable()` gates the whole feature so it never appears in the
+capability index, toolset menu, or transport where no prebuild is packaged.
 
 ## 2) Process model (pty host) — the architectural core
 

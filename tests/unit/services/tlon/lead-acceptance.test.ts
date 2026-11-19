@@ -13,6 +13,7 @@ import { getTestDir } from '../../setup'
 vi.mock('../../../../src/main/services/tlon/watcher', () => ({
   startWatchersForKB: vi.fn(), stopWatchersForKB: vi.fn(),
   startLinkedDirWatch: vi.fn(), stopLinkedDirWatch: vi.fn(),
+  refreshLinkedWatches: vi.fn(), rescanKB: vi.fn(),
 }))
 vi.mock('@parcel/watcher', () => ({ default: { subscribe: vi.fn() }, subscribe: vi.fn() }))
 vi.mock('../../../../src/main/foundation/window.service', () => ({ sendToRenderer: vi.fn() }))

@@ -48,6 +48,7 @@ import { openSessionWriter, saveChatSessionId, saveChatEngineBinding, type ChatE
 import { AppChatTurnInterrupted, turnEndingOf, type AppChatTurnEnding } from './turn-ending'
 import { imTurnReply } from './im-error-reply'
 import { stopGeneration } from '../../services/agent/control'
+import { replyEndingOf } from '../../services/agent/reply-ending'
 import { listResidentSessions, hasPendingSessionInput } from '../../services/agent'
 
 // ============================================
@@ -491,6 +492,9 @@ class AppChatSink implements TurnSink {
 
   private completeTurn(result: StreamResult): void {
     this.persistSessionId(result)
+    const replyEnding = replyEndingOf(result)
+    // Text streamed but cut off reaches no complete block line; the ending keeps what the reply had shown.
+    if (replyEnding) this.getWriter()?.writeEvent({ type: 'reply_ending', ending: replyEnding, ...(result.hasMeaningfulContent ? { content: result.finalContent } : {}) })
 
     // Raw aggregates define delivery independently of the live UI's streaming state.
     const accumulated = this.turn.accumulator.getReply()

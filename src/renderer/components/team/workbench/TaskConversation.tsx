@@ -15,12 +15,14 @@ import { taskTime } from './time'
 import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, undeliveredParties, type SharedTaskDecision } from './model'
 import { UndeliveredNote } from './UndeliveredNote'
 
-export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation, taskCompleted = false }: {
+export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation, taskCompleted = false, endingShownBelow }: {
   messages: Message[]; activities: TeamActivity[]; epochId: string | null; appId?: string; detail: TeamDetail; showEmpty: boolean; onActivity: (id?: string) => void
   decisions?: ActivityEntry[]; onAnswered?: (entry: ActivityEntry) => void
   focusDecision?: string | null; onDecisionFocused?: () => void
   emptyActions?: ReactNode; onHumanConversation?: (appId: string) => void
   taskCompleted?: boolean
+  /** The reply whose ending the room's interruption notice already states. */
+  endingShownBelow?: string
 }) {
   const { t } = useTranslation()
   const hasHumanConversation = conversationMessages(messages).some(message => message.role === 'user')
@@ -93,7 +95,7 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
         const messageId = row.message.id
         const requests = decisions.filter(decision => attached.get(decision.id) === messageId)
         const carried = inputs.get(messageId)
-        return <MessageRow key={row.id} message={row.message} hideBrowserLiveView hideTerminalOpen injectionMessages={carried?.injections} arrivals={carried?.arrivals} afterThoughts={requests.length ? requests.map(decisionCard) : undefined} />
+        return <MessageRow key={row.id} message={row.message} hideBrowserLiveView hideTerminalOpen injectionMessages={carried?.injections} arrivals={carried?.arrivals} afterThoughts={requests.length ? requests.map(decisionCard) : undefined} endingShownBelow={messageId === endingShownBelow} />
       }
       const updates = row.activities
       const latest = updates[updates.length - 1]

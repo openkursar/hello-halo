@@ -10,6 +10,7 @@ export const tlonRpc = {
   tlonListForSpace: rawRpcMethod('tlon:list-for-space'),
   tlonGet: rawRpcMethod('tlon:get'),
   tlonUpdate: rawRpcMethod('tlon:update'),
+  tlonSetGuestRead: rawRpcMethod('tlon:set-guest-read'),
   tlonDelete: rawRpcMethod('tlon:delete'),
   tlonSetDefault: rawRpcMethod('tlon:set-default'),
   tlonBindSpace: rawRpcMethod('tlon:bind-space'),

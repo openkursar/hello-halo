@@ -27,7 +27,7 @@ describe('team run result transport', () => {
     install('document', { baseURI: 'https://example.invalid/halo/' })
     install('localStorage', { getItem: () => 'fixture-token' })
     const result = { success: true, data: { epochId: 'requested-work' } }
-    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(result)))
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(result))
     expect(await teamApi.teamRun('team', 'Inspect the new issue.')).toEqual(result)
     expect(fetch).toHaveBeenCalledWith('https://example.invalid/halo/api/teams/team/run', expect.objectContaining({
       method: 'POST', body: JSON.stringify({ trigger: { type: 'manual' }, instruction: 'Inspect the new issue.' }),

@@ -2,7 +2,7 @@ import { createServer, createConnection, type Socket } from 'node:net'
 import type { BrowserContext, Page } from '@playwright/test'
 import { test as base, expect } from './acceptance-app'
 import type { HaloAPI } from '../../../src/preload'
-import { serveBuiltRenderer } from './acceptance-renderer-redirect'
+import { installRemoteLoopbackGuard } from './acceptance-remote-lifecycle'
 
 interface RemoteStatus { server: { port: number; token: string | null; running: boolean } }
 interface RemoteFixtures {
@@ -24,7 +24,7 @@ async function freePort() {
   return port
 }
 
-async function startLink(port: number) {
+export async function startLink(port: number) {
   let online = true
   const sockets = new Set<Socket>()
   const events: Array<{ type: string; code?: string }> = []
@@ -54,8 +54,9 @@ async function startLink(port: number) {
 export const test = base.extend<RemoteFixtures>({
   remote: async ({ acceptanceApp, browser }, use, testInfo) => {
     const packaged = await acceptanceApp.app.evaluate(({ app }) => app.isPackaged)
-    const assets = packaged ? null : await serveBuiltRenderer(acceptanceApp.app)
+    await acceptanceApp.app.evaluate(installRemoteLoopbackGuard)
     let link: Awaited<ReturnType<typeof startLink>> | undefined
+    let remotePort: number | undefined
     let context: BrowserContext | undefined
     const failures: unknown[] = []
     try {
@@ -64,7 +65,8 @@ export const test = base.extend<RemoteFixtures>({
       const status = enabled.data as RemoteStatus
       expect(status.server.running).toBe(true)
       expect(status.server.token).toBeTruthy()
-      link = await startLink(status.server.port)
+      remotePort = status.server.port
+      link = await startLink(remotePort)
       context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'en-US' })
       const page = await context.newPage()
       await page.goto(link.url)
@@ -85,13 +87,18 @@ export const test = base.extend<RemoteFixtures>({
     } catch (error) { failures.push(error) }
     finally {
       try { await context?.close() } catch (error) { failures.push(error) }
-      let rendererConnections: number | undefined
-      if (assets) {
-        try { rendererConnections = await assets.close() } catch (error) { failures.push(error) }
-      }
+      try {
+        const stopped = await acceptanceApp.window.evaluate(() => (globalThis as unknown as { halo: HaloAPI }).halo.disableRemoteAccess())
+        expect(stopped.success).toBe(true)
+        const restored = await acceptanceApp.app.evaluate((_electron, port) => {
+          const state = globalThis as unknown as { acceptanceRemoteBinding?: { restore(port?: number): { restored: boolean; violations: string[] } } }
+          return state.acceptanceRemoteBinding?.restore(port)
+        }, remotePort)
+        expect(restored).toEqual({ restored: true, violations: [] })
+      } catch (error) { failures.push(error) }
       if (link) {
         try {
-          await testInfo.attach('remote-transport', { body: JSON.stringify({ renderer: packaged ? 'packaged' : 'built-assets-development-proxy', rendererConnections, events: link.events }), contentType: 'application/json' })
+          await testInfo.attach('remote-transport', { body: JSON.stringify({ renderer: packaged ? 'packaged' : 'built-application-assets', events: link.events }), contentType: 'application/json' })
         } catch (error) { failures.push(error) }
         try { await link.close() } catch (error) { failures.push(error) }
       }

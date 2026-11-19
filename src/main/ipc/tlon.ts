@@ -9,7 +9,7 @@
 
 import { showOpenDialog } from '../foundation/file-dialog'
 import * as tlonController from '../controllers/tlon.controller'
-import type { CreateKBInput, UpdateKBInput } from '../../shared/types/tlon'
+import type { CreateKBInput, UpdateKBInput, RemoveLinkedDirOptions } from '../../shared/types/tlon'
 import { tlonRpc } from '../../shared/rpc/contracts/tlon.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -20,6 +20,7 @@ export function registerTlonHandlers(): void {
     tlonListForSpace: async (spaceId: string) => tlonController.listKBsForSpace(spaceId),
     tlonGet: async (kbId: string) => tlonController.getKB(kbId),
     tlonUpdate: async (kbId: string, updates: UpdateKBInput) => tlonController.updateKB(kbId, updates),
+    tlonSetGuestRead: async (kbId: string, allow: boolean) => tlonController.setGuestRead(kbId, allow),
     tlonDelete: async (kbId: string) => tlonController.deleteKB(kbId),
     tlonSetDefault: async (kbId: string | null) => tlonController.setDefaultKB(kbId),
     tlonBindSpace: async (kbId: string, spaceId: string) => tlonController.bindToSpace(kbId, spaceId),
@@ -27,7 +28,8 @@ export function registerTlonHandlers(): void {
     tlonBindApp: async (kbId: string, appId: string) => tlonController.bindToApp(kbId, appId),
     tlonUnbindApp: async (kbId: string, appId: string) => tlonController.unbindFromApp(kbId, appId),
     tlonAddLinkedDir: async (kbId: string, dir: { path: string; label: string }) => tlonController.addLinkedDir(kbId, dir),
-    tlonRemoveLinkedDir: async (kbId: string, linkId: string) => tlonController.removeLinkedDir(kbId, linkId),
+    tlonRemoveLinkedDir: async (kbId: string, linkId: string, options?: RemoveLinkedDirOptions) =>
+      tlonController.removeLinkedDir(kbId, linkId, options),
     tlonRetryLinkedDir: async (kbId: string, linkId: string) => tlonController.retryLinkedDir(kbId, linkId),
     tlonAddFiles: async (kbId: string, filePaths: string[]) => tlonController.addRawFiles(kbId, filePaths),
     tlonListRaw: async (kbId: string) => tlonController.listRawFiles(kbId),

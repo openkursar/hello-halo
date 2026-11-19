@@ -158,6 +158,20 @@ describe('browser manager and persistent carrier', () => {
     expect(manager.getState('same-id')).toMatchObject({ title: 'New Tab', url: 'https://example.com/replacement' })
   })
 
+  it('stays loading through the attachment page finishing after the real navigation started', async () => {
+    await manager.create('page', 'https://example.com')
+    const guest = guests.get('page')!
+    guest.emit('did-start-navigation', {}, 'https://example.com/', false, true)
+    guest.emit('did-finish-load')
+    // Reporting done here let callers read the page before its title arrived.
+    expect(manager.getState('page')).toMatchObject({ isLoading: true, title: 'New Tab' })
+
+    guest.emit('page-title-updated', {}, 'Example Domain')
+    guest.emit('did-finish-load')
+    guest.emit('did-stop-loading')
+    expect(manager.getState('page')).toMatchObject({ isLoading: false, title: 'Example Domain' })
+  })
+
   it('does not register a guest that attaches after its browser was closed', async () => {
     let resolve!: (guest: FakeGuest) => void
     host.create.mockImplementationOnce(() => new Promise<FakeGuest>(accept => { resolve = accept }))

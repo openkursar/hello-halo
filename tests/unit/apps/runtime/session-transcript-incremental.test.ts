@@ -9,7 +9,8 @@
  * Event logs are generated from a fixed seed and cover the codec's moving
  * parts: tool results arriving in a later segment, text superseded by more
  * text, transparent tools, live arrivals, pushes, stopped inputs, terminal
- * checkpoints, failures and the legacy stream-event form.
+ * checkpoints, replies that ended early (with and without the words they had
+ * shown), compactions, failures and the legacy stream-event form.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -48,6 +49,8 @@ function randomLog(seed: number, length: number): StoredEvent[] {
   const inputIds: string[] = []
   let n = 0
   let tool = 0
+  let lastSaid = ''
+  const say = (text: string) => { lastSaid = text; return { type: 'text', text } }
   const content = (blocks: unknown[]): StoredEvent => ({ _ts: ts(++n), type: 'assistant', message: { role: 'assistant', content: blocks } })
   const trigger = (extra: Record<string, unknown> = {}): StoredEvent => {
     const inputId = `in-${n}`
@@ -67,10 +70,17 @@ function randomLog(seed: number, length: number): StoredEvent[] {
     [2, () => trigger({ _teamOrigin: { kind: 'human_message', correlationId: `h-${n}` } })],
     [6, () => ({ _ts: ts(++n), type: 'system', subtype: 'init' })],
     [8, () => content([{ type: 'thinking', thinking: `think ${n}` }])],
-    [14, () => content([{ type: 'text', text: `say ${n}` }])],
+    [14, () => content([say(`say ${n}`)])],
     [12, () => content([toolUse()])],
     [5, () => content([toolUse('TodoWrite')])],
-    [6, () => content([{ type: 'text', text: `then ${n}` }, toolUse()])],
+    [6, () => content([say(`then ${n}`), toolUse()])],
+    // The words shown when a reply ended early: none, a continuation of its last block, or other words.
+    [4, () => {
+      const shape = next()
+      const shown = shape < 0.35 ? {} : { content: shape < 0.7 ? `${lastSaid} and went on` : `shown ${n}` }
+      return { _ts: ts(++n), type: 'reply_ending', ending: pick(['stopped', 'interrupted', 'step-limit']), ...shown }
+    }],
+    [2, () => ({ _ts: ts(++n), type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: pick(['auto', 'manual']) } })],
     [16, () => {
       if (!openTools.length) return content([{ type: 'text', text: `idle ${n}` }])
       const id = openTools.splice(Math.floor(next() * openTools.length), 1)[0]

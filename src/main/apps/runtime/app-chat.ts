@@ -187,6 +187,7 @@ import { ReplyTextAccumulator } from './reply-accumulator'
 import { holdSupplementsAfterStop, getPendingSupplementInputIds } from './dispatch-inbound'
 import { getPendingConversationInputIds } from '../../services/conversation-interop'
 import { holdConversationAfterStop } from '../../services/conversation-interop'
+import { getKnowledgeReadDirsForApp } from '../../services/tlon'
 import { getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
 import { createAppChatDelivery, isPersonRequest } from './app-chat-delivery'
 import { awaitWorkspaceDrain, pendingWorkspaceChange, pendingWorkspaceRecovery } from './workspace-admission'
@@ -1011,6 +1012,8 @@ async function runAppChatTurn(
     runId: CHAT_RUN_ID,
     sessionKey: conversationId,
     notificationLevel: app.userOverrides?.notificationLevel,
+    workDir,
+    refuseFile: path => turnFileExportRefusal(conversationId, path),
     // Team turns route report() to the team runtime instead of the inbox. A
     // question asked while serving a request from outside persists that
     // request's origin, so the turn its answer resumes serves it too (see
@@ -1201,11 +1204,15 @@ async function runAppChatTurn(
     spaceMemoryOffered: app.userOverrides?.spaceMemoryAccess === true && isSpaceMemoryEnabled(spaceId),
     workDir,
     attachedFiles: [...(request.attachedFiles ?? []), ...(imageFallback?.filePaths ?? [])],
+    knowledgeFolders: strictFiles && !participant?.execution.fileAccess ? getKnowledgeReadDirsForApp(appId) : [],
   })
   const inheritedFiles = participant?.execution.fileAccess
   const turnFileAccess = inheritedFiles ? {
     ...currentFileAccess,
     memoryWritable: [], memoryReadable: [],
+    // A borrowed turn reads only what its lender could; this digital human's
+    // knowledge grant does not travel with it.
+    knowledgeFolders: inheritedFiles.knowledgeFolders ?? [],
     attachedFiles: [...new Set([...inheritedFiles.attachedFiles, ...currentFileAccess.attachedFiles])],
     workspaceRoots: inheritedFiles.workspaceRoots,
     closed: [...new Set([...currentFileAccess.closed, ...inheritedFiles.closed])],

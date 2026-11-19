@@ -23,7 +23,7 @@ vi.mock('os', async importOriginal => {
 })
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: () => ({ agent: { sdkEngine: m.defaultEngine, legacySdkEngine: 'anthropic' }, permissions: {} }),
-  onApiConfigChange: () => () => {}, getCredentialsGeneration: () => 0,
+  onApiConfigChange: () => () => {}, onNetworkConfigChange: () => () => {}, onAiSourcesConfigChange: () => () => {}, getCredentialsGeneration: () => 0,
   resolveClaudeConfigDir: () => join(globalThis.__HALO_TEST_DIR__, '.halo', 'claude-config'),
 }))
 vi.mock('../../../../src/main/services/space.service', () => ({
@@ -50,6 +50,7 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   buildUserSessionSdkOptions: async (input: any) => ({ engineId: input.engineId, model: 'test-model', cwd: input.workDir, systemPrompt: `system-${input.engineId}`, sourceId: 'account', env: {} }),
   computeCredentialsFingerprint: (options: any) => JSON.stringify([options.model, options.sourceId, options.reasoningEffort, options.pickedReasoningEffort]),
   computeSessionInputsFingerprint: (options: any) => JSON.stringify([options.systemPrompt, options.permissionMode]),
+  delegatedModelPolicyFingerprint: () => undefined,
   getSdkSourceId: (options: any) => options.sourceId,
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({ publishToolsetContextMode: vi.fn(), setSessionInvalidator: () => {}, buildCreationTimeServers: () => ({}), openToolset: () => ({ ok: true }) }))

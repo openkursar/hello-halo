@@ -7,14 +7,31 @@
  * never at the cost of the user's own NO_PROXY.
  */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const product = vi.hoisted(() => ({ networkPolicy: undefined as { proxyOnly?: string[] } | undefined }))
+vi.mock('../../../src/main/foundation/product-config', () => ({
+  getNetworkPolicy: () => product.networkPolicy,
+}))
+
 import {
   applyProxyEnv,
   chromiumBypassRules,
   compileBypassList,
+  effectiveProxyOnly,
+  mcpServerUrls,
   parseBypassList,
   proxyBypassList,
 } from '../../../src/main/services/proxy-policy'
+
+beforeEach(() => {
+  for (const key of ['HALO_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) vi.stubEnv(key, '')
+})
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+  product.networkPolicy = undefined
+})
 
 describe('parseBypassList', () => {
   it('splits on commas, semicolons and whitespace, keeps the first of duplicates', () => {
@@ -149,5 +166,73 @@ describe('applyProxyEnv', () => {
 
     expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890')
     expect(env.ALL_PROXY).toBe('socks5://127.0.0.1:1080')
+  })
+
+  it('leaves the session endpoints alone when no host list limits the proxy', () => {
+    vi.stubEnv('HALO_SERVER_MODE', '1')
+    const env: Record<string, string | undefined> = {}
+
+    applyProxyEnv(env, { proxy: 'http://127.0.0.1:7890' }, ['https://llm.corp.example/v1'])
+
+    expect(env.NO_PROXY).toBe('localhost,127.0.0.1,[::1]')
+  })
+
+  it('adds the session endpoints proxyOnly excludes to NO_PROXY on a server', () => {
+    vi.stubEnv('HALO_SERVER_MODE', '1')
+    const env: Record<string, string | undefined> = { NO_PROXY: '.internal' }
+
+    applyProxyEnv(env, { proxy: 'http://127.0.0.1:7890', proxyOnly: ['*.weixin.qq.com'] }, [
+      'https://llm.corp.example/v1', 'https://qyapi.weixin.qq.com/mcp', 'http://10.0.0.8:8080/sse', undefined, 'not a url',
+    ])
+
+    expect(env.NO_PROXY).toBe('localhost,127.0.0.1,[::1],.internal,llm.corp.example:443,10.0.0.8:8080')
+    expect(env.HTTP_PROXY).toBe('http://127.0.0.1:7890')
+  })
+
+  it('does not exempt a proxied port on a host with a direct endpoint', () => {
+    vi.stubEnv('HALO_SERVER_MODE', '1')
+    const env: Record<string, string> = {}
+    applyProxyEnv(env, { proxyOnly: ['mcp.internal:443'] }, ['https://mcp.internal', 'http://mcp.internal:8080'])
+    expect(env.NO_PROXY.split(',')).toContain('mcp.internal:8080')
+    expect(env.NO_PROXY.split(',')).not.toContain('mcp.internal')
+  })
+
+  it('ignores proxyOnly on the desktop', () => {
+    const env: Record<string, string | undefined> = {}
+
+    applyProxyEnv(env, { proxyOnly: ['*.weixin.qq.com'] }, ['https://llm.corp.example/v1'])
+
+    expect(env.NO_PROXY).toBe('localhost,127.0.0.1,[::1]')
+  })
+})
+
+describe('effectiveProxyOnly', () => {
+  it('is empty on the desktop, whatever is configured', () => {
+    product.networkPolicy = { proxyOnly: ['*.weixin.qq.com'] }
+    expect(effectiveProxyOnly(['api.example.com'])).toEqual([])
+    expect(effectiveProxyOnly(undefined)).toEqual([])
+  })
+
+  it('takes the config value on a server, else the product default', () => {
+    vi.stubEnv('HALO_SERVER_MODE', 'true')
+    product.networkPolicy = { proxyOnly: ['*.weixin.qq.com'] }
+    expect(effectiveProxyOnly(['api.example.com'])).toEqual(['api.example.com'])
+    expect(effectiveProxyOnly([])).toEqual([])
+    expect(effectiveProxyOnly(undefined)).toEqual(['*.weixin.qq.com'])
+    product.networkPolicy = undefined
+    expect(effectiveProxyOnly(undefined)).toEqual([])
+  })
+})
+
+describe('mcpServerUrls', () => {
+  it('lists the URLs of remote servers only', () => {
+    expect(mcpServerUrls({
+      remote: { type: 'http', url: 'https://mcp.example.com/mcp' },
+      events: { type: 'sse', url: 'https://sse.example.com/sse' },
+      local: { command: 'node', args: ['server.js'] },
+      inProcess: { type: 'sdk', instance: {} },
+      empty: null,
+    })).toEqual(['https://mcp.example.com/mcp', 'https://sse.example.com/sse'])
+    expect(mcpServerUrls(undefined)).toEqual([])
   })
 })

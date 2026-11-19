@@ -103,9 +103,9 @@ function teamHeader(page: Page, name: string) {
 }
 
 async function openSourceRoom(page: Page, name: string) {
-  const label = page.getByText(`Team: ${name}`, { exact: true })
-  await expect(label).toHaveCount(1)
-  await label.locator('..').getByRole('button', { name: 'Open team view', exact: true }).click()
+  const summary = page.getByRole('group', { name, exact: true })
+  await expect(summary).toHaveCount(1)
+  await summary.getByRole('button', { name: 'View team', exact: true }).click()
   await expect(teamHeader(page, name)).toBeVisible()
   await expect(page.getByRole('region', { name: 'Task room', exact: true })).toBeVisible()
 }

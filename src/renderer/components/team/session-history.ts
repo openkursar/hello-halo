@@ -1,5 +1,6 @@
 import { api } from '../../api'
 import type { Message } from '../../types'
+import { readReplyEnding } from '../../../shared/reply-ending'
 
 type HistoryResult = Awaited<ReturnType<typeof api.teamChatMessages>>
 type HistorySource = { readers: number; messages: Message[] | null; cursor: number; dirty: boolean; pending?: Promise<HistoryResult> }
@@ -67,10 +68,14 @@ const SEQ_WIDTH = String(Number.MAX_SAFE_INTEGER).length
  * `seq` but no `id`. Every team surface keys and matches messages by id, so such
  * a row takes one derived from its seq: the same on every read, and never an id
  * the owner itself assigns. These rows carry no `timestamp` either, so lists
- * order them by comparing ids as text, hence the padding.
+ * order them by comparing ids as text, hence the padding. Of the owner's
+ * metadata only how a reply ended crosses, and only as a value this build knows.
  */
-function withRowId(row: HistoryRow): HistoryRow {
-  return row.id ? row : { ...row, id: `${REMOTE_ROW_ID}${String(row.seq).padStart(SEQ_WIDTH, '0')}` }
+function withRowId(row: HistoryRow & { ending?: unknown }): HistoryRow {
+  if (row.id) return row
+  const { ending: sent, metadata: _metadata, ...rest } = row
+  const ending = readReplyEnding(sent)
+  return { ...rest, id: `${REMOTE_ROW_ID}${String(row.seq).padStart(SEQ_WIDTH, '0')}`, ...(ending ? { metadata: { ending } } : {}) }
 }
 
 const seqOf = (message: Message) => (message as HistoryRow).seq

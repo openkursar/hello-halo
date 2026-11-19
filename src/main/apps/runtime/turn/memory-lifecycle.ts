@@ -166,7 +166,7 @@ export function appMemoryGuard(
  */
 export function appTurnFileAccess(
   scope: MemoryCallerScope,
-  opts: { memoryActive: boolean; spaceMemoryOffered: boolean; workDir: string; attachedFiles: string[] }
+  opts: { memoryActive: boolean; spaceMemoryOffered: boolean; workDir: string; attachedFiles: string[]; knowledgeFolders?: string[] }
 ): TurnFileAccess {
   const own = resolveMemoryLayout(scope, 'app')
   const space = resolveMemoryLayout(scope, 'space')
@@ -178,6 +178,7 @@ export function appTurnFileAccess(
     memoryWritable: opts.memoryActive ? memoryContentPaths(own) : [],
     memoryReadable: opts.memoryActive && opts.spaceMemoryOffered ? [space.topicsDir] : [],
     attachedFiles: opts.attachedFiles,
+    knowledgeFolders: opts.knowledgeFolders ?? [],
     workspaceRoots: [opts.workDir],
     closed: [...new Set([join(opts.workDir, '.halo'), join(scope.spacePath, '.halo')])],
     // Where images for a text-only model are persisted (services/agent image-attachments).

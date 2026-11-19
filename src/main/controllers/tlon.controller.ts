@@ -9,6 +9,7 @@ import {
   listKBs as svcListKBs,
   listKBsForSpace as svcListKBsForSpace,
   updateKB as svcUpdateKB,
+  setKBGuestRead as svcSetKBGuestRead,
   deleteKB as svcDeleteKB,
   setDefaultKB as svcSetDefaultKB,
   bindToSpace as svcBindToSpace,
@@ -31,6 +32,7 @@ import {
 import type {
   CreateKBInput,
   UpdateKBInput,
+  RemoveLinkedDirOptions,
 } from '../../shared/types/tlon'
 
 export interface ControllerResponse<T = unknown> {
@@ -83,6 +85,14 @@ export function getKB(kbId: string): ControllerResponse {
 export function updateKB(kbId: string, updates: UpdateKBInput): ControllerResponse {
   try {
     const kb = svcUpdateKB(kbId, updates)
+    return kb ? ok(kb) : { success: false, error: 'Knowledge base not found' }
+  } catch (e) { return fail(e) }
+}
+
+export function setGuestRead(kbId: string, allow: unknown): ControllerResponse {
+  if (typeof allow !== 'boolean') return { success: false, error: 'allow must be true or false' }
+  try {
+    const kb = svcSetKBGuestRead(kbId, allow)
     return kb ? ok(kb) : { success: false, error: 'Knowledge base not found' }
   } catch (e) { return fail(e) }
 }
@@ -152,9 +162,9 @@ export function addLinkedDir(
   } catch (e) { return fail(e) }
 }
 
-export function removeLinkedDir(kbId: string, linkId: string): ControllerResponse {
+export function removeLinkedDir(kbId: string, linkId: string, options?: RemoveLinkedDirOptions): ControllerResponse {
   try {
-    return ok(svcRemoveLinkedDir(kbId, linkId))
+    return ok(svcRemoveLinkedDir(kbId, linkId, { forget: options?.forget === true }))
   } catch (e) { return fail(e) }
 }
 

@@ -24,6 +24,8 @@ vi.mock('../../../../src/main/services/tlon/watcher', () => ({
   stopWatchersForKB: vi.fn(async () => {}),
   startLinkedDirWatch: vi.fn(async () => {}),
   stopLinkedDirWatch: vi.fn(async () => {}),
+  refreshLinkedWatches: vi.fn(async () => {}),
+  rescanKB: vi.fn(),
 }))
 // Belt and braces: if the real watcher module still loads (dynamic import),
 // its native subscribe must never touch the real filesystem watch API.
@@ -75,6 +77,8 @@ import {
   seedAppKnowledgeBases,
   getKBReferenceById,
   getKBReferencesForApp,
+  getKnowledgeReadDirsForApp,
+  setKBGuestRead,
   getKBChatContext,
   collectIngestCandidates,
 } from '../../../../src/main/services/tlon/service'
@@ -948,6 +952,63 @@ describe('Tlon Service', () => {
       expect(refs.map(r => r.id)).toEqual([active.id])
       expect(refs.map(r => r.id)).not.toContain(paused.id)
       expect(refs.map(r => r.id)).not.toContain(unbound.id)
+    })
+  })
+
+  describe('getKnowledgeReadDirsForApp', () => {
+    it('opens no text folder until the owner allows guest reading', () => {
+      const kb = createKB({ name: 'Shared' })
+      bindToApp(kb.id, 'app-1')
+      expect(getKB(kb.id)?.allowGuestRead).toBeUndefined()
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
+
+      setKBGuestRead(kb.id, true)
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([getKBTextDir(kb.id)])
+      expect(getKnowledgeReadDirsForApp('app-2')).toEqual([])
+
+      setKBGuestRead(kb.id, false)
+      expect(getKB(kb.id)?.allowGuestRead).toBeUndefined()
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
+    })
+
+    it('does not acknowledge a failed revocation or lose the previous grant on restart', () => {
+      const kb = createKB({ name: 'Shared' })
+      bindToApp(kb.id, 'app-1')
+      setKBGuestRead(kb.id, true)
+      const blocked = getKBIndexPath() + '.tmp'
+      fs.mkdirSync(blocked)
+      expect(() => setKBGuestRead(kb.id, false)).toThrow()
+      expect(getKB(kb.id)?.allowGuestRead).toBe(true)
+      _resetTlonRegistry()
+      expect(getKB(kb.id)?.allowGuestRead).toBe(true)
+      fs.rmdirSync(blocked)
+
+      vi.mocked(observedReadFileSync).mockClear()
+      const running = getKnowledgeReadDirsForApp('app-1')
+      expect(vi.mocked(observedReadFileSync).mock.calls.some(([p]) => p === getKBIndexMdPath(kb.id))).toBe(false)
+      setKBGuestRead(kb.id, false)
+      _resetTlonRegistry()
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
+      expect(running).toEqual([getKBTextDir(kb.id)])
+    })
+
+    it('leaves out a paused knowledge base even when allowed', () => {
+      const kb = createKB({ name: 'Paused' })
+      bindToApp(kb.id, 'app-1')
+      setKBGuestRead(kb.id, true)
+      updateKB(kb.id, { status: 'paused' })
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
+    })
+
+    it('is not changed through the general update', () => {
+      const kb = createKB({ name: 'Shared' })
+      bindToApp(kb.id, 'app-1')
+      updateKB(kb.id, { name: 'Renamed', allowGuestRead: true } as never)
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
+    })
+
+    it('reports an unknown knowledge base', () => {
+      expect(setKBGuestRead('missing', true)).toBeNull()
     })
   })
 

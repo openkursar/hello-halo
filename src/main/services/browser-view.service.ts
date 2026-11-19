@@ -10,6 +10,7 @@ import type { BrowserTabOpened } from '../../shared/types/browser-host'
 import { ensureBrowserCompatibility } from './browser-compatibility'
 import { TouchPointerController } from './browser-touch-pointer'
 import { getConfig, onBrowserConfigChange } from '../foundation/config.service'
+import { isServerMode } from '../foundation/runtime-mode'
 
 // ============================================
 // Types
@@ -121,6 +122,43 @@ function buildBlockedMessage(url: string): string {
   }
 }
 
+/** Upper bound on a navigation in server mode, see loadUrlBounded. */
+const LOAD_URL_TIMEOUT = 30_000
+
+/**
+ * loadURL() with an upper bound.
+ *
+ * loadURL resolves on did-finish-load, so its duration is whatever Chromium's
+ * network stack decides — minutes, for a single slow subresource, while the DOM
+ * the caller wanted has been readable since the first second. On timeout the
+ * load is stopped so the page settles on whatever already rendered, and the
+ * rejection travels the same path a real did-fail-load takes.
+ *
+ * Without a bound this is plain loadURL(). Only server mode passes one: there
+ * no person watches the spinner, so an agent would wait on the load for as long
+ * as Chromium does. The desktop keeps its existing unbounded wait.
+ */
+async function loadUrlBounded(webContents: WebContents, url: string, timeoutMs?: number): Promise<void> {
+  if (timeoutMs === undefined) return webContents.loadURL(url)
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      webContents.loadURL(url),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Load timed out after ${Math.round(timeoutMs / 1e3)}s: ${url}`)),
+          timeoutMs,
+        )
+      }),
+    ])
+  } catch (error) {
+    if (!webContents.isDestroyed() && webContents.isLoading()) webContents.stop()
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 function wasNavigationCancelled(error: unknown): boolean {
   const failure = error as { code?: string; errno?: number }
   return failure?.code === 'ERR_ABORTED' || failure?.errno === -3
@@ -149,6 +187,8 @@ class BrowserPageManager {
   private lastBounds: Map<string, BrowserViewBounds> = new Map()
 
   private destroyedListeners: Set<(viewId: string, webContentsId?: number) => void> = new Set()
+  private stateListeners: Set<(viewId: string) => void> = new Set()
+  private userInputListeners: Set<(viewId: string) => void> = new Set()
 
   // Debounce timers for state change events
   // This prevents flooding the renderer with too many IPC messages during rapid navigation
@@ -429,6 +469,35 @@ class BrowserPageManager {
     return () => this.destroyedListeners.delete(listener)
   }
 
+  /**
+   * Subscribe to a view's state changes (url, title, loading), debounced like the
+   * renderer's. Fires without a main window, so server mode hears them too.
+   */
+  onViewStateChanged(listener: (viewId: string) => void): () => void {
+    this.stateListeners.add(listener)
+    return () => this.stateListeners.delete(listener)
+  }
+
+  /**
+   * Subscribe to a person operating a page through a path other than its own
+   * window, such as a remote live view, so an AI working the same page knows
+   * its last look is stale.
+   */
+  onUserInput(listener: (viewId: string) => void): () => void {
+    this.userInputListeners.add(listener)
+    return () => this.userInputListeners.delete(listener)
+  }
+
+  noteUserInput(viewId: string): void {
+    for (const listener of this.userInputListeners) {
+      try {
+        listener(viewId)
+      } catch (error) {
+        console.error(`[Browser] user-input listener failed for ${viewId}:`, error)
+      }
+    }
+  }
+
   private emitViewDestroyed(viewId: string, webContentsId?: number, reason: 'closed' | 'lost' = 'closed') {
     if (this.mainWindow && !this.mainWindow.isDestroyed() && !this.mainWindow.webContents.isDestroyed()) {
       this.mainWindow.webContents.send('browser:page-gone', { viewId, reason })
@@ -453,9 +522,11 @@ class BrowserPageManager {
   }
 
   /**
-   * Navigate to a URL
+   * Navigate to a URL. `timeoutMs` bounds the load (see loadUrlBounded); in
+   * server mode it defaults to LOAD_URL_TIMEOUT, so a caller that waits longer
+   * should say so, or the navigation gives up before the caller does.
    */
-  async navigate(viewId: string, input: string): Promise<boolean> {
+  async navigate(viewId: string, input: string, timeoutMs = isServerMode() ? LOAD_URL_TIMEOUT : undefined): Promise<boolean> {
     const view = this.views.get(viewId)
     if (!view) return false
 
@@ -494,7 +565,7 @@ class BrowserPageManager {
         console.warn('[Browser] Compatibility setup failed; continuing navigation without optional APIs', { viewId, errorType: error instanceof Error ? error.name : typeof error })
       }
       if (this.views.get(viewId) !== view || view.webContents.isDestroyed()) return false
-      await view.webContents.loadURL(url)
+      await loadUrlBounded(view.webContents, url, timeoutMs)
 
       return true
     } catch (error) {
@@ -756,12 +827,19 @@ class BrowserPageManager {
       this.emitStateChangeImmediate(viewId)
     })
 
+    // The attachment page's late did-finish-load can arrive after the real
+    // navigation started, so only did-stop-loading may clear the loading flag.
+    wc.on('did-stop-loading', () => {
+      if (!isCurrent()) return
+      this.updateState(viewId, { isLoading: false })
+      this.emitStateChangeImmediate(viewId)
+    })
+
     // Navigation finished - immediate emit for responsive UI feedback
     wc.on('did-finish-load', () => {
       if (!isCurrent()) return
       removeAttachmentHistory()
       this.updateState(viewId, {
-        isLoading: false,
         canGoBack: wc.navigationHistory.canGoBack(),
         canGoForward: wc.navigationHistory.canGoForward(),
         error: undefined,
@@ -928,11 +1006,19 @@ class BrowserPageManager {
    */
   private doEmitStateChange(viewId: string) {
     const state = this.states.get(viewId)
-    if (state && this.mainWindow && !this.mainWindow.isDestroyed()) {
+    if (!state) return
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send('browser:state-change', {
         viewId,
         state: { ...state },
       })
+    }
+    for (const listener of this.stateListeners) {
+      try {
+        listener(viewId)
+      } catch (error) {
+        console.error(`[Browser] view-state listener failed for ${viewId}:`, error)
+      }
     }
   }
 

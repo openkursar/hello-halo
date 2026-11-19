@@ -29,17 +29,24 @@ function firstValidInteger(max: number, ...values: unknown[]): number | undefine
 }
 
 /**
- * Only ever reports a positive. `input_modalities` is not an OpenAI-spec
- * field, so a list that omits "image" is just as likely to be an incomplete
- * gateway stub as a real statement of absence — reporting `false` from it
- * would override the id heuristic and silently strip a working model's
- * images. Absence leaves that heuristic in charge.
+ * Only ever reports a positive. Modality lists are not an OpenAI-spec field,
+ * so a list that omits "image" is just as likely to be an incomplete gateway
+ * stub as a real statement of absence — reporting `false` from it would
+ * override the id heuristic and silently strip a working model's images.
+ * Absence leaves that heuristic in charge.
  */
 function inferVisionSupport(modalities: unknown): true | undefined {
   if (!Array.isArray(modalities)) return undefined
   return modalities.some(
     value => typeof value === 'string' && value.toLowerCase() === 'image'
   ) || undefined
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value
+  }
+  return undefined
 }
 
 export function parseCatalogModelCapabilities(raw: unknown): CatalogModelCapability | undefined {
@@ -72,15 +79,20 @@ export function parseCatalogModelOption(raw: unknown): ModelOption | undefined {
   const obj = raw as Record<string, unknown>
   if (typeof obj.id !== 'string' || !obj.id.trim()) return undefined
 
+  // Gateways use several shapes for the same two facts: OpenRouter nests the
+  // modality list under `architecture`, flat lists use `input_modalities`, and
+  // OpenAI-compatible gateways (e.g. local model routers) use `modalities.input`.
   const supportsVision =
     inferVisionSupport(readNested(obj, ['architecture', 'input_modalities']))
     ?? inferVisionSupport(obj.input_modalities)
+    ?? inferVisionSupport(readNested(obj, ['modalities', 'input']))
   const capabilities = parseCatalogModelCapabilities(obj)
   const id = obj.id.trim()
+  const name = firstNonEmptyString(obj.name, obj.display_name, obj.displayName) ?? id
 
   return {
     id,
-    name: typeof obj.name === 'string' && obj.name.trim() ? obj.name : id,
+    name,
     ...(supportsVision ? { supportsVision } : {}),
     ...(capabilities ? { capabilities } : {})
   }

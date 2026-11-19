@@ -86,6 +86,17 @@ describe('TelemetryProvider', () => {
       await provider.init('user-001')
     })
 
+    it('keeps server event bodies out of HTTP diagnostics', async () => {
+      vi.stubEnv('HALO_SERVER_MODE', '1')
+      try {
+        await provider.track({ name: 'app.launch', timestamp: 1 }, { ...makeContext(), runtimeMode: 'server' })
+        await provider.destroy()
+        expect(mockFetch.mock.lastCall?.[2]).toEqual({ privateDiagnostics: true })
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
     it('should enqueue events', async () => {
       await provider.track(
         { name: 'app.installed', properties: { appId: 'a1', specId: 's1', version: '1.0', type: 'automation' } },

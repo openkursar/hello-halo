@@ -417,6 +417,44 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     icon: 'cloud'
   },
   {
+    id: 'runcrate',
+    name: 'Runcrate',
+    authType: 'api-key',
+    apiUrl: 'https://api.runcrate.ai/v1',
+    modelsUrl: 'https://api.runcrate.ai/v1/models',
+    models: [
+      { id: 'deepseek-ai/DeepSeek-V4.1-Flash', name: 'DeepSeek V4.1 Flash' },
+      { id: 'moonshotai/Kimi-K2.6', name: 'Kimi K2.6' },
+      { id: 'zai-org/GLM-5.3', name: 'GLM 5.3' },
+      { id: 'Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo', name: 'Qwen3 Coder 480B A35B' },
+      { id: 'openai/gpt-oss-120b', name: 'gpt-oss 120B' }
+    ],
+    description: 'Runcrate OpenAI-compatible API for open-weight models',
+    website: 'https://runcrate.ai/',
+    region: 'global',
+    icon: 'server',
+    notes: 'The /v1/models catalog also lists image, audio and video models. Model list fetched dynamically'
+  },
+  {
+    id: 'standardcompute',
+    name: 'Standard Compute',
+    authType: 'api-key',
+    apiUrl: 'https://api.stdcmpt.com/v1',
+    modelsUrl: 'https://api.stdcmpt.com/v1/models',
+    models: [
+      { id: 'StandardCompute', name: 'StandardCompute (routed)' },
+      { id: 'anthropic/claude-sonnet-5.5', name: 'Claude Sonnet 5.5' },
+      { id: 'openai/gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+      { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
+      { id: 'z-ai/glm-5.3', name: 'GLM 5.3' },
+      { id: 'moonshotai/kimi-k3', name: 'Kimi K3' }
+    ],
+    description: 'Standard Compute OpenAI-compatible LLM gateway',
+    website: 'https://standardcompute.com/',
+    region: 'global',
+    icon: 'route'
+  },
+  {
     id: 'requesty',
     name: 'Requesty',
     authType: 'api-key',

@@ -125,6 +125,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   onApiConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
   onNetworkConfigChange: vi.fn(),
+  onAiSourcesConfigChange: vi.fn(),
 }))
 // The space the chat's record is kept in, so the clear empties it (on a held write).
 vi.mock('../../../../src/main/services/space.service', () => ({
@@ -161,6 +162,7 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   copySessionJsonl,
   loadChatSessionId: vi.fn(() => 'original-sdk-session'),
   deleteChatSessionId: vi.fn(),
+  deleteTranscriptImages: vi.fn(),
 }))
 vi.mock('../../../../src/main/apps/conversation-mcp', () => ({
   createHaloAppsMcpServer: vi.fn(),

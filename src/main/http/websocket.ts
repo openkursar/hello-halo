@@ -14,6 +14,7 @@ import { getTeamStore } from '../apps/team'
 import { parseTeamSessionKey } from '../../shared/apps/im-keys'
 import { shouldDeliverAgentEvent } from '../../shared/agent-event-visibility'
 import { clearDetailConversations, setDetailConversations } from '../services/conversation-detail'
+import { isServerMode } from '../foundation/runtime-mode'
 
 // The credential a client authenticated with. Drives per-credential event
 // visibility: remote-control sees everything (unchanged); office-member is
@@ -110,6 +111,23 @@ export function sendFederationFrameToClient(clientId: string, frame: unknown): b
   const client = clients.get(clientId)
   if (!client || client.ws.readyState !== WebSocket.OPEN) return false
   client.ws.send(JSON.stringify({ type: 'federation', payload: frame }))
+  return true
+}
+
+/**
+ * Send one event to a specific connected client. Used where a payload is for
+ * the one client that asked for it and nobody else — a watched browser page's
+ * frames, which are far too large to broadcast. Returns false when the client
+ * is gone or not writable, which the sender reads as a dead viewer.
+ */
+export function sendEventToClient(clientId: string, channel: string, data: Record<string, unknown>): boolean {
+  const client = clients.get(clientId)
+  if (!client || !client.authenticated || client.ws.readyState !== WebSocket.OPEN) return false
+  if (channel === 'browser:live-frame' && client.ws.bufferedAmount > 4 * 1024 * 1024) {
+    sendToClient(client, { type: 'event', channel: 'browser:live-stopped', data: { viewId: data.viewId, reason: 'stalled' } })
+    return false
+  }
+  client.ws.send(JSON.stringify({ type: 'event', channel, data }))
   return true
 }
 
@@ -223,7 +241,7 @@ export function initWebSocket(server: any): WebSocketServer {
     ws.on('close', (code: number, reason: Buffer) => {
       clients.delete(clientId)
       clearDetailConversations(`ws:${clientId}`)
-      releaseTerminalAttachments(clientId)
+      releaseViewerAttachments(clientId)
       const why = reason?.length ? reason.toString() : ''
       console.log(`[WS] Client disconnected: ${clientId} code=${code}${why ? ` reason=${why}` : ''}`)
     })
@@ -233,7 +251,7 @@ export function initWebSocket(server: any): WebSocketServer {
       console.error(`[WS] Client error ${clientId}:`, error)
       clients.delete(clientId)
       clearDetailConversations(`ws:${clientId}`)
-      releaseTerminalAttachments(clientId)
+      releaseViewerAttachments(clientId)
     })
   })
 
@@ -309,13 +327,17 @@ function resolveReentrySession(
 }
 
 /**
- * A vanished client must stop gating terminal flow control, or its unacked
- * backlog would pause a pty forever (see ai-terminal/flow-control.ts).
+ * A vanished client must stop gating everything it was watching: its unacked
+ * terminal backlog would pause a pty forever (see ai-terminal/flow-control.ts),
+ * and an unacked browser frame would hold that page's frame lease open.
  */
-function releaseTerminalAttachments(clientId: string): void {
+function releaseViewerAttachments(clientId: string): void {
   void import('../services/ai-terminal').then(({ terminalViewerDisconnected }) => {
     terminalViewerDisconnected(clientId)
   }).catch(() => { /* terminal module unavailable on this platform */ })
+  if (isServerMode()) void import('../services/browser-live').then(({ browserLiveViewerDisconnected }) => {
+    browserLiveViewerDisconnected(clientId)
+  }).catch(() => console.warn('[WS] Could not release remote browser attachments'))
 }
 
 /**
@@ -390,7 +412,9 @@ function handleClientMessage(
       } else if (typeof token === 'string' && authenticateWebSocket(token, client.ip)) {
         client.authenticated = true
         client.credential = { type: 'remote-control' }
-        sendToClient(client, { type: 'auth:success' })
+        sendToClient(client, isServerMode()
+          ? { type: 'auth:success', payload: { browserLive: true } }
+          : { type: 'auth:success' })
         console.log(`[WS] Client ${client.id} authenticated successfully`)
         break
       }
@@ -567,9 +591,96 @@ function handleClientMessage(
       break
     }
 
+    // Watching a browser page this client cannot host itself. Frames go only to
+    // the client that asked, so delivery is per-client rather than broadcast,
+    // and a failed send is how the stream learns this viewer is gone.
+    // Only a server offers this: a desktop's pages are on its own screen, and a
+    // remote client of a desktop keeps the plain link fallback.
+    case 'browser-live-attach': {
+      if (!client.authenticated) {
+        sendToClient(client, { type: 'error', error: 'Not authenticated' })
+        break
+      }
+      const viewId = message.payload?.viewId
+      if (typeof viewId !== 'string') break
+      if (!isServerMode()) {
+        sendEventToClient(client.id, 'browser:live-stopped', { viewId, reason: 'unsupported' })
+        break
+      }
+      if (!mayUseBrowserLive(client)) {
+        sendEventToClient(client.id, 'browser:live-stopped', { viewId, reason: 'unavailable' })
+        break
+      }
+      void Promise.all([import('../services/browser-live'), import('../services/ai-browser')]).then(([{ browserLiveAttach }, { isLiveConversationPage }]) => {
+        if (clients.get(client.id) !== client || client.ws.readyState !== WebSocket.OPEN || !mayUseBrowserLive(client)) return
+        const started = isLiveConversationPage(viewId) && browserLiveAttach(viewId, {
+          viewerId: client.id,
+          frame: (frame) => sendEventToClient(client.id, 'browser:live-frame', frame as unknown as Record<string, unknown>),
+          stopped: (stopped) => { sendEventToClient(client.id, 'browser:live-stopped', stopped as unknown as Record<string, unknown>) },
+        })
+        if (!started) sendEventToClient(client.id, 'browser:live-stopped', { viewId, reason: 'gone' })
+      }).catch(() => {
+        sendEventToClient(client.id, 'browser:live-stopped', { viewId, reason: 'unavailable' })
+      })
+      break
+    }
+
+    case 'browser-live-detach': {
+      if (!mayUseBrowserLive(client)) break
+      const viewId = message.payload?.viewId
+      if (typeof viewId !== 'string') break
+      void import('../services/browser-live').then(({ browserLiveDetach }) => {
+        browserLiveDetach(viewId, client.id)
+      }).catch(() => { /* nothing was streaming */ })
+      break
+    }
+
+    case 'browser-live-ack': {
+      if (!mayUseBrowserLive(client)) break
+      const viewId = message.payload?.viewId
+      const seq = message.payload?.seq
+      if (typeof viewId !== 'string' || typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq <= 0) break
+      void import('../services/browser-live').then(({ browserLiveAck }) => {
+        browserLiveAck(viewId, client.id, seq)
+      }).catch(() => { /* nothing was streaming */ })
+      break
+    }
+
+    case 'browser-live-detail': {
+      if (!mayUseBrowserLive(client)) break
+      const viewId = message.payload?.viewId
+      if (typeof viewId !== 'string') break
+      const scope = message.payload?.scope === 'page' ? 'page' : 'screen'
+      void import('../services/browser-live').then(({ browserLiveRequestDetail }) => {
+        browserLiveRequestDetail(viewId, client.id, scope)
+      }).catch(() => { /* nothing was streaming */ })
+      break
+    }
+
+    case 'browser-live-input': {
+      if (!mayUseBrowserLive(client)) break
+      const viewId = message.payload?.viewId
+      if (typeof viewId !== 'string') break
+      void import('../services/browser-live').then(({ browserLiveInput }) => {
+        browserLiveInput(viewId, client.id, message.payload?.input)
+      }).catch(() => { /* nothing was streaming */ })
+      break
+    }
+
     default:
       console.log(`[WS] Unknown message type: ${message.type}`)
   }
+}
+
+/**
+ * Whether a client may watch or operate a browser page. A page shows whatever
+ * the AI has signed into, so watching is as privileged as operating: only the
+ * install's owner (remote-control) qualifies. An office-member session is a
+ * peer node or a team viewer and never reaches a page, whatever view id it
+ * names. Server mode only, see the attach case.
+ */
+function mayUseBrowserLive(client: WebSocketClient): boolean {
+  return client.authenticated && client.credential?.type === 'remote-control' && isServerMode()
 }
 
 /**
@@ -662,6 +773,14 @@ export function getClientCount(): number {
 /**
  * Get authenticated client count
  */
+export function disconnectRemoteControlClients(): void {
+  for (const client of clients.values()) {
+    if (client.credential?.type !== 'remote-control') continue
+    client.authenticated = false
+    client.ws.close(1008, 'Access code changed')
+  }
+}
+
 export function getAuthenticatedClientCount(): number {
   let count = 0
   for (const client of Array.from(clients.values())) {

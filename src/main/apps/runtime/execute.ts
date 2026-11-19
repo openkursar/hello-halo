@@ -526,6 +526,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       runId,
       sessionKey,
       notificationLevel: app.userOverrides.notificationLevel,
+      workDir,
       plansDir,
       canComplete: () => agentExecution.canComplete(),
       onReported: () => { reportedAt = agentExecution.inputRevision },
@@ -772,6 +773,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       onSessionId: persistEngineSession,
       reportSaved: () => reportedAt === agentExecution.inputRevision,
       onSent: () => { if (!opensWithSlashCommand(initialMessage)) workspaceNotice.delivered() },
+      spaceId: app.spaceId ?? undefined,
     }
     let streamResult = await processStream(
       formatReferencesBlock(followupReferences, workDir)

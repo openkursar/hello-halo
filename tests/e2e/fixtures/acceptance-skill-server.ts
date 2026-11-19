@@ -205,7 +205,7 @@ export const test = base.extend<{ skillServer: SkillServer; useScriptedModel: bo
         expect(observed.userData.startsWith(`${profile}/`) || observed.userData.startsWith(`${profile}\\`)).toBe(true)
         expect(observed.appData.startsWith(`${profile}/`) || observed.appData.startsWith(`${profile}\\`)).toBe(true)
         expect(observed.windows.every(window => !window.visible), 'Production server mode must not display any Electron window').toBe(true)
-        expect(observed.network.listens.some(item => item.requestedHost === '0.0.0.0' && item.address?.port === port)).toBe(true)
+        expect(observed.network.listens.some(item => item.requestedHost === '127.0.0.1' && item.address?.port === port)).toBe(true)
         expect(observed.network.listens.filter(item => item.address).every(item => ['127.0.0.1', '::1'].includes(item.address!.address))).toBe(true)
         return observed
       }
@@ -214,7 +214,10 @@ export const test = base.extend<{ skillServer: SkillServer; useScriptedModel: bo
         try {
           app = await launchElectronApp(wrappedEntry, profile, {
             bootstrapDirectory: project,
-            env: { ...environment, HALO_SERVER_MODE: '1', HALO_SERVER_PORT: String(port), PORT: '', HALO_REMOTE_PASSWORD: token },
+            env: {
+            ...environment, HALO_SERVER_MODE: '1', HALO_SERVER_PORT: String(port), PORT: '', HALO_REMOTE_PASSWORD: token,
+            ELECTRON_RENDERER_URL: 'http://127.0.0.1:5173',
+          },
           })
         } catch (error) { launchWithoutHandle = true; throw error }
         applications.push(trackManagementApp(app, true))
@@ -262,7 +265,7 @@ export const test = base.extend<{ skillServer: SkillServer; useScriptedModel: bo
       expect(observed.network.rendererConnections, 'The real HTTP server must proxy the built renderer, not a developer Vite process').toBeGreaterThan(0)
       await info.attach('skill-server-boundary', { body: JSON.stringify({
         main: entry, renderer: join(project, 'out/renderer'), browser: executablePath, headless: true,
-        productionListenHost: '0.0.0.0', fixtureListenHost: '127.0.0.1', developerProxyPort: 5173, isolatedRendererPort: rendererPort,
+        fixtureListenHost: '127.0.0.1', developerProxyPort: 5173, isolatedRendererPort: rendererPort,
         handlerReplacement: false, authReplacement: false, authPreseed: 'temporary Bearer token plus renderer cookie/localStorage',
         modelRequests: model ? 'scripted loopback endpoint; production engine and handlers unchanged' : 'none', trash: 'cancel only; later external removal is inside the disposable profile',
       }, null, 2), contentType: 'application/json' })

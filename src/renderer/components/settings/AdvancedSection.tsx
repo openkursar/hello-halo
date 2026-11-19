@@ -118,11 +118,12 @@ const CAPABILITY_GROUPS: readonly CapabilityGroup[] = [
 // ─── Component ──────────────────────────────────────────────────────────────────
 
 interface AdvancedSectionProps {
+  localRuntimeSetup?: boolean
   config: HaloConfig | null
   setConfig: (config: HaloConfig) => void
 }
 
-export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
+export function AdvancedSection({ config, setConfig, localRuntimeSetup = true }: AdvancedSectionProps) {
   const { t } = useTranslation()
 
   const configuredEngine = config?.agent?.sdkEngine === 'anthropic' && !hasExplicitCcSelection(config.agent.ccRuntime, config.aiSources)
@@ -449,6 +450,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
 
           <div className="space-y-2">
             {ENGINE_IDS.map(engineId => {
+              if (!localRuntimeSetup && (engineId === 'anthropic' || engineId === 'codex')) return null
               const copy = ENGINE_COPY[engineId]
               // The active engine stays selectable even if its runtime went
               // missing, so the user is never locked out of their own setting.

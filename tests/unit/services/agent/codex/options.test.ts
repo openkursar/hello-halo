@@ -6,7 +6,7 @@ import type { ApiCredentials } from '../../../../../src/main/services/agent/type
 
 const state = vi.hoisted(() => ({
   haloDir: '', getApiCredentials: vi.fn(), ensureRouter: vi.fn(), prepareMcp: vi.fn(),
-  network: {} as { proxy?: string; noProxy?: string },
+  network: {} as { proxy?: string; noProxy?: string; proxyOnly?: string[] },
 }))
 vi.mock('../../../../../src/main/foundation/config.service', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../../../src/main/foundation/config.service')>()
@@ -217,6 +217,21 @@ describe('Codex proxy environment', () => {
 
     expect(resolved.env.NO_PROXY).toBe('localhost,127.0.0.1,[::1],corp.example.com,10.0.0.0/8,.weixin.qq.com')
     expect(resolved.env.no_proxy).toBe(resolved.env.NO_PROXY)
+    state.network = {}
+  })
+
+  it('sends the remote MCP servers a server\'s proxyOnly leaves out direct', async () => {
+    vi.stubEnv('HALO_SERVER_MODE', '1')
+    state.network = { proxy: 'http://127.0.0.1:7890', proxyOnly: ['*.weixin.qq.com'] }
+    const mcpServers = {
+      docs: { type: 'http', url: 'https://mcp.corp.example/mcp' },
+      wecom: { type: 'http', url: 'https://mcp.weixin.qq.com/mcp' },
+      local: { command: 'node' },
+    }
+
+    const resolved = await resolveCodexOptions({ cwd: '/work', env: {}, apiCredentials: credentials(), mcpServers })
+
+    expect(resolved.env.NO_PROXY).toBe('localhost,127.0.0.1,[::1],mcp.corp.example:443')
     state.network = {}
   })
 })

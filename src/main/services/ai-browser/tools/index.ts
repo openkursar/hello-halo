@@ -23,8 +23,10 @@
  */
 
 import type { BrowserContext } from '../context'
+import { isServerMode } from '../../../foundation/runtime-mode'
 import { buildNavigationTools } from './navigation'
 import { buildInputTools } from './input'
+import { textResult } from './helpers'
 import { buildSnapshotTools } from './snapshot'
 import { buildScriptTools } from './script'
 import { buildTabTools } from './tab'
@@ -37,13 +39,35 @@ import { buildDownloadTools } from './download'
  * (scoped activeViewId) while sharing the same browserViewManager session.
  */
 export function buildAllTools(ctx: BrowserContext) {
-  return [
+  const tools = [
     ...buildNavigationTools(ctx),  // 2 tools: navigate, wait_for
-    ...buildInputTools(ctx),       // 5 tools: click, fill, hover, press_key, upload_file
+    ...buildInputTools(ctx),       // 5 tools: click, fill, hover, press_key, upload_file (+ fill_secret on a server)
     ...buildSnapshotTools(ctx),    // 3 tools: snapshot, screenshot, evaluate
     ...buildScriptTools(ctx),      // 1 tool:  run
     ...buildTabTools(ctx),         // 1 tool:  tab
     ...buildInspectTools(ctx),     // 1 tool:  inspect
     ...buildDownloadTools(ctx),    // 1 tool:  download
   ]
+  // Only a remote live view (server mode) lets a person operate a page from
+  // outside its window, so only there can a tool result need the notice.
+  return isServerMode() ? tools.map(definition => withUserInputNotice(ctx, definition)) : tools
+}
+
+interface ToolDefinition {
+  name: string
+  handler: (args: unknown, extra: unknown) => Promise<{ content?: unknown[] } | undefined>
+}
+
+/** Do not run an action chosen before the person touched the page. */
+function withUserInputNotice<T extends ToolDefinition>(ctx: BrowserContext, definition: T): T {
+  return {
+    ...definition,
+    handler: async (args: unknown, extra: unknown) => {
+      const notice = ctx.takeUserInputNotice()
+      if (notice && definition.name !== 'browser_snapshot') return textResult(notice, true)
+      const result = await definition.handler(args, extra)
+      if (!notice || !result) return result
+      return { ...result, content: [...(result.content ?? []), { type: 'text', text: notice }] }
+    },
+  }
 }

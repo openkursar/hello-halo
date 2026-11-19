@@ -11,10 +11,8 @@ export interface TurnGateHooks<TJob> {
 }
 export interface TurnGateOptions<TJob> {
     bufferCap?: number;
-    trace?: (message: string) => void;
     recheckMs?: number;
     reservationTtlMs?: number;
-    describeJob?: (job: TJob) => string;
     retryDispatch?: (error: unknown, job: TJob) => boolean;
     getCoalescingKey?: (job: TJob) => string | undefined;
     onDiscard?: (job: TJob, reason: string) => void;

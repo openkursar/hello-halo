@@ -255,6 +255,8 @@ serving that digital human or fronting its team:
 `tool()` + `createSdkMcpServer()`, same pattern as
 `services/ai-browser/sdk-mcp-server.ts`. Memory uses native file tools, not an MCP server.
 
+A server report may link an existing readable file inside the turn's working directory. Team turns also apply their live file-export restrictions before saving a report. A denied or missing file leaves the report unsaved; the tool never copies host files into a workspace. The desktop retains its local file links.
+
 **Rationale**:
 - Consistent with existing Halo patterns for injecting custom tools.
 - SDK MCP servers are first-class citizens in V2 sessions.
@@ -1231,6 +1233,23 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   Writers use `SessionWriter.writeTrigger(content, images, teamOrigin, provenance)`
   / `TurnSink.writeUserMessage(...)`, and write the text to *show*, not the
   framed text the model received.
+- **Reply endings.** When a turn ends before its answer was done (stopped,
+  cut off, or at the step limit — `services/agent` `replyEndingOf`, the same
+  decision as the end-of-turn notice), the chat sink appends a `reply_ending`
+  line and the reader sets `metadata.ending` on that turn's last reply, so the
+  chat still says so after a reload. The line also carries the text the reply
+  had shown (`content`): text cut off mid-block never reaches a complete
+  `assistant` line, so the reader makes those words the reply's (a reply
+  started for them when the turn wrote none; earlier saved words stay among
+  its steps). The line ends the native turn, so a later turn that fails before
+  it starts cannot take this reply as its own draft. A turn that showed and
+  wrote nothing marks nothing; a failure stays the reply's `error`. Automation
+  runs keep this on the run's own status instead. Office viewers receive the
+  ending with the member's serialized transcript (`ending`, the only metadata
+  that crosses), and accept only the values they know. Known limit: when a
+  large transcript is read a page at a time and a person's addition lies
+  between a reply and its `reply_ending` line exactly at the page boundary,
+  the earlier page shows that reply without its ending.
 - **Pushes.** A `push` line (§2.14a) reads as an assistant message with
   `source: 'push'`, `metadata.pushVia`, and the sender when it is not the chat's
   own digital human (`pushedByAppId` / `pushedByName`). Its writer never puts one among a
@@ -2385,6 +2404,15 @@ checks, file guards, execution and audit records.
   - the folder of each skill the turn may load is readable, read only, whatever
     the reading switches say: a skill reads its own instructions and references
     as it runs, and a global skill lives outside the workspace.
+  - the extracted text of a bound knowledge base is readable the same way, read
+    only, but only when its owner turned on "Let guests read its documents"
+    (`allowGuestRead`, off by default, set through the internal
+    `PUT /api/tlon/:kbId/guest-read`, which the model cannot call); without it
+    the grant adds no read access; the prompt may still include names and
+    short excerpts. The file grant is captured at the start of a restricted
+    turn. Changes affect subsequent turns, not work already in progress or
+    content already delivered. A borrowed turn does
+    not carry this digital human's grant: it reads what its lender could.
   - a file tool (Write, Edit, MultiEdit, NotebookEdit) never writes what an
     engine, or git that it runs, reads as settings, hooks or standing
     instructions, granted Write or not, memory included: `.claude/`,

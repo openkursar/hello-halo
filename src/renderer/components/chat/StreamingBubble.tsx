@@ -23,7 +23,6 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { MarkdownRenderer } from './MarkdownRenderer'
-import { useTranslation } from '../../i18n'
 import type { Thought } from '../../types'
 
 interface StreamingBubbleProps {
@@ -42,7 +41,6 @@ export function StreamingBubble({
   // DOM refs for measuring heights
   const historyRef = useRef<HTMLDivElement>(null)  // Contains all past segments
   const currentRef = useRef<HTMLDivElement>(null)  // Contains current (new) content
-  const { t } = useTranslation()
 
   // State for scroll animation
   const [segments, setSegments] = useState<string[]>([])     // Saved content snapshots
@@ -218,14 +216,10 @@ export function StreamingBubble({
   const containerHeight = currentHeight > 0 ? currentHeight : 'auto'
 
   // Typography, radius and padding must match the settled bubble in MessageItem —
-  // this bubble is swapped out for that one the instant the run ends.
+  // this bubble is swapped out for that one the instant the run ends. That the
+  // reply is still working is said once, by the work line above it.
   return (
     <div className="rounded-lg pb-3 message-assistant message-working w-full overflow-hidden">
-      {/* Working indicator */}
-      <div className="flex items-center gap-1.5 mb-1 working-indicator-fade">
-        <span className="text-xs text-faint-foreground">{t('Halo is working')}</span>
-      </div>
-
       {/* Viewport - height matches current content only
            CSS transitions only enabled during segment scroll animation (GPU perf).
            During normal streaming, height changes are instant to avoid layout thrashing. */}
@@ -252,9 +246,6 @@ export function StreamingBubble({
             <MarkdownRenderer content={displayContent} mode="streaming" />
             {isStreaming && (
               <span className="inline-block w-0.5 h-5 ml-0.5 bg-primary streaming-cursor align-middle" />
-            )}
-            {!isStreaming && (
-              <span className="waiting-dots ml-1 text-muted-foreground/60" />
             )}
           </div>
         </div>

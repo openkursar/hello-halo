@@ -2,7 +2,7 @@
  * Thought Utilities - Shared utilities for thought display components
  *
  * Provides consistent styling, icons, labels and formatting for thought items
- * across ThoughtProcess (real-time) and CollapsedThoughtProcess (history) components.
+ * across the live and saved work of a reply (ThoughtProcess, CollapsedThoughtProcess).
  */
 
 import {
@@ -18,12 +18,6 @@ import {
 } from 'lucide-react'
 import { getToolIcon } from '../icons/ToolIcons'
 import type { Thought } from '../../types'
-
-// i18n static keys for extraction (DO NOT REMOVE)
-// prettier-ignore
-void function _i18nThoughtKeys(t: (k: string) => string) {
-  t('Thinking'); t('Tool call'); t('Tool result'); t('System'); t('Error'); t('Complete')
-}
 
 // ============================================
 // Nested tool grouping
@@ -58,10 +52,10 @@ export function groupChildThoughts(
 }
 
 // ============================================
-// Thought panel model
+// Work model
 // ============================================
 
-/** What the thought panel draws, live or saved, derived from a turn's steps. */
+/** What a reply's work is drawn from, live or saved, derived from a turn's steps. */
 export interface ThoughtPanelModel {
   /** The steps it was derived from. */
   readonly thoughts: readonly Thought[]
@@ -227,33 +221,6 @@ export function getThoughtIcon(type: Thought['type'], toolName?: string): Lucide
   }
 }
 
-
-/**
- * Get display label for thought type
- *
- * @param type - Thought type
- * @returns Display label string (English, not translated)
- */
-export function getThoughtLabelKey(type: Thought['type']): string {
-  switch (type) {
-    case 'thinking':
-      return 'Thinking'
-    case 'tool_use':
-      return 'Tool call'
-    case 'tool_result':
-      return 'Tool result'
-    case 'text':
-      return 'AI'
-    case 'system':
-      return 'System'
-    case 'error':
-      return 'Error'
-    case 'result':
-      return 'Complete'
-    default:
-      return 'AI'
-  }
-}
 
 // ============================================
 // Tool Input Formatting

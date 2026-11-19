@@ -280,7 +280,9 @@ export const teamApi = {
 
   /**
    * Join an office hosted elsewhere, bringing local digital humans (joiner).
-   * Desktop-only: it needs local apps and an outbound federation connection.
+   * The apps and the outbound federation connection belong to the node, not to
+   * the client driving it, so a remotely driven (e.g. headless) node joins over
+   * HTTP.
    */
   teamJoinOffice: async (input: {
     officeId: string
@@ -289,7 +291,8 @@ export const teamApi = {
     bringAppIds: string[]
   }): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamJoinOffice(input)
-    return { success: false, error: 'DESKTOP_ONLY' }
+    const { officeId, ...body } = input
+    return httpRequest('POST', `/api/teams/${encodeURIComponent(officeId)}/join`, body)
   },
 
   /**
@@ -298,7 +301,7 @@ export const teamApi = {
    */
   teamLeaveOffice: async (officeId: string, appIds?: string[]): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamLeaveOffice({ officeId, ...(appIds ? { appIds } : {}) })
-    return { success: false, error: 'DESKTOP_ONLY' }
+    return httpRequest('POST', `/api/teams/${encodeURIComponent(officeId)}/leave`, appIds ? { appIds } : undefined)
   },
 
   /**

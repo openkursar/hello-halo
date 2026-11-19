@@ -154,6 +154,8 @@ src/
 │       ├── ai-browser/                # AI Browser + tools/
 │       ├── ai-terminal/              # AI Terminal (pty + xterm headless + MCP tools). See ai-terminal/DESIGN.md
 │       ├── ai-sources/                # Multi-provider auth + providers/
+│       ├── browser-live/              # Watching a server's browser page from a remote client
+│       │                              #   (server mode only). See browser-live/DESIGN.md
 │       ├── analytics/                 # Usage analytics
 │       ├── api-ref/                   # `halo_api_ref` toolset — the manual for Halo's own
 │       │                              #   HTTP API, generated at build time into
@@ -244,6 +246,8 @@ src/
     │   ├── chat/                      #   Chat stream + tool-result/ + transcript/ (native
     │   │                              #   transcript scrolling for every chat surface — no
     │   │                              #   list virtualization; see transcript/DESIGN.md)
+    │   │                              #   + work-history/ (a reply's folded work: words first,
+    │   │                              #   operations on request; see work-history/DESIGN.md)
     │   ├── ai-config/                 #   Model/source controls: ModelSelector + thinking
     │   │                              #   slider, quota ring, provider picker
     │   ├── layout/                    #   Header, NavRail, SpaceSelector, TaskPanel, etc.
@@ -665,6 +669,11 @@ identity, page state and ordinary website-child tab creation; `services/browser-
 Interactive and watchable AI pages share a permanent main-renderer host; pure
 automation and search use a minimal hidden host. Viewers only borrow presentation
 and may unmount without destroying pages. See `services/browser-host/DESIGN.md`.
+In server mode a remote client, which has no webview guest of its own, watches a
+page instead of hosting it: `services/browser-live` streams paced low-quality
+frames to an owner client that explicitly asked to watch, over WebSocket only.
+A desktop keeps its own webview and its remote clients keep the link fallback.
+See `services/browser-live/DESIGN.md`.
 `services/browser-input` owns keyboard/text delivery and operation-scoped frame
 routing. `BrowserInputOperation` holds the debugger resources and pressed input of
 one operation; opaque iframe DOM references select local isolated worlds or owned
@@ -1088,6 +1097,10 @@ event once, and releases all concurrent reads when registration is complete.
 It does not start domain services or poll for readiness.
 Remote mode: renderer -> HTTP/WS -> main.
 
+### MCP HTTP ingress (server mode)
+
+`http/mcp-proxy.ts` optionally forwards one exact `/mcp/<name>` path to a deployment-configured literal loopback HTTP endpoint. `HALO_MCP_PROXY_CONFIG` names a bounded, credential-free JSON file. It is read in server mode only; a desktop sharing Remote Access logs that it is ignored. Absent means no middleware, listener or timer. Invalid configuration refuses HTTP startup. The ingress is attached before body parsers, management authentication and frontend fallbacks; it forwards raw bounded streams, not Agent calls. Host and browser Origin are explicit allowlists, while the upstream validates the caller's Bearer and owns MCP sessions and tool permissions. Halo management credentials are never substituted. HTTP shutdown disposes active forwarding and its state timer. This does not launch or supervise the upstream. Deployment example: `deploy/server/mcp-proxy.example.json`.
+
 ### 17.1 Self-API (the agent operating Halo)
 
 A third consumer of the same routes: the agent itself, over a loopback-only
@@ -1225,6 +1238,7 @@ When touching a module, read its design doc first:
 - `src/main/services/updater/DESIGN.md` — Auto-update: the two apply paths, why staged update descriptions are signed at build time, and the reversal contract with the native helper
 - `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session, including the self-API switch — see §17.1)
 - `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer)
+- `src/main/services/browser-live/DESIGN.md` — Watching a server's browser page from a remote client: server-only scope, owner-only access, explicit opt-in, frame pacing, the stop reasons, and why control is WebSocket-only
 - `src/main/services/git/DESIGN.md` — Git for the changes view: how git is run and located (Windows included), the request gate, compare scopes, snapshots, writes, measured costs
 - `src/main/services/code-review/DESIGN.md` — Starting an AI review of a repository's changes as a background conversation, its built-in task, and the latest review per repository
 - `src/main/services/conversation-interop/DESIGN.md` — Cross-conversation read/send/wait: delivery rules, circuit breaker, and the `ConversationSource` contract (space conversations built in, digital-human chats registered by `apps/runtime`)

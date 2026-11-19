@@ -196,6 +196,8 @@ export interface Thought {
   // Stored parent thought ID for nested tool messages; absent for top-level messages.
   parentToolUseId?: string
   taskProgress?: TaskProgress
+  /** On a `system` step: the engine compacted the context here. */
+  compaction?: { trigger: 'manual' | 'auto' }
 }
 
 /** Progress reported by an external engine for a tool's background task. */

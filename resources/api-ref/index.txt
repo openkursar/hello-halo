@@ -160,11 +160,12 @@ POST   /api/teams/<teamId>/run                                     [ai]       te
 POST   /api/teams/<teamId>/pause                                   [ai]       team                    Stop all open runs of this team
 GET    /api/teams/<teamId>/triggers                                [ai]       team                    List a team's schedules and other triggers
 POST   /api/teams/<teamId>/triggers                                [ai]       team                    Add a schedule, file or WeCom trigger to a team, or change one
-POST   /api/teams/<teamId>/leave                                   [ai]       team                    Leave a team hosted on someone else's computer
+POST   /api/teams/<teamId>/leave                                   [ai]       team                    Withdraw selected local members or leave a team hosted on another computer
 GET    /api/teams/<teamId>/federation/presence                     [ai]       team                    See which computers of a shared team are online
 DELETE /api/teams/<teamId>/triggers/<triggerId>                    [ai]       team                    Remove a schedule or other trigger from a team
 POST   /api/store/query                                            [ai]       store                   Paginated search over store listings (primary browse endpoint)
 GET    /api/store/apps                                             [ai]       store                   List store listings (legacy, non-paginated; prefer POST /api/store/query)
+GET    /api/store/app-detail                                       [ai]       store                   Get full detail for one store listing by slug (preferred)
 GET    /api/store/apps/<slug>                                      [ai]       store                   Get full detail for one store listing by slug
 GET    /api/store/app-document                                     [ai]       store                   Get a listing's SKILL.md/README document
 POST   /api/store/install                                          [ai]       store                   Install an app from the store by slug
