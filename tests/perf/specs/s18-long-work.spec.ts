@@ -313,26 +313,71 @@ function saveSpan(fsOps: Array<{ op: string; path: string; start: number; end: n
   return { spanMs: end - start, ops: ops.length, writes: writes.length, ioMs: ops.reduce((sum, op) => sum + (op.end - op.start), 0) }
 }
 
-/** Opens the reply's work process and waits for its last step: milliseconds from the click. */
-async function expandTime(window: Page): Promise<number | null> {
-  const button = window.getByRole('button', { name: /^Already thought/ }).last()
+/** The folded line of a reply's work: "Work process" in the current view, "Already thought" in the one before it. */
+const WORK_HEADER = /^(Work process|Already thought)/
+
+/**
+ * Opens the reply's work process: milliseconds from the click until it shows
+ * what it opens to. The view before the folded timeline showed every step, so
+ * there it waits for the last step's file; the folded timeline shows one line
+ * per stretch, so it waits for the first of those.
+ */
+async function expandTime(window: Page): Promise<{ ms: number | null; view: 'timeline' | 'every-step' }> {
+  const button = window.getByRole('button', { name: WORK_HEADER }).last()
   await button.waitFor({ state: 'visible', timeout: 60000 })
   const handle = await button.elementHandle()
-  if (!handle) return null
+  if (!handle) return { ms: null, view: 'timeline' }
   return window.evaluate(async ({ element, marker }) => {
-    const row = (element as HTMLElement).closest('[data-transcript-index]') ?? document.body
+    const header = element as HTMLElement
+    const row = header.closest('[data-transcript-index]') ?? document.body
+    const everyStep = /^Already thought/.test(header.textContent ?? '')
     const start = performance.now()
-    ;(element as HTMLElement).click()
-    return await new Promise<number | null>((resolve) => {
+    header.click()
+    const ms = await new Promise<number | null>((resolve) => {
       const limit = start + 120000
       const check = () => {
-        if ((row as HTMLElement).innerText.includes(marker)) resolve(performance.now() - start)
+        const shown = everyStep
+          ? (row as HTMLElement).innerText.includes(marker)
+          : Array.from(row.querySelectorAll('button[aria-expanded]')).some(candidate => candidate !== header)
+        if (shown) resolve(performance.now() - start)
         else if (performance.now() > limit) resolve(null)
         else requestAnimationFrame(check)
       }
       requestAnimationFrame(check)
     })
+    return { ms, view: everyStep ? 'every-step' as const : 'timeline' as const }
   }, { element: handle, marker: LAST_FILE })
+}
+
+/** Opens the first stretch of the open work process: milliseconds until its steps are drawn; null where there is none to open. */
+async function openFirstStretch(window: Page): Promise<number | null> {
+  const row = window.locator('[data-transcript-index]').filter({ has: window.getByRole('button', { name: WORK_HEADER }) }).last()
+  const stretch = row.locator('button[aria-expanded="false"]').first()
+  if (!await stretch.count()) return null
+  const handle = await stretch.elementHandle()
+  if (!handle) return null
+  return window.evaluate(async (element) => {
+    const stretchLine = element as HTMLElement
+    const container = stretchLine.parentElement as HTMLElement
+    const start = performance.now()
+    stretchLine.click()
+    return await new Promise<number | null>((resolve) => {
+      const limit = start + 60000
+      const check = () => {
+        if (stretchLine.getAttribute('aria-expanded') === 'true' && container.querySelectorAll('button').length > 1) resolve(performance.now() - start)
+        else if (performance.now() > limit) resolve(null)
+        else requestAnimationFrame(check)
+      }
+      requestAnimationFrame(check)
+    })
+  }, handle)
+}
+
+/** Page size after a forced collection, so garbage not yet collected does not read as held memory. */
+async function settledView(cdp: CdpMetricsCollector) {
+  await cdp.collectGarbage()
+  const { heapMB, nodes, listeners } = await cdp.snapshot()
+  return { heapMB, nodes, listeners }
 }
 
 /** The app's own logs of a failed arm, kept beside the test output before the profile is removed. */
@@ -410,6 +455,14 @@ test(`S18 long work (${STEPS} steps)`, async ({}, testInfo) => {
     const crashCount = await readCrashCount(app).catch(() => 0)
     const unresponsiveCount = await readUnresponsiveCount(app)
 
+    // The turn's own view, folded as it ends; then the work opened with one stretch
+    // open. Last, so what opening reads from disk is not counted in the end-of-turn
+    // save or the bytes above.
+    const liveFolded = await settledView(cdp)
+    const liveExpand = await expandTime(window)
+    const liveStretchMs = await openFirstStretch(window)
+    const liveExpanded = await settledView(cdp)
+
     await app.close()
     steps.push({ label: 'closed', tMs: Date.now() - t0 })
     app = await launchElectronApp(appEntryPath, testConfigDir)
@@ -419,9 +472,12 @@ test(`S18 long work (${STEPS} steps)`, async ({}, testInfo) => {
     const reopenCdp = new CdpMetricsCollector(window)
     await reopenCdp.connect()
     const reopenedHeap = await reopenCdp.snapshot()
-    const expandMs = await expandTime(window)
+    const reopenedFolded = await settledView(reopenCdp)
+    const { ms: expandMs, view: workView } = await expandTime(window)
     const expandedHeap = await reopenCdp.snapshot()
-    if (expandMs === null) failures.push(`After relaunch the reply's work process did not show its last step (${LAST_FILE}) within 120 s.`)
+    const stretchMs = await openFirstStretch(window)
+    const reopenedExpanded = await settledView(reopenCdp)
+    if (expandMs === null) failures.push(`After relaunch the reply's work process did not open within 120 s.`)
     steps.push({ label: 'expanded', tMs: Date.now() - t0 })
 
     const status: PerfResult['status'] = failures.length ? 'precondition-failed' : 'ok'
@@ -460,6 +516,12 @@ test(`S18 long work (${STEPS} steps)`, async ({}, testInfo) => {
         endOfTurnSave: save,
         files: conversation ? { conversationBytes: conversation.conversationBytes, thoughtsBytes: conversation.thoughtsBytes, imagesBytes: conversation.imagesBytes } : null,
         reopen: { heapAfterOpenMB: reopenedHeap.heapMB, heapAfterExpandMB: expandedHeap.heapMB, expandMs, cold: true },
+        // Page size after a forced collection, in the two states of the work process.
+        workView: {
+          view: workView,
+          liveEnd: { folded: liveFolded, expanded: liveExpanded, expandMs: liveExpand.ms, openStretchMs: liveStretchMs },
+          reopened: { folded: reopenedFolded, expanded: reopenedExpanded, expandMs, openStretchMs: stretchMs },
+        },
       },
     }
     const filePath = writeResult(result)

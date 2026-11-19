@@ -117,12 +117,51 @@ not of what was measured, and the router was not changed.
 
 ---
 
+## On the folded work-process view
+
+The same scenario on two builds that both carry the new work-process view (live
+work folded, the timeline drawn only when opened, a stretch's steps drawn when it
+is opened, 50 at a time): `lwp-release` is the clean `release_v3.2` (`5143122c`),
+`lwp-merged` is this work merged into it (`f1b5fabb`). Both use the same SDK
+build, one build each, one run per size. The page is measured after a forced
+collection, in the turn's own window at the end of the turn and again after a
+cold restart, folded and then with the work opened and its first stretch opened.
+`results/w-{merged,release}/s18-long-work-{1000,5000}.json`, field
+`longWork.workView`. MB is 2^20 bytes.
+
+| | Old view (`a7658b03`) | New view, clean release | New view, with this work |
+|---|---|---|---|
+| **Page nodes at the end of the turn, 1,000 / 5,000 steps** | 79,355 / 393,246 | 596 / 566 | 586 / 566 |
+| **Listeners at the end of the turn, 1,000 / 5,000 steps** | 4,210 / 18,573 | 639 / 639 | 639 / 639 |
+| **Window process peak during the turn, 1,000 / 5,000 steps** | 858–1,014 / 3,084 MB | 307 / 257 MB | 283 / 317 MB |
+
+| Folded, then opened with one stretch open (nodes · GC-forced heap) | Clean release | With this work |
+|---|---|---|
+| End of the turn, folded — 1,000 steps | 496 · 48.0 MB | 496 · 23.0 MB |
+| End of the turn, opened + 1 stretch — 1,000 steps | 2,551 · 78.2 MB | 2,551 · 28.5 MB |
+| After a cold restart, folded — 1,000 steps | 421 · 16.9 MB | 421 · 16.9 MB |
+| After a cold restart, opened + 1 stretch — 1,000 steps | 2,459 · 47.9 MB | 2,459 · 23.2 MB |
+| End of the turn, folded — 5,000 steps | 496 · 63.3 MB | 496 · 38.9 MB |
+| End of the turn, opened + 1 stretch — 5,000 steps | 2,537 · 109.4 MB | 2,537 · 60.4 MB |
+| After a cold restart, folded — 5,000 steps | 404 · 16.9 MB | 421 · 16.9 MB |
+| After a cold restart, opened + 1 stretch — 5,000 steps | 2,445 · 63.8 MB | 2,445 · 39.1 MB |
+
+| Reading | Result |
+|---|---|
+| **The page no longer grows with the number of steps.** Nodes and listeners at the end of a 1,000-step and a 5,000-step turn are the same to within 30 nodes (586 vs 566) and 0 listeners; the old view's 79,355 → 393,246 and 4,210 → 18,573 are gone. Opening the work adds ~2,000 nodes and ~210 listeners regardless of the turn's length (a stretch draws at most 50 steps). | The window's peak process memory is 257–317 MB on both new-view builds at both sizes, against 858–1,014 MB and 3,084 MB on the old view: the growth `results/long-work-base-r1/` showed was the old view drawing every step. Peak memory is order-of-magnitude only; the difference between the two new-view builds at one size (283 vs 307, 317 vs 257 MB) is inside run-to-run spread. |
+| **This work's remaining share is JavaScript heap, and it grows with steps only because the window still receives and holds the steps.** After a forced collection, the folded page holds 23.0 → 38.9 MB (this work) against 48.0 → 63.3 MB (clean release) from 1,000 to 5,000 steps; about 15 MB per 4,000 steps on both. Opened, 28.5 → 60.4 MB against 78.2 → 109.4 MB. After a cold restart folded it is 16.9 MB on both: nothing of the turn is held until it is opened. | That slope is the steps the live window holds (about 4 KB each here), which stage 3 is meant to bound. One run per cell; `heapMB` after `HeapProfiler.collectGarbage`. |
+| **Opening the work after a cold restart: 55 / 129 ms (this work) vs 145 / 169 ms (clean release) at 1,000 / 5,000 steps;** the first stretch opens in 4–8 ms on both. | Timings only: loads 23–32 on every run, and the clean release's 5,000-step run overlapped unrelated unit tests and type checks on the same machine. Read the direction, not the values. The stopped-turn and settled-state checks do not depend on load. |
+
+The old view's `expandMs` measured the time until the last step's file name was
+on screen; the folded view shows one line per stretch, so the new arms measure the
+time until the first of those lines is drawn (`longWork.workView.view` says which).
+The two are not comparable.
+
+---
+
 ## Not done, in order
 
-1. Repeat the 1,000- and 5,000-step arms on a build whose work-process view keeps
-   live work folded, in two states (folded; opened with one segment open),
-   recording `nodes`, `listeners` and a GC-forced heap. A heap snapshot only if
-   the count still grows with steps.
-2. Measure page nodes, listeners and GC-forced heap on a build with the folded
-   work-process view (see 1).
-3. A repetition of both 5,000-step arms on a quiet machine.
+1. A repetition of the 5,000-step arms of both new-view builds on a quiet machine
+   (the clean release's overlapped other work).
+2. Read the live window's JavaScript heap per held step (about 4 KB, above) against
+   stage 3's plan; no heap snapshot has been taken.

@@ -69,15 +69,21 @@ function scriptImageRead(model: AcceptanceModel, request: string, file: string, 
   return seen
 }
 
-/** Opens the reply's work process and, if it is folded, the Read step's result; returns the image shown there. */
+/**
+ * Opens the reply's work process (folded by default), then the Read step that
+ * saw the image, and returns the image shown in its result. A lone operation is
+ * its own line; what the person opened stays open, so each line is opened only
+ * if it is not already.
+ */
 async function openImageStep(reply: Locator): Promise<Locator> {
-  const header = reply.getByRole('button', { name: /^Already thought/ }).first()
+  const header = reply.getByRole('button', { name: /^Work process/ })
   await expect(header).toBeVisible()
   if (await header.getAttribute('aria-expanded') !== 'true') await header.click()
+  // A Read of a picture is named by what it returned: "Image · <file>".
+  const step = reply.getByRole('button', { name: /^Image · / }).first()
+  await expect(step).toBeVisible()
+  if (await step.getAttribute('aria-expanded') !== 'true') await step.click()
   const image = reply.locator('[data-testid="tool-result-images"] img').first()
-  const showResult = reply.getByTitle('Show tool result', { exact: true }).first()
-  await expect(image.or(showResult)).toBeVisible()
-  if (!await image.isVisible()) await showResult.click()
   await expect(image).toBeVisible()
   await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth)).toBe(96)
   return image
