@@ -30,6 +30,7 @@ test.describe('server-mode browser guests', () => {
     for (const kind of ['main', 'human', 'automation'] as ContextKind[]) {
       const opened = await serverTool(electronApp, kind, 'browser_navigate', { url: browserSite.pageUrl(`server-${kind}`) })
       expect(opened.viewId).not.toBeNull()
+      await serverTool(electronApp, kind, 'browser_wait_for', { text: 'Draft', timeout: 5000 })
       const snapshot = toolText(await serverTool(electronApp, kind, 'browser_snapshot'))
       const uid = snapshot.split('\n').find(line => line.includes('textbox "Draft"'))?.match(/uid=(\S+)/)?.[1]
       expect(uid).toBeTruthy()
