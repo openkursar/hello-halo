@@ -164,7 +164,10 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
         gate.putBack(conversationId, [{ identity: job.identity, messages: indexes.map(index => takenBack(messages[index], true, recordedInputIds?.[index])) }])
       })) return false
       for (const message of messages) {
-        const observation = sink.observeLiveTurn({ onReply: message.request.onReply, onResult: message.request.onResult, onProgress: message.request.onProgress })
+        const observation = sink.observeLiveTurn({
+          onReply: message.request.onReply, onResult: message.request.onResult,
+          onProgress: message.request.onProgress, onWorkProgress: message.request.onWorkProgress,
+        })
         observations.push(observation)
         void observation.done.then(message.resolve, message.reject)
         try {
@@ -230,6 +233,7 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
         recordedInputIds: requests.flatMap(item => item.recordedInputIds ?? []),
         onMessageAccepted: () => notify(item => item.onMessageAccepted?.()),
         onProgress: event => notify(item => item.onProgress?.(event)),
+        onWorkProgress: requests.find(item => item.onWorkProgress)?.onWorkProgress,
         onResult: (content, ending) => notify(item => item.onResult?.(content, ending)),
         // Every merged item shares this conversation's chat: push the one reply once.
         onReply: (content, ending) => {

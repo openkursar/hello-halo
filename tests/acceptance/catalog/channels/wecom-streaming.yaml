@@ -1,0 +1,84 @@
+version: 1
+id: channels.wecom-streaming
+module: channels
+title:
+  en: Keep up with long WeCom replies
+  zh: 跟进企业微信长任务回复
+story:
+  en: When I turn on streaming for my WeCom bot, I can follow a long task in the same chat without periodic status messages interrupting me.
+  zh: 我为企业微信机器人开启流式回复后，可以在原聊天里跟进长任务，不被定期状态消息打扰。
+basis: observed
+references:
+  - src/main/apps/runtime/DESIGN.md
+  - src/main/apps/runtime/im-channels/wecom-stream-session.ts
+  - src/main/apps/runtime/im-channels/wecom-long-progress.ts
+  - src/renderer/components/settings/MessageChannelsSection.tsx
+promises:
+  handoff:
+    en: With streaming enabled, the bot closes a long-running stream before the WeCom reply window expires, tells me work is continuing, and delivers subsequent messages to the same chat.
+    zh: 开启流式回复后，机器人会在企业微信回复窗口到期前结束长时间运行的流式消息，告诉我任务还在继续，并在同一聊天中发送后续消息。
+  real-progress:
+    en: After that handoff, completed narration and the final answer carry concise summaries of newly completed successful work, without repeating prior updates or exposing raw tool activity.
+    zh: 切换后，阶段说明和最终答复会简要说明新完成的成功操作，不重复先前更新，也不展示原始工具活动。
+  quiet:
+    en: Elapsed time alone does not send another status message after the handoff.
+    zh: 切换后，单靠时间经过不会触发新的状态消息。
+  summary-only:
+    en: If no new narration is ready, at most one summary-only update can appear once at least 20 successful operations have accumulated and 15 minutes have passed since the last visible update.
+    zh: 没有新的阶段说明时，累计至少 20 项成功操作且距上次可见更新至少 15 分钟，才可能单独发送一次操作摘要。
+scenarios:
+  - id: channels.wecom-streaming.continuation
+    title:
+      en: Receive completed work and the answer after the live reply closes
+      zh: 流式回复结束后收到已完成工作和最终答复
+    verifies:
+      - handoff
+      - real-progress
+      - quiet
+    platforms: &platforms
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: An isolated WeCom bot serves a direct chat with its owner. The test uses a local WeCom endpoint and a scripted model; Halo runs the actual file reads and shell command.
+        zh: 独立测试的企业微信机器人服务于主人的单聊。测试使用本地企微端点和脚本模型，由 Halo 实际读取文件、执行命令。
+    steps:
+      - en: Enable streaming in Settings and send a request in the direct chat. Move the isolated application's clock to just before the provider's reply window expires, then allow the work to continue.
+        zh: 在设置中开启流式回复并从单聊发送请求。把隔离应用的时钟推进到平台回复窗口即将到期时，再让任务继续。
+      - en: Let one file read and one command succeed. Advance the application's clock through a quiet stretch, then let another file read fail. Let the bot narrate what it found, read one more file and give its final answer.
+        zh: 让一次文件读取和一条命令成功。把应用时钟推进一段安静时间，再让另一次文件读取失败。让机器人说明发现、再读一个文件并给出最终答复。
+    expected:
+      - en: The live reply closes once with a continuation notice. The chat receives nothing else before the completed narration; the next message places the successful read and command summary ahead of the narration.
+        zh: 流式回复只结束一次并提示任务仍在继续。在阶段说明完成前，聊天不收到其他消息；随后收到的消息先总结成功的读取和命令，再展示阶段说明。
+      - en: A separate final message places the remaining successful read before the answer. There is no repeated narration, periodic status message, failed-read count or raw tool output. The final answer is kept once in Halo's conversation history.
+        zh: 独立的最终消息先总结剩余的成功读取，再给出答复。不重复阶段说明、不发送定期状态、不计入失败读取，也不展示原始工具输出。Halo 的对话记录只保留一份最终答复。
+    notes:
+      en: Exercises the application's elapsed-time handoff in a local direct chat, not real WeCom timing, actual timer expiry with no activity, group delivery or the summary-only threshold.
+      zh: 验证本地单聊中应用按经过时间切换回复方式，不覆盖真实企业微信计时、无活动时的实际定时触发、群聊投递或单独摘要阈值。
+  - id: channels.wecom-streaming.summary-only
+    title:
+      en: Send at most one summary during a long stretch without narration
+      zh: 长时间没有阶段说明时最多发送一次摘要
+    verifies:
+      - summary-only
+    platforms: *platforms
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements:
+      - halo-sdk
+    steps:
+      - en: After a live reply closes, keep the bot working silently. First pass the time threshold with fewer than 20 successful operations. Then complete enough successful operations and keep working past both thresholds again without narration.
+        zh: 流式回复结束后让机器人继续安静工作。先让成功操作少于 20 项时超过时间阈值，再完成足够的成功操作，然后在没有阶段说明的情况下再次超过两个阈值。
+    expected:
+      - en: No message is sent when either threshold is unmet. One summary can report actual completed work, but crossing both thresholds again does not send a second summary.
+        zh: 只要有一个阈值未满足，就不发送消息。可以发送一次真实完成工作的摘要，但再次达到两个阈值时不会再发第二次。

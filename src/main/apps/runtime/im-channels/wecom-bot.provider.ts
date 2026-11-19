@@ -1073,11 +1073,11 @@ class WecomBotInstance implements ImChannelInstance {
     // issue scope ("群回复可关闭引用气泡").
     const useQuoteReply = chatType === 'direct' || this.config.quoteReply !== false
     let streamSession: WecomStreamSession | null = null
+    let streamClosed = false
     const ensureStream = (): WecomStreamSession | null => {
+      if (streamSession) return streamSession
       if (!this.authenticated) return null
-      if (!streamSession) {
-        streamSession = this.createTrackedStreamSession(frame, chatId, chatType, trace)
-      }
+      streamSession = this.createTrackedStreamSession(frame, chatId, chatType, trace)
       return streamSession
     }
 
@@ -1089,13 +1089,24 @@ class WecomBotInstance implements ImChannelInstance {
     const streaming: StreamingHandle | undefined = useQuoteReply
       ? {
           update: async (event: ProgressEvent) => {
+            if (streamClosed) return
             const s = ensureStream()
             if (s) await s.update(event)
             // No session yet and WS not authenticated: progress events are not
             // critical to deliver. Silent skip is acceptable here — finish()
             // owns the must-deliver guarantee.
           },
+          updateWork: async event => {
+            if (!streamClosed) await ensureStream()?.updateWork(event)
+          },
+          stopLongReply: () => {
+            const delivery = streamSession?.stopLongReply()
+            if (delivery) streamClosed = true
+            return delivery
+          },
           finish: async (finalText: string) => {
+            if (streamClosed) return
+            streamClosed = true
             const s = ensureStream()
             if (s) {
               await s.finish(finalText)
@@ -1108,6 +1119,7 @@ class WecomBotInstance implements ImChannelInstance {
             await this.deliverFinalWithoutSession(chatId, chatType, trace, frame, finalText)
           },
           dispose: () => {
+            streamClosed = true
             if (streamSession) {
               streamSession.dispose()
               streamSession = null
