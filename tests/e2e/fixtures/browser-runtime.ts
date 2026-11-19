@@ -43,7 +43,7 @@ export const test = base.extend<{ browserPolicy: BrowserPolicy | undefined; brow
     const preload = path.join(outputRoot, 'preload/index.cjs')
     const script = path.join(projectRoot, 'out/renderer', `.e2e-browser-runtime-${identity}.js`)
     const html = path.join(projectRoot, 'out/renderer', `.e2e-browser-runtime-${identity}.html`)
-    const bundledPackages = new Set(['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent'])
+    const bundledPackages = new Set(['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent', '@hello-halo/agent-sdk/collaboration/protocol'])
     await esbuild.build({
       entryPoints: [path.join(directory, browserServerMode ? 'browser-server-runtime-main.ts' : 'browser-runtime-main.ts')],
       bundle: true, platform: 'node', format: 'cjs', outfile: main, logLevel: 'silent',
