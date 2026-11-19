@@ -3527,6 +3527,7 @@
   "This file has merge conflicts. Resolve them in a terminal, or ask the AI to.": "此文件存在合并冲突。请在终端中解决，或让 AI 解决。",
   "This file is no longer where it was published from — it was moved or deleted.": "此文件已不在其发布时的位置——它已被移动或删除。",
   "This file is on {{owner}}’s computer and can’t be fetched right now.": "此文件位于 {{owner}} 的电脑上，暂时无法获取。",
+  "This file is outside the workspace and cannot be read here.": "此文件不在工作空间内，无法在此读取。",
   "This file is too large to copy here. Ask {{owner}} to share it another way.": "此文件过大，无法复制到此处。请让 {{owner}} 通过其他方式分享。",
   "This folder is no longer a Git repository.": "此文件夹不再是 Git 仓库。",
   "This folder is too large to watch. Watched folders are meant for a small set of documents.": "该文件夹过大，无法监视。监视文件夹用于存放少量文档。",

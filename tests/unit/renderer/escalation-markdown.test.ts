@@ -25,7 +25,7 @@ vi.mock('../../../src/renderer/stores/people-view.store', () => {
   usePeopleViewStore.getState = () => state
   return { usePeopleViewStore }
 })
-vi.mock('../../../src/renderer/hooks/useDataContent', () => ({ useDataContent: () => undefined }))
+vi.mock('../../../src/renderer/hooks/useDataContent', () => ({ useDataContent: () => ({ unreadable: false }) }))
 vi.mock('../../../src/renderer/components/chat/MarkdownRenderer', () => ({
   MarkdownRenderer: ({ content }: { content: string }) => createElement('div', { 'data-markdown': content }),
 }))

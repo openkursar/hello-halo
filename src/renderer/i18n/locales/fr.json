@@ -3757,6 +3757,7 @@
   "Time until reset:": "Temps avant réinitialisation :",
   "Timed out": "Délai dépassé",
   "TLS Ciphers": "Suites de chiffrement TLS",
+  "This file is outside the workspace and cannot be read here.": "Ce fichier se trouve en dehors de l'espace de travail et ne peut pas être lu ici.",
   "To (the recipient)": "À (le destinataire)",
   "To enable AI to execute system commands (such as git, npm, pip, etc.), a command execution environment needs to be installed. This is a one-time operation and does not require reconfiguration after installation.": "Pour permettre à l'IA d'exécuter des commandes système (telles que git, npm, pip, etc.), un environnement d'exécution de commandes doit être installé. Il s'agit d'une opération unique qui ne nécessite pas de reconfiguration après l'installation.",
   "To start every conversation afresh, use “{{action}}” below.": "Pour recommencer chaque conversation à zéro, utilisez « {{action}} » ci-dessous.",

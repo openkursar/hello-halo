@@ -74,6 +74,8 @@ import { withheldWebSearch, withholdWebSearchBuiltins } from './web-search-switc
 import { buildRunSenderKey } from '../../../shared/apps/im-keys'
 import { closeRunSender, openRunSender } from './run-conversation-source'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
+import { isServerMode } from '../../foundation/runtime-mode'
+import { logWriteOutsideSpace } from '../../services/space-scope'
 import { openSessionWriter, loadChatEngineState, saveChatEngineBinding, saveChatEngineRouting, type SessionWriter } from './session-store'
 import { prepareAppEngineSession, resolveAppSessionEngine } from './engine-selection'
 import {
@@ -526,6 +528,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       runId,
       sessionKey,
       notificationLevel: app.userOverrides.notificationLevel,
+      spaceId: app.spaceId!,
       plansDir,
       canComplete: () => agentExecution.canComplete(),
       onReported: () => { reportedAt = agentExecution.inputRevision },
@@ -772,6 +775,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       onSessionId: persistEngineSession,
       reportSaved: () => reportedAt === agentExecution.inputRevision,
       onSent: () => { if (!opensWithSlashCommand(initialMessage)) workspaceNotice.delivered() },
+      spaceId: app.spaceId ?? undefined,
     }
     let streamResult = await processStream(
       formatReferencesBlock(followupReferences, workDir)
@@ -1108,6 +1112,7 @@ interface RunTurnContext {
   /** A report was saved and no input has arrived since. */
   reportSaved: () => boolean
   onSent?: () => void
+  spaceId?: string
 }
 
 /**
@@ -1130,6 +1135,7 @@ interface RunTurnContext {
  */
 async function processStream(message: string, turn: RunTurnContext): Promise<StreamResult> {
   const { execution, abortController, runTag, writer, turnAskedUser, runId, onPendingInputAbandoned, engineId } = turn
+  const serverMode = isServerMode()
   const result: StreamResult = {
     finalText: '',
     aiReportedError: false,
@@ -1180,7 +1186,10 @@ async function processStream(message: string, turn: RunTurnContext): Promise<Str
           if (block.type === 'text' && typeof block.text === 'string') {
             result.finalText += block.text
           }
-          if (block.type === 'tool_use') toolUseCount++
+          if (block.type === 'tool_use') {
+            toolUseCount++
+            if (serverMode) logWriteOutsideSpace(block.name, block.input ?? {}, turn.spaceId, `[Runtime][${runTag}]`)
+          }
         }
       }
     }

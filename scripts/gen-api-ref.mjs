@@ -205,7 +205,9 @@ function scanRoutesFile(file) {
   const routes = []
   lines.forEach((line, i) => {
     const m = line.match(re)
-    if (m) routes.push({ method: m[1].toUpperCase(), path: m[2], file, line: i + 1 })
+    // A wildcard segment ('*slug') is a param whose value may span several
+    // segments. Callers still see one param, so document it as ':slug'.
+    if (m) routes.push({ method: m[1].toUpperCase(), path: m[2].replace(/\*(\w+)/g, ':$1'), file, line: i + 1 })
   })
   routes.forEach((r, i) => {
     const end = i + 1 < routes.length ? routes[i + 1].line - 1 : lines.length

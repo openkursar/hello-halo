@@ -1,6 +1,7 @@
 /** Halo product context and session bindings, appended to native engine guidance. */
 import os from 'os'
 import { getDataFolderName } from '../../foundation/product-config'
+import { isServerMode } from '../../foundation/runtime-mode'
 import type { KBReference } from '../../../shared/types/tlon'
 import type { EngineId } from '../../../shared/types/engine'
 
@@ -82,6 +83,15 @@ Use \`read_halo_doc\` for Halo product guidance, starting with \`index.md\` when
 When looking for Halo configuration or skills, use these paths.
 `.trim()
 
+/**
+ * A server user reaches files only through the space, so a file written
+ * elsewhere is lost to them. The desktop user can open any local path.
+ */
+const SERVER_FILE_PLACEMENT = `
+# Files
+Files you create for the user must go under the working directory; the user can open files only from there. Write elsewhere only for scratch files the user is not meant to see.
+`.trim()
+
 /** Every template states who the assistant is in one line starting like this. */
 const HALO_IDENTITY_LINE = /^You are Halo, .*$/m
 
@@ -156,6 +166,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   if (ctx.ownIdentity) {
     prompt = prompt.replace(HALO_IDENTITY_LINE, ctx.ownIdentity === 'app-instructions' ? RUNS_ON_HALO_LINE : RUNS_ON_HALO)
   }
+  if (isServerMode()) prompt += '\n\n' + SERVER_FILE_PLACEMENT
 
   // Toolset-broker sessions (main chat): append the usage guides of currently-
   // enabled optional toolsets. Awareness of disabled ones lives in the

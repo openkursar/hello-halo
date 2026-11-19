@@ -2,27 +2,34 @@
  * useDataContent - Load activity entry data from inline content or file path
  *
  * When an activity entry has `dataPath`, reads the file via the artifact API
- * and returns its content. Falls back to inline `data` string if no path or
- * if the file read fails. Supports both Electron (IPC) and remote (HTTP) modes.
+ * and returns its content. Supports both Electron (IPC) and remote (HTTP) modes.
+ *
+ * A failed read is reported rather than swallowed: entries recorded before
+ * output containment landed can point outside the space, which the desktop
+ * still opens but the headless build refuses, and a caller that silently
+ * renders nothing leaves the user staring at a filename with no explanation.
  *
  * Usage:
- *   const renderedData = useDataContent(entry.content)
- *   // renderedData is the markdown string to render, or undefined
+ *   const { text, unreadable } = useDataContent(entry.content)
  */
 
 import { useState, useEffect } from 'react'
 import { api } from '../api'
 import type { ActivityEntryContent } from '../../shared/apps/app-types'
 
+export interface DataContent {
+  /** Markdown to render, or undefined when there is nothing to show. */
+  text?: string
+  /** The entry names a file, and reading it failed. */
+  unreadable: boolean
+}
+
 /**
  * Resolve the renderable markdown content from an activity entry.
  *
  * Priority: dataPath (file) > data (inline string) > undefined
- *
- * @param content - The activity entry content
- * @returns The markdown string to render, or undefined if no content
  */
-export function useDataContent(content: ActivityEntryContent): string | undefined {
+export function useDataContent(content: ActivityEntryContent): DataContent {
   const inlineData = typeof content.data === 'string' ? content.data : undefined
   const [fileContent, setFileContent] = useState<string | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -52,9 +59,10 @@ export function useDataContent(content: ActivityEntryContent): string | undefine
     return () => { cancelled = true }
   }, [content.dataPath])
 
-  // File content takes priority; fall back to inline data on failure or absence
   if (content.dataPath && !loadFailed && fileContent !== null) {
-    return fileContent
+    return { text: fileContent, unreadable: false }
   }
-  return inlineData
+  // Inline data is a usable substitute even when the file read failed; the
+  // failure only matters when it leaves nothing to show.
+  return { text: inlineData, unreadable: loadFailed && inlineData === undefined }
 }

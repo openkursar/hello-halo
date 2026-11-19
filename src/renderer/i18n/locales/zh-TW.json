@@ -3527,6 +3527,7 @@
   "This file has merge conflicts. Resolve them in a terminal, or ask the AI to.": "此檔案有合併衝突。請在終端機中解決，或請 AI 解決。",
   "This file is no longer where it was published from — it was moved or deleted.": "此檔案已不在原本發布的位置 — 它已被移動或刪除。",
   "This file is on {{owner}}’s computer and can’t be fetched right now.": "此檔案位於 {{owner}} 的電腦上，目前無法取得。",
+  "This file is outside the workspace and cannot be read here.": "此檔案不在工作區內，無法在此讀取。",
   "This file is too large to copy here. Ask {{owner}} to share it another way.": "此檔案過大，無法複製到此處。請 {{owner}} 以其他方式分享。",
   "This folder is no longer a Git repository.": "此資料夾已不再是 Git 儲存庫。",
   "This folder is too large to watch. Watched folders are meant for a small set of documents.": "此資料夾過大，無法監看。監看的資料夾適用於少量文件。",

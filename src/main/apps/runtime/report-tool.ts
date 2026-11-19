@@ -16,6 +16,9 @@ import type { ActivityEntry, ActivityEntryType, ActivityEntryContent } from './t
 import { broadcastToAll } from '../../http/websocket'
 import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
+import { isServerMode } from '../../foundation/runtime-mode'
+import { getOutputDir } from '../../services/space-scope'
+import { reclaimReportedFile } from './report-output'
 import { getActiveTeamRuntime } from './team'
 import { oneLineExcerpt } from './text-truncate'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
@@ -34,6 +37,8 @@ export interface ReportToolContext {
   sessionKey: string
   /** Notification level: 'all' | 'important' | 'none'. Defaults to 'important'. */
   notificationLevel?: 'all' | 'important' | 'none'
+  /** Space owning this run; bounds where reported files may live in server mode. */
+  spaceId?: string
   /** Absolute path to the plans directory for file-based data_path guidance */
   plansDir?: string
   /** Drives team-specific report routing when present. */
@@ -139,14 +144,19 @@ export function createReportToolServer(
     'Plans, proposals and long reports go in a .md file: pass its absolute path ' +
     'as `data_path` and Edit that file to revise.'
 
-  // Inject the concrete plans directory path so the AI knows exactly where to write
-  const plansDirGuidance = runContext.plansDir
-    ? `\nBy default, write files to: ${runContext.plansDir}`
-    : ''
+  // A server user reaches files only through the space, so name that directory
+  // explicitly; the desktop can open any local path.
+  const outputDir = isServerMode() ? getOutputDir(runContext.spaceId) : ''
+  const fileGuidance = outputDir
+    ? `\nWrite those files under: ${outputDir}\n` +
+      'Files written elsewhere are not visible to the user.'
+    : runContext.plansDir
+      ? `\nBy default, write files to: ${runContext.plansDir}`
+      : ''
 
   const reportTool = tool(
     'report_to_user',
-    baseDescription + plansDirGuidance,
+    baseDescription + fileGuidance,
     {
       type: z.enum([
         'run_complete',
@@ -255,7 +265,11 @@ export function createReportToolServer(
 
       // Optional fields
       if (input.data) content.data = input.data
-      if (input.data_path) content.dataPath = input.data_path
+      if (input.data_path) {
+        content.dataPath = isServerMode()
+          ? await reclaimReportedFile(input.data_path, runContext.spaceId)
+          : input.data_path
+      }
       // With several questions each carries its own choices and `message` is
       // the framing, so a top-level `choices` has no question to belong to.
       if (input.choices && askedQuestions.length === 0) content.choices = input.choices

@@ -67,6 +67,14 @@ describe('the real generated tables', () => {
     expect(manual).not.toContain('ephemeral:true')
   })
 
+  it('reaches scoped store slugs through the query and body routes the manual recommends', () => {
+    // The middleware classifies the path without its query string.
+    expect(classify('GET', '/api/store/app-detail').decision).toBe('allowed')
+    expect(classify('POST', '/api/store/install').decision).toBe('allowed')
+    const manual = readFileSync(join(repoRoot, 'resources/api-ref/store.txt'), 'utf-8')
+    expect(manual).not.toContain('goes in the path as-is')
+  })
+
   it('are non-trivial, so a silently empty table cannot make the rest pass', () => {
     expect(scope.length).toBeGreaterThan(50)
     expect(routes.length).toBeGreaterThan(scope.length)
