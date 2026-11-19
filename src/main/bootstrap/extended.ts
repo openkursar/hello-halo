@@ -561,9 +561,9 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
       // pull/replicate only the tail. Carries the thoughts/tool trace so a remote
       // viewer's backfill shows the same thinking the live relay did.
       const serializeTeamTranscript = (teamId: string, appId: string, epochId: string, sinceSeq?: number) => {
-        const messages = readTeamMemberMessages(appId, teamId, epochId)
         const start = typeof sinceSeq === 'number' && sinceSeq > 0 ? sinceSeq - 1 : 0
-        return messages.slice(start).map((m, i) => ({
+        const messages = start > 0 ? readTeamMemberMessages(appId, teamId, epochId, start) : readTeamMemberMessages(appId, teamId, epochId)
+        return messages.map((m, i) => ({
           seq: start + i + 1,
           role: m.role,
           content: m.content,

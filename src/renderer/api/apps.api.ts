@@ -188,11 +188,17 @@ export const appsApi = {
     return httpRequest('GET', `/api/apps/${appId}/activity${qs ? '?' + qs : ''}`)
   },
 
-  appGetSession: async (appId: string, runId: string): Promise<ApiResponse> => {
+  /**
+   * A run's transcript. With `since` (an earlier update's cursor, or '' for
+   * everything) the answer is a `TranscriptUpdate` carrying only what changed;
+   * a desktop that does not know `since` still answers with the message list.
+   */
+  appGetSession: async (appId: string, runId: string, since?: string): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.appGetSession({ appId, runId })
+      return window.halo.appGetSession(since === undefined ? { appId, runId } : { appId, runId, since })
     }
-    return httpRequest('GET', `/api/apps/${appId}/runs/${runId}/session`)
+    const query = since === undefined ? '' : `?since=${encodeURIComponent(since)}`
+    return httpRequest('GET', `/api/apps/${appId}/runs/${runId}/session${query}`)
   },
 
   appGetRuns: async (appId: string, options?: { limit?: number; offset?: number }): Promise<ApiResponse> => {
@@ -513,12 +519,22 @@ export const appsApi = {
     return httpRequest('GET', `/api/apps/${input.appId}/chat/messages/${encodeURIComponent(input.messageId)}/thoughts?${params}`)
   },
 
-  appChatSessionState: async (appId: string, conversationId?: string): Promise<ApiResponse> => {
+  /**
+   * A chat's running turn. With `since` (the previous answer's
+   * `thoughtsRevision`, or '' at first) the thoughts are only those changed
+   * since, placed by `thoughtsDelta`; without it, all of them.
+   */
+  appChatSessionState: async (appId: string, conversationId?: string, since?: string): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.appChatSessionState(appId, conversationId)
+      return since === undefined
+        ? window.halo.appChatSessionState(appId, conversationId)
+        : window.halo.appChatSessionState(appId, conversationId, since)
     }
-    const qs = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''
-    return httpRequest('GET', `/api/apps/${appId}/chat/session-state${qs}`)
+    const query = [
+      ...(conversationId ? [`conversationId=${encodeURIComponent(conversationId)}`] : []),
+      ...(since !== undefined ? [`since=${encodeURIComponent(since)}`] : []),
+    ].join('&')
+    return httpRequest('GET', `/api/apps/${appId}/chat/session-state${query ? `?${query}` : ''}`)
   },
 
   appChatClear: async (appId: string, spaceId: string, conversationId?: string): Promise<ApiResponse> => {

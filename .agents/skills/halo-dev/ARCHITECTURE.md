@@ -837,7 +837,9 @@ content (contract: `balancing/DESIGN.md`).
             ├── meta.json       # Space metadata (id/name/icon/timestamps/workingDir)
             └── conversations/
                 ├── <id>.json           # Conversation data (lightweight, no thoughts)
-                └── <id>.thoughts.json  # Separated thoughts data (lazy-loaded)
+                ├── <id>.thoughts.json  # Separated thoughts data (lazy-loaded)
+                └── <id>.images/        # Images saved by content: sent images (desktop view) and
+                                        #   tool-result images the thoughts refer to; removed with the conversation
 ```
 
 **Credential master key (enterprise builds only):** when `security.credentialAtRestSafe`

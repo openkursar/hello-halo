@@ -3,6 +3,7 @@ import type { EngineId } from '../../../shared/types/engine'
 import type { EngineSessionBinding } from '../../../shared/types/engine-session'
 import type { Goal, GoalInput } from '../../../shared/types/goal'
 import type { TranscriptMessage } from '../../../shared/types/transcript'
+import { readToolOutputImages } from '../../../shared/tool-result-images'
 
 export interface EngineHandoffPlan {
   kind: 'legacy' | 'resume' | 'fresh' | 'handoff'
@@ -61,6 +62,19 @@ function clipText(value: string, maxBytes: number): { text: string; truncated: b
   return { text: buffer.subarray(0, Math.max(0, maxBytes)).toString('utf8').replace(/\ufffd$/, ''), truncated: true }
 }
 
+/**
+ * A recorded output whose images were saved as files hands over its text and
+ * where each image is, so the next engine can open one; never the image data.
+ */
+function handoffOutput(output: string | undefined): { output: string | undefined; savedImages?: string[] } {
+  const parts = output ? readToolOutputImages(output) : null
+  if (!parts) return { output }
+  return {
+    output: parts.flatMap(part => part.type === 'text' ? [part.text] : []).join(''),
+    savedImages: parts.flatMap(part => part.type === 'text' ? [] : [part.path]),
+  }
+}
+
 /** Projects only visible text and completed observations; no reasoning or executable tool blocks. */
 function neutralRecord(message: TranscriptMessage, maxBytes: number) {
   let remaining = maxBytes
@@ -104,21 +118,28 @@ function neutralRecord(message: TranscriptMessage, maxBytes: number) {
   if (message.error) record.error = text(message.error, 2048)
   const results: Array<Record<string, unknown>> = []
   const seen = new Set<string>()
-  const addResult = (id: string, name: string | undefined, output: string | undefined, error: string | undefined, status: string, input?: Record<string, unknown>) => {
+  const addResult = (id: string, name: string | undefined, output: string | undefined, error: string | undefined, status: string, input?: Record<string, unknown>, savedImages?: string[]) => {
     if (seen.has(id)) return
     seen.add(id)
     if (results.length >= 32) { truncated = true; return }
     const fileReferences = input ? ['file_path', 'filePath', 'path', 'cwd'].flatMap(key => typeof input[key] === 'string' ? [text(input[key], 2048)] : []) : []
-    results.push({ id: text(id, 256), tool: text(name, 256), status, output: text(output, 4096), error: text(error, 2048), ...(fileReferences.length ? { fileReferences } : {}) })
+    const images = savedImages?.slice(0, 8).map(path => text(path, 2048))
+    truncated ||= (savedImages?.length ?? 0) > 8
+    results.push({
+      id: text(id, 256), tool: text(name, 256), status, output: text(output, 4096), error: text(error, 2048),
+      ...(fileReferences.length ? { fileReferences } : {}), ...(images?.length ? { savedImages: images } : {}),
+    })
   }
   for (const tool of (message.toolCalls ?? []).slice(0, 128)) {
     if (tool.output !== undefined || tool.error !== undefined) addResult(tool.id, tool.name, tool.output, tool.error, tool.status, tool.input)
   }
   for (const thought of (message.thoughts ?? []).slice(0, 256)) {
     if (thought.type === 'tool_use' && thought.toolResult) {
-      addResult(thought.id, thought.toolName, thought.toolResult.output, undefined, thought.toolResult.isError ? 'error' : 'completed', thought.toolInput)
+      const result = handoffOutput(thought.toolResult.output)
+      addResult(thought.id, thought.toolName, result.output, undefined, thought.toolResult.isError ? 'error' : 'completed', thought.toolInput, result.savedImages)
     } else if (thought.type === 'tool_result') {
-      addResult(thought.id, thought.toolName, thought.toolOutput ?? thought.content, undefined, thought.isError ? 'error' : 'completed')
+      const result = handoffOutput(thought.toolOutput)
+      addResult(thought.id, thought.toolName, result.output ?? thought.content, undefined, thought.isError ? 'error' : 'completed', undefined, result.savedImages)
     }
   }
   truncated ||= (message.toolCalls?.length ?? 0) > 128 || (message.thoughts?.length ?? 0) > 256

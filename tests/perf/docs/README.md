@@ -36,7 +36,7 @@ The fixtures are generated, not committed; `manifest.json` is. Every fixture is
 verified against it by sha256 before use, and generation is deterministic — a
 fixture that fails verification means the generator changed, not the machine.
 
-### Four projects, and why
+### Five projects, and why
 
 | Project | npm script | Contents | Cost |
 |---|---|---|---|
@@ -44,6 +44,7 @@ fixture that fails verification means the generator changed, not the machine.
 | `perf` | `test:perf` | Everything except the soaks and the leak probe | ~20 min |
 | `perf-soak` | `test:perf:soak` | The two leak scenarios | 10 min each |
 | `perf-leak` | — (see below) | The leak probe: evidence, no `PerfResult`, no threshold | ~2 s/cycle |
+| `perf-long-work` | — (see below) | One reply of `LONG_WORK_STEPS` (default 1,000) steps driven by the mock's plan mode: bytes to the window, memory, end-of-turn save, reopening, and the polling views | ~4 min at 1,000 steps, ~25 min at 5,000 |
 
 `perf-leak` has no npm script because it is never run the same way twice — it is
 an experiment, and its knobs are the experiment's arms:
@@ -61,6 +62,12 @@ PERF_LABEL=<arm> LEAK_CYCLES=200 LEAK_TERMINAL_EVERY=0 \
 | `LEAK_IDLE_MS` | Spends the cycle without doing the work — the control that turns "per cycle" into a claim about the work rather than about the clock |
 | `LEAK_RELEASE_CONSOLE` | Drops the debugger's own retention, separating it from the page's |
 | `LEAK_HEAP_SNAPSHOT` | Two snapshots for `analyze-heap.mjs`; hundreds of MB, opt-in |
+
+`perf-long-work` runs through the same runner, so the mock is started for it:
+
+```bash
+PERF_LABEL=<arm> LONG_WORK_STEPS=5000 node scripts/run-perf.mjs --project=perf-long-work [-g "S18 polling"]
+```
 
 Read a result with `node tests/perf/analyze-heap.mjs <before> <after> [--retain=<Class>]`
 when the question is who is holding something, not how much of it there is.

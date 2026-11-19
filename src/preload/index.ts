@@ -603,7 +603,8 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   appStartRun: (appId: string) => Promise<IpcResponse<import('../shared/apps/app-types').AppRunStartInfo>>
   appGetState: (appId: string) => Promise<IpcResponse>
   appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number; teamId?: string; epochId?: string } }) => Promise<IpcResponse>
-  appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>
+  /** `since` (a cursor from an earlier update, or '' for everything) returns a `TranscriptUpdate` instead of the message list. */
+  appGetSession: (input: { appId: string; runId: string; since?: string }) => Promise<IpcResponse>
   appRespondEscalation: (input: { appId: string; escalationId: string; response: EscalationResponse }) => Promise<IpcResponse>
   appGetRuns: (input: { appId: string; options?: { limit?: number; offset?: number } }) => Promise<IpcResponse<import('../shared/apps/app-types').AutomationRunWithSummary[]>>
   appGetRunStats: (input: { appId: string; window?: number }) => Promise<IpcResponse<import('../shared/apps/app-types').RunStats>>
@@ -666,7 +667,8 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   // Paged read, newest page first; messages carry thoughts:null (see appChatMessageThoughts)
   appChatTranscript: (input: { appId: string; spaceId: string; conversationId?: string; before?: string; limit?: number; through?: string }) => Promise<IpcResponse<import('../shared/apps/app-types').AppChatTranscriptPage>>
   appChatMessageThoughts: (input: { appId: string; spaceId: string; conversationId?: string; messageId: string }) => Promise<IpcResponse<Thought[]>>
-  appChatSessionState: (appId: string, conversationId?: string) => Promise<IpcResponse>
+  /** `since` (a `thoughtsRevision` from an earlier read, or '' at first) returns only the thoughts changed since. */
+  appChatSessionState: (appId: string, conversationId?: string, since?: string) => Promise<IpcResponse>
   appChatClear: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
   appChatRestart: (appId: string) => Promise<IpcResponse<{ sessionsClosed: number }>>
   appChatsClearable: (appId: string) => Promise<IpcResponse<{ total: number; im: number; teamIm: number }>>

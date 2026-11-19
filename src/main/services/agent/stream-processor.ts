@@ -50,7 +50,10 @@ import {
   type ToolMessageContext
 } from './tool-message-handler'
 import { isTransparentTool } from './constants'
-import { isAppChatKey, parseAppChatKey } from '../../../shared/apps/im-keys'
+import { isAppChatKey, isSpaceConversationId, parseAppChatKey } from '../../../shared/apps/im-keys'
+import { hasInlineToolImages } from './tool-result-images'
+import { noteThoughtChanged } from './live-thought-changes'
+import { getConversationImagesDir } from '../conversation.service'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 import { deriveErrorCode } from '../analytics/error-code'
@@ -206,6 +209,22 @@ function deriveAnalyticsSource(
   return { source: 'app-chat', appId: conversationId.slice('app-chat:'.length), channel: 'native' }
 }
 
+/**
+ * Where this stream's display copies save tool-result images: the folder its
+ * entry named (a digital human's transcript folder, so the step on screen and
+ * the stored line refer to one file), or the folder beside a space
+ * conversation. Null otherwise; images then stay inline, as before.
+ */
+function toolImagesDirFor(spaceId: string, conversationId: string, given: (() => string) | undefined): string | null {
+  try {
+    if (given) return given()
+    return isSpaceConversationId(conversationId) ? getConversationImagesDir(spaceId, conversationId) : null
+  } catch (error) {
+    console.warn(`[Agent][${conversationId}] Tool images stay inline: no folder for space ${spaceId}`, error)
+    return null
+  }
+}
+
 // ============================================
 // Types
 // ============================================
@@ -308,6 +327,12 @@ export interface ProcessStreamParams {
   t0: number
   /** Strategy callbacks for caller-specific behavior */
   callbacks: StreamCallbacks
+  /**
+   * Where the display copy saves tool-result images, named by the entry that
+   * stores the transcript and asked only when an image arrives. Absent: beside
+   * a space conversation, else inline.
+   */
+  toolImagesDir?: () => string
 }
 
 // ============================================
@@ -489,6 +514,12 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
 
   // Tool ID to Thought ID mapping - for merging tool_result into tool_use
   const toolIdToThoughtId = new Map<string, string>()
+  // Resolved when the first tool image arrives; most turns never need it.
+  let toolImagesDir: string | null | undefined
+  const toolImagesDirOf = (message: unknown): string | null => {
+    if (toolImagesDir === undefined && hasInlineToolImages(message)) toolImagesDir = toolImagesDirFor(spaceId, conversationId, params.toolImagesDir)
+    return toolImagesDir ?? null
+  }
   let nextStreamThoughtId = 0
   const attemptTools = new Map<string, string>()
   let attemptTextBaseline = lastTextContent
@@ -683,11 +714,13 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         const blocks = sdkMessage.parent_tool_use_id == null ? sdkMessage.message.content : []
         for (const block of blocks) {
           if (block.type !== 'tool_result') continue
-          const outcome = parseSDKMessage({ ...sdkMessage, message: { ...sdkMessage.message, content: [block] } }, displayModel)
+          const outcome = parseSDKMessage({ ...sdkMessage, message: { ...sdkMessage.message, content: [block] } }, displayModel, toolImagesDirOf(sdkMessage))
           if (!outcome || outcome.type !== 'tool_result') continue
           const tool = sessionState.thoughts.find(thought => thought.id === toolIdToThoughtId.get(outcome.id))
-          if (tool) tool.toolResult = { output: outcome.toolOutput || '', isError: outcome.isError || false, timestamp: outcome.timestamp }
-          else sessionState.thoughts.push(outcome)
+          if (tool) {
+            tool.toolResult = { output: outcome.toolOutput || '', isError: outcome.isError || false, timestamp: outcome.timestamp }
+            noteThoughtChanged(sessionState, tool.id)
+          } else sessionState.thoughts.push(outcome)
         }
         callbacks.onRawMessage?.(sdkMessage)
         assertSessionActive()
@@ -1052,7 +1085,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
     // enter the main conversation's processing path.
     const parentToolUseId = (sdkMessage as any).parent_tool_use_id as string | null | undefined
     if (parentToolUseId != null && (sdkMessage.type === 'assistant' || sdkMessage.type === 'user')) {
-      const subCtx: ToolMessageContext = { spaceId, conversationId, sessionState, toolIdToThoughtId }
+      const subCtx: ToolMessageContext = { spaceId, conversationId, sessionState, toolIdToThoughtId, toolImagesDir: toolImagesDirOf(sdkMessage) }
       handleToolMessage(sdkMessage, parentToolUseId, subCtx)
       continue
     }
@@ -1098,7 +1131,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
 
     // Parse SDK message into Thought and send to renderer
     // Pass credentials.model to display the user's actual configured model
-    const thought = parseSDKMessage(sdkMessage, displayModel)
+    const thought = parseSDKMessage(sdkMessage, displayModel, toolImagesDirOf(sdkMessage))
     if (thought?.type === 'error') thought.content = explainEngineError(thought.content, params.engineId)
 
     if (thought) {

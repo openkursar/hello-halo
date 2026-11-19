@@ -3,6 +3,7 @@
 import type { Thought, TaskProgress, SessionState } from './types'
 import { isDeveloperMode } from '../../foundation/logging'
 import { emitAgentEvent } from './events'
+import { toolResultDisplayText } from './tool-result-images'
 
 // ============================================
 // Types
@@ -15,6 +16,8 @@ export interface ToolMessageContext {
   sessionState: SessionState
   /** Maps SDK tool_use_id → Thought.id for merging tool_result into tool_use */
   toolIdToThoughtId: Map<string, string>
+  /** Where the display copy saves tool-result images; without it they stay inline */
+  toolImagesDir?: string | null
 }
 
 /** Generate a unique thought ID */
@@ -89,9 +92,7 @@ export function handleToolMessage(
       if (block.type === 'tool_result') {
         const toolId = block.tool_use_id
         const isError = block.is_error || false
-        const resultContent = typeof block.content === 'string'
-          ? block.content
-          : JSON.stringify(block.content)
+        const resultContent = toolResultDisplayText(block.content, ctx.toolImagesDir)
 
         // Try to merge into corresponding tool_use thought
         const toolUseThoughtId = toolId ? toolIdToThoughtId.get(toolId) : undefined

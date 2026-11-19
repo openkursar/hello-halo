@@ -8,6 +8,7 @@
  */
 
 import { jsonrepair } from 'jsonrepair'
+import { join } from 'path'
 import { isTransparentTool } from '../../services/agent/constants'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { ImageAttachment, ImageMediaType } from '../../../shared/types/image-attachment'
@@ -22,6 +23,7 @@ import type {
 } from '../../../shared/types/transcript'
 import { roleForTranscriptSource, summarizeThoughts } from '../../../shared/transcript'
 import { readSkillNotice, SKILL_NOTICE_TEXT } from '../../../shared/skill-notice'
+import { TOOL_IMAGE_FILE_BLOCK } from '../../../shared/tool-result-images'
 
 // ============================================
 // Types
@@ -62,9 +64,9 @@ export interface StoredEvent {
 
 /** Create a thought ID generator scoped to a single convertEventsToMessages() call.
  *  Avoids module-level mutable state that could race under concurrent reads. */
-function createThoughtIdGenerator(): () => string {
-  let idx = 0
-  return () => `session-thought-${++idx}`
+function createThoughtIdGenerator(start = 0): { next: () => string; count: () => number } {
+  let idx = start
+  return { next: () => `session-thought-${++idx}`, count: () => idx }
 }
 
 // isTransparentTool imported from services/agent/constants — single source of truth.
@@ -120,14 +122,85 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
 export interface ConvertedTranscript {
   messages: TranscriptMessage[]
   openTurnFrom?: string
+  /** With `track`: when each message and thought last changed. */
+  changes?: TranscriptChanges
+  /** With `checkpoints`: points between native turns, in order, for continuing from one later. */
+  checkpoints?: TranscriptCheckpoint[]
+  /**
+   * Converting from a seed: lines of stop marks whose records came before the
+   * events. Those earlier messages changed, which this conversion cannot show.
+   */
+  marksBeforeStart?: number[]
 }
 
-export function convertEventsToTranscript(events: StoredEvent[], lines?: readonly number[]): ConvertedTranscript {
-  const generateThoughtId = createThoughtIdGenerator()
+/**
+ * The line of the last event that created or changed each message and thought
+ * of a conversion (a thought also changes when it stops being the reply text
+ * and joins the process). Whatever was last changed before a line is exactly
+ * what a conversion of the events before that line produced, and stays at the
+ * same place.
+ */
+export interface TranscriptChanges {
+  lineOf(item: TranscriptMessage | Thought): number
+}
+
+/** Conversion state that outlives a native-turn boundary. */
+export interface TranscriptSeed {
+  /** Thought ids generated before; ids continue after it. */
+  thoughtIds: number
+  /** Provenance of the user event the next replies answer. */
+  teamMetadata?: TranscriptMessage['metadata']
+  /** A native turn was started (`system` init) and has not ended. */
+  turnOpen: boolean
+  /** Inputs marked stopped so far; a mark can be read before its record. */
+  stoppedInputs?: string[]
+}
+
+/**
+ * A boundary between native turns: a native turn's start, or a stopped turn's
+ * snapshot. Converting the events after it from `seed` yields exactly the
+ * messages a whole conversion has from `messageCount` on. Later events change
+ * an earlier message only by marking a person's stopped input
+ * (`marksBeforeStart`).
+ */
+export interface TranscriptCheckpoint {
+  /** Index in the converted events of the first event after the boundary. */
+  eventIndex: number
+  /** Messages before the boundary. */
+  messageCount: number
+  /** Id of the last message before the boundary. */
+  lastMessageId?: string
+  seed: TranscriptSeed
+}
+
+export interface ConvertOptions {
+  track?: boolean
+  /** Report boundaries: all of them, or only the latest `latest`. */
+  checkpoints?: boolean | { latest: number }
+  /** Continue from a checkpoint: the events start right after it. */
+  seed?: TranscriptSeed
+  /**
+   * The folder beside the transcript that holds its saved tool images. Their
+   * references are read relative to it, so a copied or moved transcript shows
+   * its own copies.
+   */
+  imagesDir?: string
+}
+
+export function convertEventsToTranscript(events: StoredEvent[], lines?: readonly number[], options: ConvertOptions = {}): ConvertedTranscript {
+  const thoughtIds = createThoughtIdGenerator(options.seed?.thoughtIds ?? 0)
+  const generateThoughtId = thoughtIds.next
 
   const messages: TranscriptMessage[] = []
   const lineOf = (index: number): number => lines?.[index] ?? index + 1
   const messageId = (line: number): string => `session-msg-${line}`
+
+  // Change lines, kept only when asked for (see TranscriptChanges).
+  const changedAt = options.track ? new WeakMap<object, number>() : null
+  let currentLine = 0
+  const touch = (item: object): void => { changedAt?.set(item, currentLine) }
+  const checkpoints: Array<TranscriptCheckpoint & { stoppedCount: number }> | null = options.checkpoints ? [] : null
+  const keepCheckpoints = typeof options.checkpoints === 'object' ? options.checkpoints.latest : Infinity
 
   // Map from SDK tool_use block id → Thought reference (for result merging)
   const toolUseMap = new Map<string, Thought>()
@@ -141,7 +214,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
   // keeps its place before the tools it introduces; flush lifts the last one
   // out as the bubble. hadSubstantiveTool tracks whether a non-transparent tool
   // appeared since it was set.
-  let teamMetadata: TranscriptMessage['metadata']
+  let teamMetadata: TranscriptMessage['metadata'] = options.seed?.teamMetadata
   let lastTextThought: Thought | undefined
   let hadSubstantiveTool = false
 
@@ -160,15 +233,17 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
   let nativeTurnStart = 0
   let lastFlushedAnswer = ''
   /** Index in `messages` where the native turn still running at the end began. */
-  let openTurnStart: number | null = null
+  let openTurnStart: number | null = options.seed?.turnOpen ? 0 : null
   /** Live records waiting for the reply segment they arrived in. */
   let heldLive: TranscriptMessage[] = []
   /** Live records placed this native turn → as held, so a checkpoint replacing its segments can place them again. */
   const placedLive = new Map<TranscriptMessage, TranscriptMessage>()
   const inputIdOf = new WeakMap<TranscriptMessage, string>()
   const recordsByInputId = new Map<string, TranscriptMessage>()
-  /** Outcomes by input id; a mark may be read before or after its record. */
-  const outcomes = new Map<string, 'stopped'>()
+  /** Outcomes by input id; a mark may be read before or after its record. Only ever added to. */
+  const outcomes = new Map<string, 'stopped'>((options.seed?.stoppedInputs ?? []).map(inputId => [inputId, 'stopped']))
+  /** Converting from a seed: marks read whose records are not among the events (yet), by line. */
+  const marksWithoutRecord = options.seed ? new Map<string, number>() : null
 
   const streamBlocks = new Map<number, {
     type: 'text' | 'thinking' | 'tool_use'
@@ -183,12 +258,15 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
   function appendText(text: string, ts: string, separator = '\n\n'): void {
     if (!text) return
     if (!lastTextThought || hadSubstantiveTool) {
+      // The candidate it replaces now shows among the thoughts.
+      if (lastTextThought) touch(lastTextThought)
       lastTextThought = { id: generateThoughtId(), type: 'text', content: text, timestamp: ts }
       pendingThoughts.push(lastTextThought)
     } else {
       lastTextThought.content += separator + text
       lastTextThought.timestamp = ts
     }
+    touch(lastTextThought)
     hadSubstantiveTool = false
   }
 
@@ -213,6 +291,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
       record.thoughtsSummary = summarizeThoughts(thoughts)
     }
 
+    touch(record)
     messages.push(record)
     if (content) lastFlushedAnswer = content
     releaseLive(record.id)
@@ -236,7 +315,10 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
     inputIdOf.set(record, inputId)
     const outcome = outcomes.get(inputId)
     const marked = outcome ? { ...record, metadata: { ...record.metadata, inputOutcome: outcome } } : record
-    if (marked !== record) inputIdOf.set(marked, inputId)
+    if (marked !== record) {
+      inputIdOf.set(marked, inputId)
+      touch(marked)
+    }
     recordsByInputId.set(inputId, marked)
     return marked
   }
@@ -245,6 +327,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
   function releaseLive(replyId?: string): void {
     for (const live of heldLive) {
       const placed = register(replyId ? { ...live, metadata: { ...live.metadata, inputReplyId: replyId } } : live, inputIdOf.get(live))
+      touch(placed)
       messages.push(placed)
       placedLive.set(placed, live)
     }
@@ -266,10 +349,29 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
     }
   }
 
+  /** The state after a native-turn boundary, from which the rest can be converted on its own. */
+  function markCheckpoint(index: number): void {
+    if (!checkpoints) return
+    checkpoints.push({
+      eventIndex: index + 1,
+      messageCount: messages.length,
+      ...(messages.length ? { lastMessageId: messages[messages.length - 1].id } : {}),
+      // The stopped inputs so far are the first `stoppedCount` keys; listed once the latest boundaries are known.
+      stoppedCount: outcomes.size,
+      seed: {
+        thoughtIds: thoughtIds.count(),
+        ...(teamMetadata ? { teamMetadata } : {}),
+        turnOpen: openTurnStart !== null,
+      },
+    })
+    if (checkpoints.length > keepCheckpoints) checkpoints.shift()
+  }
+
   for (let index = 0; index < events.length; index++) {
     const event = events[index]
     const ts = event._ts || new Date().toISOString()
     noteTurnStart(index - 1)
+    currentLine = lineOf(index)
 
     if (event.type === 'system' && event.subtype === 'init') {
       flush()
@@ -277,13 +379,16 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
       streamBlocks.clear()
       toolUseMap.clear()
       openTurnStart = messages.length
+      markCheckpoint(index)
       continue
     }
 
     const skillNotice = readSkillNotice(event)
     if (skillNotice) {
       turnFirstLine ??= lineOf(index)
-      pendingThoughts.push({ id: generateThoughtId(), type: 'system', content: SKILL_NOTICE_TEXT[skillNotice], skillNotice, timestamp: ts })
+      const notice: Thought = { id: generateThoughtId(), type: 'system', content: SKILL_NOTICE_TEXT[skillNotice], skillNotice, timestamp: ts }
+      touch(notice)
+      pendingThoughts.push(notice)
       continue
     }
 
@@ -294,6 +399,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
         const record = recordsByInputId.get(inputId)
         const at = record ? messages.lastIndexOf(record) : -1
         if (at >= 0) messages[at] = register(record!, inputId)
+        else marksWithoutRecord?.set(inputId, lineOf(index))
       }
       continue
     }
@@ -314,19 +420,24 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
         } else if (messages[at].role === 'assistant' && messages[at].source !== 'push') messages.splice(at, 1)
       }
       heldLive = [...replaced, ...heldLive]
+      // What stayed in place from this native turn moved up.
+      for (let at = nativeTurnStart; at < messages.length; at++) touch(messages[at])
       turnFirstLine ??= lineOf(index)
-      pendingThoughts = Array.isArray(event.thoughts) ? event.thoughts as Thought[] : []
+      pendingThoughts = Array.isArray(event.thoughts) ? withSavedImagesIn(event.thoughts as Thought[], options.imagesDir) : []
+      for (const thought of pendingThoughts) touch(thought)
       // The checkpoint's text is the bubble, not one of its thoughts.
       lastTextThought = { id: generateThoughtId(), type: 'text', content: typeof event.content === 'string' ? event.content : '', timestamp: ts }
       pendingResultText = ''
       pendingError = typeof event.error === 'string' ? event.error : undefined
       snapshotUsage = event.tokenUsage as TokenUsage | undefined
       flush()
+      for (const addition of additions) touch(addition)
       messages.push(...additions)
       closeNativeTurn()
       streamBlocks.clear()
       toolUseMap.clear()
       openTurnStart = null
+      markCheckpoint(index)
       continue
     }
 
@@ -336,7 +447,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
       const content = extractTextContent(event.message?.content)
       if (content) {
         const by = parsePushedBy(event._pushedBy)
-        messages.push({
+        const pushed: TranscriptMessage = {
           id: messageId(lineOf(index)),
           role: 'assistant',
           source: 'push',
@@ -346,7 +457,9 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
             pushVia: parsePushVia(event._pushVia),
             ...(by ? { pushedByAppId: by.appId, pushedByName: by.name } : {}),
           },
-        })
+        }
+        touch(pushed)
+        messages.push(pushed)
       }
       continue
     }
@@ -354,7 +467,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
     // ── User events ──
     if (event.type === 'user') {
       const content = event.message?.content
-      const toolResults = extractToolResults(content)
+      const toolResults = extractToolResults(content, options.imagesDir)
 
       if (toolResults.length > 0) {
         // Tool-result user message: merge results into corresponding tool_use thoughts.
@@ -367,6 +480,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
               isError: tr.isError,
               timestamp: ts,
             }
+            touch(toolThought)
           }
         }
       } else {
@@ -412,7 +526,9 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
             if (inputId) inputIdOf.set(record, inputId)
             heldLive.push(record)
           } else {
-            messages.push(register(record, inputId))
+            const registered = register(record, inputId)
+            touch(registered)
+            messages.push(registered)
           }
         }
       }
@@ -448,6 +564,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
             content: block.thinking || '',
             timestamp: ts,
           }
+          touch(thought)
           pendingThoughts.push(thought)
           lastThoughtTs = ts
           streamBlocks.set(index, { type: 'thinking', content: thought.content, thought })
@@ -460,6 +577,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
             toolName: block.name || '',
             toolInput: block.input || {},
           }
+          touch(thought)
           pendingThoughts.push(thought)
           lastThoughtTs = ts
           if (!isTransparentTool(block.name || '')) {
@@ -488,7 +606,10 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
           blockState.content += delta.text || ''
         } else if (blockState.type === 'thinking' && delta?.type === 'thinking_delta') {
           blockState.content += delta.thinking || ''
-          if (blockState.thought) blockState.thought.content = blockState.content
+          if (blockState.thought) {
+            blockState.thought.content = blockState.content
+            touch(blockState.thought)
+          }
         } else if (blockState.type === 'tool_use' && delta?.type === 'input_json_delta') {
           blockState.content += delta.partial_json || ''
         }
@@ -505,6 +626,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
           blockState.thought.toolInput = blockState.content
             ? parseToolInput(blockState.content)
             : (blockState.initialToolInput || {})
+          touch(blockState.thought)
         }
 
         streamBlocks.delete(index)
@@ -545,12 +667,14 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
         }
 
         if (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
-          pendingThoughts.push({
+          const thinking: Thought = {
             id: generateThoughtId(),
             type: 'thinking',
             content: block.thinking,
             timestamp: ts,
-          })
+          }
+          touch(thinking)
+          pendingThoughts.push(thinking)
           lastThoughtTs = ts
         }
 
@@ -563,6 +687,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
             toolName: block.name || '',
             toolInput: block.input || {},
           }
+          touch(thought)
           pendingThoughts.push(thought)
           lastThoughtTs = ts
 
@@ -629,7 +754,31 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
   releaseLive()
 
   const openTurnFrom = openTurnStart !== null && openTurnStart < messages.length ? messages[openTurnStart].id : undefined
-  return { messages, ...(openTurnFrom ? { openTurnFrom } : {}) }
+  const changes = changedAt ? changesOf(messages, changedAt) : undefined
+  const stoppedInputs = checkpoints?.length && outcomes.size ? [...outcomes.keys()] : []
+  const placed = checkpoints?.map(({ stoppedCount, ...checkpoint }): TranscriptCheckpoint => stoppedCount
+    ? { ...checkpoint, seed: { ...checkpoint.seed, stoppedInputs: stoppedInputs.slice(0, stoppedCount) } }
+    : checkpoint)
+  const marksBeforeStart = marksWithoutRecord
+    ? [...marksWithoutRecord].flatMap(([inputId, line]) => recordsByInputId.has(inputId) ? [] : [line])
+    : []
+  return {
+    messages,
+    ...(openTurnFrom ? { openTurnFrom } : {}),
+    ...(changes ? { changes } : {}),
+    ...(placed ? { checkpoints: placed } : {}),
+    ...(marksBeforeStart.length ? { marksBeforeStart } : {}),
+  }
+}
+
+/** A message changes with any of its thoughts, which may be updated after it was emitted. */
+function changesOf(messages: TranscriptMessage[], changedAt: WeakMap<object, number>): TranscriptChanges {
+  for (const message of messages) {
+    let line = changedAt.get(message) ?? 0
+    for (const thought of message.thoughts ?? []) line = Math.max(line, changedAt.get(thought) ?? 0)
+    changedAt.set(message, line)
+  }
+  return { lineOf: item => changedAt.get(item) ?? 0 }
 }
 
 // ============================================
@@ -718,7 +867,7 @@ function pickProvenanceMetadata(raw: unknown): TranscriptProvenanceMetadata {
   return picked
 }
 
-function extractToolResults(content: unknown): Array<{ toolUseId: string; output: string; isError: boolean }> {
+function extractToolResults(content: unknown, imagesDir?: string): Array<{ toolUseId: string; output: string; isError: boolean }> {
   if (!Array.isArray(content)) return []
   return content
     .filter((b: any) => b.type === 'tool_result')
@@ -727,10 +876,67 @@ function extractToolResults(content: unknown): Array<{ toolUseId: string; output
       output: typeof b.content === 'string'
         ? b.content
         : Array.isArray(b.content)
-          ? b.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
+          ? toolOutputOfBlocks(b.content, imagesDir)
           : JSON.stringify(b.content ?? ''),
       isError: !!b.is_error,
     }))
+}
+
+/** A saved image's file name: its content hash and extension. */
+const SAVED_IMAGE_FILE = /([0-9a-f]{16}\.(?:png|jpg|gif|webp))$/
+
+/** A saved image's path inside the transcript's own folder; other paths stay as they are. */
+function reanchor(path: string, imagesDir: string | undefined): string {
+  const name = imagesDir ? SAVED_IMAGE_FILE.exec(path)?.[1] : undefined
+  return name ? join(imagesDir!, name) : path
+}
+
+/**
+ * Text blocks read as their text. A result whose images were saved as files
+ * keeps its blocks as JSON, the form the step's image view reads; images kept
+ * inline (older lines) are left out as before.
+ */
+function toolOutputOfBlocks(blocks: any[], imagesDir?: string): string {
+  if (blocks.some((c: any) => c?.type === TOOL_IMAGE_FILE_BLOCK)) {
+    return JSON.stringify(blocks
+      .filter((c: any) => c?.type === 'text' || c?.type === TOOL_IMAGE_FILE_BLOCK)
+      .map((c: any) => c.type === TOOL_IMAGE_FILE_BLOCK && typeof c.path === 'string' ? { ...c, path: reanchor(c.path, imagesDir) } : c))
+  }
+  return blocks.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
+}
+
+/**
+ * A stopped turn's checkpoint stores its live steps, whose outputs may refer
+ * to saved images — on a step's result, or on a result kept as a step of its
+ * own when its call was not seen; those are read relative to the transcript's
+ * folder too. Returns the same array when nothing refers to an image.
+ */
+function withSavedImagesIn(thoughts: Thought[], imagesDir: string | undefined): Thought[] {
+  if (!imagesDir) return thoughts
+  let changed = false
+  const next = thoughts.map((thought) => {
+    let updated = thought
+    const result = thought.toolResult && rebasedOutput(thought.toolResult.output, imagesDir)
+    if (result !== undefined) updated = { ...updated, toolResult: { ...thought.toolResult!, output: result } }
+    const standalone = rebasedOutput(thought.toolOutput, imagesDir)
+    if (standalone !== undefined) updated = { ...updated, toolOutput: standalone }
+    if (updated !== thought) changed = true
+    return updated
+  })
+  return changed ? next : thoughts
+}
+
+/** An output's saved-image paths read relative to `imagesDir`; undefined when it refers to none. */
+function rebasedOutput(output: string | undefined, imagesDir: string): string | undefined {
+  if (!output?.startsWith('[') || !output.includes(`"type":"${TOOL_IMAGE_FILE_BLOCK}"`)) return undefined
+  let blocks: unknown
+  try {
+    blocks = JSON.parse(output)
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(blocks)) return undefined
+  return JSON.stringify(blocks.map((c: any) => c?.type === TOOL_IMAGE_FILE_BLOCK && typeof c.path === 'string' ? { ...c, path: reanchor(c.path, imagesDir) } : c))
 }
 
 function parseToolInput(raw: string): Record<string, unknown> {

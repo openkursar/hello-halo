@@ -61,6 +61,7 @@ import {
   getStudioSummary,
   moveAppDefaultSpace,
   readAppRunMessages,
+  readAppRunUpdate,
   RunProcessClearedError,
   EscalationAnswerValidationError,
   sendAppChatMessage,
@@ -658,7 +659,7 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:get-session ──────────────────────────────────────────────────────
-    appGetSession: async (input: { appId: string; runId: string }) => {
+    appGetSession: async (input: { appId: string; runId: string; since?: string }) => {
       try {
         const r = requireManager()
         if (!r.success) return r
@@ -668,6 +669,9 @@ export function registerAppHandlers(): void {
           return { success: false, error: `App not found: ${input.appId}` }
         }
 
+        if (typeof input.since === 'string') {
+          return { success: true, data: readAppRunUpdate(input.appId, input.runId, input.since) }
+        }
         const messages = readAppRunMessages(input.appId, input.runId)
         return { success: true, data: messages }
       } catch (error: unknown) {
@@ -843,9 +847,9 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-session-state ─────────────────────────────────────────────
-    appChatSessionState: async (appId: string, conversationId?: string) => {
+    appChatSessionState: async (appId: string, conversationId?: string, since?: string) => {
       try {
-        const state = getAppChatSessionState(appId, conversationId)
+        const state = getAppChatSessionState(appId, conversationId, typeof since === 'string' ? since : undefined)
         return { success: true, data: state }
       } catch (error: unknown) {
         const err = error as Error

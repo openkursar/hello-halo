@@ -402,7 +402,10 @@ from the app runtime status — `running` + `runningRunId === runId`, broadcast 
 `app:status_changed`) it **polls** `app:get-session` every 2s so new blocks/steps
 appear incrementally; on live→idle it does one final reload. The poll exists only
 while the view is open AND the run is live, so unwatched and finished runs incur
-zero cost.
+zero cost. Each read after the first passes the previous answer's cursor
+(`since`) and receives only what changed (`readSessionUpdate`, §2.18): a long
+run's earlier steps are neither transferred nor re-rendered again. Without
+`since` the route answers with the whole message list, as before.
 
 **Mid-run injection**: while a run is live it registers an `ActiveRunHandle` in
 `active-runs.ts` (keyed by `runId`, holding its execution's session handle + JSONL
@@ -1179,6 +1182,45 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   still works but is uncached and logged once.
 - **Codec** (`session-transcript.ts`): the event → message conversion is pure
   and lives apart from the file I/O and the cache in `session-store.ts`.
+- **Reading only what changed.** A conversion asked to `track` records, for
+  every message and thought, the line of the last event that changed it (a
+  thought also changes when it stops being the reply text and joins the
+  process). The cache keeps those lines only once a reader has asked
+  `readSessionUpdate(…, since)`, which answers a reader holding an earlier read
+  with the messages from the first one changed and, in each, only the changed
+  thoughts placed by index (`shared/transcript-update.ts`, applied by
+  `applyTranscriptUpdate`); a cursor names the history it belongs to, so a
+  rewritten or re-parsed file answers whole. A file above 32 MB is converted
+  from the remembered turn start at or before the cursor (below), so a watcher
+  of a long run receives what the run added there too. Equality with a whole
+  read is held by randomized tests over every cut of generated logs, on both
+  sides of the 32 MB limit.
+- **Reading from a message on.** At a native turn's start (`system` init) and
+  after a stopped turn's `turn_snapshot` the conversion state is small
+  (`TranscriptSeed`: thought id count, the provenance replies inherit, an open
+  turn, stopped inputs), and nothing before can change except a stop marking a
+  person's earlier input (`input_outcome`). A `result` is not such a boundary:
+  what follows a turn's result may still revise its reply. `readSessionMessagesFrom(…, from)`
+  equals `readSessionMessages(…).slice(from)`; for a file above 32 MB it
+  remembers the newest boundaries it saw (a file that shrank or changed before
+  one forgets them) and parses only from the last one at or before `from`, never
+  the whole file again. An incremental read whose events mark an input recorded
+  before its starting boundary answers whole. The federation serializer reads a
+  member's tail this way; the same equality tests cover every boundary.
+- **Tool images.** A tool result's images are written to `<runId>.images/`
+  beside the transcript and referenced from the line
+  (`services/agent/tool-result-images.ts`). The writer derives the folder from
+  its own file; the chat entry hands the same folder (`transcriptImagesDir`) to
+  the live stream, so the step on screen and the line name one file. The
+  folder goes with its transcript: `deleteRunTranscript` (run retention)
+  removes it, clearing a chat removes it (and fails like the transcript's own
+  clear when it cannot), `copySessionJsonl` gives the copy its own names for the
+  files (hard links; a copy where links are unavailable), and app data
+  relocation moves it with the `runs/` folder. References are read
+  relative to the transcript's current folder, so a copy shows its own files
+  and a moved record still finds them. The codec keeps a result with
+  references as its blocks' JSON so the step shows the image. Older lines with
+  inline images read as before (text only).
 - **Provenance.** A user-side record may carry `_source`
   (`injection` | `cross-conversation` | `cross-conversation-notice` |
   `team-message`) and `_metadata` (the flat fields space conversations persist:

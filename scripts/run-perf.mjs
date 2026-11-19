@@ -26,7 +26,7 @@ const PROJECT_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..')
 const playwrightArgs = process.argv.slice(2)
 
 if (!playwrightArgs.some((a) => a.startsWith('--project'))) {
-  console.error('run-perf: pass --project=<perf|perf-release|perf-soak>')
+  console.error('run-perf: pass --project=<perf|perf-release|perf-soak|perf-long-work>')
   process.exit(2)
 }
 

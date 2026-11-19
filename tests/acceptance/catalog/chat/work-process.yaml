@@ -1,0 +1,77 @@
+version: 1
+id: chat.work-process
+module: chat
+title:
+  en: See what the AI looked at
+  zh: 看到 AI 看过的内容
+story:
+  en: When I open a step of a reply's work process, I see what that step returned, including the images the AI looked at.
+  zh: 点开回复工作经过中的一步，能看到这一步的结果，包括 AI 看过的图片。
+basis: documented
+references:
+  - src/main/services/agent/tool-result-images.ts
+  - src/shared/tool-result-images.ts
+  - src/renderer/components/chat/tool-result/ToolResultImages.tsx
+  - tests/e2e/specs/acceptance-work-process-images.spec.ts
+promises:
+  tool-image:
+    en: A step that read an image shows the image itself on the desktop, during the reply, after it and after a restart; the model still receives the image.
+    zh: 读取图片的那一步，在电脑上直接显示图片本身：回复进行中、结束后、重启后都是如此；模型照常收到这张图片。
+  image-elsewhere:
+    en: Where the image file cannot be opened (remote web, the mobile app, a teammate's computer that did not run the step), the step names the image and its size on one line.
+    zh: 打不开图片文件的地方（远程网页、手机 App、没有执行这一步的队友电脑），这一步用一行写出图片名称和大小。
+scenarios:
+  - id: chat.work-process.tool-image
+    title:
+      en: Open a step that read an image
+      zh: 点开读取图片的步骤
+    verifies:
+      - tool-image
+    platforms: &desktop
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    variants:
+      surface:
+        - space
+        - digital-human
+    preconditions:
+      - en: A scripted model asks the real Read tool to read a PNG in the workspace.
+        zh: 脚本模型让真实的 Read 工具读取工作区里的一张 PNG。
+    steps:
+      - en: Send the request, open the reply's work process and the Read step's result; restart and open it again.
+        zh: 发送请求，展开回复的工作经过并打开 Read 这一步的结果；重启后再打开一次。
+    expected:
+      - en: The image is shown from its saved file both times, the model received the image, and the stored work process holds a reference rather than the image data.
+        zh: 两次都从保存的文件显示图片，模型收到了图片，保存的工作经过里是引用而不是图片数据。
+    requirements:
+      - halo-sdk
+  - id: chat.work-process.tool-image-remote
+    title:
+      en: A step that read an image, seen from a remote client
+      zh: 在远程客户端查看读取图片的步骤
+    verifies:
+      - image-elsewhere
+    platforms: *desktop
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Remote access is on and a reply read an image.
+        zh: 已开启远程访问，有一条回复读取过图片。
+    steps:
+      - en: Open the reply's work process in a remote web client and the step's result.
+        zh: 在远程网页中展开这条回复的工作经过并打开这一步的结果。
+    expected:
+      - en: The step shows one line with the image name and size.
+        zh: 这一步显示一行图片名称和大小。
+    notes:
+      en: The line is covered by a renderer unit test (tests/unit/renderer/tool-result-images.test.ts); no remote-client journey runs it yet.
+      zh: 这一行由渲染单元测试覆盖（tests/unit/renderer/tool-result-images.test.ts），还没有远程客户端的端到端流程。

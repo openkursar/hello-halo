@@ -152,7 +152,7 @@ import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
 import { withheldWebSearch, withholdWebSearchBuiltins } from './web-search-switch'
 import { getSpace, getSpaceDir, isSpaceMemoryEnabled } from '../../services/space.service'
-import { readSessionMessages, readSessionTranscript, readSessionMessageThoughts, loadChatEngineState, copyChatEngineState, saveChatEngineRouting, reloadChatInstructions, deleteChatSessionId, copySessionJsonl } from './session-store'
+import { readSessionMessages, readSessionMessagesFrom, readSessionTranscript, readSessionMessageThoughts, transcriptImagesDir, deleteTranscriptImages, loadChatEngineState, copyChatEngineState, saveChatEngineRouting, reloadChatInstructions, deleteChatSessionId, copySessionJsonl } from './session-store'
 import { prepareAppEngineSession, resolveAppSessionEngine } from './engine-selection'
 import type { Thought, TranscriptMessage, TranscriptPageRequest, TranscriptProvenance } from '../../../shared/types/transcript'
 import { getAppMemoryService, getActivityStore } from './index'
@@ -1570,7 +1570,8 @@ async function runAppChatTurn(
       resumeSessionId,
       workDir,
       { displayModel: resolvedCreds.displayModel, contextWindow: resolvedCreds.capabilities?.contextWindow,
-        sink: bindAppChatEngine(sink, { spacePath, appId, runId: chatRunId, engineId, expected: engineState }) },
+        sink: bindAppChatEngine(sink, { spacePath, appId, runId: chatRunId, engineId, expected: engineState }),
+        toolImagesDir: () => transcriptImagesDir(spacePath, appId, chatRunId) },
       undefined,
       undefined,
       undefined,
@@ -2049,8 +2050,10 @@ export function loadImChatMessages(
  *
  * Single source of truth for the team-channel read, shared by the
  * `team:chat-messages` IPC handler and the team read-only HTTP route.
+ * `from` (0-based) returns only the messages from there on, without reading a
+ * large transcript whole when that can be avoided.
  */
-export function readTeamMemberMessages(appId: string, teamId: string, epochId: string): any[] {
+export function readTeamMemberMessages(appId: string, teamId: string, epochId: string, from?: number): any[] {
   const app = getAppManager()?.getApp(appId)
   const execution = !app ? getTeamStore()?.participants.getExecution(teamId, epochId, appId) : null
   const spaceId = app?.spaceId ?? execution?.environment.spaceId ?? null
@@ -2059,7 +2062,7 @@ export function readTeamMemberMessages(appId: string, teamId: string, epochId: s
   const spacePath = chatRecordPath(appId, conversationId, getSpace(spaceId)?.path ?? '')
   if (!spacePath) return []
   const runId = deriveRunId(conversationId, appId)
-  return readSessionMessages(spacePath, appId, runId)
+  return from === undefined ? readSessionMessages(spacePath, appId, runId) : readSessionMessagesFrom(spacePath, appId, runId, from)
 }
 
 /**
@@ -2143,20 +2146,27 @@ export function loadChatMessageThoughts(
  * @param conversationId - Optional specific session; defaults to the app's
  *   native default session ("app-chat:{appId}"). Native local sessions pass
  *   their own "app-chat:{appId}:local:direct:{uuid}" key.
+ * @param since - For a reader polling a running turn: the `thoughtsRevision`
+ *   of its previous read ('' at first). The answer then holds only the thoughts
+ *   changed since, placed by `thoughtsDelta`.
  */
-export function getAppChatSessionState(appId: string, conversationId?: string): {
+export function getAppChatSessionState(appId: string, conversationId?: string, since?: string): {
   isActive: boolean
   thoughts: any[]
   spaceId?: string
+  thoughtsRevision?: string
+  thoughtsDelta?: { total: number; at: number[] }
 } {
   const convId = conversationId ?? getAppChatConversationId(appId)
-  const state = getSessionState(convId)
+  const state = since === undefined ? getSessionState(convId) : getSessionState(convId, { since })
   return {
     // A message still starting or a queued round has no turn state yet, but the
     // client is already waiting on it and must not be told the session went idle.
     isActive: state.isActive || isAppChatConversationGenerating(convId),
     thoughts: state.thoughts,
     spaceId: state.spaceId,
+    ...(state.thoughtsRevision !== undefined ? { thoughtsRevision: state.thoughtsRevision } : {}),
+    ...(state.thoughtsDelta ? { thoughtsDelta: state.thoughtsDelta } : {}),
   }
 }
 
@@ -2212,7 +2222,7 @@ async function clearHeldSession(conversationId: string, appId: string, spaceId: 
   // 3. Clean up scoped browser context
   destroyChatBrowserContext(conversationId, 'session-cleared')
 
-  // 4. Clear the JSONL file and saved sessionId
+  // 4. Clear the JSONL file, its saved images and the saved sessionId
   const spacePath = chatRecordPath(appId, conversationId, getSpace(spaceId)?.path ?? '')
   if (spacePath) {
     const runId = deriveRunId(conversationId, appId)
@@ -2224,6 +2234,13 @@ async function clearHeldSession(conversationId: string, appId: string, spaceId: 
         console.error(`[AppChat][${appId}] Failed to clear transcript for ${conversationId}:`, error)
         throw error
       }
+    }
+    try {
+      deleteTranscriptImages(spacePath, appId, runId)
+    } catch (error) {
+      // Like the transcript: the clear is reported as failed, and clearing again retries.
+      console.error(`[AppChat][${appId}] Failed to remove saved images for ${conversationId}:`, error)
+      throw error
     }
     // Remove saved sessionId so next session starts truly fresh
     deleteChatSessionId(spacePath, appId, runId)
