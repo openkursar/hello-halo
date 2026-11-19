@@ -1,13 +1,13 @@
 [
   {
     "name": "spawn_agent",
-    "description": "Create a collaborator in your current work context and give it its first assignment. Returns promptly; the collaborator works independently. It does not see your conversation history. Include relevant context, limits and the expected result. You can message it again with team_send and create more collaborators as needed. No team setup or shared goal is required.",
+    "description": "Create a collaborator in your current work context and give it its first assignment. Returns promptly; the collaborator works independently in its own context and does not see your conversation history. To continue related work, message an existing collaborator with team_send; it keeps its context.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "prompt": {
           "type": "string",
-          "description": "Self-contained assignment, relevant inputs, permitted actions and expected evidence.",
+          "description": "Self-contained assignment; the collaborator sees nothing else.",
           "minLength": 1
         },
         "name": {

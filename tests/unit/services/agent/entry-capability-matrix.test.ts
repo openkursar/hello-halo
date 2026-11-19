@@ -264,6 +264,7 @@ vi.mock('../../../../src/main/services/conversation.service', () => ({
 vi.mock('../../../../src/main/services/space.service', async () => {
   const { resolveMemoryLayout } = await import('../../../../src/main/platform/memory/paths')
   return {
+    hasSpace: () => true,
     getSpace: () => ({ id: 'space-1', path: state.workDir }),
     getSpaceDir: () => state.workDir,
     isSpaceMemoryEnabled: () => state.memoryEnabled,
@@ -379,7 +380,7 @@ const { app, environment } = vi.hoisted(() => {
     status: 'active',
     permissions: { granted: [], denied: [] },
     userConfig: {},
-    userOverrides: undefined,
+    userOverrides: {},
     spec: {
       name: 'Tester',
       type: 'automation',
@@ -395,13 +396,14 @@ const { app, environment } = vi.hoisted(() => {
   }
 })
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: () => ({ getApp: () => app, getAppWorkDir: () => '/tmp/halo-matrix/app' }),
+  // A run reads the installed record, so overrides live there, not only on the caller's copy.
+  getAppManager: () => ({ getApp: () => ({ ...app, userOverrides: { disabledTools: state.appDisabledTools } }), getAppWorkDir: () => '/tmp/halo-matrix/app' }),
 }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveChatEnvironment: () => environment,
   resolveExecutionEnvironment: () => environment,
-  validateExecutionEnvironment: vi.fn(),
-  validateEnvironmentConnections: vi.fn(),
+  validateExecutionEnvironment: vi.fn(environment => environment),
+  validateEnvironmentConnections: vi.fn(() => ({ changed: false, changedSpecIds: [] })),
   missingConnections: vi.fn(() => []),
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy:${appId}:${runId}`,
   appChatRunId: (conversationId: string, appId: string) => `run-${conversationId}-${appId}`,

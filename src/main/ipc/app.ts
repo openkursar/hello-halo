@@ -970,7 +970,7 @@ export function registerAppHandlers(): void {
     // Create a fresh native client-side chat session for a digital human.
     appSessionCreate: async (input: { appId: string }) => {
       try {
-        const result = createNativeChatSession(input.appId)
+        const result = await createNativeChatSession(input.appId)
         console.log(`[AppIPC] app:session-create: appId=${input.appId} conversationId=${result.conversationId}`)
         return { success: true, data: result }
       } catch (error: unknown) {
@@ -986,7 +986,7 @@ export function registerAppHandlers(): void {
     // on the engine's sessionFork capability.
     appSessionFork: async (input: { appId: string; spaceId: string; sourceConversationId: string }) => {
       try {
-        const result = forkNativeChatSession(input.appId, input.spaceId, input.sourceConversationId)
+        const result = await forkNativeChatSession(input.appId, input.spaceId, input.sourceConversationId)
         console.log(`[AppIPC] app:session-fork: appId=${input.appId} from=${input.sourceConversationId} to=${result.conversationId}`)
         return { success: true, data: result }
       } catch (error: unknown) {

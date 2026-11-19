@@ -21,7 +21,7 @@ import type {
   AISource,
   ModelOption,
 } from '../../../shared/types/ai-sources'
-import { getSourceAccountName } from '../../../shared/types/ai-sources'
+import { accountSearchText, filterAccountModels, modelSearchWords } from '../ai-config/account-model-search'
 
 export interface GroupDraft {
   name: string
@@ -177,14 +177,6 @@ export interface PickerAccount {
   models: ModelOption[]
 }
 
-function searchText(...parts: Array<string | undefined>): string {
-  return parts.filter(Boolean).join(' ').toLocaleLowerCase()
-}
-
-function matchesAll(text: string, words: readonly string[]): boolean {
-  return words.every(word => text.includes(word))
-}
-
 /**
  * The accounts and models the "add a model" panel offers for a search. Words
  * may name the account, the model or both ("claude sonnet"). Accounts that
@@ -192,18 +184,15 @@ function matchesAll(text: string, words: readonly string[]): boolean {
  * why they are missing instead of leaving people to wonder.
  */
 export function pickerAccounts(sources: readonly AISource[], query: string): PickerAccount[] {
-  const words = query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
+  const words = modelSearchWords(query)
   const accounts: PickerAccount[] = []
   for (const source of sources) {
     const unusable: PickerAccount['unusable'] = source.authType === 'delegated'
       ? 'cli-account'
       : isSourceGroupEligible(source) ? undefined : 'not-signed-in'
-    const all = listSourceModels(source)
-    const accountText = searchText(source.name, source.provider, getSourceAccountName(source))
-    const models = words.length === 0
-      ? all
-      : all.filter(model => matchesAll(`${accountText} ${searchText(model.name, model.id)}`, words))
-    if (words.length > 0 && models.length === 0 && !(unusable && matchesAll(accountText, words))) continue
+    const accountText = accountSearchText(source)
+    const models = filterAccountModels(listSourceModels(source), accountText, words)
+    if (words.length > 0 && models.length === 0 && !(unusable && words.every(word => accountText.includes(word)))) continue
     accounts.push({ source, ...(unusable ? { unusable } : {}), models })
   }
   return [...accounts.filter(account => !account.unusable), ...accounts.filter(account => account.unusable)]

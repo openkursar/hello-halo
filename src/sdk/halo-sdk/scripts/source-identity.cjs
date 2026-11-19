@@ -14,7 +14,8 @@ function sourceIdentity(workspace) {
       hash.update(path.slice(workspace.length).replaceAll('\\', '/')).update('\0').update(readFileSync(path)).update('\0');
     }
   };
-  for (const input of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates', 'bindings/node/crate', 'scripts/source-identity.cjs']) {
+  for (const input of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates', 'bindings/node/crate',
+    'bindings/node/collaboration/model-selection-limits.json', 'scripts/source-identity.cjs']) {
     visit(join(workspace, input));
   }
   return hash.digest('hex');

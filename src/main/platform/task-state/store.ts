@@ -40,6 +40,7 @@ export class TaskStateStore {
   private readonly stmtDelete: Database.Statement
   private readonly stmtDeleteAllInSpace: Database.Statement
   private readonly stmtDeleteByPrefix: Database.Statement
+  private readonly stmtRepointByPrefix: Database.Statement
   private readonly stmtDeleteExpiredRead: Database.Statement
   private readonly stmtListAll: Database.Statement
 
@@ -93,6 +94,12 @@ export class TaskStateStore {
     this.stmtDeleteByPrefix = db.prepare(`
       DELETE FROM conversation_task_state
       WHERE conversation_id = @id OR substr(conversation_id, 1, length(@prefix)) = @prefix
+    `)
+
+    this.stmtRepointByPrefix = db.prepare(`
+      UPDATE conversation_task_state SET space_id = @space_id
+      WHERE (conversation_id = @id OR substr(conversation_id, 1, length(@prefix)) = @prefix)
+        AND space_id != @space_id
     `)
 
     this.stmtDeleteExpiredRead = db.prepare(`
@@ -158,6 +165,11 @@ export class TaskStateStore {
   /** Deletes the row for `id` and every row whose id extends it with `:`. */
   deleteIdAndChildren(id: string): void {
     this.stmtDeleteByPrefix.run({ id, prefix: `${id}:` })
+  }
+
+  /** Repoints only the space of `id` and its `:` descendants; returns changed rows. */
+  repointIdAndChildren(id: string, spaceId: string): number {
+    return this.stmtRepointByPrefix.run({ id, prefix: `${id}:`, space_id: spaceId }).changes
   }
 
   /** Deletes expired, non-kept 'read' rows. Returns the number of rows removed. */

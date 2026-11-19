@@ -40,6 +40,7 @@ import {
 import { emitAgentEvent, emitHumanRequest } from './events'
 import {
   acquireV2Session,
+  v2Sessions,
   getSessionEngineId,
   isSessionBusy,
   updateConsumerDisplayModel,
@@ -53,6 +54,7 @@ import { formatTurnAttachments } from './references'
 import { opensWithSlashCommand } from './opening-context'
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { captureToolsetExecutionOptions, resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
+import { captureDelegatedModelContext, getSessionDelegatedModelContext, setSessionDelegatedModelContext } from './delegated-model'
 import { resolveSpaceMemorySession, buildSpaceMemoryPreamble } from './space-memory'
 import { applyReasoningEffort, pickReasoningEffort } from './reasoning-effort'
 import { createConversationSink } from './conversation-sink'
@@ -65,6 +67,7 @@ import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 import { COMMAND_ENVIRONMENT_NOT_INSTALLED_ERROR } from '../../../shared/constants/agent-errors'
 import type { TranscriptMessageMetadata } from '../../../shared/types/transcript'
+import { assertSpaceOperationCurrent, isSpaceUnderMaintenance, runSpaceOperation } from './space-maintenance'
 
 // ============================================
 // Send Message
@@ -93,7 +96,17 @@ export async function sendMessage(
   request: AgentRequest,
   internal?: InternalSendOptions,
 ): Promise<void> {
+  return runSpaceOperation(request.spaceId, request.conversationId, async signal => {
+    try {
+      await sendMessageInner(request, signal, internal)
+    } catch (error) {
+      if (signal.aborted) emitAgentEvent('agent:complete', request.spaceId, request.conversationId, { type: 'complete', duration: 0 })
+      throw error
+    }
+  })
+}
 
+async function sendMessageInner(request: AgentRequest, maintenanceSignal: AbortSignal, internal?: InternalSendOptions): Promise<void> {
   const {
     spaceId,
     conversationId,
@@ -122,6 +135,7 @@ export async function sendMessage(
   const thinkingEnabled = request.thinkingEnabled ?? (internal ? inheritedReasoning?.thinkingEnabled ?? true : false)
   const requestedEffort = pickReasoningEffort(request.reasoningEffort, inheritedReasoning?.effort)
   const engineId = await resolveConversationEngine(originalConversation, getSessionEngineId(conversationId), isSessionBusy(conversationId))
+  assertSpaceOperationCurrent(maintenanceSignal)
   const turnGoal = request.goal ? prepareGoalInput(request.goal, engineId) : null
 
   console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}${references?.length ? `, references=${references.length}` : ''}${task ? `, task=${task.type}/${task.variant}` : ''}`)
@@ -172,11 +186,13 @@ export async function sendMessage(
   let goalApplied = false
   let dispatchAttempted = false
   let failureReported = false
+  let failureSettlement: Promise<void> | undefined
+  let failureSignal: AbortSignal | undefined
 
   // Resolves once the failure is in the chat; the pre-dispatch path awaits it
   // so a late error cannot land on the user's next send.
   const reportFailure = (error: unknown): Promise<void> => {
-    if (failureReported) return Promise.resolve()
+    if (failureReported || maintenanceSignal.aborted) return Promise.resolve()
     failureReported = true
     const err = error as Error
     if (err.name === 'AbortError') {
@@ -195,7 +211,10 @@ export async function sendMessage(
     const fallbackMessage = err.message || 'Unknown error. Check logs in Settings > System > Logs.'
     if (process.platform === 'win32' && isCommandEnvironmentFailure(fallbackMessage, stderrBuffer)) {
       // Loaded on demand: git-bash (and its installer) stays out of the first startup phase.
-      return import('../git-bash')
+      if (isSpaceUnderMaintenance(spaceId)) return Promise.resolve()
+      return failureSettlement = runSpaceOperation(spaceId, conversationId, async signal => {
+        failureSignal = signal
+        await import('../git-bash')
         .then(({ detectGitBash }) => detectGitBash().found ? fallbackMessage : COMMAND_ENVIRONMENT_NOT_INSTALLED_ERROR)
         .catch(e => {
           console.error(`[Agent][${conversationId}] Git Bash check after failed send failed:`, e)
@@ -203,12 +222,14 @@ export async function sendMessage(
         })
         .then(message => deliverFailure(error, message))
         .catch(e => console.error(`[Agent][${conversationId}] Failed to report send failure:`, e))
+      }).catch(e => console.error(`[Agent][${conversationId}] Failure settlement was cancelled:`, e))
     }
     deliverFailure(error, fallbackMessage)
     return Promise.resolve()
   }
 
   const deliverFailure = (error: unknown, detectedMessage: string): void => {
+    if (maintenanceSignal.aborted || failureSignal?.aborted || isSpaceUnderMaintenance(spaceId)) return
     const err = error as Error
     let errorMessage = detectedMessage
     if (stderrBuffer && errorMessage !== COMMAND_ENVIRONMENT_NOT_INSTALLED_ERROR) {
@@ -251,6 +272,7 @@ export async function sendMessage(
       beforeMessageId: userMessage.id, legacySessionId: resumeSessionId,
       excludedHistoryMessageIds: internal?.excludedHistoryMessageIds,
     })
+    assertSpaceOperationCurrent(maintenanceSignal)
     const sessionId = continuation.resumeSessionId
 
     // The conversation's pinned account, or the global selection when it has
@@ -262,6 +284,7 @@ export async function sendMessage(
     // The conversation's own level wins over one the send carries (API callers).
     const pickedEffort = pickReasoningEffort(conversation?.reasoningEffort, requestedEffort)
     const resolvedCredentials = await resolveCredentialsForSdk(credentials, pickedEffort, engineId)
+    assertSpaceOperationCurrent(maintenanceSignal)
     const electronPath = getHeadlessElectronPath()
 
     // Non-vision models can't receive image blocks: persist images to files and
@@ -294,6 +317,8 @@ export async function sendMessage(
       Object.assign(record, buildCreationTimeServers({
         spaceId, conversationId, workDir, toolContextMode,
         executionOptions: () => captureToolsetExecutionOptions(sdkOptions, engineId, record),
+        modelContext: credentials.sourceId ? () => getSessionDelegatedModelContext(v2Sessions.get(conversationId)?.session) ?? captureDelegatedModelContext(
+          { modelSourceId: credentials.sourceId!, modelId: credentials.model }, engineId, sdkOptions, undefined, credentials.capabilities) : undefined,
         requiredToolsets: imageFallback ? [OCR_TOOLSET_ID] : undefined,
         modelSelection: credentials.sourceId
           ? { modelSourceId: credentials.sourceId, modelId: credentials.model }
@@ -341,6 +366,7 @@ export async function sendMessage(
       memoryGuard: spaceMemory?.guard,
     })
 
+    assertSpaceOperationCurrent(maintenanceSignal)
     sdkOptions.strictNativeResume = continuation.strictNativeResume
     if (continuation.engineHandoffContent) sdkOptions.engineHandoffContent = continuation.engineHandoffContent
 
@@ -363,6 +389,7 @@ export async function sendMessage(
       buildMcpServers,
       resolveKnowledgeBases,
       {
+        maintenanceSignal,
         creationContext: spaceMemory?.contextKey,
         toolsetInstructions: (mode: ToolsetContextMode) => engineId === 'halo' ? buildToolsetSection(spaceId, conversationId, mode) : '',
         recoverNativeSession: sessionId ? async () => (await prepareConversationContinuation(
@@ -375,6 +402,7 @@ export async function sendMessage(
       reportFailure
     )
 
+    assertSpaceOperationCurrent(maintenanceSignal)
     const v2Session = sessionLease.session
 
     // Ensure consumer's displayModel is up-to-date.
@@ -392,6 +420,8 @@ export async function sendMessage(
       if (v2Session.setMaxThinkingTokens) {
         await v2Session.setMaxThinkingTokens(thinkingBudget)
       }
+      if (credentials.sourceId) setSessionDelegatedModelContext(v2Session, captureDelegatedModelContext(
+        { modelSourceId: credentials.sourceId, modelId: credentials.model }, engineId, sdkOptions, undefined, credentials.capabilities))
     } catch (e) {
       console.error(`[Agent][${conversationId}] Failed to set dynamic params:`, e)
     }
@@ -415,6 +445,7 @@ export async function sendMessage(
     const memoryPreamble = spaceMemory && !sessionId && !opensWithSlashCommand(turnMessage)
       ? await buildSpaceMemoryPreamble(spaceMemory.layout, conversationId)
       : ''
+    assertSpaceOperationCurrent(maintenanceSignal)
     const messageWithContext = memoryPreamble + turnMessage
     const messageContent = buildMessageContent(messageWithContext, imageFallback ? undefined : images)
 
@@ -433,7 +464,9 @@ export async function sendMessage(
     console.log(`[Agent][${conversationId}] Message sent to REPL (${typeof messageContent === 'string' ? messageContent.length : 'multi-modal'} chars). Consumer handles response.`)
 
   } catch (error: unknown) {
-    if (!dispatchAttempted) {
+    if (maintenanceSignal.aborted) {
+      if (!dispatchAttempted) emitAgentEvent('agent:complete', spaceId, conversationId, { type: 'complete', duration: 0 })
+    } else if (!dispatchAttempted) {
       if (!sessionLease || sessionLease.isCurrent) {
         await reportFailure(error)
       } else {
@@ -443,5 +476,6 @@ export async function sendMessage(
     }
   } finally {
     sessionLease?.release()
+    await failureSettlement
   }
 }

@@ -240,10 +240,10 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/apps/:appId/move-space': {
       expose: 'ai',
       group: ['digital-human', 'workspace'],
-      summary: 'Set which space a digital human starts new work in',
+      summary: 'Move a digital human and all its memory and conversations to another space',
       body: '{"newSpaceId": "<spaceId — a uuid from GET /api/spaces>"}',
       returns: '{success:true,data:{}}',
-      notes: 'Changes the default only: work already running, existing chat sessions and team work keep the environment they started in. A digital human must belong to a space, so newSpaceId is required — null is rejected. Nothing is stopped or restarted. 404 if appId does not exist; 400 if newSpaceId is an empty string.',
+      notes: 'Confirm the move with the user first: ongoing runs and replies are stopped. Memory, all conversations and pending decisions move together; project files stay in their project folder. Read the destination space before choosing it. A digital human must belong to a space, so newSpaceId is required — null is rejected. 404 if appId does not exist; 400 if newSpaceId is an empty string.',
       impact: 'reversible',
     },
 

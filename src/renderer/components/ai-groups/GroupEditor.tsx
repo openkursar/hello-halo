@@ -8,6 +8,7 @@ import { ArrowDown, ArrowUp, GripVertical, Loader2, Plus, X } from 'lucide-react
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { Disclosure } from '../ui/Disclosure'
+import { inlineFormPrimary, inlineFormSecondary } from '../ui/inline-form-actions'
 import type { AIGroup, AIGroupMember, AIGroupStrategy, AISourcesConfig } from '../../types'
 import {
   MAX_GROUP_MEMBERS,
@@ -362,14 +363,14 @@ export function GroupEditor({ aiSources, group, onSaved, onCancel, onAddProvider
           type="button"
           onClick={onCancel}
           disabled={saving}
-          className="min-h-11 sm:min-h-9 rounded-lg bg-secondary px-4 text-sm text-foreground hover:bg-surface-hover disabled:opacity-50"
+          className={inlineFormSecondary}
         >
           {t('Cancel')}
         </button>
         <button
           type="submit"
           disabled={saving || (!hasUsableAccount && draft.members.length === 0)}
-          className="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-50 sm:min-h-9"
+          className={inlineFormPrimary}
         >
           {saving && <Loader2 size={16} className="animate-spin" />}
           {group ? t('Save') : t('Create')}

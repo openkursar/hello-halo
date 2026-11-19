@@ -28,10 +28,11 @@
  */
 
 import { randomUUID } from 'crypto'
+import { resolveExternalRuntimeLaunch, type RuntimeLaunch } from '../../external-runtime'
+import { EngineUnavailableError } from '../resolved-sdk'
 import { NativeSessionResumeError } from '../../../../shared/types/engine-session'
 import {
   createCodexConnection,
-  resolveBundledCodexBinary,
   type CodexConnection,
 } from './transport/connection'
 import { JsonRpcClient } from './transport/jsonrpc-client'
@@ -98,6 +99,7 @@ export class CodexAppServerSession {
   private exitListeners = new Set<(error?: Error) => void>()
   private pendingHaloQuestionIds = new Set<string>()
   private serverHandlerDisposer: (() => void) | null = null
+  private abortDisposer: (() => void) | null = null
 
   /**
    * Implements V2SDKSession.query — the CC SDK shape Halo's session-manager
@@ -123,7 +125,7 @@ export class CodexAppServerSession {
     supportedCommands: () => Promise<unknown[]>
   }
 
-  private constructor(options: CodexResolvedOptions, sessionId: string, opts: AdapterOptions) {
+  private constructor(options: CodexResolvedOptions, sessionId: string, opts: AdapterOptions, private readonly launch: RuntimeLaunch) {
     this.initialSessionId = sessionId
     this.options = options
     this.opts = opts
@@ -157,16 +159,40 @@ export class CodexAppServerSession {
   }
 
   static async create(sdkOptions: Record<string, any>): Promise<CodexAppServerSession> {
+    const signal = sdkOptions.abortController?.signal as AbortSignal | undefined
+    signal?.throwIfAborted()
+    const launch = await resolveExternalRuntimeLaunch('codex', { signal })
+    if (!launch) throw new EngineUnavailableError('codex', 'No compatible Codex installation is selected')
     const options = await resolveCodexOptions(sdkOptions)
+    if (signal?.aborted) {
+      await options.mcpBridge?.close()
+      signal.throwIfAborted()
+    }
     const sessionId = (sdkOptions.resume as string | undefined) || randomUUID()
     const adapter = new CodexAppServerSession(options, sessionId, {
       spaceId: sdkOptions.spaceId,
       conversationId: sdkOptions.conversationId,
       resume: sdkOptions.resume,
       strictNativeResume: sdkOptions.strictNativeResume === true,
-    })
-    await adapter.start()
-    return adapter
+    }, launch)
+    if (signal) {
+      const abort = () => {
+        console.warn('[Codex][session] Execution cancelled; closing owned native resources')
+        void adapter.close().catch(error => console.error('[Codex][session] Cancelled execution cleanup failed:', error))
+      }
+      signal.addEventListener('abort', abort, { once: true })
+      adapter.abortDisposer = () => signal.removeEventListener('abort', abort)
+      if (signal.aborted) abort()
+    }
+    try {
+      signal?.throwIfAborted()
+      await adapter.start()
+      signal?.throwIfAborted()
+      return adapter
+    } catch (error) {
+      await adapter.close()
+      throw error
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -184,17 +210,9 @@ export class CodexAppServerSession {
   }
 
   private async doStart(): Promise<void> {
-    const resolvedBinary = resolveBundledCodexBinary()
-    if (!resolvedBinary) {
-      throw new Error(
-        '[Codex] Could not find the codex binary. Make sure @openai/codex and its platform package are installed.',
-      )
-    }
-
+    if (this.closed) throw new Error('Codex session creation was cancelled')
     const connection = createCodexConnection({
-      binaryPath: resolvedBinary.binaryPath,
-      isJsShim: resolvedBinary.isJsShim,
-      pathDirs: resolvedBinary.pathDirs,
+      launch: this.launch,
       env: this.options.env,
       cwd: this.options.cwd,
       onStderr: (line) => {
@@ -206,6 +224,10 @@ export class CodexAppServerSession {
     })
     this.connection = connection
     await connection.start()
+    if (this.closed) {
+      await connection.stop()
+      throw new Error('Codex session creation was cancelled')
+    }
 
     const rpc = new JsonRpcClient({
       stdin: connection.stdin,
@@ -444,6 +466,8 @@ export class CodexAppServerSession {
 
   private async disposeResources(): Promise<void> {
     this.closed = true
+    this.abortDisposer?.()
+    this.abortDisposer = null
 
     // Reject any AskUserQuestion bridges waiting on user input.
     for (const id of this.pendingHaloQuestionIds) {

@@ -2,7 +2,6 @@ pub mod anthropic_request;
 pub mod cache;
 pub mod provider;
 pub mod transport;
-pub mod image_budget;
 pub mod model_quirks;
 pub mod openai_request;
 pub mod openai_stream;

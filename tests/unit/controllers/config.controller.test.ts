@@ -71,18 +71,22 @@ describe('read-only build defaults', () => {
 })
 
 describe('explicit external engine choice', () => {
-  it.each([
-    [{ sdkEngine: 'anthropic' }, true],
-    [{ sdkEngine: 'anthropic', maxTurns: 200 }, false],
-    [{ sdkEngine: 'anthropic', ccRuntime: { selectedPath: '/untrusted' } }, false],
-  ])('distinguishes a targeted choice from a settings snapshot: %j', (agent, explicit) => {
-    vi.mocked(getConfig).mockReturnValue({ agent: { sdkEngine: 'anthropic', ccRuntime: { selectedPath: '/old', discoveryCompleted: true } } } as any)
+  it.each(['anthropic', 'codex'] as const)('changes the %s default without manufacturing executable trust', sdkEngine => {
+    vi.mocked(getConfig).mockReturnValue({ agent: { sdkEngine: 'halo', ccRuntime: { selectedPath: '/old', discoveryCompleted: true } } } as any)
     vi.mocked(saveConfig).mockClear()
     vi.mocked(isConfigUnreadable).mockReturnValue(false)
-    setConfig({ agent })
+    setConfig({ agent: { sdkEngine } })
     const saved = vi.mocked(saveConfig).mock.calls[0][0]
-    expect(saved.agent?.ccRuntime?.selectionOrigin).toBe(explicit ? 'user' : undefined)
-    if (explicit) expect(saved.agent?.ccRuntime?.selectedPath).toBe('/old')
+    expect(saved.agent).toMatchObject({ sdkEngine })
+    expect(saved.agent?.ccRuntime).toBeUndefined()
+    expect(saved.agent?.codexRuntime).toBeUndefined()
+  })
+
+  it.each(['ccRuntime', 'codexRuntime'] as const)('does not accept %s paths, integrity or selection origin from a client snapshot', key => {
+    vi.mocked(getConfig).mockReturnValue({ agent: { sdkEngine: 'halo', [key]: { selectedPath: '/checked', selectionOrigin: 'user' } } } as any)
+    vi.mocked(saveConfig).mockClear()
+    setConfig({ agent: { maxTurns: 200, [key]: { selectedPath: '/untrusted', selectionOrigin: 'user', managedIntegrity: 'untrusted' } } })
+    expect(vi.mocked(saveConfig).mock.calls[0][0].agent).toEqual({ maxTurns: 200 })
   })
 })
 
@@ -211,6 +215,20 @@ describe('settings snapshot stamps', () => {
     } finally {
       vi.mocked(getConfigReadFailureCount).mockReturnValue(0)
     }
+  })
+})
+
+describe('managed subagent model settings', () => {
+  it('preserves live assignments and mode against stale full-config saves', () => {
+    const live = { version: 1, revision: 7, policyRevision: 3, selectionMode: 'task', profiles: [] }
+    const updates = { aiSources: { version: 2, sources: [], currentId: null, subagentModels: { revision: 1 } } }
+    preserveManagedSources(updates, { aiSources: { version: 2, sources: [], currentId: null, subagentModels: live } })
+    expect(updates.aiSources.subagentModels).toBe(live)
+  })
+  it('cannot inject assignments through a generic save before activation', () => {
+    const updates = { aiSources: { version: 2, sources: [], currentId: null, subagentModels: { revision: 1 } } }
+    preserveManagedSources(updates, { aiSources: { version: 2, sources: [], currentId: null } })
+    expect(updates.aiSources).not.toHaveProperty('subagentModels')
   })
 })
 

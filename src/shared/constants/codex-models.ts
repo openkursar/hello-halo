@@ -18,7 +18,7 @@ export const CODEX_ADAPTER_ID = 'openai-codex'
  * the local router — so the two versions have no reason to move together.
  * Bump this when a CLI release changes the catalog or the wire shape.
  */
-export const CODEX_CLI_VERSION = '0.160.0'
+export const CODEX_CLI_VERSION = '0.169.1'
 
 /** A catalog entry shipped with Halo, as the source and the picker read it. */
 export interface CodexSubscriptionModel {

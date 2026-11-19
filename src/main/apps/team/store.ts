@@ -719,6 +719,10 @@ export class TeamStore implements ITeamStore {
     const sets: string[] = []
     const params: Record<string, unknown> = { id: teamId, updated_at: Date.now() }
 
+    if (fields.owningSpaceId !== undefined) {
+      sets.push('owning_space_id = @owning_space_id')
+      params.owning_space_id = fields.owningSpaceId
+    }
     if (fields.name !== undefined) {
       sets.push('name = @name')
       params.name = fields.name

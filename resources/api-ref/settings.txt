@@ -32,6 +32,12 @@ operations on this page:
   GET    /api/model-capabilities/preset/<modelId>                    Read the shipped capability preset for one model
   POST   /api/model-capabilities/resolve                             Resolve a model id to its effective capabilities
   GET    /api/security/policy                                        Read the security policy this build runs under
+  GET    /api/subagent-models                                        Read model assignments for new subagents
+  POST   /api/subagent-models/clear-builtin                          Clear a fixed model assignment target
+  POST   /api/subagent-models/create                                 Create a custom model assignment when the owner requests it
+  POST   /api/subagent-models/delete                                 Delete a custom model assignment
+  POST   /api/subagent-models/set-selection-mode                     Change default subagent model selection only on explicit owner instruction
+  POST   /api/subagent-models/update                                 Update a model assignment when the owner requests it
   GET    /api/system/version                                         Read the running Halo version
 
 GET    /api/agent/engine-availability                              List which agent engines are installed and which one is active
@@ -148,6 +154,36 @@ GET    /api/security/policy                                        Read the secu
      curl -s "$HALO_API_URL/api/security/policy" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {"success":true,"data":{"tunnelSafe":boolean,"browserAllowlistEditable":boolean}}
      # note: Tells you which of two guarded behaviours this build permits before you attempt one. Cannot fail.
+
+GET    /api/subagent-models                                        Read model assignments for new subagents
+     curl -s "$HALO_API_URL/api/subagent-models" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":boolean,"data"?:{"version":1,"revision":number,"policyRevision":number,"selectionMode":"inherit"|"task","profiles":array},"error"?:string,"code"?:string}
+     # note: Includes three fixed unconfigured slots without saving them. Contains no credentials.
+
+POST   /api/subagent-models/clear-builtin                          Clear a fixed model assignment target
+     curl -sX POST "$HALO_API_URL/api/subagent-models/clear-builtin" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":boolean,"data"?:{"version":1,"revision":number,"policyRevision":number,"selectionMode":"inherit"|"task","profiles":array},"error"?:string,"code"?:string}
+     # note: Body: id, expectedRevision. Keeps the slot and purpose. Existing subagents remain unchanged. Clearing the final target restores inherit mode.
+
+POST   /api/subagent-models/create                                 Create a custom model assignment when the owner requests it
+     curl -sX POST "$HALO_API_URL/api/subagent-models/create" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":boolean,"data"?:{"version":1,"revision":number,"policyRevision":number,"selectionMode":"inherit"|"task","profiles":array},"error"?:string,"code"?:string}
+     # note: Body: name, description, target ({kind:model,sourceId,modelId} or {kind:group,groupId}). Does not enable automatic selection.
+
+POST   /api/subagent-models/delete                                 Delete a custom model assignment
+     curl -sX POST "$HALO_API_URL/api/subagent-models/delete" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":boolean,"data"?:{"version":1,"revision":number,"policyRevision":number,"selectionMode":"inherit"|"task","profiles":array},"error"?:string,"code"?:string}
+     # note: Body: id, expectedRevision. Builtins cannot be deleted. Existing subagents remain unchanged.
+
+POST   /api/subagent-models/set-selection-mode                     Change default subagent model selection only on explicit owner instruction
+     curl -sX POST "$HALO_API_URL/api/subagent-models/set-selection-mode" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":boolean,"data"?:{"version":1,"revision":number,"policyRevision":number,"selectionMode":"inherit"|"task","profiles":array},"error"?:string,"code"?:string}
+     # note: Body: selectionMode (inherit or task), expectedRevision (settings revision). Task requires at least one configured target; do not enable it without owner authorization.
+
+POST   /api/subagent-models/update                                 Update a model assignment when the owner requests it
+     curl -sX POST "$HALO_API_URL/api/subagent-models/update" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":boolean,"data"?:{"version":1,"revision":number,"policyRevision":number,"selectionMode":"inherit"|"task","profiles":array},"error"?:string,"code"?:string}
+     # note: Body: id, expectedRevision (profile revision), description, target; name required for custom profiles and forbidden for builtins. Conflicts preserve stored settings.
 
 GET    /api/system/version                                         Read the running Halo version
      curl -s "$HALO_API_URL/api/system/version" -H "Authorization: Bearer $HALO_API_TOKEN"

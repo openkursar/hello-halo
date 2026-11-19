@@ -18,6 +18,7 @@ import type { AISource } from '../../../../src/shared/types/ai-sources'
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() }
 }))
+vi.mock('../../../../src/main/services/space.service', () => ({ hasSpace: () => true }))
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => '/tmp'), getVersion: vi.fn(() => '0.0.0'),
@@ -117,6 +118,28 @@ afterAll(() => {
 })
 
 describe('getOrCreateV2Session in-flight sharing', () => {
+  it('rebuilds lazy tools after model delegation is first configured', async () => {
+    const aiSources = getConfig().aiSources!
+    saveConfig({ aiSources: { ...aiSources, subagentModels: undefined } })
+    const original = fakeSession('before-model-settings')
+    const configured = fakeSession('configured-model-settings')
+    createSession.mockResolvedValueOnce(original).mockResolvedValueOnce(configured)
+    const options = { engineId: 'halo', model: 'm' }
+    const build = () => ({})
+    try {
+      await getOrCreateV2Session('space', 'lazy-model-policy', options, undefined, undefined, undefined, undefined, build)
+      saveConfig({ aiSources: { ...getConfig().aiSources!, subagentModels: {
+        version: 1, selectionMode: 'inherit', policyRevision: 1, revision: 1, profiles: [{
+          id: 'builtin:small', kind: 'builtin', slot: 'small', revision: 1, description: 'Focused checks',
+          target: { kind: 'model', sourceId: 'source', modelId: 'm' },
+        }],
+      } } })
+      const current = await getOrCreateV2Session('space', 'lazy-model-policy', options, undefined, undefined, undefined, undefined, build)
+      expect(current).toBe(configured)
+      expect(original.close).toHaveBeenCalledOnce()
+    } finally { saveConfig({ aiSources }) }
+  })
+
   it('rebuilds an invalidated warm-up before handing it to a newly arriving sender', async () => {
     const stale = fakeSession('stale-warmup')
     const current = fakeSession('current-tools')

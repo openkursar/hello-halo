@@ -96,6 +96,7 @@ impl SessionControls {
             options["permissionMode"] = mode.clone();
         }
         if let Some(thinking) = &values.thinking {
+            options.as_object_mut().unwrap().remove("nativeEffectiveReasoning");
             options["thinking"] = thinking.clone();
             options["thinkingExplicit"] = json!(true);
         }
@@ -295,12 +296,14 @@ impl ActorState<'_> {
         budget.configure_output(thinking.clone(), None);
         let mut request = json!({"model":model,"messages":projected,"systemPrompt":system,"tools":definitions,
             "thinking":thinking,"maxTokens":budget.max_output_tokens(),"stream":true,"providerOptions":{"fallbackModelAvailable":false}});
+        if thinking.is_null() { request.as_object_mut().unwrap().remove("thinking"); }
         if let Some(temperature) = effort.temperature { request["temperature"] = json!(temperature); }
         if let Some(reasoning) = effort.reasoning { request["providerOptions"]["reasoning_effort"] = json!(reasoning); }
         if crate::js::truthy(&self.options["effort"]) { request["providerOptions"]["effort"] = self.options["effort"].clone(); }
         else if self.options["nativeResolvedConfig"] != true { request["providerOptions"]["effort"] = json!("high"); }
         if crate::js::truthy(&self.options["taskBudget"]) { request["providerOptions"]["taskBudget"] = self.options["taskBudget"].clone(); }
-        let attachments = loop_runtime::working_attachments(execution, self.tools, self.discovery, self.messages, &mut Vec::new(), &self.context.harness).await?;
+        let mut attachments = loop_runtime::working_attachments(execution, self.tools, self.discovery, self.messages, &mut Vec::new(), &self.context.harness).await?;
+        if let Some(state) = super::compact::collaboration::attachment(execution, self.tools, cancellation, &self.context.harness).await? { attachments.push(state); }
         let snapshot = self.discovery.as_ref().map(|state| state.lock().unwrap().snapshot());
         let result = compact_request(execution, self.options, provider, self.messages, &mut budget, &request, &injected, &attachments,
             snapshot, Arc::new(Mutex::new(OutputAllowance::default())), cancellation, CompactTrigger::Manual { instructions }).await;

@@ -122,10 +122,13 @@ async function sdkSnapshot(root) {
   if (descriptor.name !== '@hello-halo/agent-sdk') throw new Error('The installed SDK package identity is invalid')
   let revision = null, dirty = null, sourceCheckout = false
   try {
-    if (await fs.realpath(git(directory, ['rev-parse', '--show-toplevel'])) === directory) {
+    const checkout = await fs.realpath(git(directory, ['rev-parse', '--show-toplevel']))
+    const inTree = inside(checkout, directory)
+      && Boolean(git(directory, ['ls-files', '--error-unmatch', 'package.json']))
+    if (checkout === directory || inTree) {
       sourceCheckout = true
       revision = git(directory, ['rev-parse', 'HEAD'])
-      dirty = Boolean(git(directory, ['status', '--porcelain', '--untracked-files=normal']))
+      dirty = Boolean(git(directory, ['status', '--porcelain', '--untracked-files=normal', '--', '.']))
     }
   } catch {
     // An installed distribution can lack Git metadata; its content remains explicit, never a clean source claim.

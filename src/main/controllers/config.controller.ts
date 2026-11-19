@@ -143,7 +143,7 @@ export function preserveManagedSources(updates: Record<string, unknown>, existin
     ? current!.currentId
     : sources.some(source => source.id === incoming.currentId) ? incoming.currentId : sources[0]?.id ?? null
   // Groups change only through their own operations. An account this save drops leaves its models out of them.
-  const { groups: _staleGroups, currentGroupId: _staleGroup, ...rest } = incoming
+  const { groups: _staleGroups, currentGroupId: _staleGroup, subagentModels: _staleSubagentModels, ...rest } = incoming
   const kept = new Set(sources.map(source => source.id))
   const groups = (current?.version === 2 ? current.groups : undefined)
     ?.map(group => ({ ...group, members: group.members.filter(member => kept.has(member.sourceId)) }))
@@ -152,6 +152,7 @@ export function preserveManagedSources(updates: Record<string, unknown>, existin
     sources,
     currentId,
     ...(groups ? { groups } : {}),
+    ...(current?.subagentModels ? { subagentModels: current.subagentModels } : {}),
     ...(current?.version === 2 && current.currentGroupId ? { currentGroupId: current.currentGroupId } : {}),
   }
 }
@@ -167,12 +168,16 @@ export function updateConfig(updates: Record<string, unknown>, snapshotEpoch?: n
     const reloadRequired = reloadRequiredBeforeSave(snapshotEpoch)
     if (reloadRequired) return reloadRequired
     const agent = updates.agent
-    if (agent && typeof agent === 'object' && 'ccRuntime' in agent) {
-      const stored = (existing.agent as Record<string, unknown> | undefined)?.ccRuntime
-      if (JSON.stringify(agent.ccRuntime) !== JSON.stringify(stored)) {
-        console.warn('[Config] Ignored externally supplied CC runtime settings; preserving the runtime manager selection')
+    if (agent && typeof agent === 'object') {
+      const preferences = { ...agent } as Record<string, unknown>
+      for (const key of ['ccRuntime', 'codexRuntime'] as const) {
+        if (!(key in preferences)) continue
+        const stored = (existing.agent as Record<string, unknown> | undefined)?.[key]
+        if (JSON.stringify(preferences[key]) !== JSON.stringify(stored)) {
+          console.warn('[Config] Ignored externally supplied runtime settings; preserving the runtime manager selection', { runtime: key })
+        }
+        delete preferences[key]
       }
-      const { ccRuntime: _runtime, ...preferences } = agent
       updates.agent = preferences
     }
     if (updates.agent && typeof updates.agent === 'object') {
@@ -181,9 +186,6 @@ export function updateConfig(updates: Record<string, unknown>, snapshotEpoch?: n
       if ('sdkEngine' in preferences && !isEngineId(preferences.sdkEngine)) throw new Error('Unknown agent engine')
       if (isEngineId(preferences.sdkEngine) && preferences.sdkEngine !== (storedAgent?.sdkEngine ?? 'halo') && !isEngineId(storedAgent?.legacySdkEngine)) {
         preferences.legacySdkEngine = getDefaultEngine()
-      }
-      if (preferences.sdkEngine === 'anthropic' && Object.keys(agent as object).length === 1) {
-        preferences.ccRuntime = { ...(storedAgent?.ccRuntime as object), selectionOrigin: 'user' }
       }
       updates.agent = preferences
     }

@@ -17,8 +17,11 @@ promises:
     en: The default engine for new conversations changes without restarting the application, and each existing conversation keeps the engine it runs on until it is moved explicitly.
     zh: 新对话使用的默认引擎无需重启应用即可切换，已有对话保持其所用引擎，直到被明确迁移。
   fallback:
-    en: A missing explicitly selected Claude Code installation fails without selecting another installation or engine; other engine fallback retains the saved choice.
-    zh: 明确选择的 Claude Code 安装不可用时失败，不选择其他安装或引擎；其他引擎的回退保留保存的选择。
+    en: A missing explicitly selected Claude Code or Codex installation fails without selecting another installation or engine, preserving the saved preference, input and history; other engine fallback retains the saved choice.
+    zh: 明确选择的 Claude Code 或 Codex 安装不可用时失败，不选择其他安装或引擎，保留偏好、输入与历史；其他引擎的回退保留保存的选择。
+  external-setup:
+    en: Claude Code and Codex use the same in-place setup flow for explicit installation, download sources, local discovery and selection, cancellation, offline reuse and recovery. Closing the panel does not cancel installation; the latest explicit engine or installation choice wins.
+    zh: Claude Code 与 Codex 使用相同的就地设置流程，支持显式安装、下载来源、本机发现与选用、取消、离线复用和恢复。关闭面板不取消安装，最近一次明确的引擎或安装选择优先。
   task-tracking:
     en: Claude Code conversations retain the task checklist on non-Claude models when the tool is allowed; an explicitly disabled checklist tool remains unavailable.
     zh: Claude Code 对话在非 Claude 模型上仍保留待办清单能力；用户明确禁用清单工具时，它保持不可用。
@@ -26,6 +29,110 @@ promises:
     en: An ordinary upgrade never discovers Claude Code or rewrites all history. Ambiguous historical defaults and paths use Halo, while recorded user choices and a currently selected Claude Code delegated account remain selected. Compatible history resumes silently; unsafe recovery preserves history and fails.
     zh: 普通升级不发现 Claude Code、不批量改写历史。来源不明的旧默认值和路径使用 Halo，有记录的主动选择及当前选中的 Claude Code 委托账户保留。兼容历史正常恢复不提示；无法安全恢复时保留历史并失败。
 scenarios:
+  - id: models.engines.external-idle
+    title: Open Halo and external engine settings without discovering or probing unused runtimes
+    verifies: [external-setup]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - An isolated fresh profile has neither an external runtime selection nor installed runtime catalog entries.
+    steps:
+      - Start Halo, open Advanced settings, then expand the Claude Code and Codex setup panels without requesting installation or discovery.
+    expected:
+      - Both panels show the setup actions without inspecting runtime candidate paths, traversing discovery directories or spawning either runtime. A bounded listing of each private managed-runtime root is allowed to initialize known state. No model request occurs.
+    notes: The source-build observer delegates filesystem and child-process calls unchanged and records bounded vendor-candidate operations. It does not establish absence of all networking, synchronous filesystem calls, arbitrary user layouts or data-size-dependent startup work.
+  - id: models.engines.codex-missing
+    title: Keep the Codex choice, original history and unsent input when its external installation is missing
+    verifies: [fallback]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      entry: [default, bound]
+    preconditions:
+      - An isolated profile selects a nonexistent external Codex path and contains saved history. Either Codex is the default for a new conversation or an existing conversation explicitly selects Codex while Halo is the default.
+    steps:
+      - With the Codex default, request a new conversation through the real application API. With an explicit existing Codex conversation, open it, enter a draft and try to send it.
+    expected:
+      - Creating the new conversation fails with an unavailable Codex explanation without changing the default or existing history. Sending in the explicitly selected Codex conversation fails with an actionable recovery entry, preserving its draft, history and choice. Neither path makes a model request or falls back.
+    notes: Uses actual application handlers and a local scripted model observer without executing Codex. The default variant checks the API creation boundary, not a new-conversation UI recovery journey; the bound variant checks rendered recovery and retained input. It does not establish successful installation or recovery after installation.
+  - id: models.engines.external-setup
+    title: Install and manage either optional external runtime in the same inline settings flow
+    verifies: [external-setup, selection, fallback]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      engine: [anthropic, codex]
+      journey: [recommended, mirror, local-selection, cancel-retry, offline-reuse, panel-reopen, latest-intent, state-isolation]
+    expected:
+      - Installation and local selection are explicit and validated. Existing defaults remain usable until selection succeeds; failures keep previous selection and actionable feedback.
+      - Each engine retains its own status, progress, source and errors; older asynchronous work cannot override newer explicit choices.
+    notes: Parameterized application bindings use explicit vendor artifact receipts and a loopback registry serving unchanged vendor artifact bytes. The recommended and mirror variants install the recommended release through an explicitly selected mirror, not the public vendor endpoint. Local selection checks an explicit fixture path, not the operating-system picker or discovery scan. State isolation checks per-engine persisted source fields, not all possible delayed responses. No paid model calls or personal credentials are authorized; bindings alone are not passing evidence.
+  - id: models.engines.managed-codex-integrity
+    title: Reject incomplete managed Codex integrity records without changing the selected engine
+    verifies: [fallback, external-setup]
+    platforms: [darwin]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [packaged-app, halo-sdk]
+    variants:
+      record: [no-integrity, no-version, missing-helper, wrong-pin]
+    preconditions:
+      - An isolated packaged application contains a synthetic managed Codex catalog with inert non-program bytes and one incomplete or incorrect integrity record.
+    steps:
+      - Read known status, check that exact managed path, then try selecting it through the real application APIs.
+    expected:
+      - Status and checking report unavailable with checksum-mismatch; selection fails with the typed issue, preserving engine and selected-path preferences and issuing no model request.
+    notes: This negative integrity-boundary check uses real application handlers and inert files, not a real Codex process or a model call. It does not establish successful Codex execution and does not require or borrow a local Codex installation. The fixture layout currently targets macOS arm64; other platforms need separate fixtures.
+  - id: models.engines.packaged-runtime
+    title: Install an optional runtime and resume its real conversation in the emitted application
+    verifies: [selection, external-setup, fallback]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [packaged-app, halo-sdk]
+    variants:
+      engine: [anthropic, codex]
+    preconditions:
+      - A controlled emitted application starts on Halo in a fresh isolated HOME with a fixed OS-only PATH, no personal credentials and no optional runtime selected.
+      - Explicit vendor artifact receipts supply unchanged official runtime bytes to a local mirror; the requested engine's process must execute on this host.
+    steps:
+      - Install the recommended release through the real inline settings panel and explicitly activate it.
+      - Complete a turn with the real external process and local scripted model, restart the same packaged application and continue the original conversation.
+    expected:
+      - The actual application is packaged, the requested engine runs without fallback, and the same saved engine binding and prior context survive restarting.
+    notes: This separately verifies emitted-application behavior, not source-build behavior. Only the model endpoint and artifact mirror are local fixtures; application handlers and runtime processes are real. It does not establish public network downloads, live models, installer signing or other platforms. An OS execution block remains uncovered rather than a passing skip.
+  - id: models.engines.codex-runtime
+    title: Run an explicitly selected external Codex with a local scripted model, MCP and native history resume
+    verifies: [selection, fallback]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk, local-codex]
+    preconditions:
+      - An isolated profile uses the explicitly supplied fixed Codex 0.132.0 artifact, separate runtime state and a local scripted model without personal credentials.
+    steps:
+      - Complete a turn through the real external process and application MCP bridge, restart the isolated application, and continue the original conversation using its saved native history.
+    expected:
+      - The requested and actual engine remain Codex with no fallback. A real MCP tool completes, its result reaches the scripted model, and the resumed conversation retains history without replaying the earlier tool action.
+    notes: This obligation requires real process execution and is blocked when the fixed artifact cannot execute on the host. It does not establish live providers, authenticated accounts, image input, permission approval, stopping a running turn, live steering or compatibility with other Codex versions. Those require separate evidence.
   - id: models.engines.cc-task-tracking
     title:
       en: Keep the task checklist when using a non-Claude model on Claude Code

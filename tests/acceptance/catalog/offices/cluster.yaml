@@ -56,11 +56,13 @@ scenarios:
     steps:
       - en: A standing member receives work across nodes and spawns an independent-context assistant on its own machine. The assistant writes a private file and returns its result to its creator, not the public lead.
         zh: 常驻成员跨节点接收任务，并在本机创建独立上下文助手；助手写入私有文件并将结果返回创建者，而不是公共负责人。
-      - en: The parent reads the returned private reference and assistant record, continues the assistant by its returned handle, then publishes and sends its own summary to the public team.
-        zh: 父成员读取返回的私有引用及助手记录，通过返回的句柄续工，再自行向公共团队发布并发送总结。
+      - en: The parent reads the returned private reference and assistant record, attempts a duplicate name, then continues the original assistant by its returned handle and sends its own summary to the public team.
+        zh: 父成员读取返回的私有引用及助手记录，尝试创建同名助手，再按返回的句柄继续原助手，并向公共团队发送自己的总结。
       - en: All nodes attempt to read and contact the helper through the public team; the public lead attempts to read the private artifact and assistant record, and another task attempts the same history read.
         zh: 所有节点尝试通过公共团队读取和联系助手；公共负责人尝试读取私有产出与助手记录，另一个任务也尝试读取同一历史。
     expected:
+      - en: The private assistant keeps its requested name without a suffix. The duplicate is refused without creating another assistant and the feedback tells the parent to use the original handle, not the name.
+        zh: 私有助手保留所请求的名字，不追加后缀；重名请求被拒绝且不新增助手，反馈提示父成员使用原句柄而不是名字。
       - en: Standing membership and cross-node delivery remain unchanged. The helper never enters the public epoch roster or board; its identity and private scope do not replicate. Only its parent reads the private bytes and record and follows up locally. Public team APIs cannot address the helper or read its history, and the public lead receives the parent summary but no private child record or file content.
         zh: 常驻成员及跨节点投递保持原样；助手不进入公共任务名册或看板，其身份与私有作用域不跨机同步。只有父成员读取私有文件及记录并在本机续工；公共团队 API 无法联系助手或读取其历史，公共负责人收到父成员总结，但不能取得内部助手记录或文件内容。
     notes:

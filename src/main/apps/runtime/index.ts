@@ -33,7 +33,8 @@
 
 import type { DatabaseManager } from '../../platform/store'
 import { getAppManager, type AppManagerService } from '../manager'
-import { previewAppSpaceChange, changeAppDefaultSpace, retainAppEnvironments } from './space-change'
+import { previewAppSpaceChange, changeAppDefaultSpace, retainAppEnvironments, repairLegacyAppWorkspaces } from './space-change'
+import { previewWorkspaceDeletion, deleteWorkspacePreservingPeople } from './workspace-deletion'
 import { readSessionMessages } from './session-store'
 import { RunProcessClearedError } from './errors'
 import { buildAppCapabilityInventory } from './capability-inventory'
@@ -154,6 +155,9 @@ export { injectIntoAppChatWhenLive, getAppChatTurnIdentity } from './app-chat-li
 export { createDigitalHumanConversationSource } from './conversation-source'
 export { createRunConversationSource } from './run-conversation-source'
 export { deliverRunCollaborationSource } from './team/run-work'
+export { beginWorkspaceRecovery, setWorkspaceInitialization } from './workspace-admission'
+import { pendingWorkspaceInitialization } from './workspace-admission'
+export { mutateWorkspace } from './workspace-mutations'
 
 // Re-export inbound dispatch
 export { dispatchInboundMessage } from './dispatch-inbound'
@@ -211,6 +215,20 @@ let imChannelManagerInstance: ImChannelManager | null = null
 let stopReleasingSupplements: (() => void) | null = null
 let imSessionRegistryInstance: ImSessionRegistry | null = null
 let activityStoreRef: ActivityStore | null = null
+let resolveRuntimeReady!: (service: AppRuntimeService) => void
+let rejectRuntimeReady!: (error: unknown) => void
+const runtimeReady = new Promise<AppRuntimeService>((resolve, reject) => {
+  resolveRuntimeReady = resolve
+  rejectRuntimeReady = reject
+})
+void runtimeReady.catch(() => {})
+
+/** Explicit workspace operations wait for team services as well as runtime registration. */
+export async function whenAppRuntimeReady(): Promise<AppRuntimeService> {
+  let initialization: Promise<void> | undefined
+  while ((initialization = pendingWorkspaceInitialization())) await initialization
+  return runtimeService ?? runtimeReady
+}
 
 // ============================================
 // Initialization
@@ -230,6 +248,7 @@ interface InitAppRuntimeDeps {
   background: BackgroundService
   /** Lazy, scoped HTTP access for actions carried by owner relay notes. */
   relayActionAccess?: RelayActionAccess
+  onWorkspaceDataReady?: () => void
 }
 
 /**
@@ -263,9 +282,18 @@ function normalizeWebhookPath(path: string): string {
  * @param deps - Injected dependencies
  * @returns Initialized AppRuntimeService
  */
-export async function initAppRuntime(
-  deps: InitAppRuntimeDeps
-): Promise<AppRuntimeService> {
+export async function initAppRuntime(deps: InitAppRuntimeDeps): Promise<AppRuntimeService> {
+  try {
+    const service = await initializeAppRuntime(deps)
+    resolveRuntimeReady(service)
+    return service
+  } catch (error) {
+    rejectRuntimeReady(error)
+    throw error
+  }
+}
+
+async function initializeAppRuntime(deps: InitAppRuntimeDeps): Promise<AppRuntimeService> {
   const start = performance.now()
   console.log('[Runtime] Initializing App Runtime...')
 
@@ -354,6 +382,8 @@ export async function initAppRuntime(
   setImSessionRegistry(registry)
   imSessionRegistryInstance = registry
 
+  await repairLegacyAppWorkspaces({ manager: deps.appManager, store })
+  deps.onWorkspaceDataReady?.()
   const automationApps = deps.appManager.listApps({ type: 'automation' })
   for (const app of automationApps) {
     if (app.status === 'uninstalled' || store.getSessionEnvironment(`environment-backfill:${app.id}`)) continue
@@ -468,6 +498,9 @@ export async function initAppRuntime(
     },
   })
 
+  runtimeService = service
+  memoryServiceRef = deps.memory
+
   // Activate all active automation Apps (registers event subscriptions)
   await service.activateAll()
 
@@ -577,7 +610,18 @@ export function getAppSpaceChangePreview(appId: string, newSpaceId: string) {
 }
 
 export async function moveAppDefaultSpace(appId: string, newSpaceId: string): Promise<void> {
+  await whenAppRuntimeReady()
   await changeAppDefaultSpace(spaceChangeDependencies(), appId, newSpaceId)
+}
+
+export async function getWorkspaceDeletionImpact(spaceId: string) {
+  await whenAppRuntimeReady()
+  return previewWorkspaceDeletion(spaceChangeDependencies(), spaceId)
+}
+
+export async function removeWorkspacePreservingPeople(spaceId: string, remove: () => Promise<boolean>): Promise<boolean> {
+  await whenAppRuntimeReady()
+  return deleteWorkspacePreservingPeople(spaceChangeDependencies(), spaceId, remove)
 }
 
 export function readAppRunMessages(appId: string, runId: string) {

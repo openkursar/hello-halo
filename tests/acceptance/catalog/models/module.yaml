@@ -9,6 +9,13 @@ description:
 paths:
   - src/renderer/components/ai-config/**
   - src/renderer/components/ai-groups/**
+  - src/renderer/components/subagent-models/**
+  - src/shared/types/subagent-models.ts
+  - src/shared/subagent-models.ts
+  - src/shared/rpc/contracts/subagent-models.contract.ts
+  - src/main/controllers/subagent-models.controller.ts
+  - src/main/http/routes/subagent-models.routes.ts
+  - src/main/services/agent/subagent-models.ts
   - src/renderer/stores/ai-group-route.store.ts
   - src/shared/ai-groups.ts
   - src/main/controllers/ai-groups.controller.ts

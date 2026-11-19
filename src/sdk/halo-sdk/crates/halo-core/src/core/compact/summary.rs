@@ -357,8 +357,11 @@ async fn candidate(
     if let Some(index) = retained_request {
         output.push(current[index].clone(), Some(MessageOrigin::History { index }));
     }
-    output.extend_history(&current[tail_start..snapshot.len()], tail_start);
-    output.extend_history(&current[snapshot.len()..], snapshot.len());
+    for (index, message) in current.iter().enumerate().skip(tail_start) {
+        if !super::context::is_context(message) {
+            output.push(message.clone(), Some(MessageOrigin::History { index }));
+        }
+    }
     let prepared = callbacks.prepare_candidate(output).await?;
     Ok((prepared, live_messages(original, callbacks).await?))
 }

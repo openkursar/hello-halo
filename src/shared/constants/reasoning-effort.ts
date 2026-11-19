@@ -132,3 +132,11 @@ export function clampReasoningEffort(
   }
   return best ?? ranked[0]
 }
+
+export function resolveCodexWireEffort(effort: string, supported: readonly string[] | undefined): string {
+  const listed = supported?.filter(isReasoningEffortLevel) ?? []
+  if (!isReasoningEffortLevel(effort) || effort === 'off') {
+    return listed.length && !supported?.includes(effort) ? clampReasoningEffort('minimal', listed) ?? effort : effort
+  }
+  return clampReasoningEffort(effort, listed.length ? listed : CODEX_REASONING_EFFORT_LEVELS) ?? effort
+}

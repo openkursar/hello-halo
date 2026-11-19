@@ -464,6 +464,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     hooks: {
       acquireRecipientFence: target => {
         const participants = getTeamService()?.participants
+        if (participants?.isMaintaining(target.appId)) throw new Error('This collaborator is changing workspace.')
         const accept = (fence?: string) => {
           if (!fence) throw new Error('The recipient owner is unavailable.')
           if (target.requestId && participants?.requestAllowed(target.requestId) === false) throw new Error('This collaboration request was stopped.')
@@ -476,6 +477,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
         return accept(store.recipientFences.read(target))
       },
       acceptRecipientFence: (target, fence) => {
+        if (getTeamService()?.participants.isMaintaining(target.appId)) return false
         const member = store.getMember(target.teamId, target.appId, target.epochId)
         return !!member && (!store.getTeamById(target.teamId)?.ephemeral || store.recipientFences.accepts(target, fence))
       },
@@ -906,3 +908,5 @@ export { createConversationWorkHost } from './conversation-work'
 export { deliverOwnedCollaborationSource, deliverTeamCollaborationSource, observeOwnedCollaborationSources } from './source-delivery'
 
 export { disposeJoinedOfficeWork } from './office-disposal'
+export { beginTeamWorkspaceChange, prepareTeamWorkspaceChange } from './workspace-change'
+export type { TeamWorkspaceChangeInput, TeamWorkspaceChange, TeamWorkspaceChangePlan, ParticipantRelocation } from './workspace-change'

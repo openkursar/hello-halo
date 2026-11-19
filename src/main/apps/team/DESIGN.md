@@ -120,6 +120,10 @@ these scopes recursively through the normal dissolution path. Parent-epoch
 closure calls it before releasing the parent, and team dissolution covers every
 epoch, including removed members. Failed closes retain rows and leases for retry;
 the shared workspace release keeps dirty checkouts and independent installed people.
+Workspace deletion uses `dissolveTeam(..., { preserveInstalledMembers: true })`
+after its scoped allocation/engine barriers; the option propagates to private
+scopes and skips orphan app removal. Normal explicit team deletion retains its
+existing orphan-cleanup behavior.
 
 Deletion fences admission and cancels requests without sealing business epochs.
 Both host dissolution and joined-office cleanup await descendant disposal, then
@@ -140,6 +144,21 @@ node. Local execution configuration is stored separately: model selection,
 engine, environment, assignment and permission floor never appear in a public
 participant projection. A remote record cannot install local execution settings.
 
+Space chats, digital-human chats and team members creating private assistants
+use the requested trimmed name (or `collaborator`) and keep an independent
+stable handle. Creation refuses `lead`, `all` and addresses already used in the
+collaboration receiving the assistant. It never checks the parent's shared
+team roster. The check runs before allocation and again before insertion; a
+late conflict returns the workspace and slot. Automation and channel sessions
+keep suffixed names. Existing records and addressing rules stay unchanged; in
+particular the team member still uses the original handle for a private assistant.
+
+New local execution records also retain the direct parent's normalized
+`inheritedReasoning`. Advanced model selections additionally retain the SDK's
+versioned `modelBinding`; neither field enters participant replication. Missing
+reasoning on legacy records keeps legacy restoration, while explicit bindings
+restore their original logical account/group and model strictly.
+
 Standing membership queries remain unchanged without an epoch argument. Scoped
 queries combine the standing roster with that epoch's participants; a different
 or missing epoch never exposes them. `work-members.ts` owns this projection and
@@ -150,6 +169,17 @@ contact edge.
 Participants do not install Apps or enter the people directory. The runtime
 adapts a local execution profile to the existing app-chat executor. Keeping a
 participant record does not keep an engine session alive or grant personal memory.
+
+Explicit workspace maintenance uses `participants.listLocalExecutions` and
+`ParticipantService.beginMaintenance`; neither query participates in startup or
+roster projection. The lease fences only selected local identities and their
+source-private descendants, aborts admitted workspace allocations and waits for
+creation chains before returning the final actor set. Engine-turn and transcript
+flush remains the caller's runtime responsibility. Failed stops or allocation
+cleanup prevent relocation. Release removes admission fences but does not revive
+cancelled requests. Shared epochs, unrelated members and remote profiles remain
+unchanged. App-backed private scopes rehome `owningSpaceId` in the caller's
+transaction alongside their owner-only execution profiles.
 
 ### Member-owned columns (v10, extended in v13)
 

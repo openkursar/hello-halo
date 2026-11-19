@@ -295,7 +295,7 @@ export interface TeamService {
    */
   runTeam(teamId: string, trigger?: TeamRunTrigger, instruction?: string): Promise<TeamRunResult>
   pauseTeam(teamId: string): Promise<void>
-  dissolveTeam(teamId: string): Promise<void>
+  dissolveTeam(teamId: string, options?: { preserveInstalledMembers?: boolean }): Promise<void>
   listTriggers(teamId: string): TeamTrigger[]
   setTrigger(teamId: string, input: TeamTriggerInput, triggerId?: string): TeamTrigger
   removeTrigger(teamId: string, triggerId: string): void
@@ -1510,7 +1510,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
   }
 
-  function dissolveTeamInternal(teamId: string, opts: { silent?: boolean } = {}): Promise<void> {
+  function dissolveTeamInternal(teamId: string, opts: { silent?: boolean; preserveInstalledMembers?: boolean } = {}): Promise<void> {
     const existing = dissolutionTasks.get(teamId)
     if (existing) return existing
     dissolvingTeams.add(teamId)
@@ -1524,10 +1524,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return pending
   }
 
-  async function disposePrivateCollaborations(teamId: string, epochId?: string): Promise<void> {
+  async function disposePrivateCollaborations(teamId: string, epochId?: string, options?: { preserveInstalledMembers?: boolean }): Promise<void> {
     const failures: unknown[] = []
     for (const team of store.listPrivateCollaborations(teamId, epochId)) {
-      try { await dissolveTeamInternal(team.id) } catch (error) { failures.push(error) }
+      try { await dissolveTeamInternal(team.id, options) } catch (error) { failures.push(error) }
     }
     if (failures.length) throw new AggregateError(failures, 'Some private assistants could not be closed. Their parent work was retained for cleanup.')
   }
@@ -1564,7 +1564,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return failures
   }
 
-  async function performDissolution(teamId: string, opts: { silent?: boolean }): Promise<void> {
+  async function performDissolution(teamId: string, opts: { silent?: boolean; preserveInstalledMembers?: boolean }): Promise<void> {
     const team = store.getTeamById(teamId)
     if (!team) return
     const rt = getRuntime()
@@ -1586,7 +1586,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     if (!rt && epochs.length && team.coordinatorConversationId && parseTeamSessionKey(team.coordinatorConversationId)) {
       failures.push(new Error('Team execution services are unavailable. The private scope was retained for cleanup.'))
     }
-    try { await disposePrivateCollaborations(teamId) } catch (error) { failures.push(error) }
+    try { await disposePrivateCollaborations(teamId, undefined, opts) } catch (error) { failures.push(error) }
     if (rt) failures.push(...await settleRemoteStops(rt, remoteStops))
     // Revisit closed scopes too: a prior failed teardown must be retried before its rows or leases disappear.
     if (rt) for (const epoch of epochs) {
@@ -1618,7 +1618,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     for (const source of sources) emitUpdated(source.id, { team: requireTeam(source.id) })
     await rt?.teamFolders.remove(teamId, epochIds)
 
-    for (const m of members) {
+    if (!opts.preserveInstalledMembers) for (const m of members) {
       if (m.aiProvisioned) {
         await cleanupOrphanApp(m.appId, team.owningSpaceId)
       }
@@ -1630,8 +1630,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
   }
 
-  async function dissolveTeam(teamId: string): Promise<void> {
-    return dissolveTeamInternal(teamId)
+  async function dissolveTeam(teamId: string, options?: { preserveInstalledMembers?: boolean }): Promise<void> {
+    return dissolveTeamInternal(teamId, options)
   }
 
   // ── Artifacts ──

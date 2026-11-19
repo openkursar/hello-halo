@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'crypto'
 import { existsSync, readdirSync, realpathSync, rmSync } from 'fs'
-import { copyFile, cp, link, mkdir, readdir, rename, rm, stat } from 'fs/promises'
+import { copyFile, cp, link, mkdir, readdir, rename, rm, stat, utimes } from 'fs/promises'
 import { join } from 'path'
 import { resolveClaudeConfigDir } from '../../foundation/config.service'
 
@@ -135,24 +135,45 @@ export async function prepareStoredSession(options: {
  * merged. A copy carries the time it was made, so it counts as newer than its
  * source until the source is written again. `toWorkDir` must exist.
  *
+ * `sessionIds` limits an app move to its own transcripts and exact sidecar
+ * directories. It publishes both engine path conventions and preserves source
+ * timestamps; omitted preserves the whole-workspace carry-over behavior.
  * @returns how many session files were copied
  */
-export async function copyStoredSessions(fromWorkDir: string, toWorkDir: string, configDir = resolveClaudeConfigDir()): Promise<number> {
+export async function copyStoredSessions(
+  fromWorkDir: string,
+  toWorkDir: string,
+  configDir = resolveClaudeConfigDir(),
+  sessionIds?: ReadonlySet<string>,
+): Promise<number> {
+  if (sessionIds) {
+    for (const id of sessionIds) {
+      if (!SESSION_ID.test(id)) throw new Error('Stored session copy refused an invalid session identifier')
+    }
+    if (sessionIds.size === 0) return 0
+  }
   const projects = join(configDir, 'projects')
-  const target = join(projects, projectDirName(realpathSync(toWorkDir).normalize('NFC')))
+  const targets = new Set([join(projects, projectDirName(realpathSync(toWorkDir).normalize('NFC')))])
+  if (sessionIds) targets.add(join(projects, toWorkDir.replace(/[^a-zA-Z0-9]/g, '-')))
   let copied = 0
   for (const dir of projectDirs(projects, fromWorkDir)) {
     const source = join(projects, dir)
-    if (source === target || !existsSync(source)) continue
-    await mkdir(target, { recursive: true })
-    for (const entry of await readdir(source, { withFileTypes: true })) {
-      const from = join(source, entry.name)
-      const to = join(target, entry.name)
-      if (entry.isDirectory()) {
-        await cp(from, to, { recursive: true, force: false, errorOnExist: false })
-      } else if (entry.isFile() && (await mtimeOf(to)) < (await stat(from)).mtimeMs) {
-        await replaceWithCopy(from, to)
-        copied += 1
+    if (!existsSync(source)) continue
+    const entries = await readdir(source, { withFileTypes: true })
+    for (const target of targets) {
+      if (source === target) continue
+      await mkdir(target, { recursive: true })
+      for (const entry of entries) {
+        if (sessionIds && !(entry.isDirectory() ? sessionIds.has(entry.name)
+          : entry.isFile() && entry.name.endsWith('.jsonl') && sessionIds.has(entry.name.slice(0, -6)))) continue
+        const from = join(source, entry.name)
+        const to = join(target, entry.name)
+        if (entry.isDirectory()) {
+          await cp(from, to, { recursive: true, force: false, errorOnExist: false, preserveTimestamps: Boolean(sessionIds) })
+        } else if (entry.isFile() && (await mtimeOf(to)) < (await stat(from)).mtimeMs) {
+          await replaceWithCopy(from, to, Boolean(sessionIds))
+          copied += 1
+        }
       }
     }
   }
@@ -163,10 +184,12 @@ export async function copyStoredSessions(fromWorkDir: string, toWorkDir: string,
  * Copied beside `to` and renamed over it: a copy cut short (a full disk) never
  * leaves a truncated session that, being newer, no later copy would replace.
  */
-async function replaceWithCopy(from: string, to: string): Promise<void> {
+async function replaceWithCopy(from: string, to: string, preserveTimestamps = false): Promise<void> {
   const staged = `${to}.${randomUUID()}.tmp`
   try {
+    const times = preserveTimestamps ? await stat(from) : undefined
     await copyFile(from, staged)
+    if (times) await utimes(staged, times.atime, times.mtime)
     await rename(staged, to)
   } catch (error) {
     await rm(staged, { force: true })

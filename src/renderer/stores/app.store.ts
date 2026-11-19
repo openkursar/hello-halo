@@ -27,7 +27,7 @@ interface AppState {
   view: AppView
   returnTo: AppView | null
   /** A place in Settings to open on its next visit; consumed there. */
-  settingsFocus: 'claude-code' | 'proxy' | 'remote-access' | null
+  settingsFocus: 'claude-code' | 'codex' | 'proxy' | 'remote-access' | null
   isLoading: boolean
   error: string | null
 
@@ -54,6 +54,7 @@ interface AppState {
   navigateBack: (fallback: AppView) => void
   /** Settings, opened at Claude Code's setup. */
   openClaudeCodeSettings: () => void
+  openExternalRuntimeSettings: (runtimeId: 'anthropic' | 'codex') => void
   openProxySettings: () => void
   /** Settings, opened at Remote Access. */
   openRemoteAccessSettings: () => void
@@ -130,6 +131,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openClaudeCodeSettings: () => {
     set({ settingsFocus: 'claude-code' })
+    get().navigate('settings')
+  },
+
+  openExternalRuntimeSettings: runtimeId => {
+    set({ settingsFocus: runtimeId === 'codex' ? 'codex' : 'claude-code' })
     get().navigate('settings')
   },
 

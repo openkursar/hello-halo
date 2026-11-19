@@ -59,7 +59,15 @@ function assertStableDiscovery(requests: ModelRequest[], service: string) {
   }
   const final = requests.at(-1)!
   const definitions = final.toolResults.flatMap(result => {
-    try { return JSON.parse(result.text).tools ?? [] } catch { return [] }
+    try {
+      const payload = JSON.parse(result.text)
+      if (payload.invoke_via === 'CallTool' && Array.isArray(payload.targets)) {
+        return payload.targets.map((target: Record<string, unknown>) => ({
+          ...target, name: target.tool, input_schema: target.arguments_schema,
+        }))
+      }
+      return payload.tools ?? []
+    } catch { return [] }
   }) as Array<{ name: string; version?: string; already_loaded?: boolean; description?: string; input_schema?: unknown; usage_guide?: string }>
   const discovered = definitions.filter(tool => tool.name.includes(`__${service}__`))
   expect(discovered.length).toBeGreaterThan(0)
@@ -81,10 +89,18 @@ function assertStableDiscovery(requests: ModelRequest[], service: string) {
 
 async function assertAutomaticCapabilities(window: import('@playwright/test').Page) {
   await window.getByRole('button', { name: menuButton, exact: true }).click()
-  for (const name of [/Operate Halo/, /Team Collaboration/, /Web Control/, /^AI Terminal\b/, /Text Extraction/]) {
-    await expect(window.getByRole('menuitemcheckbox', { name })).toHaveCount(0)
+  const capabilities = window.getByRole('group', { name: 'Capabilities', exact: true })
+  await expect(capabilities).toContainText('Used automatically when needed')
+  const names = [/^Web Control/, /^Team Collaboration/, ...(process.platform === 'linux' ? [] : [/^AI Terminal/]), /^Text Recognition/, /^Operate Halo/]
+  for (const name of names) {
+    await expect(capabilities.getByRole('menuitem', { name })).toHaveCount(1)
   }
+  await expect(capabilities.getByRole('menuitemcheckbox')).toHaveCount(0)
+  // The entry is aria-disabled, which Playwright's actionability check refuses; a person can still click it.
+  await capabilities.getByRole('menuitem', { name: /^Web Control/ }).click({ force: true })
+  await expect(capabilities).toBeVisible()
   await window.keyboard.press('Escape')
+  await expect(capabilities).toHaveCount(0)
 }
 
 test('ordinary conversation omits browser and terminal definitions and long guides', acceptance('chat.capabilities.ordinary-context'), async ({ model, window }, info) => {
@@ -96,7 +112,7 @@ test('ordinary conversation omits browser and terminal definitions and long guid
   await waitForAcceptanceIdle(window, turn.conversationId)
   expect(requests).toHaveLength(1)
   assertDeferredCapabilities(requests[0])
-  expect(requests[0].text.split('Use collaborators when work can progress independently, benefits from a separate context, or needs independent review.').length - 1).toBe(1)
+  expect(requests[0].text.split('Collaborators are separate agents that work in their own context.').length - 1).toBe(1)
   expect(model.exchanges.flatMap(exchange => exchange.reply?.tools ?? [])).toEqual([])
   await info.attach('ordinary-capability-request', { body: JSON.stringify(requests, null, 2), contentType: 'application/json' })
 })

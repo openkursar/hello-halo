@@ -25,6 +25,7 @@
 import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerAiGroupsHandlers } from '../ipc/ai-groups'
+import { registerSubagentModelsHandlers } from '../ipc/subagent-models'
 import { GROUP_ROUTE_EVENT } from '../../shared/types/ai-groups-runtime'
 import { powerMonitor } from 'electron'
 import { registerSecurityHandlers } from '../ipc/security'
@@ -40,7 +41,7 @@ import { cleanupTerminalHandlers } from '../ipc/terminal'
 import { initializeSearchHandlers, cleanupSearchHandlers } from '../ipc/search'
 import { registerPerfHandlers } from '../ipc/perf'
 import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-bash'
-import { cleanupAllCaches } from '../services/artifact-cache.service'
+import { cleanupAllCaches, destroySpaceCache } from '../services/artifact-cache.service'
 import { flushSpaceActivity } from '../services/space.service'
 import { onConversationDeleted, isConversationGone, deleteEphemeralConversations, getConversation } from '../services/conversation.service'
 import { disposeSearchContext } from '../services/web-search'
@@ -70,8 +71,8 @@ import { initTaskState } from '../platform/task-state'
 import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { combinedDisposable } from '../platform/event'
 import { initMemory } from '../platform/memory'
-import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, deliverRunCollaborationSource, releaseTeamEpochSessions, getAppRuntime, listTeamAnsweredMembers } from '../apps/runtime'
+import { initAppManager, shutdownAppManager, getAppManager } from '../apps/manager'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, deliverRunCollaborationSource, releaseTeamEpochSessions, getAppRuntime, beginWorkspaceRecovery, setWorkspaceInitialization, removeWorkspacePreservingPeople, listTeamAnsweredMembers } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService, collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
@@ -110,7 +111,8 @@ import { registerStoreHandlers } from '../ipc/store'
 import { registerCliConfigHandlers } from '../ipc/cli-config'
 import { registerModelCapabilitiesHandlers } from '../ipc/model-capabilities'
 import { registerCcRuntimeHandlers } from '../ipc/cc-runtime'
-import { shutdownCcRuntime } from '../services/cc-runtime'
+import { registerExternalRuntimeHandlers } from '../ipc/external-runtime'
+import { shutdownExternalRuntimes } from '../services/external-runtime'
 import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { registerTlonHandlers } from '../ipc/tlon'
 import { registerGitHandlers } from '../ipc/git'
@@ -193,6 +195,15 @@ function startModelCatalogFreshness(): void {
  * by initAppRuntime().
  */
 async function initPlatformAndApps(): Promise<void> {
+  const recovery = beginWorkspaceRecovery()
+  const initialization = initializePlatformAndApps(recovery.complete)
+  const clearInitialization = setWorkspaceInitialization(initialization)
+  try { await initialization }
+  catch (error) { recovery.fail(error); throw error }
+  finally { clearInitialization() }
+}
+
+async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Promise<void> {
   console.log('[Bootstrap] Platform+Apps initialization starting...')
   const t0 = performance.now()
 
@@ -209,6 +220,10 @@ async function initPlatformAndApps(): Promise<void> {
     isConversationGone: (conversationId, spaceId) => isSpaceConversationId(conversationId)
       ? isConversationGone(spaceId, conversationId)
       : nativeChatAppId(conversationId) ? isNativeChatGone(conversationId) : false,
+    resolveSpaceId: (conversationId, spaceId) => {
+      const appId = nativeChatAppId(conversationId)
+      return appId ? getAppManager()?.getApp(appId)?.spaceId ?? spaceId : spaceId
+    },
   })
 
   // ── Phase 1: Platform services (parallel) ───────────────────────────────
@@ -279,6 +294,7 @@ async function initPlatformAndApps(): Promise<void> {
   // (FileWatcherSource, WebhookSource), activates Apps, and starts the router.
   const runtime = await initAppRuntime({
     db, appManager, scheduler, memory, background,
+    onWorkspaceDataReady,
     relayActionAccess: {
       ensureServer: async () => (await import('../http/self-api')).ensureSelfApiServer(),
       issueGrant: async request => (await import('../http/self-api')).issueSelfApiGrant(request),
@@ -1248,9 +1264,12 @@ async function initPlatformAndApps(): Promise<void> {
         // Fire-and-forget on dissolve orphan cleanup: deleteSpace is async but
         // the service contract is sync (best-effort); errors are logged inside.
         deleteMemberSpace: (spaceId) => {
-          void deleteSpace(spaceId).catch((err) =>
-            console.warn('[Bootstrap] Team member space delete failed:', err)
-          )
+          void removeWorkspacePreservingPeople(spaceId, async () => {
+            await destroySpaceCache(spaceId)
+            return deleteSpace(spaceId)
+          }).then(removed => {
+            if (!removed) console.warn('[Bootstrap] Team member space deletion did not finish', { spaceId })
+          }).catch((error) => console.warn('[Bootstrap] Team member space delete failed:', error))
         },
         // Resolve a space to the directory its agent works in, so relative
         // artifact refs (e.g. "brief.md") open the file the member published.
@@ -1514,6 +1533,7 @@ export function initializeExtendedServices(): void {
   // Load-balancing groups: the router learns what a group is, and what it reports
   // about a conversation's model reaches every window (IPC) and remote client (WS).
   registerAiGroupsHandlers()
+  registerSubagentModelsHandlers()
   stopGroupRouting = startGroupRouting(info => {
     sendToRenderer(GROUP_ROUTE_EVENT, info)
     broadcastToAll(GROUP_ROUTE_EVENT, { ...info })
@@ -1661,6 +1681,7 @@ export function initializeExtendedServices(): void {
   // Model Capabilities: IPC handlers for model capability lookups (preset + user overrides)
   registerModelCapabilitiesHandlers()
   registerCcRuntimeHandlers()
+  registerExternalRuntimeHandlers()
 
   // WeChat iLink Bot: QR code login + token management IPC handlers
   registerWeixinIlinkHandlers()
@@ -1731,7 +1752,7 @@ export function initializeExtendedServices(): void {
  */
 export async function cleanupExtendedServices(): Promise<void> {
   let cacheShutdown: Promise<void> | null = null
-  const ccShutdown = shutdownCcRuntime().catch(error => console.error('[Bootstrap] CC runtime shutdown failed:', error))
+  const runtimeManagerShutdown = shutdownExternalRuntimes().catch(error => console.error('[Bootstrap] External runtime shutdown failed:', error))
   try {
     // Space: Flush any throttled activity timestamps to disk before teardown
     flushSpaceActivity()
@@ -1798,7 +1819,7 @@ export async function cleanupExtendedServices(): Promise<void> {
       cacheShutdown = cleanupAllCaches()
       void cacheShutdown.catch(error => console.error('[Bootstrap] Artifact cache shutdown failed:', error))
     }
-    await Promise.all([runtimeShutdown, sdkShutdown, ccShutdown])
+    await Promise.all([runtimeShutdown, sdkShutdown, runtimeManagerShutdown])
     await shutdownAppManager().catch(err => console.error('[Bootstrap] AppManager shutdown error:', err))
 
     // Analytics: Flush pending events (including anything buffered from the

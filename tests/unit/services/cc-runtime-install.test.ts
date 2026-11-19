@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
   probe: vi.fn(),
   preset: undefined as { name?: string; baseUrl: string } | undefined,
 }))
-vi.mock('../../../src/main/foundation/product-config', () => ({ getClaudeCodeDownloadSource: () => mocks.preset }))
+vi.mock('../../../src/main/foundation/product-config', () => ({
+  getClaudeCodeDownloadSource: () => mocks.preset,
+  getCodexDownloadSource: () => undefined
+}))
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getHaloDir: () => join(globalThis.__HALO_TEST_DIR__, '.halo'),
   getConfig: () => structuredClone(mocks.config),
@@ -20,10 +23,13 @@ vi.mock('../../../src/main/foundation/config.service', () => ({
   }
 }))
 vi.mock('../../../src/main/services/proxy-fetch', () => ({ proxyFetch: mocks.fetch }))
-vi.mock('../../../src/main/services/cc-runtime/probe', () => ({
-  checkInstallation: mocks.probe,
-  readKnownInstallation: () => null,
-  launchForInstallation: vi.fn()
+vi.mock('../../../src/main/services/external-runtime/probe', () => ({
+  createRuntimeProbe: () => ({
+    checkInstallation: mocks.probe,
+    readKnownInstallation: () => null,
+    launchForInstallation: vi.fn(),
+    shutdownProbes: vi.fn()
+  })
 }))
 
 import { cancelCcInstall, configureCcRuntime, getCcRuntimeStatus, installCcRuntime, lookupCcRelease, selectCcInstallation } from '../../../src/main/services/cc-runtime'

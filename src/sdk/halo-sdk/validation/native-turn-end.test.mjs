@@ -297,6 +297,124 @@ for (const arrivalStep of [2, 3]) test(`live input at response ${arrivalStep} is
   assert.equal(resultOf(events), arrivalStep === 2 ? 'ANSWER DURING CHECK' : 'ANSWER TO LIVE INPUT');
 });
 
+for (const answer of ['ORIGINAL ANSWER', '']) test(`empty end-turn replies still consume live input and retain earlier output (answer=${!!answer})`, deadline, async t => {
+  let session, stops = 0;
+  const f = await fixture(t, step => {
+    if (step === 1) assert.equal(session.sendIntoLiveTurn('LIVE_INPUT'), true);
+    return ({ 1: answer ? [text(answer)] : [], 2: [], 3: [text('NEXT TURN ANSWER')] })[step];
+  }, { tools: [], turnEndChecks: { openWork: false, completion: false },
+    hooks: { Stop: [{ hooks: [async () => { stops++; return {}; }] }] } });
+  session = f.session;
+  const events = await turn(session, 'Work.');
+  const results = events.filter(event => event.type === 'result');
+  assert.equal(results.length, 1);
+  assert.equal(results[0].is_error, false);
+  assert.equal(results[0].result, '');
+  assert.equal(results[0].num_turns, 2);
+  assert.equal(results[0].usage.input_tokens, 2);
+  assert.equal(results[0].usage.output_tokens, 2);
+  assert.equal(f.requests.length, 2);
+  assert.match(f.requests[1], /LIVE_INPUT/);
+  assert.equal(session.hasPendingInput(), false);
+  assert.equal(stops, 2);
+  assert.deepEqual(assistantBlocks(events), answer ? [text(answer)] : []);
+  const next = await turn(session, 'A new question.');
+  assert.equal(resultOf(next), 'NEXT TURN ANSWER');
+  assert.equal(f.requests.length, 3);
+  if (answer) assert.ok(requestBlocks(f.requests[2]).some(block => block.text === answer));
+});
+
+for (const prevent of [false, true]) test(`normal Stop hooks run after an empty end-turn reply (prevent=${prevent})`, deadline, async t => {
+  let stops = 0;
+  const { session, requests } = await fixture(t, step => ({ 1: [], 2: [text('AFTER STOP BLOCK')] })[step], {
+    tools: [], turnEndChecks: { openWork: false, completion: false },
+    hooks: { Stop: [{ hooks: [async () => ++stops === 1
+      ? { decision: 'block', reason: 'EMPTY_STOP_REVIEW_REQUIRED', preventContinuation: prevent } : {}] }] },
+  });
+  const events = await turn(session, 'Work.');
+  assert.equal(stops, prevent ? 1 : 2);
+  assert.equal(requests.length, prevent ? 1 : 2);
+  if (prevent) assert.equal(events.some(event => event.type === 'result'), false);
+  else {
+    assert.equal(events.find(event => event.type === 'result').is_error, false);
+    assert.equal(resultOf(events), 'AFTER STOP BLOCK');
+    assert.match(requests[1], /EMPTY_STOP_REVIEW_REQUIRED/);
+  }
+});
+
+for (const kind of ['no-events', 'start-only', 'usage-only', 'end-turn', 'message-stop', 'legacy-text'])
+  test(`custom provider completion distinguishes an empty result from a missing response (${kind})`, deadline, async t => {
+    let requests = 0;
+    const provider = { id: 'fixture', name: 'Fixture', capabilities: () => capabilities,
+      async *createMessageStream() {
+        requests++;
+        if (kind === 'start-only') yield { type: 'message_start', id: 'unfinished', model: 'fixture' };
+        if (kind === 'usage-only') yield { type: 'message_delta', usage: { output_tokens: 1 } };
+        if (kind === 'end-turn') yield { type: 'message_delta', stopReason: 'end_turn' };
+        if (kind === 'message-stop') yield { type: 'message_stop' };
+        if (kind === 'legacy-text') yield { type: 'text_delta', index: 0, text: 'LEGACY ANSWER' };
+      } };
+    const { session } = await fixture(t, () => [], { provider, tools: [], turnEndChecks: { openWork: false, completion: false } });
+    const events = await turn(session, 'Work.');
+    const result = events.find(event => event.type === 'result');
+    const incomplete = ['no-events', 'start-only', 'usage-only'].includes(kind);
+    assert.equal(requests, 1);
+    assert.equal(result.is_error, incomplete);
+    if (!incomplete) assert.equal(result.result, kind === 'legacy-text' ? 'LEGACY ANSWER' : '');
+    else assert.match(result.result, /without receiving message_stop/);
+  });
+
+for (const [reason, count] of [['refusal', 1], ['stop_sequence', 1], ['max_tokens', 4], ['unreadable', 3]])
+  test(`empty responses preserve terminal failure and recovery limits (${reason})`, deadline, async t => {
+    const requests = [];
+    const provider = scripted(() => [], requests);
+    const stream = provider.createMessageStream.bind(provider);
+    provider.createMessageStream = async function* (request) {
+      for await (const event of stream(request)) {
+        if (event.type === 'message_delta') yield { ...event, stopReason: reason === 'unreadable' ? 'end_turn' : reason };
+        else if (event.type === 'message_stop' && reason === 'unreadable') yield { ...event, unreadableToolCall: 'Malformed fixture arguments.' };
+        else yield event;
+      }
+    };
+    const { session } = await fixture(t, () => [], { provider, tools: [], turnEndChecks: { openWork: false, completion: false } });
+    const events = await turn(session, 'Work.');
+    const result = events.find(event => event.type === 'result');
+    assert.equal(result.is_error, true);
+    assert.equal(requests.length, count);
+    assert.equal(result.num_turns, count);
+    assert.equal(result.usage.input_tokens, count);
+    assert.equal(result.usage.output_tokens, count);
+    assert.match(result.result, reason === 'unreadable' ? /tool call/i : new RegExp(reason));
+  });
+
+for (const blocks of [[], [text(' \t\n')], [{ type: 'thinking', thinking: 'Considering the fixture.' }]])
+  test(`low-level callbacks retain a completed response without answer text (blocks=${blocks[0]?.type ?? 'none'})`, deadline, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'halo-empty-owner-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const requests = [], checkpoints = [], responses = [], usages = [];
+    const config = { model: 'fixture', maxTokens: 1024, contextWindow: 200_000, maxTurns: 6, maxBudgetUsd: Infinity,
+      cwd: root, env: { HOME: root }, systemPrompt: 'Fixture instructions.', thinking: { type: 'disabled' }, thinkingExplicit: true,
+      effort: 'high', toolResultBudget: 50_000, includePartialMessages: true, permissionMode: 'bypassPermissions', toolCallingMode: 'native',
+      turnEndChecks: { openWork: false, completion: false }, settingSources: [], abortSignal: t.signal };
+    const events = [];
+    for await (const event of queryLoop(config, scripted(() => blocks, requests), [], 'Work.', {
+      onAssistantBlock: frame => checkpoints.push(frame),
+      onAssistantMessage: frame => responses.push(frame),
+      onUsage: usage => usages.push(usage),
+    })) events.push(event);
+    assert.equal(requests.length, 1);
+    assert.equal(events.at(-1).is_error, false);
+    assert.equal(events.at(-1).result, '');
+    assert.equal(events.at(-1).usage.input_tokens, 1);
+    assert.equal(events.at(-1).usage.output_tokens, 1);
+    assert.deepEqual(assistantBlocks(events), blocks);
+    assert.deepEqual(checkpoints.flatMap(frame => frame.message.content), blocks);
+    assert.equal(responses.length, 1);
+    assert.deepEqual(responses[0].message.content, blocks);
+    assert.equal(usages.reduce((sum, usage) => sum + (usage.input_tokens ?? 0), 0), 1);
+    assert.equal(usages.reduce((sum, usage) => sum + (usage.output_tokens ?? 0), 0), 1);
+  });
+
 test('low-level owner callbacks receive both check answers and account every response once', deadline, async t => {
   const root = await mkdtemp(join(tmpdir(), 'halo-turn-end-owner-'));
   t.after(() => rm(root, { recursive: true, force: true }));

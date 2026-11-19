@@ -251,6 +251,7 @@ export interface TeamTriggerRow {
  * dedicated setters because they carry lifecycle meaning.
  */
 export interface TeamFieldUpdate {
+  owningSpaceId?: string
   name?: string
   goal?: string
   memberSourcing?: Team['memberSourcing']

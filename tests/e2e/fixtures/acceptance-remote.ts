@@ -1,11 +1,8 @@
 import { createServer, createConnection, type Socket } from 'node:net'
-import { createServer as createHttpServer } from 'node:http'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import express from 'express'
 import type { BrowserContext, Page } from '@playwright/test'
 import { test as base, expect } from './acceptance-app'
 import type { HaloAPI } from '../../../src/preload'
+import { serveBuiltRenderer } from './acceptance-renderer-redirect'
 
 interface RemoteStatus { server: { port: number; token: string | null; running: boolean } }
 interface RemoteFixtures {
@@ -57,12 +54,10 @@ async function startLink(port: number) {
 export const test = base.extend<RemoteFixtures>({
   remote: async ({ acceptanceApp, browser }, use, testInfo) => {
     const packaged = await acceptanceApp.app.evaluate(({ app }) => app.isPackaged)
-    const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-    // Development remote access proxies this port. Serve the built renderer unchanged.
-    const assets = packaged ? null : createHttpServer(express().use(express.static(resolve(root, 'out/renderer'))))
-    if (assets) await new Promise<void>((done, reject) => { assets.once('error', reject); assets.listen(5173, '127.0.0.1', done) })
+    const assets = packaged ? null : await serveBuiltRenderer(acceptanceApp.app)
     let link: Awaited<ReturnType<typeof startLink>> | undefined
     let context: BrowserContext | undefined
+    const failures: unknown[] = []
     try {
       const enabled = await acceptanceApp.window.evaluate(async port => (globalThis as unknown as { halo: HaloAPI }).halo.enableRemoteAccess(port), await freePort())
       expect(enabled.success).toBe(true)
@@ -87,17 +82,22 @@ export const test = base.extend<RemoteFixtures>({
         reconnect: () => link!.reconnect(),
       })
       await page.screenshot({ path: testInfo.outputPath('remote-final-window.png') })
-    } finally {
-      await context?.close()
-      if (link) {
-        await testInfo.attach('remote-transport', { body: JSON.stringify({ renderer: packaged ? 'packaged' : 'built-assets-development-proxy', events: link.events }), contentType: 'application/json' })
-        await link.close()
-      }
+    } catch (error) { failures.push(error) }
+    finally {
+      try { await context?.close() } catch (error) { failures.push(error) }
+      let rendererConnections: number | undefined
       if (assets) {
-        assets.closeAllConnections()
-        await new Promise<void>((done, reject) => assets.close(error => error ? reject(error) : done()))
+        try { rendererConnections = await assets.close() } catch (error) { failures.push(error) }
+      }
+      if (link) {
+        try {
+          await testInfo.attach('remote-transport', { body: JSON.stringify({ renderer: packaged ? 'packaged' : 'built-assets-development-proxy', rendererConnections, events: link.events }), contentType: 'application/json' })
+        } catch (error) { failures.push(error) }
+        try { await link.close() } catch (error) { failures.push(error) }
       }
     }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, `Remote fixture lifecycle failed: ${failures.map(error => error instanceof Error ? error.message : String(error)).join('; ')}`)
   },
 })
 

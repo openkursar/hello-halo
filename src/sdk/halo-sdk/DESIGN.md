@@ -32,6 +32,11 @@ the Worker runtime's preparation order. An explicit configuration overrides the
 legacy Anthropic credential path; an incomplete configuration fails before
 session creation instead of selecting ambient credentials.
 
+Providers preserve the caller's image payload without an SDK-wide image-count,
+aggregate base64 or serialized request-body budget. Hosts own image pruning and
+compression; endpoint responses establish the provider's actual limits. Image
+format validation and bounded tool-result ingestion remain separate concerns.
+
 The JavaScript facade owns JavaScript callbacks and public iterator objects.
 Pure redaction helpers use an explicit versioned wire document into `JsValue` and
 `JsText`, preserving lone UTF-16 code units and non-finite truncation limits.

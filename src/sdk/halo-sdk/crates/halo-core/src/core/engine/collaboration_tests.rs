@@ -147,6 +147,7 @@ async fn run(native_query: bool, deferred: bool, change_directory: bool) -> Evid
                                 None
                             } else {
                                 let step = evidence.requests.len();
+                                assert!(!input["messages"].to_string().contains("\"is_error\":true"), "unexpected tool failure: {}", input["messages"]);
                                 evidence.requests.push(input.clone());
                                 if step == 0 {
                                     Some(

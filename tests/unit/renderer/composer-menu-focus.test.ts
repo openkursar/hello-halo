@@ -73,6 +73,51 @@ describe('the "+" panel and the keyboard', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
+  it('passes over rows that are only shown: no highlight, keys and clicks do nothing, the panel stays open', () => {
+    const sections: ComposerMenuSection[] = [{
+      id: 'capabilities',
+      title: 'Capabilities',
+      hint: 'Used automatically when needed',
+      items: [
+        { id: 'toolset:ai-browser', icon: null, label: 'Web Control', description: 'Browse' },
+        { id: 'toolset:ocr', icon: null, label: 'Text Recognition', description: 'Read images' },
+      ],
+    }]
+    const onClose = vi.fn()
+    const props = { sections, anchorRef: { current: { getBoundingClientRect: () => ({ top: 600, bottom: 700 }) } }, triggerRef: { current: null }, onClose, radiusClassName: '' } as any
+    const runner = new ComponentRunner()
+    runner.render(() => ComposerMenu(props))
+    runner.values[0].current = { focus: vi.fn(), contains: () => false, parentElement: null }
+    env.layoutEffects.forEach(run => run())
+    const render = () => runner.render(() => ComposerMenu(props))
+    let tree = render()
+    tree.props.onKeyDown(key('ArrowDown'))
+    tree = render()
+    const rows = nodes(tree).filter(node => node.props?.item)
+    expect(rows.map(row => row.props.active)).toEqual([false, false])
+    rows[0].props.onHover()
+    rows[0].props.onActivate()
+    tree = render()
+    tree.props.onKeyDown(key('Enter'))
+    expect(nodes(tree).filter(node => node.props?.item).map(row => row.props.active)).toEqual([false, false])
+    expect(onClose).not.toHaveBeenCalled()
+    const header = nodes(tree).find(node => node.props?.role === 'group')
+    expect(nodes(header).some(node => node.props?.children === 'Used automatically when needed')).toBe(true)
+    const row = rows[0].type(rows[0].props)
+    expect(row.type).toBe('div')
+    expect(row.props).toEqual(expect.objectContaining({ role: 'menuitem', 'aria-disabled': true }))
+    expect(row.props.onClick).toBeUndefined()
+    expect(nodes(row).some(node => typeof node.type === 'function')).toBe(false)
+  })
+
+  it('keeps switch and action rows as buttons', () => {
+    const { tree } = open(undefined, vi.fn())
+    const row = nodes(tree).filter(node => node.props?.item)[0]
+    const rendered = row.type(row.props)
+    expect(rendered.type).toBe('button')
+    expect(rendered.props.role).toBe('menuitemcheckbox')
+  })
+
   it('opened by the user: the panel takes the keyboard on the highlighted row, as before', () => {
     const onChange = vi.fn()
     const { tree, focus } = open(undefined, onChange)

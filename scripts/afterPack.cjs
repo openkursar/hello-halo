@@ -78,14 +78,6 @@ const CLOUDFLARED_VARIANTS = {
   'linux-x64':    'cloudflared-linux-x64',
 };
 
-// Maps platform-arch to the @openai/codex native package required at runtime.
-const CODEX_TARGETS = {
-  'darwin-arm64': { packageName: 'codex-darwin-arm64', targetTriple: 'aarch64-apple-darwin', binaryName: 'codex' },
-  'darwin-x64':   { packageName: 'codex-darwin-x64', targetTriple: 'x86_64-apple-darwin', binaryName: 'codex' },
-  'win32-x64':    { packageName: 'codex-win32-x64', targetTriple: 'x86_64-pc-windows-msvc', binaryName: 'codex.exe' },
-  'linux-x64':    { packageName: 'codex-linux-x64', targetTriple: 'x86_64-unknown-linux-musl', binaryName: 'codex' },
-};
-
 /**
  * Resolve the app resources directory from electron-builder context.
  *
@@ -372,62 +364,6 @@ function cleanNodePtyPrebuilds(context) {
 }
 
 /**
- * Keep only the Codex native package for the target app architecture and fail
- * early if the required binary is missing. npm installs Codex's native binary
- * through host-filtered optional dependencies, so cross-arch builds must run
- * prepare-binaries first.
- */
-function cleanAndValidateCodexNativePackage(context) {
-  const platform = context.electronPlatformName;
-  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
-  const key = `${platform}-${archStr}`;
-  const target = CODEX_TARGETS[key];
-
-  if (!target) {
-    console.warn(`[afterPack] No Codex native package mapping for ${key}, skipping cleanup`);
-    return;
-  }
-
-  const unpackedDir = getUnpackedDir(context);
-  const openaiDir = path.join(unpackedDir, 'node_modules', '@openai');
-  if (!fs.existsSync(openaiDir)) {
-    console.warn(`[afterPack] No @openai dir in unpacked output, skipping Codex cleanup`);
-    return;
-  }
-
-  const targetDir = path.join(openaiDir, target.packageName);
-  const targetBinary = path.join(
-    targetDir,
-    'vendor',
-    target.targetTriple,
-    'codex',
-    target.binaryName
-  );
-
-  if (!fs.existsSync(targetBinary)) {
-    console.error(`[afterPack] ${key}: missing Codex native binary: ${targetBinary}`);
-    console.error(`[afterPack] Run "npm run prepare:all" before cross-platform/cross-arch packaging`);
-    throw new Error(`Missing @openai/${target.packageName} native binary for ${key}`);
-  }
-
-  const entries = fs.readdirSync(openaiDir, { withFileTypes: true });
-  const removed = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (!/^codex-(darwin|linux|win32)-/.test(entry.name)) continue;
-    if (entry.name === target.packageName) continue;
-
-    fs.rmSync(path.join(openaiDir, entry.name), { recursive: true });
-    removed.push(entry.name);
-  }
-
-  if (removed.length > 0) {
-    console.log(`[afterPack] ${key}: removed ${removed.length} non-target Codex package(s): ${removed.join(', ')}`);
-  }
-  console.log(`[afterPack] ${key}: keeping @openai/${target.packageName}`);
-}
-
-/**
  * Keep only the target's ripgrep package — the Halo SDK engine's Grep tool runs
  * it — and fail when it is missing: without it every search fails on machines
  * that have no ripgrep of their own.
@@ -705,7 +641,9 @@ function createPackageReader(context) {
   return {
     exists: (relPath) => {
       const normalized = relPath.split(path.sep).join('/');
-      return entries.has(normalized) || fs.existsSync(path.join(unpackedDir, relPath));
+      if (fs.existsSync(path.join(unpackedDir, relPath))) return true;
+      if (!entries.has(normalized)) return false;
+      return !asar.statFile(asarPath, relPath).unpacked;
     },
     read: (relPath) => {
       const unpacked = path.join(unpackedDir, relPath);
@@ -738,7 +676,7 @@ function getRequiredEngines() {
 }
 
 function validateEngineRuntimes(pkg, context) {
-  for (const packageId of ['@anthropic-ai/claude-code', '@anthropic-ai/claude-agent-sdk']) {
+  for (const packageId of ['@anthropic-ai/claude-code', '@anthropic-ai/claude-agent-sdk', '@openai/codex', '@openai/codex-sdk']) {
     if (pkg.exists(`node_modules/${packageId}/package.json`)) {
       throw new Error(`[afterPack] Optional Claude Code runtime must not be bundled: ${packageId}`);
     }
@@ -960,7 +898,7 @@ module.exports = async function(context) {
   cleanNodePtyPrebuilds(context);
 
   // Ensure the packaged app contains the Codex native binary for this arch.
-  cleanAndValidateCodexNativePackage(context);
+  // Codex is managed externally and is rejected by the artifact scanner.
   cleanAndValidateRipgrepPackage(context);
 
   // Install the target cloudflared binary under its runtime name.
@@ -977,6 +915,27 @@ module.exports = async function(context) {
   validateDshRuntimeBundle(context);
 
   validatePackagedArtifact(context);
+  const { sanitizeStaging } = require('./lib/distribution-policy.cjs');
+  const resourcesDir = getResourcesDir(context);
+  for (const directory of ['app.asar.unpacked', 'office-runtime', 'ocr']) {
+    const owned = path.join(resourcesDir, directory);
+    if (fs.existsSync(owned)) {
+      const result = sanitizeStaging(owned);
+      console.log(`[afterPack] Distribution cleanup ${directory}: removed=${result.removed}, transformed=${result.transformed}`);
+    }
+  }
+  require('./lib/distribution-scan.cjs').assertDistribution(resourcesDir, { target: `${context.electronPlatformName}-${ARCH_NAMES[context.arch] || String(context.arch)}` });
+
+  const targetPlatform = context.electronPlatformName;
+  const targetArch = ARCH_NAMES[context.arch] || String(context.arch);
+  if (targetPlatform === process.platform && targetArch === process.arch) {
+    const executable = targetPlatform === 'darwin'
+      ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'MacOS', context.packager.appInfo.productFilename)
+      : path.join(context.appOutDir, `${context.packager.appInfo.productFilename}${targetPlatform === 'win32' ? '.exe' : ''}`);
+    require('./lib/packaged-module-resolution.cjs').assertPackagedModuleResolution(resourcesDir, executable);
+  } else {
+    console.log(`[afterPack] Packaged Electron import resolution unverified for cross-target ${targetPlatform}-${targetArch}`);
+  }
 
   // macOS signing (other platforms skip)
   if (context.electronPlatformName !== 'darwin') {

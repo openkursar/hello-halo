@@ -12,7 +12,7 @@
 
 import path from 'path'
 import { app } from 'electron'
-import { encodeBackendConfig, ensureOpenAICompatRouter } from '../../../openai-compat-router'
+import { encodeBackendConfig, ensureOpenAICompatRouter, normalizeApiUrl } from '../../../openai-compat-router'
 import { credentialsToBackendConfig } from '../helpers'
 import { getSdkApiCredentials } from '../sdk-config'
 import { modelAcceptsImages } from '../image-attachments'
@@ -22,6 +22,9 @@ import { SdkMcpBridge } from '../mcp/sdk-bridge'
 import { buildDshLaunchSpec } from './runtime'
 import { resolveDshModel } from './routing'
 import { clampModelRuntimeLimits } from '../../../../shared/constants/model-runtime-limits'
+import { isReasoningEffortLevel } from '../../../../shared/constants/reasoning-effort'
+import { reasoningEffortProfileById } from '../../../../shared/constants/reasoning-effort-profiles'
+import type { EffectiveReasoning } from '@hello-halo/agent-sdk/collaboration'
 import type { ExternalMcpServer } from '../mcp/types'
 import type { DshInitializeParams, DshRuntimeLaunchSpec } from './types'
 
@@ -50,6 +53,17 @@ export async function resolveDshOptions(
   sdkOptions: Record<string, any>
 ): Promise<DshResolvedOptions> {
   const credentials = getSdkApiCredentials(sdkOptions)
+  const inheritedReasoning: EffectiveReasoning | undefined = sdkOptions.inheritedReasoning
+    ? { ...sdkOptions.inheritedReasoning }
+    : undefined
+  const nativeAdaptive = inheritedReasoning?.mode === 'adaptive' && !!inheritedReasoning.effort
+    && (credentials.provider === 'anthropic' || credentials.apiType === 'anthropic_passthrough')
+    && reasoningEffortProfileById(credentials.model || sdkOptions.model || '').anthropic?.mode === 'adaptive'
+  if (inheritedReasoning && inheritedReasoning.mode !== 'effort'
+    && inheritedReasoning.mode !== 'off' && inheritedReasoning.mode !== 'provider-default' && !nativeAdaptive) {
+    console.warn(`[Dsh][options] delegated session refused: reasoning mode ${inheritedReasoning.mode} cannot be preserved`)
+    throw new Error('The dsh runtime cannot preserve this reasoning mode')
+  }
   const workDir = sdkOptions.cwd || process.cwd()
 
   const { model, fellBack } = resolveDshModel(sdkOptions.model, credentials.model)
@@ -69,7 +83,18 @@ export async function resolveDshOptions(
   // tracking ids — never leave the child (see `runtimes/dsh/build.mjs`).
   const router = await ensureOpenAICompatRouter({ debug: false })
   const baseUrl = `${router.baseUrl}/v1`
-  const backend = credentialsToBackendConfig(credentials)
+  const nativeAnthropic = credentials.provider === 'anthropic' || credentials.apiType === 'anthropic_passthrough'
+  const backend = credentialsToBackendConfig(credentials, nativeAnthropic ? {
+    url: normalizeApiUrl(credentials.baseUrl, 'anthropic_passthrough'),
+    apiType: 'anthropic_passthrough',
+  } : undefined)
+  if (inheritedReasoning && !(credentials.isGroup && inheritedReasoning.mode === 'provider-default')) {
+    const effort = inheritedReasoning.mode === 'effort' || inheritedReasoning.mode === 'adaptive'
+      ? inheritedReasoning.effort!
+      : 'off'
+    backend.pickedReasoningEffort = isReasoningEffortLevel(effort) ? effort : undefined
+    backend.reasoningEffort = effort
+  }
   const apiKey = encodeBackendConfig(backend)
 
   // The runtime's DeepSeek adapter defaults to a 256K output cap and a 1M

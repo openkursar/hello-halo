@@ -49,6 +49,35 @@ scenarios:
     notes:
       en: Both conversations run the real application and engine with the same owner permissions. A native tool holds the recipient's current step; the next model input and stored/UI provenance are inspected. No external recipient or cross-permission delivery is exercised.
       zh: 两个对话使用同一所有者权限运行真实应用与引擎；以原生工具保持接收方当前步骤，检查下一次模型输入及保存和界面来源标记。不涉及外部接收者或跨权限投递。
+  - id: assistant-tools.interop.opener
+    title:
+      en: See the source of a conversation message before its new reply finishes
+      zh: 新回复结束前即可看到跨对话来件来源
+    verifies: [identity, delivery]
+    platforms: *a1
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      recipient: [visible, cached-background, unopened]
+    preconditions:
+      - en: An authorized sender and an idle recipient exist in an isolated workspace; the recipient is visible, previously opened but now in the background, or not yet opened.
+        zh: 隔离空间中有获准发送方和空闲接收方；接收方当前可见、曾打开但已切到后台，或尚未打开。
+    steps:
+      - en: The sender sends a marked conversation message that opens a new recipient turn, whose real tool is held at a controlled boundary.
+        zh: 发送方发送标记来件，开启接收方新一轮，并让真实工具停留在受控边界。
+      - en: While that tool is still held, inspect the recipient or switch back to it, expand the source card and follow its source link; then release the tool, finish and reopen the conversation.
+        zh: 工具仍被保持时查看或切回接收方，展开来源卡并点击来源链接；随后释放工具、完成并重开对话。
+    expected:
+      - en: Before the recipient finishes, its source card shows the sender and summary, expands to the original message, and opens the correct sender conversation.
+        zh: 接收方尚未完成时，来源卡已显示发送方和摘要，可展开原始消息并打开正确发送方对话。
+      - en: Completion and reopening keep exactly one attributed system record, with no extra user message or replayed model input; an unaddressed conversation is unchanged.
+        zh: 完成和重开后仍只有一条带来源的系统记录，不多出用户消息或重放模型输入，未寻址对话保持不变。
+    notes:
+      en: Only the model endpoint is scripted; the actual conversation-send tool, storage, application events and UI run unchanged. Dark/light desktop and 390px captures are included for the visible-recipient variant. Other engines and remote WebSocket clients are not established by this scenario.
+      zh: 仅替换模型端点；真实跨对话发送工具、存储、应用事件和界面均照常运行。当前可见变体含深浅色桌面和390px截图。本场景不证明其他引擎或远程WebSocket客户端行为。
   - id: assistant-tools.interop.read
     title:
       en: Read permitted history and reject an invalid target

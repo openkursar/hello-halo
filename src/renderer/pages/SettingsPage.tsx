@@ -28,7 +28,7 @@ import {
   RecommendSection
 } from '../components/settings'
 
-const FOCUS_SECTION = { 'claude-code': 'advanced', proxy: 'system', 'remote-access': 'remote' } as const
+const FOCUS_SECTION = { 'claude-code': 'advanced', codex: 'advanced', proxy: 'system', 'remote-access': 'remote' } as const
 
 const USER_SCROLL_EVENTS = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const
 

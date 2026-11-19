@@ -30,6 +30,19 @@ afterEach(async () => { db.closeAll(); await rm(directory, { recursive: true, fo
 
 const caller = { teamId: 'team', epochId: 'work', callerAppId: 'lead' }
 const sourceId = buildTeamSessionKey('lead', 'team', 'work')
+const spaceConversation = 'space-conversation'
+const spaceCaller = { teamId: 'space-team', epochId: 'space-work', callerAppId: spaceCoordinatorAppId(spaceConversation) }
+
+function spaceFixture(limit?: number) {
+  store.insertTeam({ ...store.getTeamById('team')!, id: spaceCaller.teamId, name: 'Space collaboration',
+    leadAppId: spaceCaller.callerAppId, ephemeral: true, coordinatorConversationId: spaceConversation })
+  store.insertEpoch({ ...store.getEpochById('work')!, id: spaceCaller.epochId, teamId: spaceCaller.teamId })
+  store.addMember({ teamId: spaceCaller.teamId, appId: spaceCaller.callerAppId, memberName: 'lead', role: '',
+    isLead: true, isSystemCoordinator: true, aiProvisioned: false, addedAt: 1 })
+  const f = fixture({ limit })
+  f.service.beginRequest(spaceConversation, 'space-request')
+  return { ...f, spawn: (name: string, from = spaceCaller) => f.spawn(name, from) }
+}
 
 function fixture(options: { limit?: number; onCreated?: () => Promise<void> } = {}) {
   const busy = new Set<string>()
@@ -55,6 +68,31 @@ function fixture(options: { limit?: number; onCreated?: () => Promise<void> } = 
 }
 
 describe('collaboration request lifecycle', () => {
+  it('fences idle-source descendants and awaits an allocation already publishing before workspace maintenance settles', async () => {
+    let release!: () => void
+    const publishing = new Promise<void>(resolve => { release = resolve })
+    const f = fixture({ onCreated: () => publishing })
+    f.source.sourceAppId = 'lead'
+    const allocation = f.spawn('pending')
+    const refused = expect(allocation).rejects.toThrow(/identity is retained/)
+    await vi.waitFor(() => expect(store.participants.list('team', 'work')).toHaveLength(1))
+    const lease = f.service.beginMaintenance({ appIds: ['lead'] })
+    let settled = false
+    const drained = lease.drain().then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    await expect(f.spawn('too-late')).rejects.toMatchObject({ code: 'workspace_changing' })
+    expect(() => f.service.beginRequest(sourceId, 'new-request')).toThrow(/changing workspace/)
+    release()
+    await refused; await drained
+    const member = store.participants.list('team', 'work')[0]
+    expect(lease.actorIds).toContain(member.appId)
+    expect(f.stop.mock.calls.map(([input]) => input.appId)).toEqual([member.appId])
+    expect(f.deliveries).toHaveLength(0)
+    lease.release()
+    f.service.beginRequest(sourceId, 'fresh-owner-request')
+  })
+
   it('retains the handle and reports failure when the initial assignment is undelivered', async () => {
     const f = fixture()
     vi.spyOn(f.bus, 'send').mockResolvedValue({ messageId: 'not-delivered', delivery: 'undelivered' })
@@ -70,8 +108,70 @@ describe('collaboration request lifecycle', () => {
     const assignment = 'Inspect the confidential source note, keeping its content in this assignment.'
     const member = await f.service.spawn(caller, { prompt: assignment }, f.source)
     expect(member.role).toBe('Collaborator')
+    expect(member.memberName).toBe(`collaborator-${member.appId.slice(0, 8)}`)
     expect(JSON.stringify(store.participants.get(member.teamId, member.epochId, member.appId))).not.toContain(assignment)
     expect(store.participants.getExecution(member.teamId, member.epochId, member.appId)?.prompt).toBe(assignment)
+  })
+
+  it('rejects reserved and occupied names before creating workspaces or spending slots', async () => {
+    const f = spaceFixture(2)
+    const { teamId, epochId } = spaceCaller
+    for (const name of [' lead ', 'all']) {
+      await expect(f.spawn(name)).rejects.toMatchObject({ code: 'reserved_name' })
+    }
+    expect(await readdir(directory)).not.toContain('collaboration')
+    const occupied = await f.spawn(' 评审 ')
+    expect(occupied.memberName).toBe('评审')
+    await expect(f.spawn('评审')).rejects.toMatchObject({ code: 'name_taken' })
+    await expect(f.spawn(occupied.appId)).rejects.toMatchObject({ code: 'name_taken' })
+    const second = await f.spawn('  ')
+    expect(second.memberName).toBe('collaborator')
+    expect(await readdir(join(directory, 'collaboration'))).toEqual([occupied.appId, second.appId].sort())
+    expect(f.bus.resolveMemberAppId(teamId, '评审', epochId)).toBe(occupied.appId)
+    expect(f.bus.resolveMemberAppId(teamId, occupied.appId, epochId)).toBe(occupied.appId)
+  })
+
+  it('cleans up and returns the slot if a teammate takes the name during workspace preparation', async () => {
+    const f = spaceFixture(1)
+    const { teamId, epochId } = spaceCaller
+    const reserve = store.requests.reserve
+    vi.spyOn(store.requests, 'reserve').mockImplementationOnce((...args) => {
+      queueMicrotask(() => store.addMember({ teamId, appId: 'peer', memberName: 'reviewer', role: 'reviewer',
+        isLead: false, aiProvisioned: false, addedAt: 1 }))
+      return reserve(...args)
+    })
+    await expect(f.spawn('reviewer')).rejects.toMatchObject({ code: 'name_taken' })
+    expect(store.participants.list(teamId, epochId)).toEqual([])
+    expect(await readdir(join(directory, 'collaboration'))).toEqual([])
+    expect(f.deliveries).toHaveLength(0)
+    await expect(f.spawn('tester')).resolves.toMatchObject({ memberName: 'tester' })
+  })
+
+  it('serializes same-name creation within one work scope and leaves other scopes independent', async () => {
+    const f = spaceFixture()
+    const { teamId, epochId } = spaceCaller
+    const [winner, duplicate] = await Promise.allSettled([f.spawn('reviewer'), f.spawn('reviewer')])
+    expect(winner).toMatchObject({ status: 'fulfilled', value: { memberName: 'reviewer' } })
+    expect(duplicate).toMatchObject({ status: 'rejected', reason: { code: 'name_taken' } })
+    store.insertEpoch({ ...store.getEpochById(epochId)!, id: 'next-work', startedAt: 2 })
+    const next = await f.spawn('reviewer', { ...spaceCaller, epochId: 'next-work' })
+    const [original] = store.participants.list(teamId, epochId)
+    expect(f.bus.resolveMemberAppId(teamId, 'reviewer', epochId)).toBe(original.appId)
+    expect(f.bus.resolveMemberAppId(teamId, 'reviewer', 'next-work')).toBe(next.appId)
+    expect(next.appId).not.toBe(original.appId)
+  })
+
+  it('keeps an existing suffixed collaborator and a new short name independently addressable', async () => {
+    const f = spaceFixture()
+    const { teamId, epochId, callerAppId } = spaceCaller
+    const legacy = { teamId, epochId, appId: 'ab12cd34-0000-4000-8000-000000000000', parentAppId: callerAppId,
+      memberName: 'reviewer-ab12cd34', role: 'reviewer', addedAt: 1, aiProvisioned: false, isLead: false, isTemporary: true as const }
+    store.participants.insert(legacy)
+    const current = await f.spawn('reviewer')
+    const restoredBus = createMessageBus({ store: createWorkMembership(new TeamStore(db.getAppDatabase())),
+      hooks: { isBusy: () => false, wakeTarget: async () => {} } })
+    expect(restoredBus.resolveMemberAppId(teamId, legacy.memberName, epochId)).toBe(legacy.appId)
+    expect(restoredBus.resolveMemberAppId(teamId, current.memberName, epochId)).toBe(current.appId)
   })
 
   it('shares creation budgets with nested members, renews only for real source input, and survives service reconstruction', async () => {
@@ -86,7 +186,7 @@ describe('collaboration request lifecycle', () => {
     expect(store.participants.list('team', 'work')).toHaveLength(3)
     const restored = createParticipantService({ store: new TeamStore(db.getAppDatabase()), getRuntime: () => f.runtime, maxMembersPerRequest: 2 })
     await restored.spawn(caller, { prompt: 'One remaining creation.' }, f.source)
-    await expect(restored.spawn(caller, { prompt: 'Must not reset the budget.' }, f.source)).rejects.toThrow(/creation limit/)
+    await expect(restored.spawn(caller, { name: 'one-too-many', prompt: 'Must not reset the budget.' }, f.source)).rejects.toThrow(/creation limit/)
   })
 
   it('invalidates an allocation awaiting publication before a group has dispatched, and returns its retained handle', async () => {
@@ -298,7 +398,7 @@ describe('collaboration request lifecycle', () => {
     await expect(f.service.stop(child, coordinator)).rejects.toThrow(/currently control/)
     await f.service.stopSource('conversation')
     f.service.beginRequest('conversation', 'source-request-two')
-    await expect(f.service.spawn(lead, { prompt: 'Fresh research.' }, f.source)).resolves.toMatchObject({ isTemporary: true })
+    await expect(f.service.spawn(lead, { name: 'fresh-researcher', prompt: 'Fresh research.' }, f.source)).resolves.toMatchObject({ isTemporary: true })
   })
 
   it('refuses an App identity collision before creating workspace directories', async () => {

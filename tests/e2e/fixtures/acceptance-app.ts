@@ -33,6 +33,7 @@ export interface AcceptanceSource {
 
 interface Fixtures {
   sdkEngine: EngineId
+  isolatedPath: boolean
   startupObserver: string | undefined
   diagnoseShutdown: boolean
   model: AcceptanceModel
@@ -87,10 +88,11 @@ function hasExited(owned: OwnedApplication): boolean {
   return !!owned.child && (owned.child.exitCode != null || owned.child.signalCode != null)
 }
 
-async function open(entry: string, profile: string, register: (app: ElectronApplication) => void, startupObserver?: string) {
+async function open(entry: string, profile: string, register: (app: ElectronApplication) => void | Promise<void>, startupObserver?: string, isolatedPath = false) {
   const project = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-  const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project, bootstrapObserver: startupObserver })
-  register(app)
+  const environment = isolatedPath ? { PATH: process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32') : '/usr/bin:/bin:/usr/sbin:/sbin' } : undefined
+  const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project, bootstrapObserver: startupObserver, env: environment })
+  await register(app)
   const window = await app.firstWindow()
   await window.waitForLoadState('domcontentloaded')
   await attachProbe(window)
@@ -159,13 +161,19 @@ async function close(owned: OwnedApplication, phase: string, stuckEvidence?: str
 }
 
 async function attachEvidence(profile: string, model: AcceptanceModel, info: TestInfo) {
-  await info.attach('scripted-model-exchanges', { body: JSON.stringify({ exchanges: model.exchanges, errors: model.errors }, null, 2), contentType: 'application/json' })
+  const { evidenceChunks } = await import('../../../scripts/acceptance/lib/evidence-chunks.mjs')
+  const evidence = evidenceChunks({ exchanges: model.exchanges, errors: model.errors }, resolve(dirname(fileURLToPath(import.meta.url)), '../../..'))
+  await info.attach('scripted-model-exchanges-manifest', { body: JSON.stringify(evidence.manifest), contentType: 'application/json' })
+  for (const chunk of evidence.chunks()) {
+    await info.attach(`scripted-model-exchanges-part-${chunk.index}`, { body: JSON.stringify(chunk), contentType: 'application/json' })
+  }
   const log = join(profile, '.halo/logs/main.log')
   if (existsSync(log)) await info.attach('application-main-log', { body: readFileSync(log).subarray(-1000000), contentType: 'text/plain' })
 }
 
 export const test = base.extend<Fixtures>({
   sdkEngine: ['halo', { option: true }],
+  isolatedPath: [false, { option: true }],
   startupObserver: [undefined, { option: true }],
   diagnoseShutdown: [false, { option: true }],
   model: async ({}, use) => {
@@ -175,10 +183,14 @@ export const test = base.extend<Fixtures>({
   aiSource: async ({ model }, use) => {
     await use({ provider: 'openai', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'gpt-4o' })
   },
-  acceptanceApp: async ({ model, aiSource, sdkEngine, diagnoseShutdown, startupObserver }, use, testInfo) => {
+  acceptanceApp: async ({ model, aiSource, sdkEngine, diagnoseShutdown, startupObserver, isolatedPath }, use, testInfo) => {
     const entry = getAppEntryPath()
-    const selectedCli = sdkEngine === 'anthropic' ? process.env.HALO_ACCEPTANCE_CLAUDE_CLI : undefined
-    if (sdkEngine === 'anthropic' && (!selectedCli || !existsSync(selectedCli))) throw new Error('Blocked prerequisite: HALO_ACCEPTANCE_CLAUDE_CLI must name an installed external Claude Code')
+    const selectedCli = sdkEngine === 'anthropic' ? process.env.HALO_ACCEPTANCE_CLAUDE_CLI : sdkEngine === 'codex' ? process.env.HALO_ACCEPTANCE_CODEX_CLI : undefined
+    if (sdkEngine === 'anthropic' || sdkEngine === 'codex') {
+      const { externalRuntimeFailure } = await import('../../../scripts/acceptance/lib/external-runtime-readiness.mjs')
+      const missing = await externalRuntimeFailure(sdkEngine)
+      if (missing) throw new Error(`Blocked prerequisite: ${missing}`)
+    }
     const profile = createTestConfigDir(entry, [], { sdkEngine })
     const file = join(profile, '.halo/config.json')
     const config = JSON.parse(readFileSync(file, 'utf8'))
@@ -188,6 +200,8 @@ export const test = base.extend<Fixtures>({
     config.agent = { ...config.agent, sdkEngine, configDirMode: 'custom', customConfigDir: join(profile, 'sdk-state'), maxTurns: 16 }
     if (sdkEngine === 'anthropic') {
       config.agent.ccRuntime = { selectedPath: selectedCli, selectionOrigin: 'user' }
+    } else if (sdkEngine === 'codex') {
+      config.agent.codexRuntime = { selectedPath: selectedCli, selectionOrigin: 'user' }
     }
     config.imChannels = { instances: [] }
     config.notificationChannels = {}
@@ -197,7 +211,7 @@ export const test = base.extend<Fixtures>({
     const openOwned = async () => {
       let registered = false
       try {
-        const opened = await open(entry, profile, app => {
+        const opened = await open(entry, profile, async app => {
           const owned: OwnedApplication = { app, child: null, diagnosticErrors: [] }
           applications.push(owned)
           // The public Playwright facade may be disposed before final cleanup.
@@ -205,14 +219,12 @@ export const test = base.extend<Fixtures>({
           if (!owned.child) throw new Error('The launched acceptance application did not expose a process handle')
           registered = true
           if (diagnoseShutdown) {
-            try { owned.shutdown = observeAcceptanceShutdown(app, owned.child, profile) }
-            catch (error) { owned.diagnosticErrors.push(error) }
+            try {
+              owned.shutdown = observeAcceptanceShutdown(app, owned.child, profile)
+              await owned.shutdown.installMain()
+            } catch (error) { owned.diagnosticErrors.push(error) }
           }
-        }, startupObserver)
-        const owned = applications.find(owned => owned.app === opened.app)!
-        if (owned.shutdown) {
-          try { await owned.shutdown.installMain() } catch (error) { owned.diagnosticErrors.push(error) }
-        }
+        }, startupObserver, isolatedPath)
         return opened
       } catch (error) {
         if (!registered) launchWithoutHandle = true
@@ -248,6 +260,16 @@ export const test = base.extend<Fixtures>({
     } catch (error) {
       failures.push(error)
     } finally {
+      const primaryErrors = [...testInfo.errors]
+      if (primaryErrors.length > 0 || failures.length > 0) {
+        try {
+          await testInfo.attach('application-primary-errors', { body: JSON.stringify({
+            status: testInfo.status,
+            testErrors: primaryErrors.map(error => ({ message: error.message, stack: error.stack })),
+            fixtureErrors: failures.map(error => error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) }),
+          }, null, 2), contentType: 'application/json' })
+        } catch (error) { failures.push(error) }
+      }
       try {
         if (session && !session.window.isClosed()) await session.window.screenshot({ path: testInfo.outputPath('final-window.png') })
       } catch (error) { failures.push(error) }

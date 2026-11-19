@@ -92,7 +92,7 @@ export function openAgentExecution(options: AgentExecutionOptions): AgentExecuti
 
   const work = getExecutionWorkHost()?.open({
     key, principal, modelSelection: options.modelSelection, requester, source,
-    grants: options.grants, isLive, mayDelegate, input,
+    grants: options.grants, modelContext: options.modelContext, isLive, mayDelegate, input,
   })
 
   const hasPendingWork = () => deliveries > 0 || work?.hasPending() === true

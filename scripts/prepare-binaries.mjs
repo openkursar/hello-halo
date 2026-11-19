@@ -67,15 +67,6 @@ const WATCHER_PACKAGES = {
   'linux': '@parcel/watcher-linux-x64-glibc'
 }
 
-// @openai/codex platform packages. npm only installs the current host's
-// optional dependency, so cross-arch packaging must fetch the target package.
-const CODEX_PACKAGES = {
-  'mac-arm64': { pkg: '@openai/codex-darwin-arm64', targetTriple: 'aarch64-apple-darwin', binary: 'codex' },
-  'mac-x64': { pkg: '@openai/codex-darwin-x64', targetTriple: 'x86_64-apple-darwin', binary: 'codex' },
-  'win': { pkg: '@openai/codex-win32-x64', targetTriple: 'x86_64-pc-windows-msvc', binary: 'codex.exe' },
-  'linux': { pkg: '@openai/codex-linux-x64', targetTriple: 'x86_64-unknown-linux-musl', binary: 'codex' }
-}
-
 /**
  * Detect current platform
  */
@@ -403,67 +394,6 @@ function downloadPortableGit() {
   throw new Error(`All Portable Git download sources failed: ${lastError?.message}`)
 }
 
-function getCodexVersion() {
-  const pkgPath = path.join(PROJECT_ROOT, 'node_modules', '@openai', 'codex', 'package.json')
-  return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
-}
-
-function checkCodex(platform) {
-  const target = CODEX_PACKAGES[platform]
-  const binaryPath = path.join(
-    PROJECT_ROOT,
-    'node_modules',
-    target.pkg,
-    'vendor',
-    target.targetTriple,
-    'codex',
-    target.binary
-  )
-  if (!fs.existsSync(binaryPath)) {
-    return { exists: false }
-  }
-  const stats = fs.statSync(binaryPath)
-  return { exists: true, valid: stats.size > 10 * 1024 * 1024, size: stats.size }
-}
-
-/**
- * Install @openai/codex platform package for a target platform.
- * Downloads tarball directly from npm registry to bypass host os/cpu checks.
- */
-function installCodex(platform) {
-  const target = CODEX_PACKAGES[platform]
-  const version = getCodexVersion()
-  const platformVersion = `${version}-${target.pkg.replace('@openai/codex-', '')}`
-  const registry = execSync('npm config get registry', { encoding: 'utf8' }).trim().replace(/\/+$/, '')
-  const tarballUrl = `${registry}/@openai/codex/-/codex-${platformVersion}.tgz`
-  const destDir = path.join(PROJECT_ROOT, 'node_modules', target.pkg)
-  const tmpTgz = path.join(PROJECT_ROOT, `node_modules/.${target.pkg.replace('@openai/', '')}.tgz`)
-
-  log.info(`Installing ${target.pkg}@${platformVersion} from registry...`)
-
-  try {
-    if (fs.existsSync(destDir)) {
-      fs.rmSync(destDir, { recursive: true })
-    }
-    fs.mkdirSync(destDir, { recursive: true })
-
-    curlDownload(tarballUrl, tmpTgz)
-    execSync(`tar -xzf "${tmpTgz}" -C "${destDir}" --strip-components=1`, { stdio: 'pipe' })
-    fs.unlinkSync(tmpTgz)
-
-    const status = checkCodex(platform)
-    if (!status.exists || !status.valid) {
-      throw new Error(`No valid Codex binary found in downloaded ${target.pkg}`)
-    }
-
-    log.success(`Installed ${target.pkg}@${platformVersion}`)
-  } catch (err) {
-    if (fs.existsSync(tmpTgz)) fs.unlinkSync(tmpTgz)
-    log.error(`Failed to install ${target.pkg}: ${err.message}`)
-    throw err
-  }
-}
-
 function checkRipgrep(platform) {
   const binaryPath = path.join(PROJECT_ROOT, 'node_modules', ripgrep.ripgrepBinaryPath(ripgrep.PREPARE_PLATFORM_KEYS[platform]))
   if (!fs.existsSync(binaryPath)) return { exists: false }
@@ -538,14 +468,6 @@ function preparePlatform(platform) {
   }
   log.success(`better-sqlite3 prebuild already exists for ${platform}`)
 
-  // Check and install @openai/codex native package
-  const codexStatus = checkCodex(platform)
-  if (!codexStatus.exists || !codexStatus.valid) {
-    installCodex(platform)
-  } else {
-    log.success(`@openai/codex native package already exists for ${platform}`)
-  }
-
   // ripgrep for the Halo SDK engine's Grep tool
   const ripgrepStatus = checkRipgrep(platform)
   if (!ripgrepStatus.exists || !ripgrepStatus.valid) {
@@ -573,7 +495,6 @@ function preparePlatform(platform) {
     const arch = platform === 'mac-arm64' ? 'arm64' : 'x64'
     const nativePaths = [
       `node_modules/${WATCHER_PACKAGES[platform]}`,
-      `node_modules/${CODEX_PACKAGES[platform].pkg}`,
       `node_modules/${ripgrep.ripgrepBinaryPath(ripgrep.PREPARE_PLATFORM_KEYS[platform])}`,
       `node_modules/node-pty/prebuilds/darwin-${arch}`,
     ]

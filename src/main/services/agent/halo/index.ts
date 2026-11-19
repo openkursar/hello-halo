@@ -6,6 +6,7 @@ import type * as NativeSdk from '@hello-halo/agent-sdk/native'
 import type { Options } from '@hello-halo/agent-sdk'
 import { prepareSessionSkills, withSkillNotice } from '../skill-availability'
 import { buildToolDiscoveryOptions } from '../tool-discovery'
+import { compactionContextHook, getCompactionContextReader } from '../compaction-context'
 import { getBundledRipgrepPath } from './ripgrep'
 import { updateEnvPath } from '../../child-env'
 import { NativeSessionResumeError } from '../../../../shared/types/engine-session'
@@ -26,6 +27,11 @@ export function createHaloSdkModule(sdk: typeof NativeSdk) {
   const prepare = async (options: Record<string, any>) => {
     const { haloRequestIdentity, workerGroup, ...sessionOptions } = options
     sessionOptions.collaboration = { mode: 'hosted' }
+    const compactionContext = getCompactionContextReader(sessionOptions.mcpServers?.['halo-team'])
+    if (compactionContext) {
+      const hooks = sessionOptions.hooks ?? {}
+      sessionOptions.hooks = { ...hooks, PreCompact: [...(hooks.PreCompact ?? []), compactionContextHook(compactionContext)] }
+    }
     if (!sessionOptions.toolCallingMode || sessionOptions.toolCallingMode === 'native') {
       const toolDiscovery = buildToolDiscoveryOptions(sessionOptions.mcpServers)
       if (toolDiscovery) sessionOptions.toolDiscovery = toolDiscovery

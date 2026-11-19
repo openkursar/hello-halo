@@ -41,7 +41,7 @@ async function spawnedEnv(options: { pathDirs: string[]; env: NodeJS.ProcessEnv 
   spawn.mockImplementation(() => fakeChild())
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   try {
-    await createCodexConnection({ binaryPath: 'codex', isJsShim: false, cwd: '/work', ...options }).start()
+    await createCodexConnection({ launch: { command: '/fixture/codex', argsPrefix: [], env: {}, path: '/fixture/codex', kind: 'native', version: '0.128.0', pathDirs: options.pathDirs }, cwd: '/work', env: options.env }).start()
   } finally {
     log.mockRestore()
   }

@@ -1486,7 +1486,7 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      const result = createNativeChatSession(appId)
+      const result = await createNativeChatSession(appId)
       console.log('[HTTP] POST /api/apps/%s/sessions/create → %s', appId, result.conversationId)
       res.json({ success: true, data: result })
     } catch (error) {
@@ -1507,7 +1507,7 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing required body params: spaceId, sourceConversationId' })
         return
       }
-      const result = forkNativeChatSession(appId, spaceId, sourceConversationId)
+      const result = await forkNativeChatSession(appId, spaceId, sourceConversationId)
       console.log('[HTTP] POST /api/apps/%s/sessions/fork from=%s → %s', appId, sourceConversationId, result.conversationId)
       res.json({ success: true, data: result })
     } catch (error) {

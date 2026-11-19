@@ -53,7 +53,7 @@ export interface InstalledApp {
   /** Space this App is installed in (null = global, available in all spaces) */
   spaceId: string | null
 
-  /** Stable identity storage root, retained when the default space changes. */
+  /** Legacy storage root awaiting repair into this person's current workspace. */
   dataPath?: string
 
   /** Full AppSpec (initially set at install time, updatable via updateSpec) */
@@ -312,8 +312,9 @@ export interface AppManagerService {
   /**
    * Delete all Apps belonging to a space (for space deletion cleanup).
    *
-   * Hard-deletes all app records and purges their work directories.
-   * Called by space.service.ts when a space is being deleted.
+   * Hard-deletes resource records and purges their private work directories.
+   * Refuses while any digital human still belongs to this space; runtime must
+   * relocate them first. Called by space.service.ts after that preparation.
    *
    * @param spaceId - The space ID whose apps should be deleted
    * @returns Number of apps deleted
@@ -504,6 +505,21 @@ export interface AppManagerService {
    * @throws AppAlreadyInstalledError if target scope already has the same specId
    */
   moveToSpace(appId: string, newSpaceId: string | null): Promise<void>
+
+  /** Stops destructive data/config mutations and new installations into a retiring space; does not stop executions. */
+  holdWorkspaceData(appIds: Iterable<string>, retiringSpaceId?: string): () => void
+
+  /** Quiescence belongs to runtime; this operation moves only app data and commits its records atomically. */
+  relocateAutomationData(appId: string, spaceId: string, options: {
+    sources: Array<{ path: string; spaceId: string; targetPath?: string }>
+    commitEnvironments: () => unknown
+  }): Promise<{ fileCount: number }>
+  /** In-memory recovery check shared by the person and its temporary descendants. */
+  assertAppDataAvailable(appId: string): void
+  /** Legacy split layouts only; no directory scan or full spec read. */
+  listLegacyDataAppIds(): string[]
+  /** Resolve interrupted file transactions before admitting work. Returns app IDs still needing recovery. */
+  recoverDataRelocations(): Promise<string[]>
 
   // ── Knowledge Base ─────────────────────────────
 

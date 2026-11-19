@@ -108,7 +108,7 @@ describe('skill management in the assembled Halo Apps server', () => {
     expect((await other.tools.find(tool => tool.name === 'create_automation_app')!.handler({ spec: '{}' })).content[0].text)
       .toContain('Read the authoring guide first')
     expect(createSpaceTeamMcpServer).toBeTypeOf('function')
-    expect(TEAM_TOOLSET_GUIDE).toContain('Use collaborators when work can progress independently')
+    expect(TEAM_TOOLSET_GUIDE).toContain('Collaborators are separate agents that work in their own context.')
   })
 
   it.each([undefined, 'global'] as const)('lists the requested %s scope with opaque references and pagination', async scope => {

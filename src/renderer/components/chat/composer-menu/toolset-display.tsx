@@ -1,6 +1,6 @@
 /**
  * How each toolset presents itself in the composer: icon, name and the one
- * line that tells a newcomer what switching it on lets the AI do.
+ * line that tells a newcomer what it lets the AI do.
  *
  * Literal t('...') calls (not t(ts.displayName)) so the i18n extractor sees
  * every key; a toolset missing here falls back to its registry text.

@@ -1,4 +1,5 @@
 node_modules/
+/bindings/node/collaboration/generated/
 /bindings/node/harness/generated/
 /bindings/node/native/generated/
 dist/

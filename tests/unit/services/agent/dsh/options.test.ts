@@ -18,7 +18,9 @@ vi.mock('../../../../../src/main/services/agent/dsh/runtime', () => ({
 }))
 
 import { resolveDshOptions } from '../../../../../src/main/services/agent/dsh/options'
-import { encodeBackendConfig, decodeBackendConfig } from '../../../../../src/main/openai-compat-router'
+import { encodeBackendConfig, decodeBackendConfig, convertAnthropicToOpenAIChat, type AnthropicRequest } from '../../../../../src/main/openai-compat-router'
+import type { EffectiveReasoning } from '@hello-halo/agent-sdk/collaboration'
+import { resolveAnthropicReasoning } from '../../../../../src/main/openai-compat-router/utils/normalize-anthropic-reasoning'
 
 const LAUNCH = { command: 'node', args: ['entry.js', 'config.yml'], env: {}, cwd: '/work' }
 
@@ -56,6 +58,19 @@ describe('resolveDshOptions account egress', () => {
       adapterId: 'tencent', apiType: 'chat_completions', profileArn: 'profile-a',
       codexModelCapabilities: { reasoningSummary: true, responsesLite: false },
     })
+  })
+
+  it.each(['https://native.example.com', 'https://native.example.com/', 'https://native.example.com/v1/messages'])('routes native Anthropic credentials from %s through Messages', async baseUrl => {
+    await resolveDshOptions({ apiCredentials: { ...credentials(), provider: 'anthropic', baseUrl, model: 'claude-opus-4-6' } })
+    expect(launchedBackendConfig()).toMatchObject({ sourceId: 'account-a', apiType: 'anthropic_passthrough', url: 'https://native.example.com/v1/messages', model: 'claude-opus-4-6', key: 'test-key-a' })
+  })
+
+  it('preserves an explicitly declared native endpoint without guessing from the model name', async () => {
+    await resolveDshOptions({ apiCredentials: { ...credentials(), apiType: 'anthropic_passthrough', baseUrl: 'https://native.example.com/v1/messages', model: 'claude-opus-4-6' } })
+    expect(launchedBackendConfig()).toMatchObject({ apiType: 'anthropic_passthrough', url: 'https://native.example.com/v1/messages' })
+    buildDshLaunchSpec.mockClear()
+    await resolveDshOptions({ apiCredentials: { ...credentials(), apiType: 'chat_completions', model: 'claude-opus-4-6' } })
+    expect(launchedBackendConfig()).toMatchObject({ apiType: 'chat_completions', url: 'https://gateway.example.com/v1/chat/completions' })
   })
 
   it('does not change account or model while awaiting router preparation', async () => {
@@ -99,6 +114,103 @@ describe('resolveDshOptions account egress', () => {
     expect(getApiCredentials).not.toHaveBeenCalled()
     expect(buildDshLaunchSpec).not.toHaveBeenCalled()
     expect(ensureOpenAICompatRouter).not.toHaveBeenCalled()
+  })
+})
+
+describe('resolveDshOptions frozen delegated reasoning', () => {
+  function credentials(): ApiCredentials {
+    return {
+      sourceId: 'account-a', credentialsGeneration: 'captured-a',
+      baseUrl: 'https://gateway.example.com/v1/chat/completions',
+      apiKey: 'test-key-a', model: 'gateway-model', provider: 'openai',
+    }
+  }
+  const messages: AnthropicRequest = {
+    model: 'gateway-model', max_tokens: 8192, messages: [{ role: 'user', content: 'Answer.' }],
+    thinking: { type: 'enabled' }, output_config: { effort: 'high' },
+  }
+  const wire = (backend: NonNullable<ReturnType<typeof decodeBackendConfig>>) => {
+    const { request: converted } = convertAnthropicToOpenAIChat({ ...messages, model: backend.model! }, backend)
+    return { effort: converted.reasoning_effort, thinking: converted.thinking }
+  }
+
+  it('keeps ordinary dsh Messages conversion unchanged even when a user picked another level', async () => {
+    await resolveDshOptions({ apiCredentials: credentials(), pickedReasoningEffort: 'max' })
+    expect(launchedBackendConfig()).not.toHaveProperty('pickedReasoningEffort')
+    expect(wire(launchedBackendConfig()!)).toEqual({ effort: undefined, thinking: undefined })
+  })
+
+  it.each([undefined, 'high', 'provider-specific'])('preserves actual parent wire after configured effort %s changes', async configured => {
+    await resolveDshOptions({ apiCredentials: { ...credentials(), capabilities: { reasoningEffort: configured } } })
+    const parent = wire(launchedBackendConfig()!)
+    buildDshLaunchSpec.mockClear()
+    await resolveDshOptions({
+      apiCredentials: { ...credentials(), capabilities: { reasoningEffort: 'medium' } },
+      inheritedReasoning: (parent.effort
+        ? { version: 1, mode: 'effort', effort: parent.effort }
+        : { version: 1, mode: 'provider-default' }) satisfies EffectiveReasoning,
+    })
+    expect(wire(launchedBackendConfig()!)).toEqual(parent)
+    expect(launchedBackendConfig()?.pickedReasoningEffort).toBe(configured === 'provider-specific' ? undefined : parent.effort ?? 'off')
+  })
+
+  it.each(['minimal', 'low', 'medium', 'high', 'xhigh', 'max'])('forwards frozen ladder effort %s through the public converter', async effort => {
+    await resolveDshOptions({ apiCredentials: credentials(), inheritedReasoning: { version: 1, mode: 'effort', effort } })
+    expect(wire(launchedBackendConfig()!).effort).toBe(effort)
+    expect(launchedBackendConfig()?.pickedReasoningEffort).toBe(effort)
+  })
+
+  it.each(['off', 'provider-default'])('preserves frozen %s without inheriting the current configured effort', async mode => {
+    await resolveDshOptions({ apiCredentials: { ...credentials(), capabilities: { reasoningEffort: 'high' } }, inheritedReasoning: { version: 1, mode } })
+    expect(launchedBackendConfig()?.pickedReasoningEffort).toBe('off')
+    expect(wire(launchedBackendConfig()!)).toEqual({ effort: undefined, thinking: undefined })
+  })
+
+  it('captures the frozen reasoning before asynchronous router setup', async () => {
+    let release!: (value: { baseUrl: string }) => void
+    ensureOpenAICompatRouter.mockReturnValueOnce(new Promise(resolve => { release = resolve }))
+    const inheritedReasoning = { version: 1, mode: 'effort', effort: 'low' }
+    const pending = resolveDshOptions({ apiCredentials: credentials(), inheritedReasoning })
+    await vi.waitFor(() => expect(ensureOpenAICompatRouter).toHaveBeenCalledTimes(1))
+    inheritedReasoning.effort = 'high'
+    release({ baseUrl: 'http://127.0.0.1:51234' })
+    await pending
+    expect(wire(launchedBackendConfig()!).effort).toBe('low')
+  })
+
+  it.each(['anthropic', 'apiType'])('retains an adaptive native target through %s routing metadata', async route => {
+    await resolveDshOptions({
+      apiCredentials: { ...credentials(), model: 'claude-sonnet-4-6', ...(route === 'anthropic' ? { provider: 'anthropic' } : { apiType: 'anthropic_passthrough' }) },
+      inheritedReasoning: { version: 1, mode: 'adaptive', effort: 'high' },
+    })
+    expect(launchedBackendConfig()).toMatchObject({ pickedReasoningEffort: 'high', reasoningEffort: 'high' })
+    const request = resolveAnthropicReasoning({ ...messages, model: 'claude-sonnet-4-6' }, launchedBackendConfig()!).request
+    expect(request.thinking).toMatchObject({ type: 'adaptive' })
+    expect(request.output_config?.effort).toBe('high')
+  })
+
+  it.each([undefined, 'high'])('preserves actual adaptive native parent shape after configuration %s changes', async configured => {
+    const model = 'claude-sonnet-4-6'
+    await resolveDshOptions({ apiCredentials: { ...credentials(), model, provider: 'anthropic', capabilities: { reasoningEffort: configured } } })
+    const parent = resolveAnthropicReasoning({ ...messages, model }, launchedBackendConfig()!).request
+    const inheritedReasoning: EffectiveReasoning = parent.thinking?.type === 'adaptive'
+      ? { version: 1, mode: 'adaptive', effort: parent.output_config!.effort! }
+      : { version: 1, mode: 'off' }
+    buildDshLaunchSpec.mockClear()
+    await resolveDshOptions({ apiCredentials: { ...credentials(), model, provider: 'anthropic', capabilities: { reasoningEffort: 'medium' } }, inheritedReasoning })
+    const child = resolveAnthropicReasoning({ ...messages, model }, launchedBackendConfig()!).request
+    expect({ thinking: child.thinking, effort: child.output_config }).toEqual({ thinking: parent.thinking, effort: parent.output_config })
+  })
+
+  it.each(['claude-3-sonnet', 'gateway-model'])('refuses adaptive inheritance on non-adaptive native model %s', async model => {
+    await expect(resolveDshOptions({ apiCredentials: { ...credentials(), provider: 'anthropic', model }, inheritedReasoning: { version: 1, mode: 'adaptive', effort: 'high' } })).rejects.toThrow('cannot preserve this reasoning mode')
+    expect(buildDshLaunchSpec).not.toHaveBeenCalled()
+  })
+
+  it.each(['budget', 'adaptive'])('refuses unsupported frozen %s before preparing the router or runtime', async mode => {
+    await expect(resolveDshOptions({ apiCredentials: credentials(), inheritedReasoning: { version: 1, mode, budgetTokens: 2048, effort: 'high' } })).rejects.toThrow('cannot preserve this reasoning mode')
+    expect(ensureOpenAICompatRouter).not.toHaveBeenCalled()
+    expect(buildDshLaunchSpec).not.toHaveBeenCalled()
   })
 })
 

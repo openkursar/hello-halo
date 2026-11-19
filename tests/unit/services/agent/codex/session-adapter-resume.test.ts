@@ -10,14 +10,21 @@ const rpc = vi.hoisted(() => ({
   failResume: true,
   stopped: vi.fn(),
   failInitialize: false,
+  launch: { command: '/fixture/codex', argsPrefix: [], env: {}, path: '/fixture/codex', kind: 'native', version: '0.128.0' } as any,
+  connect: vi.fn(),
+}))
+
+vi.mock('../../../../../src/main/services/external-runtime', () => ({
+  resolveExternalRuntimeLaunch: async () => rpc.launch,
 }))
 
 vi.mock('../../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
 vi.mock('../../../../../src/main/services/agent/codex/transport/connection', () => ({
-  resolveBundledCodexBinary: () => ({ binaryPath: '/codex', isJsShim: false, pathDirs: [] }),
-  createCodexConnection: () => ({
+  createCodexConnection: (options: unknown) => {
+    rpc.connect(options)
+    return {
     start: async () => {},
     stop: async () => { rpc.stopped() },
     onExit: () => () => {},
@@ -25,7 +32,8 @@ vi.mock('../../../../../src/main/services/agent/codex/transport/connection', () 
     stdout: {},
     pid: 1,
     isRunning: () => true,
-  }),
+    }
+  },
 }))
 vi.mock('../../../../../src/main/services/agent/codex/transport/jsonrpc-client', () => ({
   JsonRpcClient: class {
@@ -45,13 +53,38 @@ vi.mock('../../../../../src/main/services/agent/codex/transport/server-request-h
   registerServerRequestHandlers: () => () => {},
 }))
 vi.mock('../../../../../src/main/services/agent/codex/options', () => ({
-  resolveCodexOptions: async () => ({ env: {}, cwd: '/tmp', model: 'm', displayModel: 'm', threadParams: { developerInstructions: 'Host context' }, mcpServers: {} }),
+  resolveCodexOptions: async (options: any) => {
+    await options.prepareOptions?.()
+    return { env: {}, cwd: '/tmp', model: 'm', displayModel: 'm', threadParams: { developerInstructions: 'Host context' }, mcpServers: {} }
+  },
 }))
 
 import { NativeSessionResumeError, isNativeSessionResumeError } from '../../../../../src/shared/types/engine-session'
 import { CodexAppServerSession } from '../../../../../src/main/services/agent/codex/session-adapter'
 
 describe('Codex thread resume', () => {
+  it('keeps the captured launch when selection changes during option preparation', async () => {
+    const captured = rpc.launch
+    try {
+      const session = await CodexAppServerSession.create({ prepareOptions: async () => {
+        rpc.launch = { ...captured, command: '/other/codex', path: '/other/codex' }
+      } })
+      expect(rpc.connect.mock.calls.at(-1)?.[0].launch).toBe(captured)
+      await session.close()
+    } finally { rpc.launch = captured }
+  })
+
+  it('reports missing selected Codex before allocating options or a process', async () => {
+    const captured = rpc.launch
+    const prepareOptions = vi.fn()
+    rpc.connect.mockClear()
+    try {
+      rpc.launch = null
+      await expect(CodexAppServerSession.create({ prepareOptions })).rejects.toMatchObject({ name: 'EngineUnavailableError', engineId: 'codex' })
+      expect(prepareOptions).not.toHaveBeenCalled()
+      expect(rpc.connect).not.toHaveBeenCalled()
+    } finally { rpc.launch = captured }
+  })
   it('starts a fresh thread when the stored thread cannot be resumed', async () => {
     rpc.requests.length = 0
     rpc.failResume = true

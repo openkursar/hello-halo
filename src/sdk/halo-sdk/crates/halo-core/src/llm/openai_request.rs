@@ -1,5 +1,4 @@
 use super::{
-    image_budget::{assert_image_body_budget, assert_image_request_budget},
     model_quirks::{apply_response, is_o_series, is_quirky},
 };
 use crate::{
@@ -50,7 +49,6 @@ pub fn build_body_with_harness(
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    assert_image_request_budget(input)?;
     let model = resolve_model(request, config)?;
     let quirks = &config["quirks"];
     let messages = messages(input, &request["systemPrompt"], quirks, harness)?;
@@ -110,7 +108,6 @@ pub fn build_body_with_harness(
     {
         body["reasoning_effort"] = request["providerOptions"]["reasoning_effort"].clone();
     }
-    assert_image_body_budget(&body)?;
     Ok(body)
 }
 
@@ -376,6 +373,27 @@ pub fn parse_response_with_harness(response: &Value, model: &str, harness: &crat
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_user_and_tool_image_payloads_are_preserved() {
+        let data = "A".repeat(512 * 1024);
+        let image = json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":data}});
+        let mut messages = Vec::new();
+        for index in 0..26 {
+            let id = format!("image_{index}");
+            messages.push(json!({"role":"user","content":[image]}));
+            messages.push(json!({"role":"assistant","content":[{"type":"tool_use","id":id,"name":"screenshot","input":{}}]}));
+            messages.push(json!({"role":"user","content":[{"type":"tool_result","tool_use_id":id,"content":[image]}]}));
+        }
+        let body = build_body(&json!({"model":"fixture","messages":messages}), &json!({}), true).unwrap();
+        let url = format!("data:image/png;base64,{data}");
+        let images: Vec<_> = body["messages"].as_array().unwrap().iter()
+            .filter_map(|message| message["content"].as_array()).flatten()
+            .filter(|block| block["type"] == "image_url").collect();
+        assert!(52 * data.len() > 24 * 1024 * 1024);
+        assert_eq!(images.len(), 52);
+        assert!(images.iter().all(|block| block["image_url"]["url"] == url));
+    }
+
     #[test]
     fn request_and_response_shapes_match_baseline() {
         let fixtures: Value =

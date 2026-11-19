@@ -10,6 +10,9 @@ describe('input-arrival transport', () => {
     expect(shouldDeliverAgentEvent('agent:input-arrived', 'chat', new Set(), event)).toBe(false)
     expect(shouldDeliverAgentEvent('agent:input-arrived', 'chat', new Set(['chat']), event)).toBe(true)
   })
+  it.each(['environment-notice', 'workspace-notice'])('accepts a persisted %s as a live timeline record', source => {
+    expect(isAgentInputArrivedEvent({ ...event, live: false, messages: [{ ...record, source }] })).toBe(true)
+  })
   it('refuses malformed relayed records before subscribers render them', () => {
     expect(isAgentInputArrivedEvent(event)).toBe(true)
     expect(isAgentInputArrivedEvent({ ...event, messages: [{ ...record, metadata: { inputMode: 'live' } }] })).toBe(true)

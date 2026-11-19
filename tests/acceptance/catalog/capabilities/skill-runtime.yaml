@@ -13,6 +13,23 @@ promises:
   engines: Every skill in the shared skill folders works on the actual session engine without a notice, a forced engine switch, a configuration change or a concealed basic-path regression.
   management: AI and UI management share file truth, scope, precedence and authorization, and diagnose real availability without invented certainty or background scans.
 scenarios:
+  - id: capabilities.skill-runtime.pdf-libraries
+    title: Run the bundled PDF libraries through the actual office shim
+    verifies: [content]
+    platforms: [darwin, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [packaged-app, canvas-pruned-package]
+    preconditions:
+      - The isolated controlled package contains no native canvas package.
+    steps:
+      - Execute the application-generated halo-node shim with an isolated synthetic script using bundled pdf-lib and unpdf.
+      - Independently parse the generated PDF outside that subprocess.
+    expected:
+      - The actual bundled libraries create a PDF and extract its text without host Node modules, model calls or source changes.
+    notes: This is packaged runtime availability evidence, not a skill-selection or model-invocation journey. Windows remains outside this POSIX shim execution binding and requires controlled cmd or Git Bash execution evidence; no fallback interpreter is used.
   - id: capabilities.skill-runtime.use
     title: Reach the real model boundary using the selected effective skill
     verifies: [use, content]

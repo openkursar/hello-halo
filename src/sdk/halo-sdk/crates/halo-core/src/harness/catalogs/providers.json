@@ -142,19 +142,6 @@
       "provider"
     ]
   },
-  "providers.images.payload_budget": {
-    "text": "Image request exceeds {limit} base64 characters across {count} images; reduce image size or history before retrying",
-    "slots": [
-      "limit",
-      "count"
-    ]
-  },
-  "providers.images.body_budget": {
-    "text": "Image request exceeds {limit} bytes after serialization; reduce image size or history before retrying",
-    "slots": [
-      "limit"
-    ]
-  },
   "providers.http.error": {
     "text": "{provider} API error ({status}): {reason}",
     "slots": [

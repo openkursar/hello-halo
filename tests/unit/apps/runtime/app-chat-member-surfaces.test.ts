@@ -107,12 +107,17 @@ const teamRuntimeReady = vi.hoisted(() => ({ current: true }))
 const teamAuthority = vi.hoisted(() => ({ ready: true,
   current: null as ReturnType<typeof import('./fixtures/participant-service').createScopedParticipantService> | null,
 }))
+const participantFixture = vi.hoisted(() => ({ current: null as import('../../../../src/main/apps/runtime/team/participant-execution').ResolvedParticipant | null }))
+vi.mock('../../../../src/main/apps/runtime/team/participant-execution', () => ({
+  resolveParticipantExecution: () => participantFixture.current,
+}))
 vi.mock('../../../../src/main/apps/team', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../../src/main/apps/team')>()
   const { createScopedParticipantService } = await import('./fixtures/participant-service')
   teamAuthority.current = createScopedParticipantService()
-  return { ...actual, getTeamService: () => teamAuthority.ready
-    ? { participants: teamAuthority.current!.service, getCollaborationScope: () => null, getCollabForConversation: () => null } : null }
+  return { ...actual, getTeamStore: () => participantFixture.current ? { getTeamById: () => ({ ephemeral: true }) } : null,
+    getTeamService: () => teamAuthority.ready
+      ? { participants: teamAuthority.current!.service, getCollaborationScope: () => null, getCollabForConversation: () => null } : null }
 })
 vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -312,15 +317,16 @@ const { app, environment, activityStore, listEffectiveMcpApps } = vi.hoisted(() 
       mcpBindings: {} as Record<string, string>,
     },
     listEffectiveMcpApps: vi.fn((): unknown[] => []),
-    activityStore: { getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn() },
+    activityStore: { getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn(), registerParticipantActor: vi.fn() },
   }
 })
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: () => ({ getApp: () => app, listEffectiveMcpApps }),
+  getAppManager: () => ({ getApp: (id: string) => participantFixture.current?.app.id === id ? null : app, listEffectiveMcpApps }),
 }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/apps/runtime/execution-environment')>()),
   resolveChatEnvironment: () => environment,
+  resolveChatRecordEnvironment: () => environment,
   validateExecutionEnvironment: vi.fn(),
   resolveExecutionEnvironment: () => environment,
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy:${appId}:${runId}`,
@@ -383,6 +389,7 @@ beforeEach(() => {
   registerExecutionHost(getActiveTeamRuntime as any)
   teamAuthority.ready = true
   teamAuthority.current!.reset()
+  participantFixture.current = null
   for (const epochId of ['epoch-1', 'epoch-context-window', 'policy-snapshot', 'restricted-live-input', 'epoch-outside', 'external-authority-missing', 'external-authority-message']) {
     teamAuthority.current!.allow('team-1', epochId, 'app-member')
   }
@@ -600,6 +607,34 @@ describe('a temporary collaboration member mounts no memory and no digital-human
   })
 })
 
+describe('reporting follows the collaborator source', () => {
+  it.each([undefined, 'source-digital-human'])('mounts reporting only with a digital-human source (%s)', async sourceAppId => {
+    disposableMemberContext()
+    participantFixture.current = {
+      app: { ...app, userOverrides: {} },
+      member: { teamId: TEAM_ID, epochId: EPOCH_ID, memberName: 'tester' },
+      execution: { sourceAppId, environment, mcpServerNames: ['web-search', 'ocr'] },
+    } as unknown as NonNullable<typeof participantFixture.current>
+    await sendAppChatMessage(memberTurn())
+    const { mcpServers, systemPrompt } = mountedSurfaces()
+    expect(Boolean(mcpServers['halo-report'])).toBe(Boolean(sourceAppId))
+    expect(systemPrompt.includes('report_to_user')).toBe(Boolean(sourceAppId))
+    expect(systemPrompt.includes('Escalation preference')).toBe(Boolean(sourceAppId))
+    expect(mcpServers).toHaveProperty('halo-team')
+    expect(systemPrompt).toContain('actual requester with `team_send(to, message)`')
+    expect(systemPrompt).toContain('send blockers or missing data to the requester with `team_send`')
+  })
+
+  it('keeps reporting and its existing guidance for an installed team member', async () => {
+    keptMemberContext()
+    await sendAppChatMessage(memberTurn())
+    const { mcpServers, systemPrompt } = mountedSurfaces()
+    expect(mcpServers).toHaveProperty('halo-report')
+    expect(systemPrompt).toContain('Only when you need a HUMAN decision, call')
+    expect(systemPrompt).toContain('report_to_user({type:"escalation", message:"Your question"')
+  })
+})
+
 describe('the owner switched web search off', () => {
   beforeEach(() => {
     buildUserSessionSdkOptions.mockClear()
@@ -698,7 +733,7 @@ describe('memory context across session lifecycles', () => {
     expect(mountedSurfaces().systemPrompt).toContain(`Your History author tag is \`${tag}\``)
     expect(mountedSurfaces().systemPrompt).toContain('never invent authors for old entries')
     expect(send.mock.calls.flat().join('\n')).not.toMatch(/Running right now|No other instance|You are `team#/)
-    expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true })
+    expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true, maintenanceSignal: expect.any(AbortSignal) })
   })
 
   it('gives a fork its destination author even when resuming the source transcript', async () => {
@@ -762,7 +797,7 @@ describe('memory context across session lifecycles', () => {
       await sendAppChatMessage(turn)
       expect(mountedSurfaces().systemPrompt).toMatch(/Your History author tag is `im#[a-f0-9]{4}`/)
       expect(mountedSurfaces().systemPrompt).not.toMatch(/Your History author tag is `im-guest#/)
-      expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true })
+      expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true, maintenanceSignal: expect.any(AbortSignal) })
       expect(send.mock.calls.map(([message]) => message)).toEqual(['answer', 'answer'])
       expect(send.mock.calls.every(([, onFailure]) => typeof onFailure === 'function')).toBe(true)
     } finally {
@@ -860,7 +895,7 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
     expect(options.disallowedTools ?? []).not.toContain('Bash')
     expect(options.permissionMode).toBeUndefined()
     // A session records calls only if it was built to.
-    expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true, creationContext: 'delegation-audit' })
+    expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true, creationContext: 'delegation-audit', maintenanceSignal: expect.any(AbortSignal) })
   })
 
   it('reads what is installed only when the switches leave the answer to it', async () => {

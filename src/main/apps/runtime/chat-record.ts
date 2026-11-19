@@ -22,23 +22,29 @@ import { getSpace } from '../../services/space.service'
 import { getAppManager } from '../manager'
 import { getAppChatSink } from './app-chat-sink'
 import { chatPushConversationId, type ChatPush } from './chat-push'
-import { appChatRunId, legacySessionEnvironmentKey } from './execution-environment'
+import { appChatRunId, legacySessionEnvironmentKey, resolveChatRecordEnvironment } from './execution-environment'
 import { getImSessionRegistry } from './im-session-registry'
 import { getActivityStore } from './index'
 import { truncateUtf16Safe } from './text-truncate'
+import { pendingWorkspaceChange, pendingWorkspaceRecovery } from './workspace-admission'
 
 const LOG_TAG = '[ChatRecord]'
 
 /** The space a chat's record is kept in: the one its session was pinned to, else `fallback`. */
 export function chatRecordPath(appId: string, conversationId: string, fallback: string): string {
   const store = getActivityStore()
+  const manager = getAppManager()
+  const app = manager?.getApp(appId)
+  if (store && manager && app?.spec.type === 'automation') return resolveChatRecordEnvironment(app, manager, store, conversationId).spacePath
   return store?.getSessionEnvironment(conversationId)?.spacePath
     ?? store?.getSessionEnvironment(legacySessionEnvironmentKey(appId, appChatRunId(conversationId, appId)))?.spacePath
     ?? fallback
 }
 
 /** Put a sent push into the chat's record and session list. */
-export function writeChatPush(push: ChatPush): void {
+export async function writeChatPush(push: ChatPush): Promise<void> {
+  let changing: Promise<void> | undefined
+  while ((changing = pendingWorkspaceRecovery() ?? pendingWorkspaceChange(push.appId))) await changing
   const registry = getImSessionRegistry()
   const session = registry?.findSession(push.appId, push.channel, push.chatId)
   // A resolved push keeps its destination even if the registry changes before recording.

@@ -360,7 +360,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
                     onClick={() => { setShowMoreMenu(false); setShowWorkspaceDialog(true) }}
                     className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-foreground hover:bg-muted/60 transition-colors"
                   >
-                    <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" />{t('Move to another workspace')}
+                    <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" />{t('Change workspace')}
                   </button>
                   <div className="my-1 border-t border-border" />
                   <button

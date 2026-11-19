@@ -10,10 +10,10 @@ import { mkdtempSync, mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
-const spaces = vi.hoisted(() => new Set<string>())
+const spaces = vi.hoisted(() => new Map<string, { id: string; path?: string; workingDir?: string }>())
 vi.mock('../../../../src/main/services/space.service', () => ({
-  getSpace: (id: string) => (spaces.has(id) ? { id } : null),
-  getSpaceDir: () => '',
+  getSpace: (id: string) => spaces.get(id) ?? null,
+  getSpaceDir: (id: string) => spaces.get(id)?.workingDir ?? spaces.get(id)?.path ?? '',
 }))
 
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
@@ -23,13 +23,14 @@ import { ActivityStore } from '../../../../src/main/apps/runtime/store'
 import { validateExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
 import { WorkingDirectoryUnavailableError, workingDirErrorDetail } from '../../../../src/main/services/agent'
 import type { ExecutionEnvironment } from '../../../../src/shared/apps/app-types'
+import type { InstalledApp } from '../../../../src/main/apps/manager'
 
 let root: string
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'halo-space-workdir-'))
   spaces.clear()
-  spaces.add('space-a')
+  spaces.set('space-a', { id: 'space-a' })
 })
 
 afterEach(() => {
@@ -107,12 +108,48 @@ describe('a digital human chat whose folder is gone', () => {
     expect((thrown as Error).message).not.toContain('redirected-desktop')
   })
 
-  it('keeps the plain message when what is missing is Halo’s own history or memory', () => {
+  it('keeps the one-argument validation strict for temporary participants without an installed owner', () => {
     const workDir = join(root, 'work')
     mkdirSync(workDir)
 
     expect(() => validateExecutionEnvironment({ ...environment('space-a', workDir), spacePath: join(root, 'gone'), memoryDir: workDir }))
       .toThrow('The original history or memory is unavailable. Restore it before continuing.')
     expect(workingDirErrorDetail(new Error('anything else'), 'space-a')).toBeUndefined()
+  })
+
+  it('does not recover an installed person into a different folder when their project directory is gone', () => {
+    const storage = join(root, 'storage')
+    const memory = join(storage, '.halo', 'apps', 'person')
+    const missing = join(root, 'missing-project')
+    mkdirSync(memory, { recursive: true })
+    spaces.set('space-a', { id: 'space-a', path: storage, workingDir: missing })
+    const app = { id: 'person', spaceId: 'space-a', spec: {} } as InstalledApp
+    const onRecovered = vi.fn()
+    const manager = { getAppWorkDir: vi.fn(() => memory), listEffectiveMcpApps: () => [] }
+    expect(() => validateExecutionEnvironment({ ...environment('space-a', missing), spacePath: storage, memoryDir: memory }, { app, manager, onRecovered }))
+      .toThrow(WorkingDirectoryUnavailableError)
+    expect(onRecovered).not.toHaveBeenCalled()
+    expect(manager.getAppWorkDir).not.toHaveBeenCalled()
+  })
+
+  it('reconnects missing Halo history but still refuses a missing destination project folder', () => {
+    const storage = join(root, 'storage')
+    const memory = join(storage, '.halo', 'apps', 'person')
+    const project = join(root, 'project')
+    mkdirSync(memory, { recursive: true })
+    mkdirSync(project)
+    spaces.set('space-a', { id: 'space-a', path: storage, workingDir: project })
+    const app = { id: 'person', spaceId: 'space-a', spec: {} } as InstalledApp
+    const manager = { getAppWorkDir: () => memory, listEffectiveMcpApps: () => [] }
+    const onRecovered = vi.fn()
+    const stale = { ...environment('space-a', project), spacePath: join(root, 'deleted-storage'), memoryDir: join(root, 'deleted-memory') }
+    expect(validateExecutionEnvironment(stale, { app, manager, onRecovered })).toEqual({
+      spaceId: 'space-a', spacePath: storage, workDir: project, memoryDir: memory, mcpBindings: {},
+    })
+    expect(onRecovered).toHaveBeenCalledTimes(1)
+    rmSync(project, { recursive: true })
+    onRecovered.mockClear()
+    expect(() => validateExecutionEnvironment(stale, { app, manager, onRecovered })).toThrow(WorkingDirectoryUnavailableError)
+    expect(onRecovered).not.toHaveBeenCalled()
   })
 })

@@ -48,6 +48,53 @@ re-enter descendant disposal. It closes sessions and pending decisions, while th
 runtime clears local checks and per-epoch caches without publishing epoch changes.
 A failed close leaves the original business history intact and propagates for retry.
 
+## Workspace maintenance
+
+`beginTeamWorkspaceChange` is the local integration surface for a digital-human
+move. It synchronously fences source/actor allocation and delivery, then drains
+admitted participant creation and exact local stop requests. Its final actor IDs
+must also pass the app runtime's full turn/finally/sink barrier before files move;
+a stop receipt alone is not a flush guarantee. No epoch is sealed and no remote
+member is stopped. Existing decisions and shared work history remain intact.
+
+The plan supplies source/target pairs to the caller's journaled filesystem
+transaction: participant metadata goes beneath the moved app's
+`collaboration/<id>`, while participant transcripts retain their ordinary
+`<space>/.halo/apps/<participant-id>` shape. Its synchronous commit joins the
+caller's database transaction. Pinned participant session environments must use
+the plan's participant-specific environments, not the parent app's cwd. Explicit
+cwd/worktree ownership outside Halo's source data root is unchanged, even when an
+external authored cwd equals a parent pinned directory. Non-worktree directories
+inside source Halo data reroot to the destination cwd (preserving their relative
+subdirectory beneath a supplied historical `sourceWorkDirs` root). Their file
+access cwd and workspace roots follow; old project files and attachments do not
+move. Ordinary cwd changes require selective native-history carry by the caller,
+not an automatic native-session reset. When deletion will
+remove the cwd or its repository ownership, the stopped participant instead
+starts future work in the destination cwd. Its invalid workspace lease is dropped
+without releasing or deleting an external checkout; project files are not moved.
+The plan's `resetSessionActorIds` requires neutral history handoff rather than
+native resume against deleted files. Deleted attachments lose file access; model
+selection and permission denials remain intact. `prepareTeamWorkspaceChange`
+provides the same store-only plan before startup admits any execution, without
+requiring a participant service or introducing a startup participant scan for
+users without a legacy app repair. Team scratch remains under the global team-work
+root. Project files do not move; old relative project references are not promised
+to resolve against the new working directory. No artifact-origin model is added.
+
+## Delegated model authority
+
+Source and member tool endpoints consume the agent service's optional delegated
+model endpoint. Its SDK catalog/schema is registered only for an owner-authorized
+turn with saved model settings. Guests and external colleague requests keep
+ordinary inheritance but cannot request profile or reasoning overrides. Every
+new participant captures the actual direct parent's reasoning independently of
+that optional capability. Preparation completes before collaboration workspace
+allocation, and existing request/stop guards are rechecked afterwards. Member
+endpoint release eagerly closes its catalog; engine-owned broker catalogs remain
+owned by their server objects and native wrappers release their storage on
+collection.
+
 ## Layer position
 
 Kernel adapters (`message-bus`, `blackboard`, `checks`, `team-tools`) depend on
@@ -208,6 +255,17 @@ Bootstrap owns cross-module subscriptions and disposes them before their stores.
   Only a row this machine wrote is trusted for its origin and its words; a row
   written elsewhere serves at least a colleague whatever creator it names, and
   an update of one written here only advances its rounds.
+- `compaction-snapshot.ts` — writes the plain-language collaboration record carried
+  into a compacted conversation, from authorized board fields only, with the same
+  wording as the SDK's local text: other members by name, unfinished tasks, then the
+  newest finished tasks, findings and activity. The 12000-character budget is this
+  host's own choice, not the SDK's: members and unfinished tasks are listed first,
+  and a section that does not fit is still named with its count.
+  The mounted server carries its reader through `services/agent/compaction-context`,
+  which the Halo adapter exposes as a `PreCompact` hook; no model tool is executed
+  and no archive or digest state changes. Current work and the caller's private
+  collaborators are labelled separately; a failed read returns a recovery notice.
+  Ordinary turns and external engines are unchanged.
 - `team-tools.ts` — `createTeamMcpServer(context)` building the `halo-team` MCP
   server with the team tools. Topology/unknown-member violations surface as
   error tool_results so the LLM sees them. A ref reaching `team_post_finding` or
@@ -950,14 +1008,17 @@ files here allowed to.
 
 ### Report routing (§5.3)
 
+`report_to_user` is mounted for digital-human team turns and their collaborators,
+not for collaborators originating in a space conversation, including descendants.
+The final mounted tool set determines whether the shared prompt includes its
+usage instructions; other prompt text is unchanged. Results and blockers return
+to the requester through `team_send` on either path.
+
 `report-tool.ts` reads `ReportToolContext.teamContext` (a `TeamTriggerContext`).
-On a team turn: a result is captured to the runtime (`captureReport(corr,
-{kind:'report_result', content, taskId?})`) with NO user-facing entry; an
-escalation writes a user entry tagged with `content.teamContext` (a `TeamContext`
-persisted inside the `content_json` blob — no migration) AND captures
-`{kind:'report_escalation'}`. Completion detection does NOT depend on this call —
-the orchestration detects turn end regardless (§5.6); a captured report only
-enriches the outcome.
+A team report writes an activity entry; an escalation also captures the human
+decision request in the runtime. Milestone, output and escalation notifications
+follow the digital human's notification level. The member's result remains its
+final message, captured independently at turn end (§5.6).
 
 ### An open question does not suspend a member
 

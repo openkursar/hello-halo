@@ -22,6 +22,7 @@ import type {
 import { DEFAULT_MODEL } from '../../shared/types'
 import { getGroupEnvelopeSignature, normalizeGroups } from '../../shared/ai-groups'
 import type { CcRuntimeConfig } from '../../shared/types/cc-runtime'
+import type { RuntimeConfig } from '../../shared/types/external-runtime'
 import { BUILTIN_PROVIDERS, getBuiltinProvider } from '../../shared/constants'
 import { applyNewToolsetDefaults } from '../../shared/constants/toolsets'
 import {
@@ -809,11 +810,12 @@ interface HaloConfig {
     maxTurnsDefaultUpgraded?: boolean
     configDirMode?: 'halo' | 'cc' | 'custom'
     customConfigDir?: string
-    /** Engine changes apply after restart; an absent legacy choice uses Halo. */
+    /** Default for new work; an absent legacy choice uses Halo. */
     sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh'
     /** Default that legacy sessions used before the first live default-engine change. */
     legacySdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh'
     ccRuntime?: CcRuntimeConfig
+    codexRuntime?: RuntimeConfig
     /** Enable Digital Humans MCP tools (automation app management) */
     enableDigitalHumans?: boolean
     /** Master switch for Cross-Conversation Interop (conversation_read/conversation_send). Undefined/true = on. */

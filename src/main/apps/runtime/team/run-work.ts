@@ -74,7 +74,7 @@ export function openRunWork(request: ExecutionWorkRequest, deps: RunWorkDeps): O
 
   const tools = bindSourceToolSession({
     spaceId: environment.spaceId!, conversationId: key, workDir: environment.workDir,
-    modelSelection: request.modelSelection, collaborationEnabled: request.mayDelegate(), executionScoped: true,
+    modelSelection: request.modelSelection, modelContext: request.modelContext, collaborationEnabled: request.mayDelegate(), executionScoped: true,
   }, { source, requestId: () => requestId, canSpawn: request.mayDelegate })
 
   const endpoint = {

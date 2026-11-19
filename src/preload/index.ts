@@ -20,12 +20,14 @@ import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } 
 import type { MemoryPressureEvent } from '../shared/types/memory-pressure'
 import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
+import type { SpaceDetailsRequestOptions } from '../shared/types/space'
 import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
 import type { PickedLocalEntry } from '../shared/attached-paths'
 import type { ProxyRouteInfo } from '../shared/rpc/contracts/system.contract'
 import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../shared/types/im-channel'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { ccRuntimeRpc } from '../shared/rpc/contracts/cc-runtime.contract'
+import { externalRuntimeRpc } from '../shared/rpc/contracts/external-runtime.contract'
 import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
 import { securityRpc } from '../shared/rpc/contracts/security.contract'
 import { perfRpc } from '../shared/rpc/contracts/perf.contract'
@@ -48,6 +50,8 @@ import { browserRpc } from '../shared/rpc/contracts/browser.contract'
 import { codeReviewRpc } from '../shared/rpc/contracts/code-review.contract'
 import { configRpc } from '../shared/rpc/contracts/config.contract'
 import { aiGroupsRpc } from '../shared/rpc/contracts/ai-groups.contract'
+import { subagentModelsRpc } from '../shared/rpc/contracts/subagent-models.contract'
+import type { SubagentModelsChangedEvent } from '../shared/types/subagent-models'
 import { GROUP_ROUTE_EVENT, type GroupRouteInfo } from '../shared/types/ai-groups-runtime'
 import { agentRpc } from '../shared/rpc/contracts/agent.contract'
 import { terminalRpc } from '../shared/rpc/contracts/terminal.contract'
@@ -121,7 +125,7 @@ type SkillsRpcClient = RpcClient<typeof skillsRpc>
 }
 
 // Type definitions for exposed API
-export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRpc> {
+export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRpc>, RpcClient<typeof externalRuntimeRpc> {
   // Generic Auth (provider-agnostic)
   authGetProviders: () => Promise<IpcResponse>
   authGetBuiltinProviders: () => Promise<IpcResponse>
@@ -163,6 +167,14 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   aiSourcesUpdateSource: (sourceId: string, updates: unknown) => Promise<IpcResponse>
   aiSourcesDeleteSource: (sourceId: string) => Promise<IpcResponse>
 
+  listSubagentModels: RpcClient<typeof subagentModelsRpc>['listSubagentModels']
+  createSubagentModel: RpcClient<typeof subagentModelsRpc>['createSubagentModel']
+  updateSubagentModel: RpcClient<typeof subagentModelsRpc>['updateSubagentModel']
+  clearBuiltinSubagentModel: RpcClient<typeof subagentModelsRpc>['clearBuiltinSubagentModel']
+  deleteSubagentModel: RpcClient<typeof subagentModelsRpc>['deleteSubagentModel']
+  setSubagentModelSelectionMode: RpcClient<typeof subagentModelsRpc>['setSubagentModelSelectionMode']
+  onSubagentModelsChanged: (callback: (data: SubagentModelsChangedEvent) => void) => () => void
+
   // Load-balancing groups
   aiGroupsCreate: RpcClient<typeof aiGroupsRpc>['aiGroupsCreate']
   aiGroupsUpdate: RpcClient<typeof aiGroupsRpc>['aiGroupsUpdate']
@@ -177,7 +189,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   listSpaces: () => Promise<IpcResponse>
   createSpace: (input: { name: string; icon: string; color?: string; customPath?: string }) => Promise<IpcResponse>
   deleteSpace: (spaceId: string) => Promise<IpcResponse>
-  getSpace: (spaceId: string) => Promise<IpcResponse>
+  getSpace: (spaceId: string, options?: SpaceDetailsRequestOptions) => Promise<IpcResponse>
   openSpaceFolder: (spaceId: string) => Promise<IpcResponse>
   updateSpace: (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => Promise<IpcResponse>
   setSpaceWorkingDir: (spaceId: string, workingDir: string) => Promise<IpcResponse>
@@ -926,6 +938,7 @@ const api: HaloAPI = {
   // argument shapes come from the contract — no manual sync needed.
   ...bindRpc(modelCapabilitiesRpc),
   ...bindRpc(ccRuntimeRpc),
+  ...bindRpc(externalRuntimeRpc),
 
   // Generic Auth (provider-agnostic)
   ...bindRpc(authRpc),
@@ -933,6 +946,8 @@ const api: HaloAPI = {
   // Config + AI Sources CRUD (derived from configRpc contract)
   ...bindRpc(configRpc),
   ...bindRpc(aiGroupsRpc),
+  ...bindRpc(subagentModelsRpc),
+  onSubagentModelsChanged: (callback) => createEventListener('subagent-models:changed', callback),
   onAIGroupRoute: (callback) => createEventListener(GROUP_ROUTE_EVENT, callback),
   onCredentialDecryptFailed: (callback) => createEventListener('credential:decrypt-failed', callback),
   onModelCatalogChanged: (callback) => createEventListener('ai-sources:catalog-changed', callback),

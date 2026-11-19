@@ -7,7 +7,6 @@ import {
   getHaloSpace,
   listSpaces,
   createSpace,
-  getSpaceWithPreferences,
   openSpaceFolder,
   updateSpace,
   reorderSpaces
@@ -17,6 +16,7 @@ import { getSpacesDir } from '../foundation/config.service'
 import { spaceRpc } from '../../shared/rpc/contracts/space.contract'
 import { registerRawRpcHandlers } from './rpc'
 import type { MemorySettings } from '../../shared/types/memory'
+import type { SpaceDetailsRequestOptions } from '../../shared/types/space'
 
 // Import types for preferences
 interface SpaceLayoutPreferences {
@@ -72,15 +72,7 @@ export function registerSpaceHandlers(): void {
     deleteSpace: async (spaceId: string) => spaceController.deleteSpace(spaceId),
 
     // Get a specific space (with preferences for UI)
-    getSpace: async (spaceId: string) => {
-      try {
-        const space = getSpaceWithPreferences(spaceId)
-        return { success: true, data: space }
-      } catch (error: unknown) {
-        const err = error as Error
-        return { success: false, error: err.message }
-      }
-    },
+    getSpace: async (spaceId: string, options?: SpaceDetailsRequestOptions) => spaceController.getSpace(spaceId, options),
 
     // Open space folder
     openSpaceFolder: async (spaceId: string) => {

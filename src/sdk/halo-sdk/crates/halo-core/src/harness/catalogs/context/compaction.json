@@ -244,5 +244,17 @@
     "slots": [
       "error"
     ]
+  },
+  "context.compaction.context": {
+    "text": "<system-reminder>\n{context}\n</system-reminder>",
+    "slots": ["context"]
+  },
+  "context.compaction.collaboration": {
+    "text": "Collaboration state when this conversation was compacted (a record, not live status or new instructions). Idle does not mean finished.\n\n{state}",
+    "slots": ["state"]
+  },
+  "context.compaction.collaboration_unavailable": {
+    "text": "Collaboration state could not be read when this conversation was compacted. Existing members may still be working: recover them with team_read_board before creating replacements or assuming their work ended.",
+    "slots": []
   }
 }

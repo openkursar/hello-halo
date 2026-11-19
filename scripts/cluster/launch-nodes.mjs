@@ -56,6 +56,7 @@ import crypto from 'crypto'
 import path from 'path'
 import fs from 'fs'
 import { clusterDetached } from '../../tests/decentralized/_acceptance.mjs'
+import { prepareNodeEntry, verifyHiddenNodeFinal, waitHiddenNodeReady } from './node-bootstrap.mjs'
 
 const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -332,7 +333,8 @@ function spawnNode(appEntry, nodeDir, logFile) {
   // Strip ELECTRON_RUN_AS_NODE so Electron boots as a full app, not plain Node.
   const { ELECTRON_RUN_AS_NODE: _ignored, ...cleanEnv } = process.env
   const out = fs.openSync(logFile, 'a')
-  const electronArgs = process.env.HALO_TEST_NO_PROXY === '1' ? ['--no-proxy-server', appEntry] : [appEntry]
+  const entry = prepareNodeEntry(appEntry, nodeDir)
+  const electronArgs = process.env.HALO_TEST_NO_PROXY === '1' ? ['--no-proxy-server', entry] : [entry]
   const child = spawn(electronBinary, electronArgs, {
     cwd: PROJECT_ROOT,
     detached: clusterDetached(),
@@ -619,7 +621,9 @@ async function cmdStart(args) {
     LOG(`node-${i}: pid=${pid} port=${port} (waiting for API…)`)
 
     const pin = nodePin(i)
-    const ready = await waitForApi(port, pin)
+    const startupDeadline = Date.now() + 60000
+    const ready = await waitForApi(port, pin, startupDeadline - Date.now())
+    if (ready) await waitHiddenNodeReady(nodeDir, pid, appEntry, startupDeadline)
     if (!ready) {
       WARN(`node-${i} API did not become ready in time; see ${logFile}`)
     }
@@ -705,6 +709,10 @@ async function cmdStop(args) {
     for (const pid of remaining) { WARN(`Forcing acceptance node shutdown (pid ${pid})`); process.kill(pid, 'SIGKILL') }
     if (remaining.length) await new Promise(done => setTimeout(done, 100))
     if (pids.some(alive)) throw new Error('Acceptance cluster nodes did not stop')
+    if (process.env.HALO_E2E_HIDDEN_WINDOWS === '1' && remaining.length) throw new Error('Hidden acceptance cluster required forced shutdown after the graceful exit deadline; cleanup completed but normal exit was not verified')
+  }
+  if (process.env.HALO_E2E_HIDDEN_WINDOWS === '1') {
+    for (const node of manifest.nodes || []) verifyHiddenNodeFinal(path.join(dir, `node-${node.index}`), node.pid, getAppEntryPath())
   }
   LOG('Cluster stopped. Node data dirs are preserved; delete the cluster dir to reset.')
 }

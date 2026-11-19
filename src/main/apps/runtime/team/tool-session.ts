@@ -5,6 +5,7 @@ import { CollaborationRefusal } from '@hello-halo/agent-sdk/collaboration'
 import { createTeamMcpServer, type TeamMcpContext } from './team-tools'
 import { createSpaceTeamMcpServer, type SpaceTeamMcpScope } from '../../conversation-mcp'
 import { getTeamService, getTeamStore, type ParticipantSource } from '../../team'
+import { createDelegatedModelEndpoint, type DelegatedModelContext } from '../../../services/agent'
 
 interface Binding {
   context: TeamMcpContext
@@ -13,13 +14,26 @@ interface Binding {
 }
 
 const active = new Map<string, Binding>()
-const sources = new Map<string, { generation: number; token: symbol; source(): ParticipantSource; requestId(): string; canSpawn(): boolean }>()
+const sources = new Map<string, { generation: number; token: symbol; source(): ParticipantSource; requestId(): string; canSpawn(): boolean; modelContext?: () => DelegatedModelContext }>()
 
 /** Reused engine sessions read the current turn without giving retired endpoints a new authority. */
 export function bindTeamToolSession(conversationId: string, context: TeamMcpContext) {
   context.participants?.registerSource(conversationId)
   const generation = context.participants?.generation(context) ?? '0'
   const token = Symbol()
+  active.set(conversationId, { context, generation, token })
+  context.models = createDelegatedModelEndpoint({
+    parent: () => {
+      const source = resolve().spawnSource?.()
+      if (!source?.inheritedReasoning) throw new CollaborationRefusal('source_unavailable', 'The parent model execution is unavailable.')
+      return { selection: source.modelSelection, engineId: source.engineId, reasoning: source.inheritedReasoning,
+        reasoningLevel: source.reasoningLevel, modelBinding: source.modelBinding }
+    },
+    allowed: () => {
+      const current = active.get(conversationId)?.context ?? context
+      return !current.origin && !current.servesGuest && current.canSpawn?.() !== false
+    },
+  })
   const resolve = () => {
     const current = active.get(conversationId)
     if (!current || current.generation !== generation) {
@@ -37,13 +51,28 @@ export function bindTeamToolSession(conversationId: string, context: TeamMcpCont
     return `${parent}/assistant-${createHash('sha256').update(conversationId).digest('hex').slice(0, 24)}`
   }
   context.privateAssistants = {
+    readContext() {
+      const current = resolve()
+      current.participants?.capture(current)()
+      const work = getTeamService()?.getCollaborationScope(conversationId)
+      return work ? privateContext(current, work) : null
+    },
     async spawn(input, call) {
       const current = resolve()
       if (!current.participants || !current.spawnSource || current.canSpawn?.() === false) {
         throw new CollaborationRefusal('spawn_forbidden', 'Creating private assistants is not allowed for this turn.')
       }
       const check = current.participants.capture(current, call.signal)
-      const source = current.spawnSource()
+      let source = current.spawnSource()
+      if ((input.model_profile !== undefined && input.model_profile !== 'inherit') || input.reasoning_effort !== undefined) {
+        if (!context.models || !source.inheritedReasoning || current.origin || current.servesGuest) {
+          throw new CollaborationRefusal('model_selection_forbidden', 'Model overrides are unavailable for this request.')
+        }
+        source = { ...source, ...await context.models.prepare(input, {
+          selection: source.modelSelection, engineId: source.engineId, reasoning: source.inheritedReasoning,
+          reasoningLevel: source.reasoningLevel, modelBinding: source.modelBinding,
+        }, () => { check(); if (resolve().canSpawn?.() === false) throw new CollaborationRefusal('spawn_forbidden', 'Delegation permissions changed.') }, call.signal) }
+      }
       const service = getTeamService()
       if (!service) throw new CollaborationRefusal('runtime_unavailable', 'Collaboration services are unavailable.')
       const requestId = privateRequest(current)
@@ -64,11 +93,13 @@ export function bindTeamToolSession(conversationId: string, context: TeamMcpCont
       return privateContext(current, work)
     },
   }
-  active.set(conversationId, { context, generation, token })
   const server = createTeamMcpServer(context, resolve)
   return {
     server, generation,
-    release() { if (active.get(conversationId)?.token === token) active.delete(conversationId) },
+    release() {
+      context.models?.close()
+      if (active.get(conversationId)?.token === token) active.delete(conversationId)
+    },
   }
 }
 
@@ -79,7 +110,7 @@ export function bindSourceToolSession(scope: SpaceTeamMcpScope, callbacks: {
 }) {
   const generation = getTeamService()?.participants.sourceGeneration(scope.conversationId) ?? 0
   const token = Symbol()
-  sources.set(scope.conversationId, { generation, token, ...callbacks })
+  sources.set(scope.conversationId, { generation, token, ...callbacks, modelContext: scope.modelContext })
   const current = () => {
     const value = sources.get(scope.conversationId)
     if (!value || value.generation !== generation || (scope.executionScoped && value.token !== token)) throw new CollaborationRefusal('turn_unavailable', 'This tool endpoint no longer belongs to an active source turn.')
@@ -87,7 +118,12 @@ export function bindSourceToolSession(scope: SpaceTeamMcpScope, callbacks: {
   }
   return {
     generation,
-    server: createSpaceTeamMcpServer({ ...scope, canSpawn: () => current().canSpawn() },
+    server: createSpaceTeamMcpServer({ ...scope, canSpawn: () => current().canSpawn(),
+      modelContext: scope.modelContext ? () => {
+        const model = current().modelContext?.()
+        if (!model) throw new CollaborationRefusal('source_unavailable', 'The parent model execution is unavailable.')
+        return model
+      } : undefined },
       () => current().source(), () => current().requestId()),
     release() { if (sources.get(scope.conversationId)?.token === token) sources.delete(scope.conversationId) },
   }

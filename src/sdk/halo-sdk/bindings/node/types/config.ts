@@ -180,15 +180,20 @@ export type StopHookInput = BaseHookInput & {
   stop_hook_active: boolean;
 };
 
+/**
+ * Runs when compaction starts. A returned `additionalContext` is carried into
+ * the compacted history with the summary, replaced by the next compaction and
+ * never summarized. Nothing is added when the hook fails or times out.
+ */
 export type PreCompactHookInput = BaseHookInput & {
   hook_event_name: 'PreCompact';
-  trigger: 'auto';
+  trigger: 'auto' | 'manual';
   custom_instructions: string | null;
 };
 
 export type PostCompactHookInput = BaseHookInput & {
   hook_event_name: 'PostCompact';
-  trigger: 'auto';
+  trigger: 'auto' | 'manual';
   compact_summary: string;
 };
 
@@ -217,7 +222,7 @@ export type HookJSONOutput = {
   permissionDecisionReason?: string;
   /** PreToolUse: replacement tool input for this and later hooks. */
   updatedInput?: Record<string, unknown>;
-  /** PreToolUse / PostToolUse / UserPromptSubmit: context added to the conversation. */
+  /** PreToolUse / PostToolUse / UserPromptSubmit / PreCompact: context added to the conversation. */
   additionalContext?: string;
   /** PostToolUse: replacement result for an MCP tool. */
   updatedMCPToolOutput?: unknown;

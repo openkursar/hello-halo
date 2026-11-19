@@ -102,6 +102,38 @@ describe('a toolset request while the turn is running', () => {
   })
 })
 
+describe('automatic capabilities in the panel', () => {
+  const browser = { id: 'ai-browser', displayName: 'Web Control', summary: '', open: true, configurable: false }
+
+  it('are listed with their name and use, without a switch, under a line saying Halo picks them', () => {
+    env.toolsets = { list: [terminal, browser], requested: new Set(['ai-browser']) }
+    const render = mount(false)
+    toolbar(render()).props.onAttachMenuToggle()
+    const capabilities = panel(render()).props.sections.find((section: any) => section.id === 'capabilities')
+    expect(capabilities.hint).toBe('Used automatically when needed')
+    const row = capabilities.items.find((item: any) => item.id === 'toolset:ai-browser')
+    expect(row).toEqual(expect.objectContaining({ label: 'Web Control', description: 'AI works in your browser, with your signed-in sessions' }))
+    expect(row).not.toHaveProperty('toggle')
+    expect(row).not.toHaveProperty('onSelect')
+    expect(row).not.toHaveProperty('attention')
+    expect(capabilities.items.find((item: any) => item.id === 'toolset:ai-terminal').toggle).toBeDefined()
+  })
+
+  it('stay in view while a turn runs', () => {
+    env.toolsets = { list: [browser], requested: new Set() }
+    const render = mount(true)
+    expect(toolbar(render()).props.canOpenMenu).toBe(true)
+    toolbar(render()).props.onAttachMenuToggle()
+    expect(panel(render()).props.sections.map((section: any) => section.id)).toEqual(['capabilities'])
+  })
+
+  it('add no hint when every capability has its switch', () => {
+    const render = mount(false)
+    toolbar(render()).props.onAttachMenuToggle()
+    expect(panel(render()).props.sections.find((section: any) => section.id === 'capabilities').hint).toBeUndefined()
+  })
+})
+
 describe('a panel the AI opened', () => {
   it('leaves the keyboard in the composer: keys flip nothing, and Esc closes the panel without stopping the turn', () => {
     const { props, render } = mountWithProps(true)

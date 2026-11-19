@@ -13,6 +13,7 @@ export interface DigitalHumanChatPromptInput extends IdentityFragmentsInput {
   imSession?: ImSessionContext
   ownerIds?: string[]
   notifications?: ImNotifyContext
+  reportToUserAvailable: boolean
   team?: { context: TeamPromptContext; conversation: CurrentTeamConversation }
   collaborationGuide?: string
 }
@@ -40,9 +41,9 @@ export function buildDigitalHumanChatPrompt(input: DigitalHumanChatPromptInput):
   const constraints: string[] = []
   if (input.collaborationGuide) entry.push(`## Collaboration\n\n${input.collaborationGuide}`)
   if (team) {
-    entry.push(buildTeamEntry(team.context))
+    entry.push(buildTeamEntry(team.context, input.reportToUserAvailable))
     if (input.imSession) entry.push(buildTeamImBridge(input.imSession, team.context.selfIsLead))
-    constraints.push(...buildTeamConstraints(team.context))
+    constraints.push(...buildTeamConstraints(team.context, input.reportToUserAvailable))
   }
   if (input.imSession) {
     entry.push(buildImEntry(input.imSession, input.ownerIds, input.notifications))

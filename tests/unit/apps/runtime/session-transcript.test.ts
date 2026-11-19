@@ -441,7 +441,7 @@ describe('provenance', () => {
     expect(injected.metadata).toBeUndefined()
   })
 
-  it.each(['cross-conversation', 'cross-conversation-notice', 'team-message'] as const)(
+  it.each(['cross-conversation', 'cross-conversation-notice', 'team-message', 'environment-notice'] as const)(
     'reads source %s as a system message',
     source => {
       const [message] = convertEventsToMessages([user('from elsewhere', 1, { _source: source })])
@@ -517,6 +517,23 @@ describe('provenance', () => {
     })
     afterEach(() => {
       rmSync(dir, { recursive: true, force: true })
+    })
+
+    it.each(['environment-notice', 'workspace-notice'] as const)('preserves a %s as its own system record before the next input and reply', source => {
+      const writer = openSessionWriter(dir, 'app-1', 'run-1')
+      const written = writer.writeTrigger('Context changed.', undefined, undefined, { source })
+      writer.writeTrigger('Continue the original task.')
+      writer.writeEvent(assistant([text('Continuing.')], 3))
+
+      expect(written).toMatchObject({ inputId: expect.any(String), timestamp: expect.any(String) })
+      const messages = readSessionMessages(dir, 'app-1', 'run-1')
+      expect(messages.map(message => [message.role, message.source, message.content])).toEqual([
+        ['system', source, 'Context changed.'],
+        ['user', undefined, 'Continue the original task.'],
+        ['assistant', undefined, 'Continuing.'],
+      ])
+      expect(new Set(messages.map(message => message.id)).size).toBe(3)
+      expect(readSessionTranscript(dir, 'app-1', 'run-1', { limit: 3 }).messages).toHaveLength(3)
     })
 
     it('persists _source/_metadata and reads them back', () => {

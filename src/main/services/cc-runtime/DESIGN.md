@@ -1,4 +1,10 @@
-# External Claude Code runtime
+# External Claude Code compatibility facade
+
+The implementation now lives in `../external-runtime`; see its `DESIGN.md` for
+the instance lifecycle and shared provider contract. This directory preserves the
+existing CC public API and direct-module imports without a second state machine.
+The Claude Code provider preserves the following existing distribution and intent
+contracts; global engine activation remains controller-owned.
 
 ## Boundary
 

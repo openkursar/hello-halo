@@ -2140,11 +2140,29 @@ from a team context or an actual run record; otherwise it remains unknown.
 Question summaries included in a model's report-tool result are scoped to the
 current team task or standalone run, never another team's private question.
 
-Run environments are immutable snapshots captured before new work begins. Chat
-session environments are pinned when native sessions are created or other sessions first run. Forks retain their source environment. A one-time startup backfill pins provable legacy transcripts and registry sessions; a durable marker avoids rescanning their history on each launch. Changing future defaults pins any
-provable legacy environments before moving; existing records keep their old
-working/data/memory paths. Missing original storage blocks continuation rather than recreating empty memory or switching spaces. Connection bindings retain installed instance IDs: chat captures workspace inheritance minus explicit denials, while independent runs capture declared connections. Binding validation checks identity, not availability: pausing or a failed connection does not block a chat while the original instance remains effective. Tool assembly omits paused connections; independent runs still check declared prerequisites separately. Current revocations still apply, and removing or replacing an original connection with a same-name account blocks continuation. Public runtime activity/state types re-export the shared
-renderer-safe contract rather than maintaining another structural copy.
+Run and chat environments record their storage, working directory and connection
+identities. A workspace move rewrites every environment of the digital human in
+the same SQLite transaction as its installation location; it is not a new-work-only
+default change. Legacy `data_path` installations are repaired before app data
+admission, subscriptions and IM routing. Unchanged installations need no filesystem
+scan. An interrupted journal is recovered first, and an unrecovered app cannot
+write into a partially restored directory.
+
+Missing pinned Halo storage reconnects to the person's current workspace and
+persists that repair. A missing user-selected project directory still produces the
+change-folder error; stored history remains readable independently of that cwd.
+Connection identity and availability remain distinct: pausing an instance does
+not change its identity, while replacement, removal or authorization changes update
+the binding to currently authorized instances. A durable environment notice is
+recorded before continuing with changed accounts. Independent runs still enforce
+declared connection prerequisites. Deletion-related relocation and missing-workspace
+recovery also retain a per-conversation workspace notice. It is written as a system
+record in the timeline, not an IM reply, and supplied with the next model input.
+Recording and engine acceptance are separate checkpoints: failed preparation keeps
+the model context pending without rewriting the timeline notice; a slash command
+keeps it pending for the next ordinary turn. Explicit moves add no notice. A missing
+location does not prove that its data was deleted. Public runtime activity/state
+types re-export the shared renderer-safe contract.
 
 `getAppState` is a projection: automatic enablement, active execution, pending
 questions and accepted continuations coexist. Manual execution and answering do
@@ -2192,9 +2210,24 @@ or teammates working together. The guide states that criterion, not a list of
 cases, and leaves the decision to the model. A standing team is turned to only
 when the person names it, asks about its work, or asks to hand it a job.
 
-Changing the default space uses the runtime facade, pins provable legacy run/session
-environments and rebinds future subscriptions without deactivating current work.
-The manager's persisted data path keeps identity memory stable across the move.
+Workspace mutations are serialized by `workspace-mutations`. A digital human move
+holds admission for the person and local descendants, suspends memory consolidation,
+stops queued/running executions and chat preparation, and waits through their full
+cleanup. Retired sinks cannot write into their previous path; delivered push records
+wait for the move and resolve their destination again. Engine history is copied for
+this person's native session IDs, never moved from a project shared with others.
+Manager journals the data merge and commits location plus all runtime/team
+environments atomically; failed staging or database writes restore the original
+files. Pending decisions, configuration, identity and knowledge bindings remain.
+
+Deletion uses the same relocation path before removing workspace files. Residents,
+including uninstalled people, move to Halo Workspace; legacy dependencies of people
+living elsewhere reconnect to their current workspace. Ordinary space work and
+questions stop through the scoped engine maintenance contract. Source-only temporary
+collaborations are closed without deleting installed members; standing teams retain
+their global scratch data. User project files are outside an app move's ownership.
+Deletion impact is computed only on an explicit detail request with
+`includeDeletionImpact`, never for list/page decoration.
 
 
 ### Activity write contract and recovery

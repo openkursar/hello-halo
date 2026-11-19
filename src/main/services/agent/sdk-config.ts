@@ -36,6 +36,7 @@ import {
 import { getEngineCapabilities, resolveDefaultEngine } from './resolved-sdk'
 import type { EngineId } from '../../../shared/types/engine'
 import type { ToolsetExecutionOptions } from './toolsets/types'
+import { getSubagentModelSettings } from '../ai-sources'
 import { assertEngineSourceCompatible } from '../../../shared/engine-source'
 import { assertDelegatedAuthReady } from './cli-auth'
 import { waitForSdkInitialization } from './initialization'
@@ -580,6 +581,11 @@ export function markMcpServerSettings<T extends object>(server: T, settings: unk
  * a session rebuild on EVERY message. Keep such content out of the prompt, or
  * exclude it here.
  */
+export function delegatedModelPolicyFingerprint(): string | undefined {
+  const settings = getSubagentModelSettings()
+  return settings ? `${settings.policyRevision}:${settings.selectionMode}` : undefined
+}
+
 export function computeSessionInputsFingerprint(sdkOptions: Record<string, any>): string {
   // List fields are JSON-encoded, not joined: a rule like `Bash(echo a,b)`
   // contains the would-be separator, and any bare join lets two different rule
@@ -607,6 +613,8 @@ export function computeSessionInputsFingerprint(sdkOptions: Record<string, any>)
     ? String(sdkOptions.extraArgs['dangerously-skip-permissions'] ?? '')
     : ''
   const inputs = [mcpKeys, prompt, permissionMode, disallowed, allowed, skipPermissions]
+  const modelPolicy = getSubagentModelSettings()
+  if (modelPolicy) inputs.push(`delegated-model-policy:${modelPolicy.policyRevision}:${modelPolicy.selectionMode}`)
   if (sdkOptions.systemPromptSnapshot === false) inputs.push('systemPromptSnapshot:false')
   const discovery = toolDiscoveryFingerprint(sdkOptions)
   if (discovery) inputs.push(discovery)

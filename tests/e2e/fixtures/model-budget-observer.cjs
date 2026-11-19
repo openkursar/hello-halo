@@ -3,6 +3,22 @@ const { ChildProcess } = require('node:child_process')
 
 // Observe only numeric limits at the engine boundary; never retain prompts or credentials.
 globalThis.modelBudgetObservations = []
+const dlopen = process.dlopen
+process.dlopen = function (module, ...args) {
+  const result = dlopen.call(this, module, ...args)
+  const NativeSession = module.exports?.NativeSession
+  if (typeof NativeSession === 'function') {
+    module.exports.NativeSession = new Proxy(NativeSession, {
+      construct(target, args, newTarget) {
+        const instance = Reflect.construct(target, args, newTarget)
+        const options = JSON.parse(args[0])
+        globalThis.modelBudgetObservations.push({ engine: 'halo', boundary: 'native-session', model: options.model, contextWindow: options.contextWindow, maxOutputTokens: options.maxOutputTokens })
+        return instance
+      },
+    })
+  }
+  return result
+}
 const postMessage = Worker.prototype.postMessage
 Worker.prototype.postMessage = function (message, ...args) {
   if (message?.type === 'request' && message.method === 'create') {

@@ -45,7 +45,7 @@ export function registerSpaceRoutes(app: Express): void {
   })
 
   app.get('/api/spaces/:spaceId', async (req: Request, res: Response) => {
-    const result = spaceController.getSpace(req.params.spaceId)
+    const result = await spaceController.getSpace(req.params.spaceId, { includeDeletionImpact: req.query.includeDeletionImpact === 'true' })
     res.json(result)
   })
 
@@ -92,7 +92,7 @@ export function registerSpaceRoutes(app: Express): void {
   // We could return the path instead
   app.post('/api/spaces/:spaceId/open', async (req: Request, res: Response) => {
     // For remote access, just return the path
-    const space = spaceController.getSpace(req.params.spaceId)
+    const space = await spaceController.getSpace(req.params.spaceId)
     if (space.success && space.data) {
       res.json({ success: true, data: { path: (space.data as any).path } })
     } else {

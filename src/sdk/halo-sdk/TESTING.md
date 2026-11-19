@@ -122,10 +122,19 @@ transcript version.
 | Focused source regressions | `npm test -- <test-path>` with the offline environment above |
 | Validation-runner tests | `npm run test:resource-harness`; compiled behavior cases require `SDK_BEHAVIOR_TEST_ROOT` |
 | Compiled fixed-task simulation | After build: `SDK_BEHAVIOR_TEST_ROOT="$PWD/dist" node --test validation/behavior.test.mjs`; [scenario contract](validation/BEHAVIOR.md) |
+| Local model selection routing | After build: `SDK_BEHAVIOR_TEST_ROOT="$PWD/dist" node --test validation/model-selection*.test.mjs`; Native and Worker routing, reasoning wire modes, concurrent custom providers and durable process restart, with real child file effects |
 | Isolated lifecycle, resource and recovery | `npm run test:resources`; builds a temporary source snapshot, not checkout `dist/`; [runner](validation/README.md) |
 | Worker and bundled dependencies | `npm test -- bindings/node/tests/worker scripts/build-worker.test.ts` with offline environment; [Worker evidence and limits](bindings/node/worker/VALIDATION.md) |
 | Local execution overhead | After build: `npm run benchmark:workers -- --sessions=10`; cold/warm, CPU, RSS and event-loop measurements, not a task score |
 | Streaming and tool overlap | After build: `node validation/streaming.mjs`; [assertions and timing limits](validation/STREAMING.md) |
+
+The model-selection fixtures also accept an isolated installed package root as
+`SDK_BEHAVIOR_TEST_ROOT`; entries are resolved from its declared public exports.
+They use local scripted Anthropic/OpenAI-compatible HTTP peers or custom providers,
+not real model credentials. The restart case uses four separate Node processes to
+check retained binding identity after profile update/deletion and refusal after
+revocation, preserving the original transcript without replaying its Write effect.
+These checks do not establish real-model choices, provider billing or host behavior.
 
 Runner existence and historical reports are not current passing evidence.
 

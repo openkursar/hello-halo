@@ -13,13 +13,14 @@ import { NotificationChannelsConfig }  from '../../shared/types/notification-cha
 import type { EngineSessionBinding } from '../../shared/types/engine-session';
 import type { KBSource } from '../../shared/types/tlon';
 import type { MemorySettings } from '../../shared/types/memory';
-import type { SpaceDeletionEffect } from '../../shared/types/space';
+import type { SpaceDeletionEffect, SpaceDeletionImpact } from '../../shared/types/space';
 // Re-exported below as well, but `export … from` creates no local binding, so the
 // declarations in this file that USE these names need their own import.
 import type { ApiProvider } from '../../shared/types/ai-sources';
 import type { FileChangesSummary } from '../../shared/file-changes';
 import type { GoalInput } from '../../shared/types/goal';
 import type { CcRuntimeConfig } from '../../shared/types/cc-runtime';
+import type { RuntimeConfig } from '../../shared/types/external-runtime';
 import type {
   TranscriptMessage,
   ToolCall,
@@ -162,8 +163,9 @@ export interface SystemConfig {
 // Agent behavior configuration
 export interface AgentConfig {
   maxTurns: number;         // Maximum tool call turns per message
-  sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh';  // Agent SDK engine (requires restart)
+  sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh';
   ccRuntime?: CcRuntimeConfig;
+  codexRuntime?: RuntimeConfig;
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
   enableDigitalHumans?: boolean; // Enable Digital Humans MCP tools (automation app management)
@@ -386,6 +388,7 @@ export interface Space {
   preferences?: SpacePreferences;  // User preferences for this space
   workingDir?: string;  // Project directory for custom spaces (agent cwd, artifacts, file explorer)
   deletionEffect?: SpaceDeletionEffect;
+  deletionImpact?: SpaceDeletionImpact;
   isMissing?: boolean;  // True when the space data path is currently unavailable
   sortOrder?: number;  // User-defined display order (lower = earlier); absent on legacy spaces
 }

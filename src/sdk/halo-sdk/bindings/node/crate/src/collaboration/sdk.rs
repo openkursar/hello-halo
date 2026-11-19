@@ -186,13 +186,12 @@ impl SourceOwner for Owner {
         params: Value,
         cancellation: &CancellationToken,
     ) -> CoreResult<Value> {
-        let scope = self
-            .children
-            .lock()
-            .unwrap()
-            .get(session_id)
-            .map(|child| child.scope.clone())
-            .ok_or_else(CoreError::cancelled)?;
+        let scope = if method.starts_with("modelSelection.") {
+            Value::Null
+        } else {
+            self.children.lock().unwrap().get(session_id)
+                .map(|child| child.scope.clone()).ok_or_else(CoreError::cancelled)?
+        };
         let id = format!("{session_id}:{}", halo_core::collaboration::protocol::id());
         let mut pending = PendingCall {
             id: id.clone(),
@@ -282,11 +281,13 @@ impl NativeSdkCollaboration {
                         let options = self.owner.options(&Value::Null)?;
                         let harness = self.owner.harness(&options)?;
                         if name == "definitions" {
-                            json!(
-                                halo_core::collaboration::tool_contract::definitions_with_harness(
-                                    &harness
-                                )
-                            )
+                            let definitions = match self.adapter.model_capability() {
+                                Some(capability) => halo_core::collaboration::tool_contract::definitions_with_model_selection(
+                                    &harness, &capability,
+                                )?,
+                                None => halo_core::collaboration::tool_contract::definitions_with_harness(&harness),
+                            };
+                            json!(definitions)
                         } else {
                             halo_core::collaboration::tool_contract::text(
                                 harness.text(if name == "cancelled" {

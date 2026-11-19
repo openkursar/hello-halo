@@ -12,6 +12,7 @@ import type { EngineAvailabilityReport } from '../types'
 export function useEngineAvailability(enabled: boolean, refresh?: unknown): EngineAvailabilityReport | null {
   const [report, setReport] = useState<EngineAvailabilityReport | null>(null)
   const ccPath = useAppStore(state => state.config?.agent?.ccRuntime?.selectedPath)
+  const codexPath = useAppStore(state => state.config?.agent?.codexRuntime?.selectedPath)
   useEffect(() => {
     if (!enabled) return
     let cancelled = false
@@ -23,6 +24,6 @@ export function useEngineAvailability(enabled: boolean, refresh?: unknown): Engi
       if (!cancelled) console.warn('[EngineAvailability] Request failed', { reason: error instanceof Error ? error.message.slice(0, 300) : 'unknown' })
     })
     return () => { cancelled = true }
-  }, [enabled, ccPath, refresh])
+  }, [enabled, ccPath, codexPath, refresh])
   return enabled ? report : null
 }

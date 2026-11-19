@@ -22,6 +22,9 @@ function scriptCollaboration() {
       if (!receipt) return { tools: [modelTool(request, 'spawn_agent', { name: 'Checker', prompt: dispatch }, 'dh-collaborator')] }
       try { created = collaboratorReceipt(receipt) }
       catch (error) { errors.push(String(error)); return { text: 'The collaborator could not be created.' } }
+      const duplicate = request.toolResults.find(result => result.id === 'dh-collab-duplicate')
+      if (!duplicate) return { tools: [modelTool(request, 'spawn_agent', { name: ' Checker ', prompt: 'Do not create a second checker.' }, 'dh-collab-duplicate')] }
+      if (!duplicate.text.includes('already uses the address')) { errors.push('A duplicate checker was not refused.'); return { text: 'Could not verify duplicate name handling.' } }
       const sent = request.toolResults.find(result => result.id === 'dh-collab-send')
       if (!sent) return { tools: [modelTool(request, 'team_send', { to: created.handle, message: 'Send the verified alpha result to lead.' }, 'dh-collab-send')] }
       if (sent.error) { errors.push(`Dispatch failed: ${sent.text}`); return { text: 'The collaborator could not receive the follow-up.' } }
@@ -77,6 +80,8 @@ test('a digital human\u2019s own chat organizes a temporary team and receives it
   }, { timeout: 90000 }).toEqual({ report: true, answered: true })
 
   expect(script.created?.handle).toBeTruthy()
+  expect(script.created?.name).toBe('Checker')
+  expect((await api(window).collabFor(chat)).data).toMatchObject({ members: [{ appId: script.created?.handle, memberName: 'Checker' }] })
   expect(script.errors).toEqual([])
   const defaultChat = getAppChatConversationId(automation.appId)
   expect((await api(window).collabFor(defaultChat)).data ?? null, 'Another chat of the same digital human has no collaboration').toBeNull()

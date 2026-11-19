@@ -873,6 +873,14 @@ moved, created or deleted; folders inside Halo's and the engine's own data
 cannot be chosen, except the space's own data folder (where a space without a
 project folder works), and the default space's folder cannot be changed.
 
+Digital humans change workspace through `apps/runtime/space-change`, which stops
+and drains their work, journals a merge of memory and transcripts, and atomically
+rewrites all their environments with the installation location. Project files stay.
+Workspace deletion uses `workspace-deletion` to preserve resident and legacy-dependent
+people first. The engine's scoped maintenance fence covers preparation, native
+persistence and process exit; manager remains a data layer, never a runtime caller.
+Startup repairs only legacy split layouts before digital-human data admission.
+
 Notes:
 - **Legacy custom-path spaces**: Created before centralized storage, `path` points to the project directory with `.halo/` inside it. These continue to work without migration.
 - **Lazy-loaded conversations**: `conversation.service.ts` uses `index.json` for fast listing; full conversation data is loaded only when entering a conversation.
@@ -1013,13 +1021,22 @@ The adapter uses the public native runtime API and a same-process Rust library; 
 `src/main/services/agent/DESIGN.md`. Package ownership does not imply public npm
 publication or an independent repository.
 
-### External Claude Code and experimental distribution
+### External runtimes and experimental distribution
 
-`services/cc-runtime` owns bounded discovery, interface checks, source preferences
-and explicit installation of external Claude Code. It never imports the agent
-engine. `services/agent/cc` implements the stream-json adapter; the app bundles
-neither the upstream Claude Agent SDK nor the Claude Code executable. Halo SDK
-is a required dependency and the default when no user preference exists.
+`services/external-runtime` owns one bounded management workflow for Claude Code
+and Codex: catalogs, discovery, protocol checks, explicit downloads, immutable
+installation and selection. Vendor providers own layouts, metadata and protocol
+messages; the manager never imports the agent engine. `services/agent/cc` and
+`services/agent/codex` consume captured public launch descriptors. The app bundles
+neither external executable nor their SDK carriers. Halo SDK remains required and
+the default when no user preference exists. The legacy `services/cc-runtime`
+entry points delegate to the same manager; they own no second lifecycle.
+
+Claude Code keeps its existing configuration and data directory. Codex records
+its explicit installation separately and retains Halo's isolated Codex data and
+account routing. A missing selected external runtime preserves its preference,
+history and bindings and enters the shared recovery flow, never another engine.
+Codex's former bundled default does not inherit the historical CC migration rule.
 
 Startup never discovers CC. A recorded user runtime selection checks only its saved
 installation; old defaults and automatically selected paths do not prove intent and
@@ -1032,11 +1049,19 @@ fails without switching engines or overwriting the user's preference. CC-only de
 receive a recovery notice; the app never silently selects a different account.
 CC and Halo saved transcripts are reconciled through `agent/stored-session`.
 
-The desktop-only `cc-runtime:*` typed RPC contract exposes management operations.
-Remote clients cannot install or select a host executable. Settings reads known
-state and initiates scans only on user action; installation polling exists only
-while the visible panel observes an active install. Bootstrap cancels runtime
-downloads and probes on shutdown. See `services/cc-runtime/DESIGN.md`.
+The desktop-only `external-runtime:*` typed RPC contract exposes management
+operations; `cc-runtime:*` remains a thin compatibility facade. Remote clients
+cannot install or select a host executable. One Settings component/hook serves
+both providers. Settings reads known state and initiates scans only on user
+action; polling exists only while a visible panel observes an active install.
+Bootstrap cancels runtime downloads and probes on shutdown. See
+`services/external-runtime/DESIGN.md`.
+
+Production builds and distribution staging reject source maps and development
+artifacts. Packaging collects a declared runtime dependency closure in an owned
+staging directory, strips only parsed source-map comments, and scans actual ASAR,
+unpacked and extra-resource bytes before signing. This never edits shared
+`node_modules` or changes the independent SDK's development build policy.
 
 Experimental products use their own appId, productName, dataFolderName and
 deepLinkScheme. Development data lives in `.<dataFolderName>-dev`; packaged data
@@ -1066,8 +1091,8 @@ Remote mode: renderer -> HTTP/WS -> main.
 A third consumer of the same routes: the agent itself, over a loopback-only
 listener (`src/main/http/self-api/`) reached with curl.
 
-- **Capability**: the `halo-api-ref` toolset ("Operate Halo"), a switch in
-  ordinary conversations (the **+** menu). One decision drives all three halves — the `halo_api_ref` manual tool, the `HALO_API_*`
+- **Capability**: the `halo-api-ref` toolset ("Operate Halo"), a core capability
+  of ordinary conversations, listed without a switch in the **+** menu. One decision drives all three halves — the `halo_api_ref` manual tool, the `HALO_API_*`
   credentials (`selfApiAccess` in `sdk-config.ts`), and the usage guide appended
   to the prompt. Never wire one without the others: a session told to use a tool
   it lacks is the failure this design exists to prevent.

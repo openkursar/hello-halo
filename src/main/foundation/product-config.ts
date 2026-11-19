@@ -273,6 +273,8 @@ export interface ProductConfig {
    * source only.
    */
   claudeCodeDownloadSource?: { name?: string; baseUrl: string }
+  /** Default npm-compatible registry for explicitly installing Codex. */
+  codexDownloadSource?: { name?: string; baseUrl: string }
   /**
    * Official AI-guide host (optional; falls back to the public docs host).
    */
@@ -635,7 +637,14 @@ export function getWorkdayCalendarUrl(): string | undefined {
 
 /** This build's default Claude Code download source; undefined when it has none. */
 export function getClaudeCodeDownloadSource(): { name?: string; baseUrl: string } | undefined {
-  const source: unknown = loadProductConfig().claudeCodeDownloadSource
+  return runtimeDownloadSource(loadProductConfig().claudeCodeDownloadSource)
+}
+
+export function getCodexDownloadSource(): { name?: string; baseUrl: string } | undefined {
+  return runtimeDownloadSource(loadProductConfig().codexDownloadSource)
+}
+
+function runtimeDownloadSource(source: unknown): { name?: string; baseUrl: string } | undefined {
   if (!source || typeof source !== 'object') return undefined
   const { name, baseUrl } = source as { name?: unknown; baseUrl?: unknown }
   // A value that is not text is an invalid declaration; the source reader reports it.

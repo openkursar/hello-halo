@@ -155,6 +155,15 @@ impl MemoryStore {
                         fields.len() == 1
                             && fields.get("__haloSdkNativeUndefined") == Some(&Value::Bool(true))
                     });
+                if kind == "member" && matches!(key.as_str(), "inheritedReasoning" | "modelSelection") {
+                    if key == "inheritedReasoning" {
+                        super::model_selection::validate_effective_reasoning(value)?;
+                    } else {
+                        super::model_selection::validate_model_selection_snapshot(value)?;
+                    }
+                    size += key.len() * 6 + serde_json::to_vec(value)?.len();
+                    continue;
+                }
                 if value.is_array() || (value.is_object() && !undefined) {
                     return Err(Error::new(
                         "COLLABORATION_RECORD",
@@ -314,6 +323,58 @@ pub fn post_activity(store: &dyn ScopeStore, input: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn member_with_snapshots() -> Value {
+        json!({"id":"one","name":"alice","parentId":"lead","prompt":"work","createdAt":1,
+            "inheritedReasoning":{"version":1,"mode":"off"},
+            "modelSelection":{"version":1,"selection":{"kind":"inherit"},"bindingId":"account","restoreRef":"account-v1","model":"model","targetKind":"single","reasoning":{"version":1,"mode":"off"}}})
+    }
+
+    #[test]
+    fn member_snapshots_survive_record_and_encoded_replay() {
+        let member = member_with_snapshots();
+        let store = MemoryStore::new("team".into(), "epoch".into(), 10, 4096, None).unwrap();
+        add_member(&store, member.clone()).unwrap();
+        assert_eq!(store.get("member", "one"), Some(member.clone()));
+        let replay = MemoryStore::new("team".into(), "epoch".into(), 10, 4096, None).unwrap();
+        replay.apply_encoded_scalars(&json!({"kind":"member","value":member}), false).unwrap();
+        assert_eq!(replay.get("member", "one"), store.get("member", "one"));
+    }
+
+    #[test]
+    fn invalid_snapshots_and_unrelated_structured_fields_are_rejected() {
+        let store = MemoryStore::new("team".into(), "epoch".into(), 10, 4096, None).unwrap();
+        let member = member_with_snapshots();
+        add_member(&store, member.clone()).unwrap();
+        for (key, value) in [
+            ("inheritedReasoning", json!({"version":1,"mode":"off","budgetTokens":10})),
+            ("inheritedReasoning", json!("off")),
+            ("modelSelection", json!({"version":2})),
+            ("modelSelection", json!(null)),
+            ("prompt", json!({"text":"work"})),
+            ("extra", json!([])),
+        ] {
+            let mut invalid = member.clone();
+            invalid[key] = value;
+            assert!(add_member(&store, invalid).is_err(), "accepted {key}");
+            assert_eq!(store.get("member", "one"), Some(member.clone()));
+        }
+        for key in ["inheritedReasoning", "modelSelection"] {
+            let record = json!({"id":"task","teamId":"team","epochId":"epoch",key:member[key]});
+            assert!(store.record(json!({"kind":"task","value":record})).is_err());
+        }
+    }
+
+    #[test]
+    fn structured_snapshot_bytes_are_bounded_before_acceptance() {
+        let store = MemoryStore::new("team".into(), "epoch".into(), 10, 4096, None).unwrap();
+        let member = member_with_snapshots();
+        add_member(&store, member.clone()).unwrap();
+        let mut oversized = member.clone();
+        oversized["modelSelection"]["bindingId"] = "\\\"".repeat(4096).into();
+        assert!(add_member(&store, oversized).is_err());
+        assert_eq!(store.get("member", "one"), Some(member));
+    }
+
     #[test]
     fn rejected_mutation_preserves_existing_records() {
         let store = MemoryStore::new("team".into(), "epoch".into(), 1, 4096, None).unwrap();

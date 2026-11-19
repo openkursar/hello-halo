@@ -26,11 +26,6 @@ const ENGINE_RUNTIMES = {
     native: true,
     fix: 'npm install (builds src/sdk/halo-sdk) or npm run build:sdk',
   },
-  codex: {
-    name: 'Codex SDK engine',
-    packageId: '@openai/codex-sdk',
-    fix: 'npm install',
-  },
   // The only engine that is not an npm package in the artifact: it is compiled
   // into one file by runtimes/dsh/build.mjs, and the package tree it was
   // built from is excluded from packaging. Naming a `packageId` here would make

@@ -13,6 +13,7 @@ import type {
   TranscriptRole,
   TranscriptSource,
 } from './types/transcript'
+import type { WorkspaceNoticeKind } from './apps/app-types'
 
 export const DEFAULT_TRANSCRIPT_PAGE_SIZE = 50
 export const MAX_TRANSCRIPT_PAGE_SIZE = 200
@@ -26,11 +27,16 @@ const THROUGH_CONTEXT = 5
  * this wording is what other readers of the record (exports, handoff) see.
  */
 export const CONTINUITY_NOTICE_TEXT = 'Some earlier details could not be restored exactly; the conversation continues from its record.'
+export const ENVIRONMENT_NOTICE_TEXT = 'Connections changed. This conversation will continue with the accounts currently available in this workspace.'
+export const WORKSPACE_NOTICE_TEXT: Record<WorkspaceNoticeKind, string> = {
+  deleted: 'The workspace this conversation was in was deleted. It continues in the digital human\u2019s current workspace with its memory and history.',
+  missing: 'The previous workspace is unavailable. This conversation continues in the digital human\u2019s current workspace; messages and memory at the old location may be unavailable.',
+}
 
 /** The role a message of this source is stored and shown with. */
 export function roleForTranscriptSource(source: TranscriptSource | undefined): TranscriptRole {
   return source === 'cross-conversation' || source === 'cross-conversation-notice' || source === 'team-message'
-    || source === 'continuity-notice'
+    || source === 'continuity-notice' || source === 'environment-notice' || source === 'workspace-notice'
     ? 'system'
     : 'user'
 }

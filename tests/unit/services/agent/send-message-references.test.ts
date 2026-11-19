@@ -70,6 +70,7 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   captureToolsetExecutionOptions: vi.fn(() => ({ engineId: 'halo' })),
 }))
 vi.mock('../../../../src/main/services/space.service', () => ({
+  hasSpace: () => true,
   isSpaceMemoryEnabled: () => m.memoryEnabled,
   getSpaceMemoryLayout: () => memoryLayout,
 }))
@@ -190,6 +191,7 @@ describe('space memory session context', () => {
     // A resumed conversation can always continue from its transcript if its stored session is lost.
     const gates = m.acquireV2Session.mock.calls.at(-1)![9]
     expect(gates).toEqual({
+      maintenanceSignal: expect.any(AbortSignal),
       creationContext: `space-memory:${memoryLayout.file}`,
       recoverNativeSession: expect.any(Function),
       toolsetInstructions: expect.any(Function),
@@ -218,6 +220,7 @@ describe('space memory session context', () => {
     expect(m.ensureMemoryFile).not.toHaveBeenCalled()
     const gates = m.acquireV2Session.mock.calls[0][9]
     expect(gates).toEqual({
+      maintenanceSignal: expect.any(AbortSignal),
       creationContext: undefined, recoverNativeSession: undefined, toolsetInstructions: expect.any(Function),
     })
     expect(gates.toolsetInstructions('automatic')).toBe('Guide: automatic')

@@ -9,6 +9,7 @@
 import { authApi } from './auth.api'
 import { configApi } from './config.api'
 import { aiGroupsApi } from './ai-groups.api'
+import { subagentModelsApi } from './subagent-models.api'
 import { spaceApi } from './space.api'
 import { conversationApi } from './conversation.api'
 import { agentApi } from './agent.api'
@@ -32,6 +33,7 @@ import { canvasApi } from './canvas.api'
 import { gitApi } from './git.api'
 import { codeReviewApi } from './code-review.api'
 import { ccRuntimeApi } from './cc-runtime.api'
+import { externalRuntimeApi } from './external-runtime.api'
 import { skillsApi } from './skills.api'
 
 /**
@@ -41,6 +43,7 @@ export const api = {
   ...authApi,
   ...configApi,
   ...aiGroupsApi,
+  ...subagentModelsApi,
   ...spaceApi,
   ...conversationApi,
   ...agentApi,
@@ -64,6 +67,7 @@ export const api = {
   ...gitApi,
   ...codeReviewApi,
   ...ccRuntimeApi,
+  ...externalRuntimeApi,
   ...skillsApi,
 }
 

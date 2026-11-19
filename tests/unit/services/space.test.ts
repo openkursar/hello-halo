@@ -11,6 +11,10 @@ import path from 'path'
 
 // Lets a test make the index rename fail, the way a file held open by another
 // process (an antivirus scan on Windows) fails it.
+vi.mock('../../../src/main/services/app-bridge', () => ({
+  getAppManager: () => ({ listApps: () => [], deleteAppsInSpace: async () => {} }),
+}))
+
 const renameFault = vi.hoisted(() => ({ failures: 0, code: 'EPERM' }))
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()

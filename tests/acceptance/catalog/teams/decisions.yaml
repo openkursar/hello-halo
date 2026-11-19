@@ -247,8 +247,8 @@ scenarios:
       - en: A fresh isolated application profile uses the real engine and a local scripted model endpoint.
         zh: 全新隔离应用资料运行真实引擎及本地脚本模型端点。
     steps:
-      - en: From the workspace chat, create one temporary collaborator through spawn_agent; it asks one question through report_to_user.
-        zh: 在工作区聊天通过 spawn_agent 创建一名临时协作者，由其通过 report_to_user 提出一个问题。
+      - en: From a digital human’s own chat, create one temporary collaborator through spawn_agent; it asks one question through report_to_user.
+        zh: 在数字人原生聊天通过 spawn_agent 创建一名临时协作者，由其通过 report_to_user 提出一个问题。
       - en: Open its task conversation and submit the answer through the actual question card.
         zh: 打开其任务对话，通过真实问题卡片提交答案。
       - en: Wait for the original collaborator to continue and send its result to the source, then restart and reopen the same task.

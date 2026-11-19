@@ -12,41 +12,66 @@ const { AnthropicProvider, OpenAiCompatProvider, createSession } = await import(
 
 for (const protocol of ['anthropic', 'openai']) {
   for (const kind of ['empty', 'whitespace', 'thinking']) {
-    test(`${protocol} session recovers a completed ${kind} response without changing the request`, { timeout: 10_000 }, async t => {
+    test(`${protocol} session accepts a completed ${kind} response without retrying`, { timeout: 10_000 }, async t => {
       const root = await mkdtemp(join(tmpdir(), 'halo-empty-response-'));
-      let session;
+      let session, resumed = false;
       const first = protocol === 'openai'
         ? kind === 'thinking' ? { reasoning_content: 'Considering the fixture.' } : { content: kind === 'empty' ? '' : ' \t\n\u00a0' }
         : kind === 'thinking' ? [{ type: 'thinking', thinking: 'Considering the fixture.' }]
           : kind === 'empty' ? [] : [{ type: 'text', text: ' \t\n\u00a0' }];
-      const answer = protocol === 'openai' ? { content: 'Recovered answer.' } : [{ type: 'text', text: 'Recovered answer.' }];
       const endpoint = await fixture((_request, response) => {
-        assert.ok(endpoint.requests.length <= 2, 'empty response recovery must be bounded');
-        sse(response, endpoint.requests.length === 1 ? completionEvents(protocol, first) : completionEvents(protocol, answer, 19, 5));
+        assert.equal(endpoint.requests.length, resumed ? 2 : 1, 'normal end-turn responses must not retry');
+        sse(response, completionEvents(protocol, resumed
+          ? protocol === 'openai' ? { content: 'Next turn works.' } : [{ type: 'text', text: 'Next turn works.' }]
+          : first));
       });
       t.signal.addEventListener('abort', () => session?.close(), { once: true });
       try {
         const provider = protocol === 'anthropic'
           ? new AnthropicProvider({ apiKey: 'fixture-only', baseUrl: endpoint.url })
           : new OpenAiCompatProvider({ id: 'fixture', name: 'Fixture', baseUrl: `${endpoint.url}/v1` });
-        session = await createSession({ model: 'fixture', provider, cwd: root,
+        const options = { model: 'fixture', provider, cwd: root,
           env: { HOME: root, CLAUDE_CONFIG_DIR: join(root, 'state') },
-          tools: [], skillCatalog: [], settingSources: [], collaboration: false, persistSession: false,
+          tools: [], skillCatalog: [], settingSources: [], collaboration: false,
           systemPrompt: 'Fixture instructions.', thinking: { type: 'disabled' }, maxTurns: 2,
-          turnEndChecks: { completion: false, openWork: false } });
+          turnEndChecks: { completion: false, openWork: false } };
+        session = await createSession(options);
         await session.send('Return the fixture answer.');
         const events = [];
         for await (const event of session.stream()) events.push(event);
-        assert.equal(endpoint.requests.length, 2);
-        assert.equal(endpoint.requests[0].rawBody, endpoint.requests[1].rawBody);
+        assert.equal(endpoint.requests.length, 1);
+        const blocks = events.flatMap(event => event.type === 'assistant' ? event.message.content : []);
+        assert.deepEqual(blocks, kind === 'empty' ? [] : kind === 'thinking'
+          ? [{ type: 'thinking', thinking: 'Considering the fixture.' }]
+          : [{ type: 'text', text: ' \t\n\u00a0' }]);
         const results = events.filter(event => event.type === 'result');
         assert.equal(results.length, 1);
+        assert.equal(results[0].subtype, 'success');
         assert.equal(results[0].is_error, false);
-        assert.equal(results[0].result, 'Recovered answer.');
-        assert.equal(results[0].num_turns, 2);
-        assert.equal(results[0].usage.input_tokens, 36);
-        assert.equal(results[0].usage.output_tokens, 8);
+        assert.equal(results[0].result, '');
+        assert.equal(results[0].num_turns, 1);
+        assert.equal(results[0].usage.input_tokens, 17);
+        assert.equal(results[0].usage.output_tokens, 3);
         assert.equal(events.at(-1).state, 'idle');
+        const id = session.sessionId;
+        await session[Symbol.asyncDispose]();
+        const journalPath = join(root, 'state', 'projects', root.replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`);
+        const records = (await readFile(journalPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+        assert.deepEqual(records.filter(record => record.type === 'assistant').flatMap(record => record.message.content), blocks);
+        const metadata = records.filter(record => record.type === 'assistant_metadata');
+        assert.equal(metadata.length, 1);
+        assert.equal(metadata[0].message.stop_reason, 'end_turn');
+        assert.equal(metadata[0].message.usage.input_tokens, 17);
+        assert.equal(metadata[0].message.usage.output_tokens, 3);
+        resumed = true;
+        session = await createSession({ ...options, resume: id, strictResume: true });
+        await session.send('Continue from the recorded response.');
+        const next = [];
+        for await (const event of session.stream()) next.push(event);
+        assert.equal(endpoint.requests.length, 2);
+        assert.equal(next.findLast(event => event.type === 'result').is_error, false);
+        assert.equal(next.findLast(event => event.type === 'result').result, 'Next turn works.');
+        if (kind === 'empty') assert.equal(endpoint.requests[1].body.messages.some(message => message.role === 'assistant'), false);
       } finally {
         await session?.[Symbol.asyncDispose]();
         await endpoint.close();
@@ -55,14 +80,19 @@ for (const protocol of ['anthropic', 'openai']) {
     });
   }
 
-  test(`${protocol} repeated empty responses stop with accounted usage and a resumable history`, { timeout: 10_000 }, async t => {
+  test(`${protocol} missing tool calls exhaust bounded recovery with accounted usage and a resumable history`, { timeout: 10_000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'halo-empty-exhaustion-'));
     let session, recovered = false;
-    const empty = protocol === 'openai' ? { content: ' \n' } : [{ type: 'text', text: ' \n' }];
+    const empty = protocol === 'openai' ? {} : [];
     const answer = protocol === 'openai' ? { content: 'Server recovered.' } : [{ type: 'text', text: 'Server recovered.' }];
     const endpoint = await fixture((_request, response) => {
       assert.ok(endpoint.requests.length <= (recovered ? 4 : 3), 'recovery must not retry forever');
-      sse(response, completionEvents(protocol, recovered ? answer : empty));
+      const frames = completionEvents(protocol, recovered ? answer : empty);
+      if (!recovered) {
+        if (protocol === 'openai') frames.at(-1).choices[0].finish_reason = 'tool_calls';
+        else frames.at(-2).delta.stop_reason = 'tool_use';
+      }
+      sse(response, frames);
     });
     t.signal.addEventListener('abort', () => session?.close(), { once: true });
     const options = { model: 'fixture', cwd: root,
@@ -110,7 +140,91 @@ for (const protocol of ['anthropic', 'openai']) {
     }
   });
 
-  test(`${protocol} empty-response recovery respects the configured turn limit`, { timeout: 10_000 }, async () => {
+  for (const stopReason of protocol === 'anthropic' ? ['refusal', 'stop_sequence'] : ['content_filter']) {
+    test(`${protocol} empty ${stopReason} completion reports an error without retrying`, { timeout: 10_000 }, async () => {
+      const root = await mkdtemp(join(tmpdir(), 'halo-empty-terminal-'));
+      const endpoint = await fixture((_request, response) => {
+        assert.equal(endpoint.requests.length, 1);
+        const frames = completionEvents(protocol, protocol === 'openai' ? {} : []);
+        if (protocol === 'openai') frames.at(-1).choices[0].finish_reason = stopReason;
+        else frames.at(-2).delta.stop_reason = stopReason;
+        sse(response, frames);
+      });
+      let session;
+      try {
+        session = await createSession({ model: 'fixture', cwd: root,
+          provider: protocol === 'anthropic' ? new AnthropicProvider({ apiKey: 'fixture-only', baseUrl: endpoint.url })
+            : new OpenAiCompatProvider({ id: 'fixture', name: 'Fixture', baseUrl: `${endpoint.url}/v1` }),
+          env: { HOME: root, CLAUDE_CONFIG_DIR: join(root, 'state') },
+          tools: [], skillCatalog: [], settingSources: [], collaboration: false, persistSession: false,
+          systemPrompt: 'Fixture instructions.', thinking: { type: 'disabled' },
+          turnEndChecks: { completion: false, openWork: false } });
+        await session.send('Return an answer.');
+        const events = [];
+        for await (const event of session.stream()) events.push(event);
+        assert.equal(endpoint.requests.length, 1);
+        const result = events.findLast(event => event.type === 'result');
+        assert.equal(result.is_error, true);
+        assert.ok(result.result.includes(protocol === 'openai' ? 'content_filtered' : stopReason));
+        assert.equal(result.num_turns, 1);
+        assert.equal(result.usage.input_tokens, 17);
+        assert.equal(result.usage.output_tokens, 3);
+        assert.equal(events.at(-1).state, 'idle');
+      } finally {
+        await session?.[Symbol.asyncDispose]();
+        await endpoint.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test(`${protocol} missing tool calls recover with the original request and reported usage`, { timeout: 10_000 }, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'halo-missing-tool-recovery-'));
+    const endpoint = await fixture((_request, response) => {
+      const count = endpoint.requests.length;
+      assert.ok(count <= 3, 'missing tool-call recovery must be bounded');
+      const frames = completionEvents(protocol, count < 3 ? protocol === 'openai' ? {} : []
+        : protocol === 'openai' ? { content: 'Recovered answer.' } : [{ type: 'text', text: 'Recovered answer.' }],
+      count < 3 ? 17 : 19, count < 3 ? 3 : 5);
+      if (count < 3) {
+        if (protocol === 'openai') frames.at(-1).choices[0].finish_reason = 'tool_calls';
+        else frames.at(-2).delta.stop_reason = 'tool_use';
+      }
+      sse(response, frames);
+    });
+    let session;
+    try {
+      session = await createSession({ model: 'fixture', cwd: root,
+        provider: protocol === 'anthropic' ? new AnthropicProvider({ apiKey: 'fixture-only', baseUrl: endpoint.url })
+          : new OpenAiCompatProvider({ id: 'fixture', name: 'Fixture', baseUrl: `${endpoint.url}/v1` }),
+        env: { HOME: root, CLAUDE_CONFIG_DIR: join(root, 'state') },
+        tools: [], skillCatalog: [], settingSources: [], collaboration: false, persistSession: false,
+        systemPrompt: 'Fixture instructions.', thinking: { type: 'disabled' }, maxTurns: 3,
+        turnEndChecks: { completion: false, openWork: false } });
+      await session.send('Return an answer.');
+      const events = [];
+      for await (const event of session.stream()) events.push(event);
+      assert.equal(endpoint.requests.length, 3);
+      assert.ok(endpoint.requests.every(request => request.rawBody === endpoint.requests[0].rawBody));
+      const results = events.filter(event => event.type === 'result');
+      assert.equal(results.length, 1);
+      assert.equal(results[0].subtype, 'success');
+      assert.equal(results[0].is_error, false);
+      assert.equal(results[0].result, 'Recovered answer.');
+      assert.equal(results[0].num_turns, 3);
+      assert.equal(results[0].usage.input_tokens, 53);
+      assert.equal(results[0].usage.output_tokens, 11);
+      assert.deepEqual(events.filter(event => event.type === 'assistant').flatMap(event => event.message.content),
+        [{ type: 'text', text: 'Recovered answer.' }]);
+      assert.equal(events.at(-1).state, 'idle');
+    } finally {
+      await session?.[Symbol.asyncDispose]();
+      await endpoint.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`${protocol} normal empty completion succeeds at the configured turn limit`, { timeout: 10_000 }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'halo-empty-turn-limit-'));
     const endpoint = await fixture((_request, response) => sse(response, completionEvents(protocol, protocol === 'openai' ? {} : [])));
     let session;
@@ -127,7 +241,9 @@ for (const protocol of ['anthropic', 'openai']) {
       for await (const event of session.stream()) events.push(event);
       assert.equal(endpoint.requests.length, 1);
       const result = events.findLast(event => event.type === 'result');
-      assert.equal(result.subtype, 'error_max_turns');
+      assert.equal(result.subtype, 'success');
+      assert.equal(result.is_error, false);
+      assert.equal(result.result, '');
       assert.equal(result.num_turns, 1);
       assert.equal(result.usage.input_tokens, 17);
       assert.equal(result.usage.output_tokens, 3);
@@ -138,14 +254,14 @@ for (const protocol of ['anthropic', 'openai']) {
     }
   });
 
-  test(`${protocol} empty responses after a completed tool retain the result without replay on retry or resume`, { timeout: 10_000 }, async t => {
+  test(`${protocol} empty completion after a tool retains the result without retry or replay on resume`, { timeout: 10_000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'halo-empty-after-effect-'));
     const effect = join(root, 'effects.txt');
     const events = [];
     let session, executions = 0;
     const endpoint = await fixture((_request, response, body) => {
       const count = endpoint.requests.length;
-      assert.ok(count <= 5);
+      assert.ok(count <= 3);
       if (count === 1) {
         if (protocol === 'openai') sse(response, [
           { id: 'fixture-response', model: 'fixture', choices: [{ delta: { tool_calls: [{ index: 0, id: 'append-once',
@@ -161,10 +277,10 @@ for (const protocol of ['anthropic', 'openai']) {
       }
       assert.equal(executions, 1);
       assert.ok(JSON.stringify(body.messages).includes('Appended exactly once.'));
-      if (count <= 4) assert.equal(events.filter(event => event.type === 'user' && Array.isArray(event.message.content)
+      assert.equal(events.filter(event => event.type === 'user' && Array.isArray(event.message.content)
         && event.message.content.some(block => block.type === 'tool_result' && block.tool_use_id === 'append-once')).length, 1);
       const answer = protocol === 'openai' ? { content: 'Saved once.' } : [{ type: 'text', text: 'Saved once.' }];
-      sse(response, count < 4 ? completionEvents(protocol, protocol === 'openai' ? {} : []) : completionEvents(protocol, answer, 19, 5));
+      sse(response, count === 2 ? completionEvents(protocol, protocol === 'openai' ? {} : []) : completionEvents(protocol, answer, 19, 5));
     });
     t.signal.addEventListener('abort', () => session?.close(), { once: true });
     const options = { model: 'fixture', cwd: root,
@@ -184,30 +300,34 @@ for (const protocol of ['anthropic', 'openai']) {
       session = await createSession(options);
       await session.send('Append the fixture record once.');
       for await (const event of session.stream()) events.push(event);
-      assert.equal(endpoint.requests.length, 4);
-      assert.equal(endpoint.requests[1].rawBody, endpoint.requests[2].rawBody);
-      assert.equal(endpoint.requests[2].rawBody, endpoint.requests[3].rawBody);
+      assert.equal(endpoint.requests.length, 2);
       const result = events.findLast(event => event.type === 'result');
+      assert.equal(result.subtype, 'success');
       assert.equal(result.is_error, false);
-      assert.equal(result.result, 'Saved once.');
-      assert.equal(result.num_turns, 4);
-      assert.equal(result.usage.input_tokens, 62);
-      assert.equal(result.usage.output_tokens, 13);
+      assert.equal(result.result, '');
+      assert.equal(result.num_turns, 2);
+      assert.equal(result.usage.input_tokens, 26);
+      assert.equal(result.usage.output_tokens, 5);
       assert.equal(await readFile(effect, 'utf8'), 'once\n');
       const id = session.sessionId;
       await session[Symbol.asyncDispose]();
       const journalPath = join(root, 'state', 'projects', root.replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`);
       const records = (await readFile(journalPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-      assert.equal(records.filter(record => record.type === 'assistant').length, 2);
+      assert.equal(records.filter(record => record.type === 'assistant').length, 1);
+      const metadata = records.filter(record => record.type === 'assistant_metadata');
+      assert.equal(metadata.length, 2);
+      assert.equal(metadata.reduce((total, record) => total + record.message.usage.input_tokens, 0), 26);
+      assert.equal(metadata.reduce((total, record) => total + record.message.usage.output_tokens, 0), 5);
       assert.equal(records.filter(record => record.message?.content?.some?.(block => block.type === 'tool_result')).length, 1);
       session = await createSession({ ...options, resume: id, strictResume: true });
       await session.send('Review the recorded result.');
       const resumed = [];
       for await (const event of session.stream()) resumed.push(event);
       assert.equal(resumed.findLast(event => event.type === 'result').is_error, false);
+      assert.equal(resumed.findLast(event => event.type === 'result').result, 'Saved once.');
       assert.equal(executions, 1);
       assert.equal(await readFile(effect, 'utf8'), 'once\n');
-      assert.equal(endpoint.requests.length, 5);
+      assert.equal(endpoint.requests.length, 3);
     } finally {
       await session?.[Symbol.asyncDispose]();
       await endpoint.close();
@@ -281,12 +401,15 @@ for (const protocol of ['anthropic', 'openai']) {
 
 const request = { model: 'fixture', messages: [{ role: 'user', content: 'hello' }], maxTokens: 50, stream: true };
 
-for (const kind of ['empty', 'truncated']) {
+for (const kind of ['missing-call', 'truncated']) {
   test(`reported ${kind} response usage stops recovery at the execution budget`, { timeout: 10_000 }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'halo-response-budget-'));
-    const endpoint = await fixture((_request, response) => sse(response, kind === 'empty'
-      ? completionEvents('openai', {})
-      : [{ id: 'fixture-response', model: 'fixture', choices: [], usage: { prompt_tokens: 17, completion_tokens: 0 } }]));
+    const endpoint = await fixture((_request, response) => {
+      const frames = kind === 'missing-call' ? completionEvents('openai', {})
+        : [{ id: 'fixture-response', model: 'fixture', choices: [], usage: { prompt_tokens: 17, completion_tokens: 0 } }];
+      if (kind === 'missing-call') frames.at(-1).choices[0].finish_reason = 'tool_calls';
+      sse(response, frames);
+    });
     let session;
     try {
       session = await createSession({ model: 'fixture', cwd: root,
@@ -304,7 +427,7 @@ for (const kind of ['empty', 'truncated']) {
       assert.equal(result.subtype, 'error_max_budget_usd');
       assert.equal(result.num_turns, 1);
       assert.equal(result.usage.input_tokens, 17);
-      assert.equal(result.usage.output_tokens, kind === 'empty' ? 3 : 0);
+      assert.equal(result.usage.output_tokens, kind === 'missing-call' ? 3 : 0);
       assert.ok(result.total_cost_usd >= 0.000017);
       assert.equal(events.at(-1).state, 'idle');
     } finally {
@@ -315,7 +438,7 @@ for (const kind of ['empty', 'truncated']) {
   });
 }
 
-test('empty-response recovery can be interrupted while the server waits and the same session remains usable', { timeout: 10_000 }, async t => {
+test('missing tool-call recovery can be interrupted while the server waits and the same session remains usable', { timeout: 10_000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'halo-empty-cancellation-'));
   let ready, session;
   const waiting = new Promise(resolve => { ready = resolve; });
@@ -326,7 +449,11 @@ test('empty-response recovery can be interrupted while the server waits and the 
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       response.flushHeaders();
       ready();
-    } else sse(response, completionEvents('openai', count === 1 ? {} : { content: 'New turn works.' }));
+    } else {
+      const frames = completionEvents('openai', count === 1 ? {} : { content: 'New turn works.' });
+      if (count === 1) frames.at(-1).choices[0].finish_reason = 'tool_calls';
+      sse(response, frames);
+    }
   });
   t.signal.addEventListener('abort', () => { ready(); session?.close(); }, { once: true });
   try {
@@ -342,11 +469,13 @@ test('empty-response recovery can be interrupted while the server waits and the 
     await waiting;
     t.signal.throwIfAborted();
     assert.equal(endpoint.requests.length, 2);
+    assert.equal(endpoint.requests[0].rawBody, endpoint.requests[1].rawBody);
     await session.interrupt();
     await draining;
     assert.equal(events.findLast(event => event.type === 'result').is_error, true);
     assert.match(events.findLast(event => event.type === 'result').result, /abort|interrupt/i);
     assert.equal(events.findLast(event => event.type === 'result').usage.input_tokens, 17);
+    assert.equal(events.findLast(event => event.type === 'result').usage.output_tokens, 3);
     assert.equal(events.at(-1).state, 'idle');
     await session.send('Start the next turn.');
     const next = [];

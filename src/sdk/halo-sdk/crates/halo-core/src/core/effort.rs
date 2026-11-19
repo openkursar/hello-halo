@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 pub struct Effort {
     pub thinking: Value,
     pub temperature: Option<f64>,
-    pub reasoning: Option<&'static str>,
+    pub reasoning: Option<String>,
 }
 pub fn thinking_for_budget(budget: &Value, adaptive: bool) -> Value {
     if budget.is_null() || is_undefined(budget) || number(budget).is_some_and(|value| value <= 0.0)
@@ -17,6 +17,21 @@ pub fn thinking_for_budget(budget: &Value, adaptive: bool) -> Value {
     }
 }
 pub fn resolve(options: &Value) -> Effort {
+    let semantic = &options["nativeEffectiveReasoning"];
+    if semantic.is_object() {
+        let thinking = match semantic["mode"].as_str() {
+            Some("provider-default") | Some("effort") => Value::Null,
+            Some("off") => json!({"type":"disabled"}),
+            Some("budget") => json!({"type":"enabled","budgetTokens":semantic["budgetTokens"]}),
+            Some("adaptive") => json!({"type":"adaptive"}),
+            _ => unreachable!("validated effective reasoning"),
+        };
+        return Effort {
+            thinking,
+            temperature: options["nativeInheritedTemperature"].as_f64(),
+            reasoning: options.get("nativeInheritedOpenAiEffort").unwrap_or(&semantic["effort"]).as_str().map(str::to_owned),
+        };
+    }
     let thinking = options
         .get("thinking")
         .filter(|thinking| truthy(thinking))
@@ -40,7 +55,7 @@ pub fn resolve(options: &Value) -> Effort {
         "medium" => Some("medium"),
         "high" | "max" => Some("high"),
         _ => None,
-    };
+    }.map(str::to_owned);
     let explicit = if options["nativeResolvedConfig"] == true {
         options["thinkingExplicit"] != false
     } else {

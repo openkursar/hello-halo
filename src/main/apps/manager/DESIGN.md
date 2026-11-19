@@ -94,13 +94,13 @@ breaking the default contract. Runtime should call `deactivate(appId)` before un
 
 ### 2.5 Space Isolation
 
-**Decision**: `(spec_id, space_id)` together uniquely identify an installed App instance.
-Different spaces can install the same spec independently with completely isolated state.
-
-**Implementation**: The `id` (primary key) is a UUID generated at install time. The
-`(spec_id, space_id)` pair has a UNIQUE constraint so you cannot install the same spec
-twice in the same space. Different spaces produce different UUIDs, different rows, different
-work directories.
+**Decision**: the installation UUID identifies an App instance. Install rejects a
+same-spec/scope duplicate; skills and MCP servers also enforce scope uniqueness in
+SQLite. Digital humans moved from different spaces may share a spec name in one
+space: neither a move nor deletion of their previous space may erase or replace
+another person. Their UUIDs, directories, configuration, memories and histories
+remain independent. Migration 11 narrows the scope unique indexes to resources,
+without changing existing installation IDs or definitions.
 
 **Only MCP servers and skills may be global** (`space_id` is nullable for them). A digital
 human (`type: 'automation'`) always belongs to a space: its working directory, memory and
@@ -197,13 +197,21 @@ already deleted by an earlier build without restoring a retained backup.
 
 ### 2.8 App Work Directory Structure
 
-Automation identity storage is pinned in `installed_apps.data_path` before a
-default-space change. A nullable column (migration 8) preserves legacy layouts;
-the first move records the existing absolute root without moving files. All
-manager memory/purge operations resolve that root thereafter. Runtime captures
-each run/session's separate working and transcript environment; changing the
-default does not interrupt running work or relocate its files. Skills and MCP
-scope changes retain their existing resource-specific behavior.
+A digital human's memory and transcripts live together in its current space.
+Runtime owns stopping work and closing admission before relocation; the manager
+owns the asynchronous, journalled merge of app-owned directories. The person's
+location and runtime's environment rewrites commit in one synchronous SQLite
+transaction. A failure before that commit restores both directories; an interrupted
+operation is recovered from `app_data_relocations` before work is admitted.
+Committed cleanup may be retried without undoing a completed move. Project folders,
+skill files and knowledge-base bindings are never relocated by this operation.
+
+`data_path` (migration 8) is retained only to read and repair older split layouts.
+A completed relocation clears it. Missing legacy storage falls back to the current
+space rather than making a person unusable; unreadable storage is an error, not
+proof of missing memory. `relocateAutomationData` commits the location and its
+synchronous `commitEnvironments` callback in one transaction, then emits authority
+changes. Skills and MCP scope changes retain their resource-specific behavior.
 
 ```
 {space.path}/.halo/apps/{appId}/          -- App root work directory
@@ -555,11 +563,11 @@ CREATE TABLE installed_apps (
   upgrade_strategy TEXT NOT NULL DEFAULT 'auto', -- auto|notify|manual
   ignored_versions TEXT NOT NULL DEFAULT '[]',   -- versions the user chose to skip
   knowledge_seeded INTEGER NOT NULL DEFAULT 0, -- 1 once install() has seeded KB bindings (see 2.12)
-  data_path TEXT,                         -- pinned work directory (see 2.8)
+  data_path TEXT,                         -- legacy root awaiting relocation (see 2.8)
   author_spec_json TEXT                   -- the author's original, NULL when none is recorded (see 2.13)
 );
--- One app per spec_id per scope: partial unique indexes on (spec_id) WHERE
--- space_id IS NULL and on (spec_id, space_id) WHERE space_id IS NOT NULL.
+-- Resources enforce spec/scope uniqueness; relocated digital humans retain
+-- independent UUIDs even when their authored spec names match.
 CREATE INDEX idx_installed_apps_space ON installed_apps(space_id);
 CREATE INDEX idx_installed_apps_status ON installed_apps(status);
 CREATE INDEX idx_apps_directory ON installed_apps(json_extract(spec_json, '$.type'), installed_at DESC, id ASC);
@@ -578,6 +586,7 @@ src/main/apps/manager/
   service.ts          -- AppManagerService implementation (state machine, builtin guard)
   spec-upgrade.ts     -- Merging an author's new version over the user's edits (pure; see 2.13)
   errors.ts           -- Custom error types (incl. BuiltinAppProtectedError)
+  data-relocation.ts  -- Journalled app-data merge, rollback and interrupted-operation recovery
   skill-lifecycle.ts  -- File-authoritative skill installation, edits, moves and trash
   skill-sync.ts       -- Conservative legacy compatibility; no startup relocation
   seed.ts             -- One-shot "Halo 助手" placeholder when no apps exist

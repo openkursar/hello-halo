@@ -66,6 +66,7 @@ export type { MemberHealth, MemberRef, GroupShape } from './balancing'
 
 export {
   // Request converters
+  resolveOpenAIReasoning,
   convertAnthropicToOpenAIChat,
   convertAnthropicToOpenAIResponses,
   // Response converters
@@ -98,6 +99,7 @@ export {
 // ============================================================================
 
 export {
+  resolveAnthropicReasoning,
   // Config encoding
   encodeBackendConfig,
   decodeBackendConfig,

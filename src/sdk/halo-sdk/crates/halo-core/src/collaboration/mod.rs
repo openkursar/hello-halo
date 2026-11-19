@@ -4,8 +4,10 @@ pub mod board_pages;
 pub mod board_writes;
 pub mod journal;
 pub mod message_bus;
+pub mod model_selection;
 pub mod protocol;
 pub mod runtime;
+pub mod snapshot;
 pub mod store;
 pub mod tool_contract;
 pub mod turn_gate;
@@ -36,6 +38,7 @@ pub fn is_refusal(error: &crate::error::Error) -> bool {
     matches!(
         error.code.as_str(),
         "closed"
+            | "MODEL_SELECTION"
             | "member_missing"
             | "caller_stopped"
             | "execution_replaced"
@@ -137,6 +140,9 @@ pub trait CollaborationTools: Send + Sync {
         self.call(name, input, cancellation).await
     }
     fn is_readonly(&self, name: &str) -> bool;
+    async fn compact_state(&self, _cancellation: &tokio_util::sync::CancellationToken) -> crate::error::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
 }
 
 #[cfg(test)]

@@ -126,12 +126,9 @@ impl SummaryProvider for Summary<'_> {
         loop {
             check_cancel(cancel)?;
             let mut request = sent.clone();
-            request["messages"] = json!(crate::core::tool_context::history::project(
-                sent["messages"]
-                    .as_array()
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[])
-            ));
+            let records: Vec<_> = sent["messages"].as_array().into_iter().flatten()
+                .filter(|message| !super::context::is_context(message)).cloned().collect();
+            request["messages"] = json!(crate::core::tool_context::history::project(&records));
             match self.provider.complete(request, cancel.clone()).await {
                 Ok(response) => return Ok(response),
                 Err(error) => {
@@ -196,6 +193,7 @@ impl CompactCallbacks for Callbacks<'_> {
         Ok(self.budget.estimate_request(&request))
     }
     async fn prepare_candidate(&self, candidate: CompactCandidate) -> Result<CompactCandidate> {
+        let candidate = super::context::reconcile(candidate);
         if self.discovery.is_some() {
             let messages = crate::core::tool_context::checkpoint::prepare_with_harness(
                 &candidate.messages,
@@ -276,7 +274,7 @@ pub async fn compact_request(
     input["transcript_path"] = json!(archive);
     input["trigger"] = json!(trigger.name());
     input["custom_instructions"] = trigger.instructions().map(|value| json!(value)).unwrap_or(Value::Null);
-    hooks::run_protocol(
+    let hooked = hooks::run_protocol(
         options,
         "PreCompact",
         input,
@@ -290,8 +288,21 @@ pub async fn compact_request(
     )
     .await;
     check_cancel(cancel)?;
+    let mut attachments = attachments.to_vec();
+    if let Some(text) = hooks::additional_context(&hooked, "PreCompact") {
+        attachments.push(super::context::message(&text, &harness));
+    }
     let started = Instant::now();
     let mut envelope = request.clone();
+    if messages.iter().any(super::context::is_context) {
+        let combined: Vec<_> = injected.iter().chain(messages.iter()).cloned().collect();
+        let original = crate::core::messages::repair_with_harness(&combined, &harness).0;
+        if let Some(projected) = envelope["messages"].as_array_mut().filter(|items| items.len() == original.len()) {
+            for (message, source) in projected.iter_mut().zip(&original) {
+                if super::context::is_context(source) { super::context::mark(message); }
+            }
+        }
+    }
     let ceiling = output.min(allowance.lock().unwrap().limit.unwrap_or(f64::INFINITY));
     envelope["maxTokens"] = json!(ceiling);
     let compact_options = json!({"maxTokens":ceiling,"promptProfile":options["promptProfile"],"request":envelope,"injectedMessages":injected,"targetInputTokens":if trigger.reduce_target(){budget.target_input_tokens().min((pre_tokens/2.0).floor())}else{budget.target_input_tokens()},"maxInputTokens":budget.available_input_tokens()});
@@ -318,7 +329,7 @@ pub async fn compact_request(
         messages,
         &summary_provider,
         request["model"].as_str().unwrap_or(""),
-        attachments,
+        &attachments,
         trigger.instructions(),
         Some(&archive),
         &compact_options,

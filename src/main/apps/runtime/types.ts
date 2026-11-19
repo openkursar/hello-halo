@@ -363,6 +363,10 @@ export interface AppRuntimeService {
   dismissEscalation(appId: string, entryId: string): Promise<void>
   closeRun(appId: string, runId: string): Promise<void>
   stopRun(appId: string, runId: string): Promise<void>
+  /** Queued and executing runs whose full cleanup still owns workspace resources. */
+  getAppWorkspaceWorkCount(appId: string): number
+  /** Requires workspace admission held; stops attempts without closing durable decisions. */
+  stopAndDrainAppRuns(appId: string): Promise<void>
   getPendingEntries(appId: string, options?: PendingDecisionQuery): ActivityEntry[]
   getPendingInbox(options?: PendingDecisionQuery): import('../../../shared/apps/app-types').PendingDecisionInbox
   respondToEscalation(

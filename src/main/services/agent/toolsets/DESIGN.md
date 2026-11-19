@@ -24,9 +24,11 @@ actual access grants, tool restrictions and platform availability remain host po
   other engines retain their own calling/history representation. This does not
   turn capability loading into a user authorization workflow.
 - The status catalog retains platform-available capabilities. `configurable:
-  false` hides a core loading control while preserving availability for actions
-  such as opening a terminal. Platform restrictions and explicit caller/tool
-  policies still determine what an execution may do.
+  false` means a core capability has no loading control: the composer's "+" menu
+  lists it, without a switch, while the conversation does not exclude it, so
+  people can see what Halo can do; opening the menu loads nothing. Platform
+  restrictions and explicit caller/tool policies still determine what an
+  execution may do.
 - The broker assembles servers and short capability hints at session creation.
   Browser and terminal service metadata come from their capability modules. Native
   Halo defers their full definitions and service instructions through the existing

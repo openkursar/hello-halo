@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type AnimationEvent, type ReactNode } from 'react'
-import { Loader2, Plus } from 'lucide-react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type AnimationEvent, type ReactNode } from 'react'
+import { Loader2, Plus, Workflow } from 'lucide-react'
 import type { AISource, AISourcesConfig, HaloConfig } from '../../types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
@@ -25,6 +25,8 @@ import type { AIGroupChange } from '../../../shared/rpc/contracts/ai-groups.cont
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
 import { CLI_DELEGATED_PROVIDER_ID } from '../../../shared/constants/claude-models'
 
+const SubagentModelsManager = lazy(() => import('../subagent-models/SubagentModelsManager'))
+
 function getLocalizedText(value: LocalizedText): string {
   return resolveLocalizedText(value, getCurrentLanguage())
 }
@@ -37,16 +39,18 @@ interface AISourcesSectionProps {
 type SourceEditor =
   | { kind: 'provider'; sourceId?: string; preset?: AuthProviderConfig }
   | { kind: 'group'; groupId: string | null }
+  | { kind: 'assignments' }
 
 type Location = { kind: 'source' | 'group' | 'provider'; id: string } | { kind: 'add' }
 type ViewChange = {
   location: Location
-  intent: 'anchor' | 'open' | 'nearby' | 'return' | 'created' | 'external' | 'focus'
+  intent: 'anchor' | 'open' | 'nearby' | 'return' | 'return-menu' | 'created' | 'external' | 'focus'
   anchor?: { element: HTMLElement; top: number }
 }
 
 function editorLocation(editor: SourceEditor): Location {
   if (editor.kind === 'group') return editor.groupId ? { kind: 'group', id: editor.groupId } : { kind: 'add' }
+  if (editor.kind === 'assignments') return { kind: 'add' }
   if (editor.sourceId) return { kind: 'source', id: editor.sourceId }
   return editor.preset ? { kind: 'provider', id: editor.preset.type } : { kind: 'add' }
 }
@@ -143,6 +147,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   const chosenGroupId = aiSources.currentGroupId && groups.some(group => group.id === aiSources.currentGroupId) ? aiSources.currentGroupId : null
   const [editor, setEditor] = useState<SourceEditor | null>(null)
   const [saving, setSaving] = useState(false)
+  const assignmentDraftOpen = useRef(false)
   const [expandedSourceId, setExpandedSourceId] = useState<string | null>(null)
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null)
   const [highlighted, setHighlighted] = useState<Location | null>(null)
@@ -251,7 +256,9 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       return
     }
     if (!headerInView(target)) scrollHeaderIntoView(target, 'instant')
-    const entry = target.querySelector<HTMLElement>('[data-ai-source-edit], [data-ai-group-edit], [data-ai-add-trigger]')
+    const entry = target.querySelector<HTMLElement>(change.intent === 'return-menu'
+      ? '[data-ai-add-menu] [aria-haspopup]'
+      : '[data-ai-source-edit], [data-ai-group-edit], [data-ai-add-trigger]')
     const focus = change.intent === 'focus' ? target : entry ?? target.querySelector<HTMLElement>('button')
     focus?.focus({ preventScroll: true })
   })
@@ -261,7 +268,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   }
 
   const openEditor = (next: SourceEditor, intent: 'open' | 'external' | 'nearby' = 'open') => {
-    if (operationRef.current) return
+    if (operationRef.current || assignmentDraftOpen.current) return
     prepareView(editorLocation(next), intent, intent === 'open')
     savedSourceRef.current = null
     if (next.kind === 'provider' && next.sourceId) setExpandedSourceId(next.sourceId)
@@ -271,7 +278,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
 
   const closeEditor = () => {
     if (operationRef.current || !editor) return
-    prepareView(editorLocation(editor), 'return', true)
+    prepareView(editorLocation(editor), editor.kind === 'assignments' ? 'return-menu' : 'return', true)
     if (editor.kind === 'provider' && editor.sourceId) setExpandedSourceId(editor.sourceId)
     if (editor.kind === 'group' && editor.groupId) setExpandedGroupId(editor.groupId)
     setEditor(null)
@@ -517,8 +524,15 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
         onAddProvider={() => openEditor({ kind: 'provider' }, editingGroup ? 'nearby' : 'open')}
       />
     )) : null
-  const addContent = providerEditor && !providerEditor.sourceId && !providerEditor.preset ? providerContent : groupEditor && !groupEditor.groupId ? groupContent : null
-  const addTitle = groupEditor && !groupEditor.groupId ? t('Create Load-Balancing Group') : t('Add AI Provider')
+  const creatingGroup = groupEditor && !groupEditor.groupId
+  const configuringAssignments = editor?.kind === 'assignments'
+  const addContent = configuringAssignments ? (
+    <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">{t('Loading...')}</p>}>
+      <SubagentModelsManager config={aiSources} onClose={closeEditor} onBusyChange={setEditorSaving} onDraftChange={open => { assignmentDraftOpen.current = open }} />
+    </Suspense>
+  ) : creatingGroup ? groupContent : providerEditor && !providerEditor.sourceId && !providerEditor.preset ? providerContent : null
+  const addTitle = configuringAssignments ? t('Model assignments') : creatingGroup ? t('Create Load-Balancing Group') : t('Add AI Provider')
+  const addIcon = configuringAssignments ? <Workflow size={18} /> : creatingGroup ? <GroupIcon size={18} /> : <Plus size={18} />
 
   const renderError = (message: string) => (
     <div role="alert" className="space-y-2 rounded-md border border-destructive/20 bg-destructive/10 p-3">
@@ -620,7 +634,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
               id="add"
               title={addTitle}
               open
-              icon={<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground">{groupEditor ? <GroupIcon size={18} /> : <Plus size={18} />}</div>}
+              icon={<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground">{addIcon}</div>}
             >
               {addContent}
             </AISourceInlinePanel>
@@ -637,7 +651,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                 {t('Add AI Provider')}
               </button>
               <fieldset ref={element => { if (element) element.inert = saving }} disabled={saving} className="flex min-w-0 border-0 p-0">
-                <GroupCreateMenu onCreate={() => openEditor({ kind: 'group', groupId: null })} />
+                <GroupCreateMenu onCreate={() => openEditor({ kind: 'group', groupId: null })} onConfigureModels={() => openEditor({ kind: 'assignments' })} />
               </fieldset>
             </div>
           )}

@@ -1,3 +1,8 @@
+import modelSelectionLimits from './generated/model-selection-limits.js';
+
+export const MODEL_SELECTION_LIMITS = Object.freeze(modelSelectionLimits);
+export type * from '../contracts/collaboration/model-selection.js';
+
 export type TeamRequestOrigin = 'colleague' | 'guest'
 export type CollabMode = 'structured' | 'free'
 

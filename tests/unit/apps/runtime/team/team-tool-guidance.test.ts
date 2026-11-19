@@ -28,8 +28,8 @@ describe('shared collaboration contract', () => {
       properties: { prompt: { type: 'string' }, name: { type: 'string' } },
     })
     expect(Object.keys(find('spawn_agent').inputSchema!.properties as object)).toEqual(['prompt', 'name', 'cwd', 'isolation'])
-    expect(find('spawn_agent').description).toContain('create more collaborators as needed')
-    expect(find('spawn_agent').description).toContain('No team setup or shared goal is required')
+    expect(find('spawn_agent').description).toContain('does not see your conversation history')
+    expect(find('spawn_agent').description).toContain('message an existing collaborator with team_send')
   })
 
   it('distinguishes delivery, board tracking and reusable findings', () => {
@@ -49,7 +49,7 @@ describe('shared collaboration contract', () => {
   it('points an empty conversation to the incremental creation tool', async () => {
     const reply = await server.instance.callTool('team_send', { to: 'missing', message: 'Hello' }) as CollaborationResult
     expect(reply).toMatchObject({ isError: true })
-    expect(reply!.content[0]).toMatchObject({ text: expect.stringContaining('Use spawn_agent') })
+    expect(reply!.content[0]).toMatchObject({ text: expect.stringContaining('spawn_agent creates one') })
   })
 
   it('rejects management and scope arguments before any operation', async () => {

@@ -76,6 +76,22 @@ scenarios:
     requirements:
       - packaged-app
       - halo-sdk
+  - id: knowledge.sources.pdf-distribution
+    title: Learn Chinese and multipage PDF text without native canvas
+    verifies: [import]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [packaged-app, halo-sdk, canvas-pruned-package]
+    preconditions:
+      - A controlled package without native canvas imports an independently validated synthetic PDF with Chinese CID text, standard-font text and an image across two pages.
+    steps:
+      - Import through the real file drop, wait for learning, inspect extracted text and restart.
+    expected:
+      - Chinese and Latin text from both pages survives extraction and restart without changing the source or imported copy and without model calls.
+    notes: This checks text-layer extraction, not scanned PDF OCR or image understanding.
   - id: knowledge.sources.failures
     title:
       en: Import corrupt and textless documents

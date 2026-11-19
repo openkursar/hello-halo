@@ -199,5 +199,26 @@ export const migrations: Migration[] = [
       // the author's, to be overwritten by the next upgrade.
       db.exec('ALTER TABLE installed_apps ADD COLUMN author_spec_json TEXT')
     }
+  },
+  {
+    version: 11,
+    description: 'Preserve digital human identities during journalled workspace relocation',
+    up(db) {
+      db.exec(`
+        DROP INDEX idx_installed_apps_spec_global;
+        DROP INDEX idx_installed_apps_spec_space;
+        CREATE UNIQUE INDEX idx_installed_apps_spec_global ON installed_apps(spec_id)
+          WHERE space_id IS NULL AND COALESCE(json_extract(spec_json, '$.type'), '') != 'automation';
+        CREATE UNIQUE INDEX idx_installed_apps_spec_space ON installed_apps(spec_id, space_id)
+          WHERE space_id IS NOT NULL AND COALESCE(json_extract(spec_json, '$.type'), '') != 'automation';
+        CREATE INDEX idx_apps_legacy_data ON installed_apps(id) WHERE data_path IS NOT NULL;
+        CREATE TABLE app_data_relocations (
+          app_id TEXT PRIMARY KEY REFERENCES installed_apps(id) ON DELETE RESTRICT,
+          journal_path TEXT NOT NULL,
+          target_space_id TEXT NOT NULL,
+          committed INTEGER NOT NULL DEFAULT 0 CHECK (committed IN (0, 1))
+        );
+      `)
+    }
   }
 ]

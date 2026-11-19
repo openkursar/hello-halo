@@ -47,5 +47,7 @@ const commands = materialize(JSON.parse(await readFile(join(harness, 'resources/
 await output('native/generated/commands.ts', `// Generated from the Harness resources.\nexport const builtinCommandMetadata = ${JSON.stringify(commands, null, 2)} as const;\n`);
 const constants = materialize(JSON.parse(await readFile(join(harness, 'resources/prompt-sections.json'), 'utf8'))).constants;
 await output('harness/generated/constants.ts', `// Generated from the Harness resources.\n${Object.entries(constants).map(([name, value]) => `export const ${name} = ${JSON.stringify(value)};`).join('\n')}\n`);
+const limits = JSON.parse(await readFile(join(node, 'collaboration/model-selection-limits.json'), 'utf8'));
+await output('collaboration/generated/model-selection-limits.ts', `export default ${JSON.stringify(limits, null, 2)};\n`);
 const collaboration = materialize(JSON.parse(await readFile(join(harness, 'resources/collaboration_tools.json'), 'utf8')));
 await output('native/generated/collaboration.ts', `// Generated from the Harness resources.\nexport const baselineCollaborationDescriptors = ${JSON.stringify(collaboration, null, 2)} as const;\nexport const baselineCollaborationGuidance = ${JSON.stringify(catalog.get('collaboration.guidance').text)};\nexport const baselineCollaborationToolNames = ${JSON.stringify(collaboration.map(tool => tool.name))} as const;\n`);

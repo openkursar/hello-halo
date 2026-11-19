@@ -8,7 +8,9 @@ const refs = vi.hoisted(() => ({ service: null as any, runtime: null as any, dir
 vi.mock('../../../../src/main/services/agent/resolved-sdk', async () =>
   import('../../../../src/main/services/agent/mcp/sdk-server'))
 vi.mock('../../../../src/main/apps/team', async () => ({
-  ...(await import('../../../../src/main/apps/team/work-members')), getTeamService: () => refs.service,
+  ...await import('../../../../src/main/apps/team/work-members'),
+  ...await import('../../../../src/main/apps/team/participant-names'),
+  getTeamService: () => refs.service,
 }))
 vi.mock('../../../../src/main/apps/runtime/team', async () => ({
   createCoordinationMcpServer: (await import('../../../../src/main/apps/runtime/team/team-tools')).createCoordinationMcpServer,
@@ -160,7 +162,9 @@ describe('conversation collaboration MCP', () => {
   it('isolates conversations even when a foreign handle or team id is known', async () => {
     const first = server(), second = server({ conversationId: 'conversation-2' })
     const member = await spawn(first)
-    await spawn(second, 'other')
+    const sameName = await spawn(second)
+    expect(sameName.name).toBe(member.name)
+    expect(sameName.handle).not.toBe(member.handle)
     expect(await second.instance.callTool('team_send', { to: member.handle, message: 'Cross scope' })).toMatchObject({ isError: true })
     expect(await second.instance.callTool('team_stop', { to: member.handle })).toMatchObject({ isError: true })
     expect(refs.runtime.stopMemberTurn).not.toHaveBeenCalled()

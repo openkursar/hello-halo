@@ -147,14 +147,19 @@ async function waitForGuestAppReady(page: Page) {
 export const test = base.extend<GuestFixtures>({
   wecom: [async ({}, use, testInfo) => {
     const wecom = await startAcceptanceWecom()
-    try { await use(wecom) }
+    const failures: unknown[] = []
+    try { await use(wecom) } catch (error) { failures.push(error) }
     finally {
-      await wecom.close()
-      await testInfo.attach('local-wecom-replies', { body: JSON.stringify(wecom.replies, null, 2), contentType: 'application/json' })
-      expect(wecom.errors, 'Only the declared local WeCom protocol may be used').toEqual([])
+      try { await wecom.close() } catch (error) { failures.push(error) }
+      try { await testInfo.attach('local-wecom-replies', { body: JSON.stringify(wecom.replies, null, 2), contentType: 'application/json' }) } catch (error) { failures.push(error) }
+      try { expect(wecom.errors, 'Only the declared local WeCom protocol may be used').toEqual([]) } catch (error) { failures.push(error) }
     }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, `WeCom fixture failed: ${failures.map(error => error instanceof Error ? error.message : String(error)).join('; ')}`)
   }, { auto: true }],
-  guestApp: async ({ acceptanceApp, wecom }, use) => {
+  guestApp: async ({ acceptanceApp, wecom }, use, testInfo) => {
+    let setupPhase = 'bootstrap'
+    try {
     let window = acceptanceApp.window
     await waitForGuestAppReady(window)
     const space = await seedManagedSpace(window, 'Guest permission workspace')
@@ -177,7 +182,9 @@ export const test = base.extend<GuestFixtures>({
     expect(new URL(wecom.url).hostname).toBe('127.0.0.1')
     const added = await window.evaluate(instance => (window as unknown as { halo: HaloAPI }).halo.imChannelsCreateInstance(instance), instance)
     expect(added.success).toBe(true)
+    setupPhase = 'restart-after-channel-binding'
     window = await acceptanceApp.restart()
+    setupPhase = 'configure-channel-permissions'
     await waitForGuestAppReady(window)
     const card = await guestChannelCard(window, context)
     await switchByText(card, 'Permission Control', true)
@@ -190,7 +197,18 @@ export const test = base.extend<GuestFixtures>({
     expect((await guestConfiguration(window, context.instanceId)).config.wsUrl).toBe(wecom.url)
     await card.getByRole('switch', { name: 'Enable this channel', exact: true }).click()
     await waitForGuestChannel(window, context, wecom)
+    setupPhase = 'test'
     await use(context)
+    } catch (error) {
+      try {
+        await testInfo.attach('guest-fixture-primary-error', { body: JSON.stringify({ phase: setupPhase,
+          message: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined,
+        }, null, 2), contentType: 'application/json' })
+      } catch (attachmentError) {
+        throw new AggregateError([error, attachmentError], 'Guest fixture failure and diagnostic attachment failure')
+      }
+      throw error
+    }
   },
   window: async ({ acceptanceApp, guestApp }, use) => {
     expect(guestApp.profile).toBe(acceptanceApp.profile)

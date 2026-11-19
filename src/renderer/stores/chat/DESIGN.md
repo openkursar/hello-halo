@@ -176,7 +176,14 @@ joins the cut read onto the held messages (`joinFromAnchor`; a cut point no
 longer held means the conversation changed, and it is read whole), and
 reconciles — unchanged rows keep their objects and loaded thoughts, the bubble's
 row passes to its persisted twin, and a bubble of a turn sent meanwhile stays.
-`refresh` reconciles too, keeping unconfirmed bubbles while a turn runs.
+`refresh` reconciles too, keeping unconfirmed bubbles while a turn runs. Opening a
+running space conversation catches missed input events by reading from its latest
+held permanent message, not by refreshing every background turn. Records announced
+while that read was in flight survive an older response and reconcile by their
+existing IDs. An idle cached open does not add a transcript read. If the page
+becomes visible after an opener was recorded but before its turn starts, the
+turn-start signal reuses the same deduplicated open with warming disabled; only
+a retained space conversation is caught up, never background conversations.
 
 ## Naming
 

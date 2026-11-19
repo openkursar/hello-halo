@@ -82,6 +82,41 @@ describe('session-owned engine registry', () => {
     session.close(); await session.flush()
   })
 
+  it('preserves an unavailable Codex default and recovers without silently loading Halo', async () => {
+    state.configured = 'codex'
+    state.unavailable.add('codex')
+    await sdk.initSdk()
+    expect(sdk.getDefaultEngine()).toBe('codex')
+    await expect(sdk.resolveDefaultEngine()).rejects.toMatchObject({ name: 'EngineUnavailableError', engineId: 'codex' })
+    expect(state.modules.has('halo')).toBe(false)
+    state.unavailable.delete('codex')
+    expect(await sdk.resolveDefaultEngine()).toBe('codex')
+    state.unavailable.add('codex')
+    await expect(sdk.resolveDefaultEngine()).rejects.toMatchObject({ engineId: 'codex' })
+  })
+
+  it('clears the old active default when the selected external engine is unavailable without closing borrowed sessions', async () => {
+    await sdk.initSdk()
+    const session = await sdk.createSession({ model: 'test' })
+    const halo = state.modules.get('halo')![0]
+    state.configured = 'codex'
+    state.unavailable.add('codex')
+    await expect(sdk.resolveDefaultEngine()).rejects.toMatchObject({ engineId: 'codex' })
+    expect(sdk.getDefaultEngine()).toBe('codex')
+    expect(sdk.getActiveEngine()).toBeNull()
+    expect(halo.close).not.toHaveBeenCalled()
+    expect(session.engineId).toBe('halo')
+    session.close()
+    await session.flush()
+  })
+
+  it('never tries external Codex as an automatic fallback', async () => {
+    state.unavailable.add('halo')
+    await sdk.initSdk()
+    await expect(sdk.resolveDefaultEngine()).rejects.toMatchObject({ engineId: 'halo' })
+    expect(state.probed).not.toContain('codex')
+  })
+
   it('loads only the startup default and prewarms only when requested', async () => {
     await sdk.initSdk()
     expect(state.probed).toEqual(['halo'])
