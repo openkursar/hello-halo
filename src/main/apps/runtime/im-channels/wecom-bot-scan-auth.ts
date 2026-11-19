@@ -27,7 +27,10 @@
  */
 
 import { request as httpsRequest } from 'https'
+import type { Agent } from 'http'
 import { platform } from 'os'
+import { getNetworkPolicy } from '../../../foundation/product-config'
+import { resolveLinkAgent } from './link-route'
 
 // ============================================
 // Constants
@@ -153,8 +156,21 @@ export function getPlatCode(): number {
  *   rejecting with kind=cancelled when aborted.
  * - Enforces a request-level read timeout independent of the polling deadline.
  * - Surfaces non-2xx responses with their status code and a short body sample.
+ * - Connects directly, as WeCom's own CLI does, unless product.json
+ *   `networkPolicy.imScanViaProxy` sends it through the IM route — needed
+ *   where the host has no direct way out. `https.request` ignores proxy
+ *   environment variables, so the route is passed as its agent.
  */
-function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  let agent: Agent | undefined
+  if (getNetworkPolicy()?.imScanViaProxy === true) {
+    try {
+      agent = await resolveLinkAgent(`https://${WECOM_QC_HOST}${path}`)
+    } catch (err) {
+      throw new ScanAuthError('network', err instanceof Error ? err.message : String(err))
+    }
+  }
+
   return new Promise<T>((resolve, reject) => {
     if (signal?.aborted) {
       reject(new ScanAuthError('cancelled', 'Aborted before request'))
@@ -176,6 +192,7 @@ function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
         path,
         method: 'GET',
         timeout: HTTPS_REQUEST_TIMEOUT_MS,
+        agent,
         headers: {
           // The official CLI sends no special headers. We add User-Agent for
           // server-side telemetry hygiene (helps WeCom distinguish clients).
