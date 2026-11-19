@@ -18,8 +18,12 @@ references:
   - tests/e2e/specs/acceptance-im-collaboration.spec.ts
   - tests/e2e/specs/acceptance-collaboration-engines.spec.ts
   - tests/e2e/specs/acceptance-collaboration-compaction.spec.ts
+  - tests/e2e/specs/acceptance-private-assistant-recovery.spec.ts
   - tests/e2e/specs/acceptance-live-collaboration.spec.ts
 promises:
+  conversation-names:
+    en: Collaborators created from a space conversation or a digital human’s own chat keep their requested names without a suffix. A duplicate or reserved name does not create another collaborator in that conversation.
+    zh: 在空间对话或数字人自己的对话中创建的协作者保留所请求的名字，不追加后缀。同一对话中重名或保留名不会创建另一位协作者。
   compaction-recovery:
     en: After context compaction, the assistant can recover the existing collaborators and shared work from a short plain-language reminder, contact them by name and receive their reports without creating replacement collaborators.
     zh: 上下文压缩后，助手能从简短的自然语言提醒恢复现有协作者与共享工作，按名字联系并接收回报，无需重新创建协作者。
@@ -98,7 +102,7 @@ scenarios:
     title:
       en: Recover every original collaborator after manual or automatic context compaction
       zh: 手动或自动压缩后恢复每位原协作者
-    verifies: [compaction-recovery, room, addressing]
+    verifies: [compaction-recovery, room, addressing, conversation-names]
     platforms: [darwin, win32, linux]
     profiles: [regression]
     evidence: app-e2e
@@ -111,16 +115,39 @@ scenarios:
       - en: An isolated application uses Halo and only a local scripted model endpoint. Two real collaborators retain independent private assignments; shared tasks, findings and activity exist before compaction.
         zh: 隔离应用使用 Halo 与唯一本地脚本模型端点；两位真实协作者各自保留私有任务，压缩前已有共享任务、发现与活动。
     steps:
+      - en: In the space conversation, create two collaborators with distinct names, then try one duplicate and one reserved name.
+        zh: 在空间对话中用不同名字创建两位协作者，再尝试一次重名和一次保留名。
       - en: Compact the source through its actual manual command or a deliberate provider context overflow. Return a summary containing no collaborator names.
         zh: 通过真实手动命令或刻意的提供商上下文溢出压缩源聊天；返回不含协作者名字的摘要。
       - en: Read the reminder in the next provider request, read each original member record and send follow-up work using only the member names listed there.
         zh: 读取下一模型请求中的提醒，仅使用其中列出的成员名逐一读取原成员记录并派发后续工作。
     expected:
-      - en: The reminder is plain language without structured data, fits within 12000 characters, lists both original members by name without the source itself, and names the unfinished task, the shared finding reference and recent activity. Both original members retain their assignments and report to the source; membership and collaboration identity stay unchanged, with exactly two creation calls overall.
-        zh: 提醒为不含结构化数据的自然语言，不超过 12000 字符，按名字列出两位原成员且不含源聊天自身，并写明未完成任务、共享结论引用和最近活动；两人保留原任务并回报源聊天，成员和协作身份不变，全程仅两次创建调用。
+      - en: The two original collaborators keep their requested names. Duplicate and reserved names are refused without creating a new member.
+        zh: 两位原协作者保留所请求的名字；重名和保留名均被拒绝，不新增成员。
+      - en: The reminder is plain language without structured data, fits within 12000 characters, lists both original members by name without the source itself, and names the unfinished task, the shared finding reference and recent activity. Both original members retain their assignments and report to the source; membership and collaboration identity stay unchanged and no replacement is created.
+        zh: 提醒为不含结构化数据的自然语言，不超过 12000 字符，按名字列出两位原成员且不含源聊天自身，并写明未完成任务、共享结论引用和最近活动；两人保留原任务并回报源聊天，成员和协作身份不变，也没有创建替代成员。
     notes:
       en: Only the model endpoint is scripted; application handlers and collaboration routing remain real. This does not establish live-model reasoning, application restart recovery or cross-device delivery.
       zh: 仅模型端点由脚本替代，应用处理器与协作路由保持真实；不证明真实模型推理、应用重启恢复或跨设备投递。
+  - id: teams.collaboration.private-recovery-addressing
+    title:
+      en: Continue a private assistant by its original ID after compaction
+      zh: 压缩后用原 ID 继续联系私有助手
+    verifies: [addressing]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - en: Create a private assistant using the name of an existing teammate and save the ID returned on creation.
+        zh: 用现有正式队友的名字创建私有助手，记下创建时返回的 ID。
+      - en: Compact the member's conversation with a scripted summary that retains that ID, then send the follow-up using the retained ID.
+        zh: 压缩成员对话，由脚本模型在摘要中保留该 ID，再用保留的 ID 发送后续消息。
+    expected:
+      - en: The original assistant receives the follow-up and answers from its original assignment. The same-named teammate does not receive the ID-addressed message.
+        zh: 原助手收到后续消息并基于原任务回复；同名正式队友不会收到这条按 ID 发送的消息。
   - id: teams.collaboration.engine-parity
     title:
       en: Use the same collaboration flow with each application engine
@@ -248,6 +275,7 @@ scenarios:
       - digital-human
       - room
       - addressing
+      - conversation-names
     platforms:
       - darwin
       - win32
@@ -263,13 +291,15 @@ scenarios:
       - en: Use a fresh isolated profile, an installed digital human with conversation collaboration left off, and a local scripted model endpoint with the real application engine.
         zh: 使用全新隔离资料、一个未开启对话协作的已安装数字人，以及本地脚本模型端点，应用仍运行真实引擎。
     steps:
-      - en: In a new chat with the digital human, ask it to organize a team; it creates one member with the real collaboration tool and dispatches work in the same turn.
-        zh: 在与数字人的新聊天中让它组队；它通过真实协作工具创建一名成员，并在同一轮派工。
+      - en: In a new chat with the digital human, ask it to organize a team; it creates one member, attempts the same name again, then continues the original member in the same turn.
+        zh: 在与数字人的新聊天中让它组队；它创建一名成员，再尝试用同名创建，然后在同一轮继续联系原成员。
       - en: The member reports back to the coordinator.
         zh: 成员向协调者回报。
       - en: Delete the chat.
         zh: 删除这个聊天。
     expected:
+      - en: The original keeps its requested name and the duplicate attempt is refused without adding another member.
+        zh: 原成员保留所请求的名字；重名尝试被拒绝，不新增成员。
       - en: The report is recorded in the originating chat as a teammate message and the digital human answers it there; its default chat has no collaboration.
         zh: 回报以队友消息记录在发起的聊天中，数字人在该聊天中回应；其默认聊天没有协作。
       - en: Deleting the chat dissolves the temporary collaboration.

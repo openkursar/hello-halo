@@ -20,7 +20,7 @@ for (const trigger of ['manual', 'auto'] as const) {
       await expect(window.locator('.message-assistant [data-message-content]').filter({ hasText: compactionReady }).last()).toBeVisible({ timeout: 120000 })
       await waitForAcceptanceIdle(window, turn.conversationId)
       expect(script.errors).toEqual([])
-      expect(script.created).toHaveLength(2)
+      expect(script.created.map(member => member.name)).toEqual(['Compaction Checker 0', 'Compaction Checker 1'])
       const association = () => window.evaluate(id => (globalThis as unknown as { halo: HaloAPI }).halo.teamCollabForConversation(id), turn.conversationId)
       const before = await association()
       expect(before.success).toBe(true)
@@ -55,7 +55,7 @@ for (const trigger of ['manual', 'auto'] as const) {
       expect(after).toMatchObject({ success: true, data: { teamId: scope.teamId, epochId: scope.epochId } })
       expect((after.data as typeof scope).members.map(member => member.appId).sort()).toEqual(script.created.map(member => member.handle).sort())
       const spawnCalls = model.exchanges.flatMap(exchange => exchange.reply?.tools ?? []).filter(tool => tool.name.endsWith('__spawn_agent') || tool.name === 'spawn_agent' || tool.name === 'CallTool' && tool.input.tool === 'mcp__halo-team__spawn_agent')
-      expect(spawnCalls).toHaveLength(2)
+      expect(spawnCalls).toHaveLength(4)
       for (const member of script.created) {
         const transcript = await window.evaluate(input => (globalThis as unknown as { halo: HaloAPI }).halo.appChatTranscript(input), { appId: member.handle, spaceId: turn.spaceId, conversationId: buildTeamSessionKey(member.handle, scope.teamId, scope.epochId) })
         expect(transcript.success).toBe(true)

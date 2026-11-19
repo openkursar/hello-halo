@@ -50,6 +50,11 @@ export async function startFederatedParticipantModel() {
         return { text: `STOP_CONFIRMED_${id}` }
       }
       if (state.action !== 'exchange') return { text: `CHILD_CREATED_${id}` }
+      if (input.includes(`CHECK_DUPLICATE_${id}`)) {
+        const duplicate = request.toolResults.find(result => result.id === `${id}-duplicate`)
+        if (!duplicate) return { tools: [modelTool(request, 'spawn_agent', { name: ' Private checker ', prompt: prompt(id, 'child') }, `${id}-duplicate`)] }
+        if (!duplicate.text.includes('using its original handle, not the name')) throw new Error('The private duplicate did not prompt the parent to retain the original handle.')
+      }
       const excerpts = input.split('\n').filter(line => /^\s*Final reply excerpt \(not a completion claim\): /.test(line))
         .map(line => JSON.parse(line.slice(line.indexOf(': ') + 2)) as string)
       const result = [...excerpts, input].map(text => text.match(new RegExp(`HELPER_RESULT_${id} (\\{[^\\n]+\\})`))).find(Boolean)

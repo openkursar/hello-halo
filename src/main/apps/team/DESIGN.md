@@ -115,6 +115,15 @@ node. Local execution configuration is stored separately: model selection,
 engine, environment, assignment and permission floor never appear in a public
 participant projection. A remote record cannot install local execution settings.
 
+Space chats, digital-human chats and team members creating private assistants
+use the requested trimmed name (or `collaborator`) and keep an independent
+stable handle. Creation refuses `lead`, `all` and addresses already used in the
+collaboration receiving the assistant. It never checks the parent's shared
+team roster. The check runs before allocation and again before insertion; a
+late conflict returns the workspace and slot. Automation and channel sessions
+keep suffixed names. Existing records and addressing rules stay unchanged; in
+particular the team member still uses the original handle for a private assistant.
+
 New local execution records also retain the direct parent's normalized
 `inheritedReasoning`. Advanced model selections additionally retain the SDK's
 versioned `modelBinding`; neither field enters participant replication. Missing
