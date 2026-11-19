@@ -181,7 +181,7 @@ export async function startHttpServer(
   existingToken?: string
 ): Promise<{ port: number; token: string }> {
   const host = process.env.HALO_E2E_TEST === '1' && isServerMode() ? '127.0.0.1' : '0.0.0.0'
-  const useViteProxy = is.dev && (!isServerMode() || Boolean(process.env.ELECTRON_RENDERER_URL))
+  const useViteProxy = is.dev && Boolean(process.env.ELECTRON_RENDERER_URL)
   const listenPort = await findAvailablePort(port, host)
   // The routes reach almost every service; loaded here, they stay out of
   // what the main process loads before its window opens.

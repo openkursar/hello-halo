@@ -128,7 +128,9 @@ test('the Server web client operates the AI page, resumes after reconnect and re
       for (const theme of ['dark', 'light'] as const) {
         await setTheme(page, theme)
         await expect(image).toBeVisible()
-        await info.attach(`server-browser-${width}-${theme}`, { body: await page.screenshot(), contentType: 'image/png' })
+        const keyboard = page.getByRole('button', { name: 'Type on the page', exact: true })
+        await expect(keyboard).toBeInViewport({ ratio: 1 })
+        await info.attach(`server-browser-${width}-${theme}`, { body: await page.screenshot({ animations: 'disabled' }), contentType: 'image/png' })
       }
     }
     await page.setViewportSize({ width: 1200, height: 900 })

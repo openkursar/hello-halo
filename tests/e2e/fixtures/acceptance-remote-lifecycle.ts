@@ -1,7 +1,6 @@
 import { createServer } from 'node:net'
 import { expect, type Browser, type BrowserContext, type ElectronApplication, type Page, type TestInfo } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
-import { serveBuiltRenderer, type RendererAssets } from './acceptance-renderer-redirect'
 
 interface BindingAttempt {
   requestedHost: string | null
@@ -134,14 +133,11 @@ export async function withRemoteDesktop(
     let remotePage: Page | undefined
     let guardInstalled = false
     let remotePort: number | undefined
-    let assets: RendererAssets | undefined
     try {
       const before = await managementApp.window.evaluate(() => (globalThis as unknown as { halo: HaloAPI }).halo.getRemoteStatus())
       expect(before).toMatchObject({ success: true, data: { enabled: false, server: { running: false } } })
       bindings.push({ phase: 'guard-installed', state: await managementApp.app.evaluate(installRemoteLoopbackGuard) })
       guardInstalled = true
-      const packaged = await managementApp.app.evaluate(({ app }) => app.isPackaged)
-      if (!packaged) assets = await serveBuiltRenderer(managementApp.app)
       const enabled = await managementApp.window.evaluate(async port => (globalThis as unknown as { halo: HaloAPI }).halo.enableRemoteAccess(port), await freePort())
       expect(enabled.success).toBe(true)
       const status = enabled.data as RemoteStatus
@@ -205,9 +201,6 @@ export async function withRemoteDesktop(
           return guard.restore(port)
         }, remotePort) }) }
         catch (error) { failures.push(error) }
-      }
-      if (assets) {
-        try { bindings.push({ phase: 'renderer-redirect-restored', state: { connections: await assets.close() } }) } catch (error) { failures.push(error) }
       }
       try { await info.attach('remote-loopback-boundary', { body: JSON.stringify({ bindings, requests, scope: 'Real remote UI and application handlers with a test-only loopback listener constraint; no LAN claim.' }, null, 2), contentType: 'application/json' }) }
       catch (error) { failures.push(error) }
