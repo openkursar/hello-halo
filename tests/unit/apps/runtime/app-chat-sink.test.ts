@@ -125,6 +125,25 @@ describe('disposed chat writers', () => {
   })
 })
 
+describe('how a turn ended, as its record keeps it', () => {
+  afterEach(() => disposeAppChatSink(IM_KEY))
+
+  it('writes the ending of a reply that was stopped with the words it had shown, and nothing for one that finished', () => {
+    const sink = makeSink()
+    writeEvent.mockClear()
+    sink.onTurnComplete(makeResult({ finalContent: 'checking', hasMeaningfulContent: true, wasAborted: true, isInterrupted: true, stopReason: 'user' }))
+    expect(writeEvent).toHaveBeenCalledWith({ type: 'reply_ending', ending: 'stopped', content: 'checking' })
+
+    writeEvent.mockClear()
+    sink.onTurnComplete(makeResult({ finalContent: '', hasMeaningfulContent: false, wasAborted: true, isInterrupted: true, stopReason: 'user' }))
+    expect(writeEvent).toHaveBeenCalledWith({ type: 'reply_ending', ending: 'stopped' })
+
+    writeEvent.mockClear()
+    sink.onTurnComplete(makeResult({ finalContent: 'done' }))
+    expect(writeEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'reply_ending' }))
+  })
+})
+
 describe('digital human engine binding writes', () => {
   beforeEach(() => {
     saveChatEngineBinding.mockReset().mockReturnValue(true)

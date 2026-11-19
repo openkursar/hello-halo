@@ -116,6 +116,13 @@ describe('thoughts helpers', () => {
     })
   })
 
+  it('counts context compactions apart from other system steps, and only when there are some', () => {
+    const notice = thought('system', 0)
+    const compaction = { ...thought('system', 4), compaction: { trigger: 'auto' as const } }
+    expect(summarizeThoughts([notice, compaction])).toMatchObject({ types: { system: 2 }, compactions: 1 })
+    expect(summarizeThoughts([notice])).not.toHaveProperty('compactions')
+  })
+
   it('has no duration for a single thought', () => {
     expect(summarizeThoughts([thought('thinking', 0)]).duration).toBeUndefined()
   })

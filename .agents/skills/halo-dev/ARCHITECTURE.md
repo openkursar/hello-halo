@@ -244,6 +244,8 @@ src/
     │   ├── chat/                      #   Chat stream + tool-result/ + transcript/ (native
     │   │                              #   transcript scrolling for every chat surface — no
     │   │                              #   list virtualization; see transcript/DESIGN.md)
+    │   │                              #   + work-history/ (a reply's folded work: words first,
+    │   │                              #   operations on request; see work-history/DESIGN.md)
     │   ├── ai-config/                 #   Model/source controls: ModelSelector + thinking
     │   │                              #   slider, quota ring, provider picker
     │   ├── layout/                    #   Header, NavRail, SpaceSelector, TaskPanel, etc.

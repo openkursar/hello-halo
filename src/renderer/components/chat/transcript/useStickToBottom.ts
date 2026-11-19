@@ -9,6 +9,13 @@
  * enumerating it. The observer runs after layout and before paint, so a pin
  * never shows an intermediate frame.
  *
+ * While a turn streams, the view glides to the new end over a few frames
+ * instead of jumping there: text arrives in bursts, and a jump per burst reads
+ * as a stutter. Each frame covers a fixed share of what is left, so a new burst
+ * mid-glide just extends it. A viewport change, a jump the caller asks for and
+ * reduced motion still pin at once, and any upward intent stops the glide on
+ * its next frame.
+ *
  * Growth the reader caused is the exception. Expanding a panel they clicked
  * must not slide it out from under the pointer, so for a moment after a click
  * or key inside the transcript, content growth is left in place — and if it
@@ -42,6 +49,32 @@ const INTERACTION_MS = 1000
 const ANCHOR_PROBES = [1, 16, 48, 96, 160, 240, 360]
 
 const UPWARD_KEYS = new Set(['ArrowUp', 'PageUp', 'Home'])
+
+/** Share of the distance left to the end a glide covers per 60 Hz frame. */
+const GLIDE_RATE = 0.25
+/** Least a glide frame moves, so its tail does not crawl. */
+const GLIDE_MIN_PX = 1.5
+/** Closer than this, a glide lands on the end. */
+const GLIDE_LAND_PX = 1
+
+/**
+ * How far one glide frame moves, `elapsedMs` after the previous one, with
+ * `remaining` px left to the end: the same share per unit of time whatever the
+ * frame rate, never less than a minimum, never past the end.
+ */
+export function glideStep(remaining: number, elapsedMs: number): number {
+  const frames = Math.min(4, Math.max(0, elapsedMs) / (1000 / 60))
+  const step = Math.max(GLIDE_MIN_PX * frames, remaining * (1 - Math.pow(1 - GLIDE_RATE, frames)))
+  return Math.min(remaining, step)
+}
+
+let reducedMotionQuery: MediaQueryList | null | undefined
+function prefersReducedMotion(): boolean {
+  if (reducedMotionQuery === undefined) {
+    reducedMotionQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
+  }
+  return !!reducedMotionQuery?.matches
+}
 
 export type ScrollMotion = 'auto' | 'smooth'
 
@@ -121,6 +154,35 @@ export function useStickToBottom({ nearEndThreshold = 100, onAtBottomChange, liv
     anchor.current = null
   }, [])
 
+  const glideFrame = useRef<number | null>(null)
+  const stopGlide = useCallback(() => {
+    if (glideFrame.current !== null) cancelAnimationFrame(glideFrame.current)
+    glideFrame.current = null
+  }, [])
+
+  /** Move toward the end over the next frames; each frame aims at wherever the end is by then. */
+  const glide = useCallback((el: HTMLElement) => {
+    anchor.current = null
+    if (glideFrame.current !== null) return
+    let previous = performance.now()
+    const frame = (now: number) => {
+      glideFrame.current = null
+      if (!following.current) return
+      const remaining = el.scrollHeight - el.clientHeight - el.scrollTop
+      if (remaining <= GLIDE_LAND_PX) {
+        pin(el)
+        return
+      }
+      el.scrollTop += glideStep(remaining, now - previous)
+      previous = now
+      lastTop.current = el.scrollTop
+      glideFrame.current = requestAnimationFrame(frame)
+    }
+    glideFrame.current = requestAnimationFrame(frame)
+  }, [pin])
+
+  useEffect(() => stopGlide, [scroller, stopGlide])
+
   /**
    * Remember the first element that starts inside the view. An element that
    * straddles the top edge is a poor anchor: if it is a skipped row still at
@@ -168,8 +230,14 @@ export function useStickToBottom({ nearEndThreshold = 100, onAtBottomChange, liv
       if (following.current) {
         const viewportChanged = entries.some(e => e.target === scroller)
         const readerCaused = !liveRef.current && performance.now() < interactedUntil.current
-        if (viewportChanged || !readerCaused) pin(scroller)
-        else if (distanceToEnd(scroller) > nearEndThreshold) following.current = false
+        if (viewportChanged || !readerCaused) {
+          const grewWhileStreaming = liveRef.current && !viewportChanged && distanceToEnd(scroller) > GLIDE_LAND_PX && !prefersReducedMotion()
+          if (grewWhileStreaming) glide(scroller)
+          else {
+            stopGlide()
+            pin(scroller)
+          }
+        } else if (distanceToEnd(scroller) > nearEndThreshold) following.current = false
       } else if (anchor.current?.el.isConnected) {
         const delta = anchor.current.el.getBoundingClientRect().top - anchor.current.top
         if (Math.abs(delta) >= 0.5) {
@@ -183,7 +251,7 @@ export function useStickToBottom({ nearEndThreshold = 100, onAtBottomChange, liv
     observer.observe(scroller)
     if (content) observer.observe(content)
     return () => observer.disconnect()
-  }, [scroller, content, pin, captureAnchor, report, nearEndThreshold])
+  }, [scroller, content, pin, glide, stopGlide, captureAnchor, report, nearEndThreshold])
 
   useEffect(() => {
     if (!scroller) return
@@ -257,10 +325,11 @@ export function useStickToBottom({ nearEndThreshold = 100, onAtBottomChange, liv
     following.current = true
     interactedUntil.current = 0
     if (!scroller) return
+    stopGlide()
     if (behavior === 'auto') pin(scroller)
     else scroller.scrollTo({ top: scroller.scrollHeight, behavior })
     report(scroller)
-  }, [scroller, pin, report])
+  }, [scroller, pin, stopGlide, report])
 
   const detach = useCallback(() => {
     following.current = false

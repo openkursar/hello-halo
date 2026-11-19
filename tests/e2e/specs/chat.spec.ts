@@ -163,7 +163,7 @@ test.describe('Real Chat Flow', () => {
     }), { timeout: 45000, message: 'The submitted conversation must emit completion and leave its real active turn' }).toEqual({ started: true, completed: true, active: false, errors: 0 })
     await expect(window.getByTitle('Stop generation (Esc)', { exact: true })).toHaveCount(0)
     await expect(window.locator('.streaming-cursor')).toHaveCount(0)
-    await expect(window.getByText('Halo is working', { exact: true })).toHaveCount(0)
+    await expect(window.locator('.message-working')).toHaveCount(0)
 
     const completed = await window.evaluate(async () => {
       const state = globalThis as unknown as ChatAcceptanceWindow
@@ -238,13 +238,13 @@ test.describe('Real Chat Flow', () => {
     const sendButton = await window.waitForSelector('[data-onboarding="send-button"]', { timeout: 5000 })
     await sendButton.click()
 
-    await expect(window.getByText('Halo is working', { exact: true })).toBeVisible({ timeout: 10000 })
+    await expect(window.locator('.message-working').first()).toBeVisible({ timeout: 10000 })
 
     // Wait for AI message to appear
     await window.waitForSelector('.message-assistant', { timeout: 30000 })
 
     // Wait for AI to finish working
-    await expect(window.getByText('Halo is working', { exact: true })).toHaveCount(0, { timeout: 45000 })
+    await expect(window.locator('.message-working')).toHaveCount(0, { timeout: 45000 })
     await expect(window.locator('.streaming-cursor')).toHaveCount(0)
 
     // Verify AI response contains numbers (1-5)
@@ -269,7 +269,7 @@ test.describe('Real Chat Flow', () => {
     await expect(window.locator('.message-user')).toContainText('Test message for clearing')
     await expect(chatInput).toHaveValue('')
     await expect(window.locator('.message-assistant')).toBeVisible({ timeout: 30000 })
-    await expect(window.getByText('Halo is working', { exact: true })).toHaveCount(0, { timeout: 45000 })
+    await expect(window.locator('.message-working')).toHaveCount(0, { timeout: 45000 })
     await expect(window.locator('.streaming-cursor')).toHaveCount(0)
   })
 
@@ -286,7 +286,7 @@ test.describe('Real Chat Flow', () => {
 
     // Wait for first AI response
     await window.waitForSelector('.message-assistant', { timeout: 30000 })
-    await expect(window.getByText('Halo is working', { exact: true })).toHaveCount(0, { timeout: 45000 })
+    await expect(window.locator('.message-working')).toHaveCount(0, { timeout: 45000 })
     await expect(window.locator('.streaming-cursor')).toHaveCount(0)
 
     // Verify first response
@@ -300,7 +300,7 @@ test.describe('Real Chat Flow', () => {
 
     // Wait for second AI response (should now have 2 assistant messages)
     await window.waitForFunction(() => document.querySelectorAll('.message-assistant').length >= 2, { timeout: 30000 })
-    await expect(window.getByText('Halo is working', { exact: true })).toHaveCount(0, { timeout: 45000 })
+    await expect(window.locator('.message-working')).toHaveCount(0, { timeout: 45000 })
     await expect(window.locator('.streaming-cursor')).toHaveCount(0)
 
     // Verify second response
@@ -386,7 +386,7 @@ test.describe('Switch Provider and Chat', () => {
     await window.waitForSelector('.message-assistant', { timeout: 45000 })
 
     // Wait for AI to finish
-    await expect(window.getByText('Halo is working', { exact: true })).toHaveCount(0, { timeout: 60000 })
+    await expect(window.locator('.message-working')).toHaveCount(0, { timeout: 60000 })
     await expect(window.locator('.streaming-cursor')).toHaveCount(0)
 
     await window.screenshot({ path: 'tests/e2e/results/chat-tencent-glm-response.png' })

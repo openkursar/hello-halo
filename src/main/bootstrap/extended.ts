@@ -570,6 +570,7 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
           ...(m.thoughts ? { thoughts: m.thoughts } : {}),
           ...(m.thoughtsSummary ? { thoughtsSummary: m.thoughtsSummary } : {}),
           ...(m.timestamp ? { ts: Date.parse(m.timestamp) || undefined } : {}),
+          ...(m.metadata?.ending ? { ending: m.metadata.ending } : {}),
         }))
       }
 

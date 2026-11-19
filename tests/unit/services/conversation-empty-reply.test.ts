@@ -172,3 +172,26 @@ describe('removeEmptyReplyPlaceholder', () => {
     expect(preview(conversation.id)).toBe('Plan the launch')
   })
 })
+
+describe('a reply that ended before its answer was done', () => {
+  it('keeps how it ended, so a later read can still say so', () => {
+    const stopped = startTurn('Check the hand-off')
+    stopped.sink.onTurnComplete?.(streamResult({ finalContent: 'Checking the edges first.', hasMeaningfulContent: true, stopReason: 'user' }))
+    expect(messages(stopped.id).at(-1)?.metadata).toMatchObject({ ending: 'stopped' })
+
+    const limited = startTurn('Keep going')
+    limited.sink.onTurnComplete?.(streamResult({ finalContent: 'Part one.', hasMeaningfulContent: true, wasAborted: false, reachedMaxTurns: true }))
+    expect(messages(limited.id).at(-1)?.metadata).toMatchObject({ ending: 'step-limit' })
+  })
+
+  it('marks nothing on a reply that finished, or one kept because of a failure', () => {
+    const done = startTurn('Answer me')
+    done.sink.onTurnComplete?.(streamResult({ finalContent: 'Done.', hasMeaningfulContent: true, wasAborted: false, isInterrupted: false }))
+    expect(messages(done.id).at(-1)?.metadata?.ending).toBeUndefined()
+
+    const failed = startTurn('Run it')
+    failed.sink.onTurnError?.(new Error('Provider refused'), true, streamResult({ finalContent: 'Partial', hasMeaningfulContent: true }))
+    expect(messages(failed.id).at(-1)).toMatchObject({ error: 'Provider refused' })
+    expect(messages(failed.id).at(-1)?.metadata?.ending).toBeUndefined()
+  })
+})

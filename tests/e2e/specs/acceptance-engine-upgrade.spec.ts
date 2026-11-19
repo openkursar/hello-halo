@@ -168,7 +168,7 @@ for (const modelId of ['deepseek-v4.1-flash', 'gpt-6-astra']) {
         page = await acceptanceApp.restart()
         await openManagedConversation(page, target.title, space.id)
         await expect(page.locator('.message-assistant').last()).toContainText('Checklist recorded.')
-        const details = page.getByRole('button', { name: /Already thought/ }).last()
+        const details = page.getByRole('button', { name: /Work process/ }).last()
         if (await details.getAttribute('aria-expanded') !== 'true') await details.click()
         await expect(page.getByText('Task plan', { exact: true })).toBeVisible()
         await expect(page.getByText(todo.content, { exact: true })).toBeVisible()

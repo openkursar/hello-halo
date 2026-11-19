@@ -52,7 +52,7 @@ test.describe('repaired collaboration history', () => {
 test('keeping an older collaboration reuses its installed members without transferring the current task', async ({ window, collaboration }) => {
   await waitForHomePage(window)
   await window.getByText(COLLAB_CONVERSATION_TITLE, { exact: true }).first().click()
-  await window.getByRole('button', { name: 'Open team view', exact: true }).click()
+  await window.getByRole('button', { name: 'View team', exact: true }).click()
   await expect(window.getByRole('button', { name: 'View coordinator’s work in this task', exact: true })).toHaveCount(0)
   await window.getByRole('button', { name: 'Keep this team', exact: true }).click()
   const savedLink = window.getByRole('button', { name: 'Open saved team', exact: true })
@@ -97,9 +97,9 @@ test('a collaboration is one room: no task list, no task to create', { annotatio
   await waitForHomePage(window)
 
   await window.getByText(COLLAB_CONVERSATION_TITLE, { exact: true }).first().click()
-  const openTeamView = window.getByRole('button', { name: 'Open team view', exact: true })
+  const openTeamView = window.getByRole('button', { name: 'View team', exact: true })
   await expect(openTeamView).toBeVisible()
-  await expect(window.getByText(`Team: ${COLLAB_TEAM_NAME}`, { exact: true })).toBeVisible()
+  await expect(window.getByRole('group', { name: COLLAB_TEAM_NAME, exact: true })).toBeVisible()
 
   await openTeamView.click()
 
@@ -131,3 +131,24 @@ test('a collaboration is one room: no task list, no task to create', { annotatio
   await window.getByRole('button', { name: 'Members', exact: true }).click()
   await expect(window.getByRole('dialog', { name: 'Members' })).toBeVisible()
 })
+
+for (const width of [1280, 390]) {
+  test(`the chat shows its team as one line that opens the full team (${width}px)`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: 'chat.work-history.team-summary', evidence: 'app-e2e', mode: 'none', variant: { viewport: String(width) } }) } }, async ({ window }) => {
+    await waitForHomePage(window)
+    await window.getByText(COLLAB_CONVERSATION_TITLE, { exact: true }).first().click()
+    await window.setViewportSize({ width, height: 844 })
+
+    const summary = window.getByRole('group', { name: COLLAB_TEAM_NAME, exact: true })
+    await expect(summary).toBeVisible()
+    await expect(summary).toContainText(/\d+ members?, (\d+ working|finished)/)
+    // The roster belongs to the team view, not to the chat.
+    await expect(summary).not.toContainText(COLLAB_MEMBER_NAME)
+    const box = await summary.boundingBox()
+    expect(box!.height).toBeLessThan(48)
+    expect(await window.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+    await window.screenshot({ path: `tests/e2e/results/team-summary-${width}.png` })
+
+    await summary.getByRole('button', { name: 'View team', exact: true }).click()
+    await expect(window.getByRole('region', { name: 'Task room' })).toBeVisible()
+  })
+}

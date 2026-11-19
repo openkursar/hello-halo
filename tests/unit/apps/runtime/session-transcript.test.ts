@@ -214,6 +214,88 @@ describe('terminal result failures', () => {
   })
 })
 
+describe('where the context was compacted', () => {
+  it('keeps the compaction as a step at its place in the turn', () => {
+    const messages = convertEventsToMessages([
+      user('hello', 1), { _ts: ts(2), type: 'system', subtype: 'init' },
+      assistant([toolUse('t1')], 3), toolResult('t1', 4),
+      { _ts: ts(5), type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 180000 } },
+      assistant([text('done')], 6),
+    ])
+    const thoughts = messages.at(-1)!.thoughts!
+    expect(thoughts.map(thought => thought.compaction ? 'compaction' : thought.type)).toEqual(['tool_use', 'compaction'])
+    expect(thoughts[1]).toMatchObject({ type: 'system', content: 'Context compacted', compaction: { trigger: 'auto' } })
+    expect(messages.at(-1)!.content).toBe('done')
+  })
+})
+
+describe('a reply that ended before its answer was done', () => {
+  const init = (n: number): StoredEvent => ({ _ts: ts(n), type: 'system', subtype: 'init' })
+  const ending = (value: string, n: number): StoredEvent => ({ _ts: ts(n), type: 'reply_ending', ending: value })
+
+  it('marks the turn’s last reply, whether or not the engine closed the turn with a result', () => {
+    const stopped = convertEventsToMessages([user('hello', 1), init(2), assistant([text('checking the edges')], 3),
+      assistant([toolUse('t1')], 4), ending('stopped', 5)])
+    expect(stopped.at(-1)).toMatchObject({ role: 'assistant', content: 'checking the edges', metadata: { ending: 'stopped' } })
+
+    const limited = convertEventsToMessages([user('hello', 1), init(2), assistant([text('part one')], 3),
+      { _ts: ts(4), type: 'result', subtype: 'error_max_turns', is_error: true, result: 'Max turns exceeded' }, ending('step-limit', 5)])
+    expect(limited.at(-1)).toMatchObject({ content: 'part one', metadata: { ending: 'step-limit' } })
+  })
+
+  it('never marks an earlier turn’s reply when the stopped turn wrote nothing', () => {
+    const messages = convertEventsToMessages([user('first', 1), init(2), assistant([text('first answer')], 3), result('first answer', 4),
+      user('second', 5), init(6), ending('stopped', 7)])
+    expect(messages.find(message => message.content === 'first answer')?.metadata?.ending).toBeUndefined()
+  })
+
+  it('keeps the words a reply had shown when it stopped mid-sentence, before any complete block was written', () => {
+    const shown = (value: string, content: string, n: number): StoredEvent => ({ _ts: ts(n), type: 'reply_ending', ending: value, content })
+    const first = convertEventsToMessages([user('hello', 1), init(2), shown('stopped', 'Half of the first sent', 3)])
+    expect(first.at(-1)).toMatchObject({ role: 'assistant', content: 'Half of the first sent', metadata: { ending: 'stopped' } })
+    // Stable across reads as the log grows.
+    const later = convertEventsToMessages([user('hello', 1), init(2), shown('stopped', 'Half of the first sent', 3), user('next', 4)])
+    expect(later.find(message => message.role === 'assistant')!.id).toBe(first.at(-1)!.id)
+  })
+
+  it('keeps a new block cut off after a tool as the reply’s words, the earlier words among its steps', () => {
+    const shown: StoredEvent = { _ts: ts(7), type: 'reply_ending', ending: 'stopped', content: 'Now checking the hand-off ti' }
+    for (const closed of [false, true]) {
+      const events = [user('hello', 1), init(2), assistant([text('Edges first.')], 3), assistant([toolUse('t1')], 4), toolResult('t1', 5),
+        ...(closed ? [{ _ts: ts(6), type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Operation was aborted', errors: ['Operation was aborted'] } as StoredEvent] : []),
+        shown]
+      const reply = convertEventsToMessages(events).at(-1)!
+      expect(reply).toMatchObject({ content: 'Now checking the hand-off ti', metadata: { ending: 'stopped' } })
+      expect((reply.thoughts as Array<{ type: string; content: string }>).map(step => step.type === 'text' ? step.content : step.type)).toEqual(['Edges first.', 'tool_use'])
+      expect(reply.thoughtsSummary?.count).toBe(2)
+    }
+  })
+
+  it('does not change words the reply already saved', () => {
+    const messages = convertEventsToMessages([user('hello', 1), init(2), assistant([text('Done:\n- one')], 3),
+      { _ts: ts(4), type: 'reply_ending', ending: 'stopped', content: 'Done:\n\n- one' }])
+    expect(messages.at(-1)).toMatchObject({ content: 'Done:\n- one', metadata: { ending: 'stopped' } })
+  })
+
+  it('ends the turn there: a later turn that fails before it starts does not replace this reply', () => {
+    const messages = convertEventsToMessages([user('first', 1), init(2), assistant([text('first words')], 3), ending('interrupted', 4),
+      user('second', 5), { _ts: ts(6), type: 'turn_snapshot', content: '', thoughts: [], error: 'Engine failed to start' }])
+    const replies = messages.filter(message => message.role === 'assistant')
+    expect(replies).toHaveLength(2)
+    expect(replies[0]).toMatchObject({ content: 'first words', metadata: { ending: 'interrupted' } })
+    expect(replies[1]).toMatchObject({ error: 'Engine failed to start' })
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
+  })
+
+  it('keeps the message id and ignores a value it does not know', () => {
+    const base = [user('hello', 1), init(2), assistant([text('partial')], 3)]
+    const plain = convertEventsToMessages(base)
+    const marked = convertEventsToMessages([...base, ending('stopped', 4)])
+    expect(marked.at(-1)!.id).toBe(plain.at(-1)!.id)
+    expect(convertEventsToMessages([...base, ending('vanished', 4)]).at(-1)?.metadata?.ending).toBeUndefined()
+  })
+})
+
 describe('message id stability', () => {
   it('keeps every already-visible message id (and role) in every longer prefix of the log', () => {
     const events = sampleRun()

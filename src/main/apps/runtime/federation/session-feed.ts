@@ -378,6 +378,8 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
       content: msg.content,
       thoughts: msg.thoughts ?? null,
       thoughtsSummary: msg.thoughtsSummary ?? null,
+      // Only when present, so messages without one keep the fingerprints already published.
+      ...(msg.ending ? { ending: msg.ending } : {}),
     })
   }
 

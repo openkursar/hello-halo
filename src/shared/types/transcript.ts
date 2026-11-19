@@ -63,6 +63,8 @@ export interface Thought {
   /** Stored parent thought ID for nested tool messages. */
   parentToolUseId?: string
   taskProgress?: TaskProgress
+  /** On a `system` step: the engine compacted the context here. */
+  compaction?: { trigger: 'manual' | 'auto' }
 }
 
 /** Lightweight digest of a message's thoughts, shown while they are not loaded. */
@@ -70,6 +72,8 @@ export interface ThoughtsSummary {
   count: number
   types: Partial<Record<ThoughtType, number>>
   skillNotices?: SkillNotice[]
+  /** Context compactions among the `system` steps; absent when none (and in summaries written before they were counted). */
+  compactions?: number
   /** Wall-clock seconds between the first and last thought; absent for a single thought. */
   duration?: number
 }
@@ -173,7 +177,15 @@ export interface TranscriptProvenance {
   metadata?: TranscriptProvenanceMetadata
 }
 
+/**
+ * How a reply ended before its answer was done: someone stopped it, it was cut
+ * off, or it reached the step limit. A failed model request is `error` instead.
+ */
+export type ReplyEnding = 'stopped' | 'interrupted' | 'step-limit'
+
 export interface TranscriptMessageMetadata extends TranscriptProvenanceMetadata {
+  /** Set on a reply whose turn ended before its answer was done (assistant replies only). */
+  ending?: ReplyEnding
   /** Source input settings inherited by automatic continuations, including explicit off. */
   reasoning?: { thinkingEnabled: boolean; effort?: ReasoningEffortLevel }
   /** Lightweight file changes for immediate display without loading thoughts */

@@ -166,7 +166,7 @@ test.describe('Core Features', () => {
     await window.waitForSelector('.message-assistant', { timeout: 30000 })
 
     // Wait for AI to finish working (supports both EN and CN)
-    await window.waitForSelector('text=/Halo 工作中|Halo is working/i', { state: 'hidden', timeout: 45000 }).catch(() => {})
+    await window.waitForSelector('.message-working', { state: 'hidden', timeout: 45000 }).catch(() => {})
 
     // Verify AI response contains expected content
     const assistantMessage = await window.waitForSelector('.message-assistant', { timeout: 5000 })

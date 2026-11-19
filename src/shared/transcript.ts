@@ -97,10 +97,12 @@ export function pageTranscript(
 export function summarizeThoughts(thoughts: readonly Thought[]): ThoughtsSummary {
   const types: ThoughtsSummary['types'] = {}
   const skillNotices: NonNullable<ThoughtsSummary['skillNotices']> = []
+  let compactions = 0
   for (const t of thoughts) {
     types[t.type] = (types[t.type] || 0) + 1
     // One entry per notice, in order: each explicit command in a turn has its own feedback.
     if (t.type === 'system' && t.skillNotice) skillNotices.push(t.skillNotice)
+    if (t.type === 'system' && t.compaction) compactions++
   }
   let duration: number | undefined
   if (thoughts.length >= 2) {
@@ -108,7 +110,7 @@ export function summarizeThoughts(thoughts: readonly Thought[]): ThoughtsSummary
     const last = new Date(thoughts[thoughts.length - 1].timestamp).getTime()
     duration = (last - first) / 1000
   }
-  return { count: thoughts.length, types, duration, ...(skillNotices.length ? { skillNotices } : {}) }
+  return { count: thoughts.length, types, duration, ...(skillNotices.length ? { skillNotices } : {}), ...(compactions ? { compactions } : {}) }
 }
 
 /**

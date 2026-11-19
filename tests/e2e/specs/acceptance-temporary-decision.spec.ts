@@ -44,9 +44,9 @@ async function waitForMemberIdle(page: Page, scope: Scope, appId: string) {
 }
 
 async function openMemberRoom(page: Page, scope: Scope, member: CollaboratorReceipt) {
-  const badge = page.getByText(`Team: ${scope.name}`, { exact: true }).last()
-  await expect(badge).toBeVisible()
-  await badge.locator('..').getByRole('button', { name: 'Open team view', exact: true }).click()
+  const summary = page.getByRole('group', { name: scope.name, exact: true }).last()
+  await expect(summary).toBeVisible()
+  await summary.getByRole('button', { name: 'View team', exact: true }).click()
   const header = page.getByRole('heading', { name: scope.name, level: 1, exact: true }).locator('xpath=ancestor::header')
   await expect(header).toBeVisible()
   const select = page.getByRole('button', { name: `View ${member.name}’s work in this task`, exact: true })

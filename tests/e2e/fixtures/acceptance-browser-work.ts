@@ -212,7 +212,7 @@ export async function readGuest(app: ElectronApplication, guestId: number): Prom
 export async function revealFromReply(window: Page, answer: string) {
   const row = window.locator('[data-transcript-index]').filter({ hasText: answer }).last()
   const view = row.getByRole('button', { name: 'Open browser view', exact: true })
-  if (!await view.isVisible()) await row.getByRole('button', { name: /^Already thought/ }).click()
+  if (!await view.isVisible()) await row.getByRole('button', { name: /^Work process/ }).click()
   await expect(view).toBeEnabled()
   await view.click()
 }
