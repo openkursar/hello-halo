@@ -266,6 +266,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
             noteSessionMcpStatus(conversationId, v2Session, m)
             sink.onRawMessage?.(m)
           },
+          acceptsQuietEnd: () => sink.acceptsQuietEnd?.() === true,
           onTurnInit: () => {
             receivedAnyEvent = true
             state.turnStartedAt = turnStartTime

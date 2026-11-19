@@ -35,6 +35,14 @@ export interface TurnSink {
   onTurnComplete(result: StreamResult): void
 
   /**
+   * Whether a turn that ended normally without writing anything may simply end
+   * instead of being reported as an empty response: true when no person's
+   * message awaits this turn's answer. Asked only for such a turn, before
+   * `onTurnComplete`; a sink without it keeps the report.
+   */
+  acceptsQuietEnd?(): boolean
+
+  /**
    * The turn threw instead of completing.
    *
    * @param turnStarted whether `onTurnStart` had fired for this turn — false
@@ -68,6 +76,7 @@ export function bindSinkToEngine(sink: TurnSink, engineId: EngineId): TurnSink {
     onTurnStart: () => sink.onTurnStart?.(),
     onRawMessage: message => sink.onRawMessage?.(message),
     onTurnComplete: result => sink.onTurnComplete(stamp(result)),
+    acceptsQuietEnd: () => sink.acceptsQuietEnd?.() === true,
     onTurnError: (error, started, partial) => sink.onTurnError?.(error, started, partial && stamp(partial)),
     onConsumerStopped: partial => sink.onConsumerStopped?.(partial && stamp(partial)),
     onContinuedFromRecord: () => sink.onContinuedFromRecord?.(),

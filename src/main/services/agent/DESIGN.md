@@ -429,6 +429,7 @@ session-consumer (one loop per V2 session, surface-agnostic)
   ├── onTurnStart      — CC acknowledged a turn (system:init)
   ├── onRawMessage     — every SDK message of the turn
   ├── onTurnComplete   — the turn's StreamResult
+  ├── acceptsQuietEnd  — may a turn that wrote nothing simply end?
   ├── onTurnError      — the turn threw
   └── onConsumerStopped — no further turn will arrive
 
@@ -436,6 +437,14 @@ session-consumer (one loop per V2 session, surface-agnostic)
     conversation-sink.ts            — conversation.service + chat UI (space chat)
     apps/runtime/app-chat-sink.ts   — run JSONL + reply delivery (digital humans)
 ```
+
+**A turn may end without a word when nobody asked for its answer.** A model can
+finish normally having written nothing, e.g. after a message from another
+conversation that says no reply is needed. The stream processor reports that as an empty
+response only when the sink does not accept it (`acceptsQuietEnd`). The space-chat
+sink accepts it when no person's message belongs to the turn (since the previous
+reply, or added during it), and then leaves no blank reply behind. The
+digital-human sink does not answer yet, so its chats still show the error.
 
 A sink is supplied through `getOrCreateV2Session`'s `consumer` argument; its
 presence is what starts a consumer at all. Automation runs

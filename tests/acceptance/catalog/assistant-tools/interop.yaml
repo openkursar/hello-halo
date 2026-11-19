@@ -11,6 +11,7 @@ basis: documented
 references:
   - src/main/services/conversation-interop/DESIGN.md
   - tests/e2e/specs/acceptance-conversation-interop.spec.ts
+  - tests/e2e/specs/acceptance-conversation-quiet-end.spec.ts
 promises:
   identity:
     en: Read and send operations resolve the intended permitted conversation and retain message provenance.
@@ -18,6 +19,9 @@ promises:
   delivery:
     en: Messages reaching compatible active work are delivered at the supported next-step boundary.
     zh: 到达权限兼容活动任务的消息在支持的下一步边界送达。
+  quiet:
+    en: When the AI has nothing to say to a message from another conversation, its turn ends quietly, with no error and no blank reply; an empty answer to a person's own message is still reported.
+    zh: AI 对另一对话发来的消息无话可说时，这一轮安静结束，不报错也不留空白回复；人自己发的消息得到空回答时仍会提示。
 scenarios:
   - id: assistant-tools.interop.send
     title:
@@ -103,3 +107,30 @@ scenarios:
         zh: 有效目标返回自身历史，无效目标明确失败且不泄漏其他历史。
       - en: The conversation directory excludes the caller and other workspace, and reading leaves both stored histories unchanged.
         zh: 对话目录排除调用者及其他空间，读取不改变两份已保存历史。
+  - id: assistant-tools.interop.quiet-end
+    title:
+      en: A message that needs no reply ends the recipient's turn quietly
+      zh: 无需回复的来件让接收方安静结束这一轮
+    verifies: [quiet]
+    platforms: *a1
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: An authorized sender and an idle recipient that already answered a person exist in an isolated workspace.
+        zh: 隔离空间中有获准发送方，以及已回答过人的空闲接收方。
+    steps:
+      - en: The sender sends a notice saying no reply is needed; the recipient's model finishes without text or a tool call.
+        zh: 发送方发来写明无需回复的通知，接收方模型既不写字也不调用工具就结束。
+      - en: The person then sends the recipient a message, and its model again finishes without anything.
+        zh: 随后人给接收方发消息，模型同样什么也没写就结束。
+    expected:
+      - en: After the notice, the recipient shows the attributed message and nothing after it, with no error; reopening keeps it so, and its model was asked once.
+        zh: 来件之后，接收方只显示带来源的消息，其后无回复、无报错；重开后依旧，接收方模型只被请求一次。
+      - en: After the person's own message, the empty answer is reported as before.
+        zh: 人自己发消息后，空回答仍照旧提示。
+    notes:
+      en: Only the model endpoint is scripted, behind the real OpenAI-compatible router, which repairs an empty reply with blank text as it does for GPT models. Digital-human chats do not accept a quiet end yet, so this covers space conversations only.
+      zh: 仅替换模型端点，经过真实的 OpenAI 兼容转发层；它像对 GPT 模型那样用空白文字修补空回复。数字人对话尚未接受安静结束，本场景只覆盖空间对话。

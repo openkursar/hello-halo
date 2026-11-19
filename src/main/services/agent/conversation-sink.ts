@@ -23,7 +23,8 @@ import {
   saveSessionId,
   getConversationEngineState,
   saveConversationEngineBinding,
-  getConversation
+  getConversation,
+  type Message
 } from '../conversation.service'
 import { notifyTaskComplete } from '../notification.service'
 import { emitAgentEvent } from './events'
@@ -70,6 +71,11 @@ export function createConversationSink(spaceId: string, conversationId: string, 
       notifyTaskComplete(conversation?.title || 'Conversation')
     },
 
+    acceptsQuietEnd() {
+      const messages = getConversation(spaceId, conversationId)?.messages
+      return !!messages && !hasPersonInput(messages)
+    },
+
     onConsumerStopped(partial) {
       if (partial) {
         persistTurnResult(spaceId, conversationId, partial, commit, 'Chat session ended before the reply completed.')
@@ -95,6 +101,23 @@ export function createConversationSink(spaceId: string, conversationId: string, 
 }
 
 /**
+ * Whether a person's message belongs to the turn whose reply is the last
+ * assistant message: sent since the previous reply, or added while this turn
+ * ran. Messages from other conversations and teammates, and Halo's notices,
+ * are system records.
+ */
+function hasPersonInput(messages: readonly Message[]): boolean {
+  let reply = messages.length - 1
+  while (reply >= 0 && messages[reply].role !== 'assistant') reply--
+  if (reply < 0) return true
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (index < reply && messages[index].role === 'assistant') return false
+    if (messages[index].role === 'user') return true
+  }
+  return false
+}
+
+/**
  * Persist a completed turn's result to the conversation.
  */
 function persistTurnResult(
@@ -116,8 +139,10 @@ function persistTurnResult(
   // Still persist when only thoughts exist (thinking-only turns) so the
   // reasoning survives a reload.
   const contentToStore = hasMeaningfulContent ? finalContent : ''
-  // The connection and end-of-turn markers are not something the turn produced.
-  const producedThoughts = thoughts.some((t: Thought) => t.type !== 'system' && t.type !== 'result')
+  // The connection and end-of-turn markers are not something the turn produced,
+  // nor is the blank text a quiet end carries.
+  const producedThoughts = thoughts.some((t: Thought) => t.type !== 'system' && t.type !== 'result'
+    && !(result.endedQuietly && t.type === 'text' && !t.content.trim()))
 
   if (contentToStore || hasErrorThought || producedThoughts || error) {
     // A partial kept because of a failure shows that failure instead.

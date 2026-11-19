@@ -1139,3 +1139,41 @@ describe('processStream context gauge', () => {
     expect(tokenUsage).toBeNull()
   })
 })
+
+describe('processStream: a turn that ends without a word', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  const errorEvents = () => emitAgentEvent.mock.calls.filter(([channel]) => channel === 'agent:error').map(([, , , data]) => data)
+  /** What the openai-compat router sends when the model wrote no text and called no tool. */
+  const silentTurn = () => fakeSession([systemInit(), assistantText('m1', ' '), resultCarrying(' ')])
+
+  it('ends quietly when its caller accepts that', async () => {
+    const acceptsQuietEnd = vi.fn(() => true)
+    const result = await processStream(baseParams({ messageContent: undefined, v2Session: silentTurn(), callbacks: { acceptsQuietEnd } }))
+
+    expect(result).toMatchObject({ endedQuietly: true, hasMeaningfulContent: false, isInterrupted: false, wasAborted: false })
+    expect(acceptsQuietEnd).toHaveBeenCalledTimes(1)
+    expect(errorEvents()).toEqual([])
+  })
+
+  it.each([
+    ['declines', { acceptsQuietEnd: () => false }],
+    ['has no answer', {}],
+  ])('still reports an empty response when its caller %s', async (_case, callbacks) => {
+    const result = await processStream(baseParams({ messageContent: undefined, v2Session: silentTurn(), callbacks }))
+
+    expect(result.endedQuietly).toBeUndefined()
+    expect(errorEvents()).toEqual([expect.objectContaining({ errorType: 'interrupted', error: expect.stringContaining('Unexpected empty response.') })])
+  })
+
+  it('never asks about a turn that was cut off or wrote an answer', async () => {
+    const acceptsQuietEnd = vi.fn(() => true)
+    const cut = await processStream(baseParams({ messageContent: undefined, v2Session: fakeSession([systemInit(), assistantText('m1', ' ')]), callbacks: { acceptsQuietEnd } }))
+    const answered = await processStream(baseParams({ messageContent: undefined, v2Session: fakeSession([systemInit(), assistantText('m2', 'Noted.'), resultCarrying('Noted.')]), callbacks: { acceptsQuietEnd } }))
+
+    expect(acceptsQuietEnd).not.toHaveBeenCalled()
+    expect(cut.endedQuietly).toBeUndefined()
+    expect(answered.endedQuietly).toBeUndefined()
+    expect(errorEvents()).toEqual([expect.objectContaining({ error: 'Model response interrupted unexpectedly.' })])
+  })
+})

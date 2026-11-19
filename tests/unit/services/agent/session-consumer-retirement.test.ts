@@ -112,3 +112,32 @@ describe('consumer retirement during sink callbacks', () => {
     }
   })
 })
+
+describe('a turn that ends without a word', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(createSessionState).mockImplementation((spaceId, conversationId, abortController) => ({
+      spaceId, conversationId, abortController, thoughts: [],
+    } as SessionState))
+    vi.mocked(consumePendingRebuild).mockReturnValue(false)
+  })
+
+  it.each([
+    ['accepts it', { acceptsQuietEnd: () => true }, true],
+    ['refuses it', { acceptsQuietEnd: () => false }, false],
+    ['has no answer', {}, false],
+  ])('asks its sink, which %s', async (_case, hooks, accepted) => {
+    let params!: ProcessStreamParams
+    vi.mocked(processStream).mockImplementation(input => {
+      params = input
+      return new Promise<StreamResult>(() => {})
+    })
+    const sink: TurnSink = { onTurnComplete: vi.fn(), ...hooks }
+    const session = { send: vi.fn(), stream: async function* () {}, close: vi.fn() } satisfies V2SDKSession
+    const consumer = startConsumer(session, { spaceId: 'space', conversationId: 'conv', displayModel: 'model', sink })
+    await vi.waitFor(() => expect(params).toBeDefined())
+
+    expect(params.callbacks.acceptsQuietEnd!()).toBe(accepted)
+    consumer.stop()
+  })
+})

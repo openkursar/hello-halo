@@ -249,6 +249,9 @@ export interface StreamCallbacks {
   onTurnInit?(): void
   /** Supplies a lazy authoritative snapshot for synchronous retirement or thrown streams. */
   onSnapshotReady?(readSnapshot: () => StreamResult): void
+  /** Whether a turn that ended normally without writing anything may simply end
+   *  instead of being reported as an empty response. Asked only for such a turn. */
+  acceptsQuietEnd?(): boolean
 }
 
 /**
@@ -293,6 +296,8 @@ export interface StreamResult {
    *  When true, the REPL pipe is dirty — the session must be closed and rebuilt.
    *  Consumer uses this to break its loop and trigger session rebuild. */
   drainTimedOut: boolean
+  /** The turn ended normally without writing anything, and its caller accepted that (`acceptsQuietEnd`). */
+  endedQuietly?: boolean
 }
 
 /**
@@ -1432,14 +1437,21 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
   // | 1b   | yes        | yes           | -               | no         | no              | interrupted      |
   // | 2    | yes        | no            | -               | no         | no              | no               |
   // | 3    | no         | yes           | no              | no         | -               | interrupted      |
-  // | 4    | no         | no            | no              | no         | no              | empty response   |
+  // | 4    | no         | no            | no              | no         | no              | empty response¹  |
   // | 5    | no         | -             | yes             | -          | -               | no               |
   // | 6    | no         | -             | -               | yes        | -               | no               |
   // | 7    | no         | no            | no              | no         | yes             | max turns notice |
+  //
+  // ¹ None when the caller accepts a quiet end (`acceptsQuietEnd`).
 
   const result = readSnapshot()
   const { finalContent, hasMeaningfulContent, wasAborted, stopReason, hasErrorThought, isInterrupted, errorThought } = result
   const internalStop = stopReason === 'internal' && !hasErrorThought && !hadMaxTurnsReached && !result.drainTimedOut
+  if (!hasMeaningfulContent && !isInterrupted && !wasAborted && !hasErrorThought && !hadMaxTurnsReached
+    && callbacks.acceptsQuietEnd?.()) {
+    result.endedQuietly = true
+    console.log(`[Agent][${conversationId}] Turn ended without a reply; accepted as a quiet end`)
+  }
 
   // Log content source for debugging. Gate on meaningful content so the
   // repair placeholder (whitespace-only) is logged as "no content", matching
@@ -1489,6 +1501,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
   const getInterruptedErrorMessage = (): string | null => {
     if (hasErrorThought) return null
     if (internalStop) return null
+    if (result.endedQuietly) return null
     if (result.drainTimedOut) return 'Model response interrupted unexpectedly.'
     if (stopReason === 'internal' && hadMaxTurnsReached) return MAX_TURNS_NOTICE
     if (hasMeaningfulContent) {
