@@ -121,8 +121,21 @@ export interface AnalyticsEvent {
  * Basic info sent with every event
  */
 export interface UserContext {
-  /** User unique ID (UUID, persisted) */
+  /**
+   * Who or what the events are attributed to.
+   *
+   * On the desktop: a persisted UUID, one per install, standing in for one
+   * person. In server mode: the deployment's instance id (the container
+   * hostname, `getInstanceId`), because one process serves every remote
+   * client — it identifies the deployment, not a user.
+   */
   userId: string
+  /**
+   * Present only in server mode. It is what separates a server deployment from
+   * a Linux desktop, since `platform` reads `linux` for both; absent means a
+   * desktop (or a build that predates this field).
+   */
+  runtimeMode?: 'server'
   /**
    * Externally-meaningful user ID resolved from `product.json.identitySource`,
    * typically an enterprise SSO UID. Set lazily; present only when the active
