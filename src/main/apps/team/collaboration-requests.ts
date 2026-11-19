@@ -12,6 +12,7 @@ export interface CollaborationRequests {
   cancel(id: string): void
   cancelSource(source: string): void
   reserve(id: string, limit: number): boolean
+  releaseReservation(id: string): void
   forget(source: string): void
 }
 
@@ -26,6 +27,7 @@ export function createCollaborationRequests(db: Database.Database): Collaboratio
   const bindSource = db.prepare('INSERT OR IGNORE INTO collaboration_request_sources(source_key, request_id) VALUES (?, ?)')
   const setHead = db.prepare('INSERT INTO collaboration_request_heads(source_key, request_id, controller_app_id, controller_origin) VALUES (?, ?, ?, ?) ON CONFLICT(source_key) DO UPDATE SET request_id = excluded.request_id, controller_app_id = excluded.controller_app_id, controller_origin = excluded.controller_origin')
   const reserve = db.prepare('UPDATE collaboration_requests SET used = used + 1 WHERE id = ? AND used < ? AND cancelled = 0')
+  const releaseReservation = db.prepare('UPDATE collaboration_requests SET used = used - 1 WHERE id = ? AND used > 0')
   const cancel = db.prepare('UPDATE collaboration_requests SET cancelled = 1 WHERE id = ?')
   const compact = db.prepare('DELETE FROM collaboration_requests WHERE id >= ? AND id < ?')
   const cancelBranch = (id: string) => {
@@ -78,6 +80,7 @@ export function createCollaborationRequests(db: Database.Database): Collaboratio
       if (cancelled(id)) return false
       return reserve.run(id.split('/')[0], limit).changes === 1
     }),
+    releaseReservation(id) { releaseReservation.run(id.split('/')[0]) },
     forget(source) {
       db.prepare('DELETE FROM collaboration_request_heads WHERE source_key = ?').run(source)
       // Cancellation records remain fences for durable messages still in flight.

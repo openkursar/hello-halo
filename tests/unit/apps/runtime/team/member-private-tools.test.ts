@@ -38,7 +38,7 @@ it.each([undefined, 'colleague', 'guest'] as const)('keeps public work separate 
       escalationRouting: 'user', status: 'idle', currentEpochId: null, createdAt: 1, updatedAt: 1,
       ...(id === 'private' ? { ephemeral: true, coordinatorConversationId: sourceKey } : {}) })
     store.insertEpoch({ id: `${id}-work`, teamId: id, startedAt: 1, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation' })
-    for (const appId of id === 'public' ? ['parent', 'lead', 'peer'] : [lead]) store.addMember({ teamId: id, appId, memberName: appId,
+    for (const appId of id === 'public' ? ['parent', 'lead', 'peer-id'] : [lead]) store.addMember({ teamId: id, appId, memberName: appId === 'peer-id' ? 'Earlier name' : appId,
       role: '', isLead: appId === lead, aiProvisioned: false, addedAt: 1 })
   }
   const wake = vi.fn(async () => {})
@@ -60,21 +60,38 @@ it.each([undefined, 'colleague', 'guest'] as const)('keeps public work separate 
   })
   cleanups.push(binding.release)
   const call = async (name: string, input: Record<string, unknown>) => await binding.server.instance.callTool(name, input, {}) as { content: Array<{ text: string }>; isError?: boolean }
-  const result = await call('spawn_agent', { prompt: 'Inspect only.', name: 'helper' })
-  const handle = JSON.parse((result!.content[0] as any).text).handle
+  const result = await call('spawn_agent', { prompt: 'Inspect only.', name: 'peer' })
+  expect(result.isError).not.toBe(true)
+  const { handle, name } = JSON.parse(result.content[0].text) as { handle: string; name: string }
+  expect(name).toBe('peer')
+  const duplicate = await call('spawn_agent', { prompt: 'Do not duplicate.', name: ' peer ' })
+  expect(duplicate).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('using its original handle, not the name') }] })
   expect(store.participants.list('public', 'public-work')).toHaveLength(0)
   expect(store.participants.list('private', 'private-work')).toHaveLength(1)
   expect(store.participants.getExecution('private', 'private-work', handle)?.requestId).toMatch(/^root\/parent\/assistant-/)
-  await call('team_send', { to: 'peer', message: 'Public assignment' })
-  await call('team_send', { to: handle, message: 'Private follow-up' })
-  expect(sends.mock.calls.map(([input]) => input.teamId)).toEqual(['private', 'public', 'private'])
+  for (const [tool, input] of [
+    ['team_send', { to: name, message: 'Do not send by private name' }],
+    ['team_read_member', { member: name }],
+    ['team_stop', { to: name }],
+  ] as const) {
+    expect(await call(tool, input)).toMatchObject({ isError: true })
+  }
+  expect(sends).toHaveBeenCalledTimes(1)
+  expect(readMemberRecord).not.toHaveBeenCalled()
+  expect(stopMemberTurn).not.toHaveBeenCalled()
+  store.renameMember('public', 'peer-id', name)
+  expect(await call('team_send', { to: name, message: 'Public assignment' })).not.toMatchObject({ isError: true })
+  expect(await call('team_send', { to: handle, message: 'Private follow-up' })).not.toMatchObject({ isError: true })
+  expect(sends.mock.calls.map(([input]) => [input.teamId, input.to])).toEqual([
+    ['private', handle], ['public', 'peer-id'], ['private', handle],
+  ])
   await call('team_post_finding', { content: 'Shared finding' })
   expect(postFinding).toHaveBeenCalledWith(expect.objectContaining({ teamId: 'public', epochId: 'public-work' }))
   await call('team_read_member', { member: handle })
   expect(readMemberRecord).toHaveBeenCalledWith(expect.objectContaining({ teamId: 'private', memberAppId: handle }))
   expect(store.participants.getExecution('private', 'private-work', handle)?.origin).toBe(origin)
   readMemberRecord.mockClear()
-  const publicRead = await call('team_read_member', { member: 'peer' })
+  const publicRead = await call('team_read_member', { member: name })
   expect(publicRead.isError).toBe(true)
   expect(readMemberRecord).not.toHaveBeenCalled()
   const unknown = await call('team_send', { to: 'unowned-handle', message: 'Not authorized' })

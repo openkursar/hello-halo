@@ -16,6 +16,12 @@ export function findWorkMember(store: TeamStore, teamId: string, epochId: string
   return standing ?? temporary ?? null
 }
 
+/** Unlike name resolution, an ambiguous or identity-matching address is still occupied. */
+export function workMemberAddressTaken(store: TeamStore, teamId: string, epochId: string, address: string): boolean {
+  return !!(store.getMemberByName(teamId, address) || store.participants.findByName(teamId, epochId, address)
+    || store.getMember(teamId, address) || store.participants.get(teamId, epochId, address))
+}
+
 export function listWorkMembers(store: TeamStore, teamId: string, epochId: string): WorkMember[] {
   if (store.getEpochById(epochId)?.teamId !== teamId) return []
   return [...store.listMembersByTeam(teamId), ...(store.participants?.list(teamId, epochId) ?? [])]

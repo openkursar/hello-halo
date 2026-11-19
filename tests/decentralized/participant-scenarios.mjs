@@ -108,6 +108,8 @@ export async function runParticipantScenarios({ host, joiners, fixture, buildOff
       return value?.members?.some(member => member.appId === child) ? value : null
     }, { timeoutMs: 15000, intervalMs: 250 })
     assert(scope, 'The owner did not expose the internal scope through the source conversation lookup.')
+    assert.deepEqual(scope.members.map(member => [member.appId, member.memberName]), [[child, 'Private checker']],
+      'The private scope must retain exactly one helper under its requested name.')
     assert.notEqual(scope.teamId, teamId, 'The helper reused the public team.')
     assert.notEqual(scope.epochId, epochId, 'The helper reused the public epoch.')
     const assertPrivate = async () => {
@@ -144,8 +146,10 @@ export async function runParticipantScenarios({ host, joiners, fixture, buildOff
         return board.findings.find(finding => finding.authorAppId === child && finding.ref)
       }, { timeoutMs: 15000, intervalMs: 250 })
       assert(finding, 'The helper did not retain its private published reference.')
-      await send(parent, `FOLLOW_UP_PARENT_${id}`)
+      await send(parent, `CHECK_DUPLICATE_${id}\nFOLLOW_UP_PARENT_${id}`)
       assert(await hasReply(parent, `SUMMARY_SHARED_${id}`, [owner]), 'The parent did not continue its helper and share its own summary.')
+      const continuedScope = await apiOk(owner, 'GET', scopePath)
+      assert.deepEqual(continuedScope.members.map(member => member.appId), [child], 'A duplicate attempt created another private helper.')
       assert(await hasReply(lead, `SUMMARY_RECEIVED_${id}`), 'The remote public lead did not receive the parent summary.')
       assert.deepEqual(fixture.seen(id), { returned: true, history: true, bytes: true, followedUp: true, summary: true })
       assert(await pollUntil(async () => {

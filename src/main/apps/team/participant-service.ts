@@ -7,8 +7,9 @@ import { buildTeamSessionKey, isRemoteMember, parseSpaceCoordinatorAppId, type T
 import type { TeamStore } from './types'
 import type { RecipientAddress } from './recipient-fences'
 import type { ParticipantExecution } from './participants'
-import { appChatAppId, parseRunSenderKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
+import { appChatAppId, isSpaceConversationId, nativeChatAppId, parseRunSenderKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 import { getWorkMember, listWorkMembers } from './work-members'
+import { assertParticipantNameAvailable, participantName } from './participant-names'
 
 function sourceOwnerAppId(source: string): string | null {
   return appChatAppId(source) ?? parseRunSenderKey(source)?.appId ?? null
@@ -223,6 +224,15 @@ export function createParticipantService(deps: {
   }
 
   async function spawn(caller: CollaborationCaller, input: SpawnInput, source: ParticipantSource, signal?: AbortSignal): Promise<TeamParticipant> {
+    const conversationId = parseSpaceCoordinatorAppId(caller.callerAppId)
+    const privateAssistants = !!conversationId && parseTeamSessionKey(conversationId) !== null
+    const conversation = conversationId && (privateAssistants || nativeChatAppId(conversationId) !== null || isSpaceConversationId(conversationId))
+    const team = conversation ? store.getTeamById(caller.teamId) : null
+    const useShortName = team?.ephemeral === true && team.coordinatorConversationId === conversationId && team.leadAppId === caller.callerAppId
+    const name = useShortName ? participantName(input.name, caller) : undefined
+    const checkName = () => {
+      if (name !== undefined) assertParticipantNameAvailable(store, caller, name, privateAssistants)
+    }
     const controller = new AbortController()
     const abort = () => controller.abort(signal?.reason)
     if (signal?.aborted) abort()
@@ -241,6 +251,7 @@ export function createParticipantService(deps: {
         fail('model_selection_unavailable', 'Model overrides are unavailable in this execution.', caller)
       }
       check()
+      checkName()
       const parentRequest = requestId(caller)
       if (!store.requests.reserve(parentRequest, deps.maxMembersPerRequest ?? 128)) {
         fail('participant_limit', 'This source request has reached its collaborator creation limit. Continue an existing member with team_send.', caller)
@@ -249,10 +260,9 @@ export function createParticipantService(deps: {
       store.requests.inherit(sourceOf(caller), memberRequest)
       const id = randomUUID()
       if (store.participants.getById(id) || deps.identityExists?.(id)) fail('identity_collision', 'The collaborator identity is already in use. No workspace was created.', caller)
-      const name = `${input.name?.trim() || 'collaborator'}-${id.slice(0, 8)}`
       const member: TeamParticipant = {
         teamId: caller.teamId, epochId: caller.epochId, appId: id, parentAppId: caller.callerAppId,
-        memberName: name, role: input.name?.trim() || 'Collaborator',
+        memberName: name ?? `${input.name?.trim() || 'collaborator'}-${id.slice(0, 8)}`, role: input.name?.trim() || 'Collaborator',
         addedAt: Date.now(), isLead: false, aiProvisioned: false, isTemporary: true,
         ownerNodeId: owner.ownerNodeId, origin: 'local', memberIdentity: owner.memberIdentity, ownerDisplayName: owner.ownerDisplayName,
       }
@@ -264,6 +274,7 @@ export function createParticipantService(deps: {
         check()
         await mkdir(directory, { recursive: true })
         check()
+        checkName()
         const fileAccess = source.fileAccess ? {
           ...source.fileAccess, cwd: workspace.cwd, memoryWritable: [], memoryReadable: [],
           workspaceRoots: [workspace.cwd],
@@ -285,6 +296,9 @@ export function createParticipantService(deps: {
       } catch (error) {
         if (!inserted) {
           const cleanupFailures: unknown[] = []
+          if (error instanceof CollaborationRefusal && error.code === 'name_taken') {
+            try { store.requests.releaseReservation(parentRequest) } catch (cleanup) { cleanupFailures.push(cleanup) }
+          }
           try { await releaseMemberWorkspace(workspace) } catch (cleanup) { cleanupFailures.push(cleanup) }
           if (!cleanupFailures.length) {
             try { await rm(directory, { recursive: true, force: true }) } catch (cleanup) { cleanupFailures.push(cleanup) }

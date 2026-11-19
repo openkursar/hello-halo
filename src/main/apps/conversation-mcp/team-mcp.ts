@@ -1,11 +1,11 @@
 import { COLLABORATION_GUIDANCE, CollaborationRefusal, type CollaborationOperations } from '@hello-halo/agent-sdk/collaboration'
-import { getTeamService, type ParticipantSource } from '../team'
+import { getTeamService, participantName, type ParticipantSource } from '../team'
 import { getAppManager } from '../manager'
 import { getActiveTeamRuntime, createCoordinationMcpServer, type TeamMcpContext } from '../runtime/team'
 import { getSpace } from '../../services/space.service'
 import type { ToolsetScope } from '../../services/agent/toolsets'
 import { createDelegatedModelEndpoint } from '../../services/agent'
-import { nativeChatAppId } from '../../../shared/apps/im-keys'
+import { isSpaceConversationId, nativeChatAppId } from '../../../shared/apps/im-keys'
 import { spaceCoordinatorAppId, type TeamRequestOrigin } from '../../../shared/apps/team-types'
 
 export const TEAM_TOOLSET_GUIDE = COLLABORATION_GUIDANCE
@@ -92,6 +92,7 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope, source?: () =
       if (!service.participants.requestAllowed(capturedRequest)) throw new CollaborationRefusal('request_stopped', 'This collaboration request was stopped.')
     }
     check()
+    if (nativeChatAppId(scope.conversationId) !== null || isSpaceConversationId(scope.conversationId)) participantName(input.name)
     if (models && scope.modelContext && !capturedSource.origin) {
       capturedSource = { ...capturedSource, ...await models.prepare(input, scope.modelContext(), check, context.signal) }
     } else if ((input.model_profile && input.model_profile !== 'inherit') || input.reasoning_effort !== undefined) {

@@ -7,7 +7,11 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 const { serviceRef, runtimeRef, spaceRef } = vi.hoisted(() => ({ serviceRef: { current: null as unknown }, runtimeRef: { current: null as unknown }, spaceRef: { path: '' } }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', async () => import('../../../../src/main/services/agent/mcp/sdk-server'))
-vi.mock('../../../../src/main/apps/team', async () => ({ ...(await import('../../../../src/main/apps/team/work-members')), getTeamService: () => serviceRef.current }))
+vi.mock('../../../../src/main/apps/team', async () => ({
+  ...await import('../../../../src/main/apps/team/work-members'),
+  ...await import('../../../../src/main/apps/team/participant-names'),
+  getTeamService: () => serviceRef.current,
+}))
 vi.mock('../../../../src/main/apps/runtime/team', async () => ({
   createCoordinationMcpServer: (await import('../../../../src/main/apps/runtime/team/team-tools')).createCoordinationMcpServer,
   getActiveTeamRuntime: () => runtimeRef.current,
@@ -94,7 +98,7 @@ describe('spawn_agent over the real MCP HTTP bridge', () => {
     for (const name of ['reviewer', 'tester']) {
       const result = await h.client.callTool({ name: 'spawn_agent', arguments: { name, prompt: `Review as ${name}.` } })
       expect(result.isError, JSON.stringify(result)).not.toBe(true)
-      expect(JSON.parse((result.content as Array<{ text: string }>)[0].text)).toMatchObject({ handle: expect.any(String), status: 'accepted' })
+      expect(JSON.parse((result.content as Array<{ text: string }>)[0].text)).toMatchObject({ handle: expect.any(String), name, status: 'accepted' })
     }
     expect(h.appManager.listApps({ spaceId: SPACE })).toEqual([])
     const collab = h.service.getCollabForConversation(CONVERSATION)!
@@ -137,7 +141,7 @@ describe('spawn_agent over the real MCP HTTP bridge', () => {
   })
 
   it('rejects missing assignments and caller-chosen scopes before creating work or digital humans', async () => {
-    for (const input of [{ name: 'reviewer' }, { prompt: 'Review', team_id: 'another-work' }]) {
+    for (const input of [{ name: 'reviewer' }, { prompt: 'Review', team_id: 'another-work' }, { name: 'all', prompt: 'Review' }]) {
       const result = await h.client.callTool({ name: 'spawn_agent', arguments: input })
       expect(result.isError).toBe(true)
     }
