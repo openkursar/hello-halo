@@ -253,7 +253,12 @@ for (const sdkEngine of ['halo', 'anthropic', 'dsh'] as const) {
         evidence.shellFiles = { before: shellBefore, after: shellAfter }
         expect.soft(shellAfter, 'no shell startup file is created or removed').toEqual(shellBefore)
         evidence.views = fs.readdirSync(path.join(cliRoot, 'views'))
-        evidence.locks = fs.existsSync(path.join(cliRoot, 'locks')) ? fs.readdirSync(path.join(cliRoot, 'locks')) : []
+        const locks = fs.existsSync(path.join(cliRoot, 'locks')) ? fs.readdirSync(path.join(cliRoot, 'locks')) : []
+        evidence.locks = locks
+        // Each pin records the entry it was taken for.
+        const lockEntries = locks.map(name => (JSON.parse(fs.readFileSync(path.join(cliRoot, 'locks', name), 'utf-8')) as { entry: string }).entry)
+        evidence.lockEntries = lockEntries
+        expect.soft(lockEntries, 'pins record their entries').toEqual(expect.arrayContaining(['chat', 'app-chat', 'automation', 'terminal']))
       } finally {
         await testInfo.attach('cli-preset-evidence', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' })
         await model.close()

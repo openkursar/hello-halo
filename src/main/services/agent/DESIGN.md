@@ -996,7 +996,15 @@ after the shell directory and inherited PATH (dsh is experimental). Because the
 directory is part of `computeCredentialsFingerprint`, an updated tool set
 rebuilds the session at the next safe point, and a running turn finishes on
 the set it started with. A tool failure leaves the session without tools; it
-never fails the session. See `services/cli-tools/DESIGN.md`.
+never fails the session. Callers name their entry (`cliToolsEntry`: `chat` for
+send-message and warm-up, `app-chat`/`im`/`team` for digital-human chat,
+`automation` for runs), which is recorded on the pin. `resolved-sdk`
+`createSession` and `query` hold the session's `HALO_CLI_TOOLS_BIN`
+(`holdCliTools`) until the session's close has settled, or until starting it
+fails, so resident, transient (automation) and DSH sessions alike keep their
+tool set while they run, and cli-tools releases a set no session holds after
+its grace period instead of at the next app start. See
+`services/cli-tools/DESIGN.md`.
 
 **A policy narrows, never re-opens.** `applyCapabilityPolicy`
 (`apps/runtime/capability-policy.ts`) adds its withheld tools to the session's

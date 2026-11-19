@@ -305,7 +305,7 @@ describe('cli-tools store: pins held by a process', () => {
     expect(first?.reused).toBe(false)
     expect(again?.reused).toBe(true)
     expect(again?.binDir).toBe(first?.binDir)
-    expect(first?.lock).toMatchObject({ holder: 'p1', executionId: `p1-${first?.lock.viewKey}` })
+    expect(first?.lock).toMatchObject({ holder: 'p1', entry: 'other', executionId: `p1-other-${first?.lock.viewKey}` })
 
     await store.importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'catalog' })
     const next = await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'claude' })

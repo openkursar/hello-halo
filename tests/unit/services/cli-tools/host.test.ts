@@ -322,3 +322,88 @@ describe('cli-tools host: local management', () => {
     expect((await next.getCliToolsOverview()).pendingCleanup).toBe(0)
   })
 })
+
+describe('cli-tools host: releasing session pins', () => {
+  const lockEntries = () => (existsSync(join(root, 'locks')) ? readdirSync(join(root, 'locks')) : [])
+    .map(name => JSON.parse(readFileSync(join(root, 'locks', name), 'utf-8')) as { entry: string; executionId: string })
+
+  // Only the sweep timer is faked, so a test decides when a sweep runs.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('records the entry on each pin and does nothing without a session pin', async () => {
+    preset('1.0.0')
+    const host = await startHost()
+    expect(await host.releaseIdleCliTools()).toEqual({ released: 0, waiting: 0 })
+    await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'app-chat', engine: 'claude' })
+    await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'automation', engine: 'claude' })
+    expect(lockEntries().map(lock => lock.entry).sort()).toEqual(['app-chat', 'automation'])
+    expect(lockEntries().every(lock => lock.executionId.includes(`-${lock.entry}-`))).toBe(true)
+  })
+
+  it('releases an unheld pin only after the grace period, keeping a held one', async () => {
+    const host = await startHost({ presetDir: null })
+    await directStore().importPackage(writePackage(pkgs), { source: 'user-import' })
+    const v1 = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'chat', engine: 'claude' })
+    await directStore().importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'user-import' })
+    const v2 = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'chat', engine: 'claude' })
+    expect(v2).not.toBe(v1)
+    host.holdCliTools(v2!)
+    await host.removeCliToolVersion(ID, '1.0.0')
+    expect(existsSync(v1!)).toBe(true)
+
+    const t0 = 1_000_000
+    // The first sweep only notes that v1 is unheld; v2 is held.
+    expect(await host.releaseIdleCliTools(t0)).toEqual({ released: 0, waiting: 1 })
+    expect(await host.releaseIdleCliTools(t0 + host.CLI_TOOLS_IDLE_GRACE_MS - 1)).toEqual({ released: 0, waiting: 1 })
+    expect(existsSync(v1!)).toBe(true)
+
+    expect(await host.releaseIdleCliTools(t0 + host.CLI_TOOLS_IDLE_GRACE_MS)).toEqual({ released: 1, waiting: 0 })
+    expect(existsSync(v1!)).toBe(false)
+    expect(existsSync(v2!)).toBe(true)
+    expect(readdirSync(join(root, 'store', ID))).toHaveLength(1)
+    expect((await host.getCliToolsOverview()).pendingCleanup).toBe(0)
+  })
+
+  it('restarts the grace period while a pin is held again', async () => {
+    preset('1.0.0')
+    const host = await startHost()
+    const bin = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'im', engine: 'claude' })
+    const grace = host.CLI_TOOLS_IDLE_GRACE_MS
+    expect((await host.releaseIdleCliTools(0)).waiting).toBe(1)
+    const release = host.holdCliTools(bin!)
+    expect((await host.releaseIdleCliTools(grace)).waiting).toBe(0)
+    release()
+    expect(await host.releaseIdleCliTools(grace + 1)).toEqual({ released: 0, waiting: 1 })
+    expect(await host.releaseIdleCliTools(2 * grace + 1)).toEqual({ released: 1, waiting: 0 })
+    expect(lockEntries()).toEqual([])
+  })
+
+  it('counts holds, ignores a repeated release and sweeps after the last one ends', async () => {
+    preset('1.0.0')
+    const host = await startHost()
+    const bin = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'automation', engine: 'claude' })
+    const first = host.holdCliTools(bin!)
+    const second = host.holdCliTools(bin!)
+    first()
+    first()
+    // Still held by the second session: no sweep is scheduled.
+    expect(vi.getTimerCount()).toBe(0)
+    second()
+    expect(vi.getTimerCount()).toBe(1)
+    // The scheduled sweep finds the pin unheld and waits out the grace period.
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(lockEntries().map(lock => lock.entry)).toEqual(['automation'])
+    expect(vi.getTimerCount()).toBe(1)
+    expect(host.holdCliTools(undefined)).toBeTypeOf('function')
+  })
+
+  it('never releases a terminal pin', async () => {
+    preset('1.0.0')
+    const host = await startHost()
+    await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'terminal', engine: 'terminal' })
+    expect(await host.releaseIdleCliTools(0)).toEqual({ released: 0, waiting: 0 })
+    expect(await host.releaseIdleCliTools(10 * host.CLI_TOOLS_IDLE_GRACE_MS)).toEqual({ released: 0, waiting: 0 })
+    expect(lockEntries().map(lock => lock.entry)).toEqual(['terminal'])
+  })
+})

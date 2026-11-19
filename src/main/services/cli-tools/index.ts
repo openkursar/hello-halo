@@ -12,6 +12,7 @@ export {
   buildToolViews,
   catalogSignatureMode,
   getCliToolsOverview,
+  holdCliTools,
   importUserPackage,
   previewUserPackage,
   reconfirmExternalProgram,

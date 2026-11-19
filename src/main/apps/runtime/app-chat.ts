@@ -1155,6 +1155,9 @@ async function runAppChatTurn(
   // ── 5. Build SDK options ─────────────────────────────
   const sdkOptions = await buildUserSessionSdkOptions({
     engineId,
+    cliToolsEntry: teamContext && !teamContext.personalChat ? 'team'
+      : classifySessionSource(parseAppChatKey(conversationId)?.channel ?? NATIVE_SESSION_CHANNEL) === 'im' ? 'im'
+      : 'app-chat',
     selfApiAccess: usesHaloApi,
     credentials: resolvedCreds,
     workDir,

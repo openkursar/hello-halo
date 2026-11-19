@@ -52,6 +52,27 @@ let prepared: Promise<void> | null = null
 /** Owner of this process's pins; a later process releases them. */
 const holder = `p${process.pid}-${Date.now().toString(36)}`
 
+/**
+ * How long a session pin must stay unheld before it is released. It covers an
+ * environment assembled for a session that has not started (and so taken its
+ * hold) yet; a running session is covered by its hold (`holdCliTools`).
+ */
+export const CLI_TOOLS_IDLE_GRACE_MS = 10 * 60_000
+
+/** Pins this process took for sessions, by execution id; `idleSince` is when a sweep first saw it unused. */
+const sessionPins = new Map<string, { binDir: string; idleSince: number | null }>()
+/** Launcher directories of running sessions, with how many hold each (see `holdCliTools`). */
+const heldDirs = new Map<string, number>()
+let sweepTimer: ReturnType<typeof setTimeout> | null = null
+/** Pinning and releasing run one at a time, so a release never drops a lock a concurrent pin just reused. */
+let pinOrder: Promise<unknown> = Promise.resolve()
+
+function withPinOrder<T>(task: () => Promise<T>): Promise<T> {
+  const run = pinOrder.then(task, task)
+  pinOrder = run.catch(() => undefined)
+  return run
+}
+
 export function initCliTools(hostOptions: CliToolsHostOptions): void {
   options = hostOptions
 }
@@ -446,7 +467,14 @@ export async function applyCliToolsEnv(
   try {
     await prepareCliTools()
     const basePath = readEnvPath(env)
-    const pin = await cliStore.pinCurrent({ holder, entry: request.entry, engine: request.engine, basePath })
+    const pin = await withPinOrder(async () => {
+      const taken = await cliStore.pinCurrent({ holder, entry: request.entry, engine: request.engine, basePath })
+      // Terminals keep their tools until the app exits; every other pin is released by `releaseIdleCliTools`.
+      if (taken?.binDir && request.entry !== 'terminal') {
+        sessionPins.set(taken.lock.executionId, { binDir: taken.binDir, idleSince: null })
+      }
+      return taken
+    })
     if (!pin?.binDir) return null
     writeEnvPath(env, basePath ? `${basePath}${delimiter}${pin.binDir}` : pin.binDir)
     env[CLI_TOOLS_BIN_ENV] = pin.binDir
@@ -459,5 +487,84 @@ export async function applyCliToolsEnv(
       message: err instanceof Error ? err.message : String(err),
     })
     return null
+  }
+}
+
+/**
+ * Mark a session's launcher directory (its `HALO_CLI_TOOLS_BIN`) as in use
+ * until the returned function is called, which the caller does once the
+ * session's processes have exited. Calling it again is harmless. When the
+ * last hold on a directory ends, a sweep (`releaseIdleCliTools`) is
+ * scheduled. A missing directory is a no-op.
+ */
+export function holdCliTools(binDir: string | undefined): () => void {
+  if (!binDir) return () => undefined
+  heldDirs.set(binDir, (heldDirs.get(binDir) ?? 0) + 1)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const left = (heldDirs.get(binDir) ?? 1) - 1
+    if (left > 0) {
+      heldDirs.set(binDir, left)
+      return
+    }
+    heldDirs.delete(binDir)
+    scheduleSweep(1000)
+  }
+}
+
+function scheduleSweep(delayMs: number): void {
+  if (sweepTimer || sessionPins.size === 0) return
+  sweepTimer = setTimeout(() => {
+    sweepTimer = null
+    void releaseIdleCliTools().then(({ waiting }) => {
+      if (waiting > 0) scheduleSweep(CLI_TOOLS_IDLE_GRACE_MS)
+    })
+  }, delayMs)
+  sweepTimer.unref?.()
+}
+
+/**
+ * Release the session pins no running session holds, then delete the removed
+ * versions and views nothing pins any more. A pin is released only when it
+ * was already unheld at an earlier sweep at least `CLI_TOOLS_IDLE_GRACE_MS`
+ * ago, so an environment assembled for a session that has not started yet
+ * keeps its files. Returns how many unheld pins are still waiting for their
+ * grace period. Never throws.
+ */
+export async function releaseIdleCliTools(
+  now: number = Date.now()
+): Promise<{ released: number; waiting: number }> {
+  const cliStore = getStore()
+  if (!cliStore || sessionPins.size === 0) return { released: 0, waiting: 0 }
+  try {
+    return await withPinOrder(async () => {
+      let released = 0
+      let waiting = 0
+      for (const [executionId, pin] of [...sessionPins]) {
+        if (heldDirs.has(pin.binDir)) {
+          pin.idleSince = null
+        } else if (pin.idleSince === null || now - pin.idleSince < CLI_TOOLS_IDLE_GRACE_MS) {
+          pin.idleSince ??= now
+          waiting += 1
+        } else {
+          await cliStore.releaseExecution(executionId)
+          sessionPins.delete(executionId)
+          released += 1
+        }
+      }
+      if (released > 0) {
+        await cliStore.collectPendingCleanup()
+        await cliStore.pruneViews()
+      }
+      return { released, waiting }
+    })
+  } catch (err) {
+    console.error('[CliTools] Releasing unused tool pins failed; they stay until the app restarts', {
+      code: isCliToolError(err) ? err.code : 'UNEXPECTED',
+      message: err instanceof Error ? err.message : String(err),
+    })
+    return { released: 0, waiting: 0 }
   }
 }

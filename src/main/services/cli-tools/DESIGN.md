@@ -222,9 +222,10 @@ lock references. Deciding when executions end, and clearing locks left by a
 crashed process, is the caller's job.
 
 `pinCurrent` is the form the host uses. It pins the current tool set for a
-`holder` (one per app process) under the id `<holder>-<viewKey>`, so every
-environment built with the same tool set shares one lock and a changed set
-gets a new one. It returns `null` and writes nothing when no tool is usable.
+`holder` (one per app process) under the id `<holder>-<entry>-<viewKey>`, so
+every environment built for the same entry with the same tool set shares one
+lock, a changed set gets a new one, and each lock records the entry it serves.
+It returns `null` and writes nothing when no tool is usable.
 `releaseOtherHolders` deletes every lock whose holder is not the given one,
 including locks without a holder.
 
@@ -258,15 +259,31 @@ version pin never freezes.
   directory to the end of the env's PATH (`Path` on Windows, matched
   case-insensitively) and sets `HALO_CLI_TOOLS_BIN`. Any failure is logged and
   the env is left without tools; a session never fails because of a tool.
+  Every pin except a terminal's is remembered as a session pin.
 - **Callers.** `buildUserSessionSdkOptions` applies it for every user session,
-  whatever the engine; internal tasks get no tools. The DSH launch spec copies
-  the directory into its own child env. The AI terminal applies it when a
-  terminal opens.
+  whatever the engine, with the entry its caller names (`chat`, `app-chat`,
+  `im`, `team`, `automation`; `other` when none is named); internal tasks get
+  no tools. The DSH launch spec copies the directory into its own child env.
+  The AI terminal applies it with entry `terminal` when a terminal opens.
 - **Version timing.** A session or terminal keeps the directory it was built
   with. A new tool set changes the directory, which changes the credentials
   fingerprint, so the next request rebuilds the session with the new set while
-  a running turn finishes on the old one. Old sets stay pinned until the
-  process exits and are released at the next start.
+  a running turn finishes on the old one.
+- **Releasing session pins.** `holdCliTools(binDir)` marks a session's
+  launcher directory as in use and returns an idempotent release; holds are
+  counted per directory. The agent runtime (`resolved-sdk`) takes one for
+  every engine session and query, resident or transient, and releases it once
+  the session's processes have exited. When the last hold on a directory
+  ends, an unref'd sweep `releaseIdleCliTools(now?)` runs shortly after. A
+  session pin no hold covers is released only once it was already unheld at
+  an earlier sweep at least `CLI_TOOLS_IDLE_GRACE_MS` (10 minutes) ago, which
+  covers an environment assembled for a session that has not started yet;
+  being held again restarts the wait, and the sweep repeats after the grace
+  period while pins are waiting. After a release it deletes removed versions
+  and views nothing pins. It returns `{ released, waiting }` and never throws.
+  Pinning and releasing are serialized, so a release never drops a lock a
+  concurrent environment just reused. Terminal pins, and any pin left when the
+  process exits, are released at the next start.
 - **Catalog packages.** `installCatalogPackage(archive, expected)` imports a
   package the caller downloaded from an administrator catalog with source
   `catalog` and makes it current. The archive sha256, payload integrity, id
@@ -437,7 +454,10 @@ scan. fflate is loaded only when an archive is extracted.
 - Paths containing `"` or line breaks are refused for launchers.
 - Windows behavior has unit-test coverage only, until it is verified on a real
   machine.
-- Pins are released per process, not per session: a tool set used once stays
-  pinned until the app restarts.
-- Lock `entry` is `other` for every session (the builder does not know which
-  entry called it) and `terminal` for terminals. It is diagnostic only.
+- A removed version used by a closed session is deleted one to two grace
+  periods after the session closed, not at once. Terminal pins last until the
+  app restarts.
+- An environment whose session starts more than `CLI_TOOLS_IDLE_GRACE_MS`
+  after it was assembled may find its tool set already released; that session
+  runs without tools, it does not fail.
+- Lock `entry` is diagnostic only; it never changes which tools a session gets.

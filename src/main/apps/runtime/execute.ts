@@ -585,6 +585,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     const sdkOptions = await buildUserSessionSdkOptions({
       engineId,
+      cliToolsEntry: 'automation',
       selfApiAccess: usesHaloApi,
       credentials: resolvedCreds,
       workDir,

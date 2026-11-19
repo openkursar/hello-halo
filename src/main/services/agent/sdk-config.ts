@@ -42,7 +42,7 @@ import { assertDelegatedAuthReady } from './cli-auth'
 import { waitForSdkInitialization } from './initialization'
 import { getDeviceIdentity } from '../../foundation/device-identity'
 import { applyOfficeRuntimeEnv } from '../office-runtime'
-import { applyCliToolsEnv, CLI_TOOLS_BIN_ENV } from '../cli-tools'
+import { applyCliToolsEnv, CLI_TOOLS_BIN_ENV, type CliExecutionEntry } from '../cli-tools'
 import { applyProxyEnv, mcpServerUrls } from '../proxy-policy'
 import { WorkingDirectoryUnavailableError } from './working-dir'
 import { createMemoryWriteHooks, type MemoryWriteGuardConfig } from '../../platform/memory'
@@ -270,7 +270,10 @@ export interface SessionSdkOptionsParams {
 }
 
 /** A session the user is, in effect, running: chat, automation, a team member's turn. */
-export type UserSessionSdkOptionsParams = SessionSdkOptionsParams
+export type UserSessionSdkOptionsParams = SessionSdkOptionsParams & {
+  /** Where the session was started from; recorded on its CLI tool pin. Defaults to `other`. */
+  cliToolsEntry?: CliExecutionEntry
+}
 
 /** A background task nobody asked for by name. It carries no session-shaped extras. */
 export type InternalTaskSdkOptionsParams = Pick<
@@ -973,10 +976,11 @@ const unpricedModelsLogged = new Set<string>()
 export async function buildUserSessionSdkOptions(
   params: UserSessionSdkOptionsParams
 ): Promise<Record<string, any>> {
-  const sdkOptions = await assembleSdkOptions(params, readUserAgentSettings())
+  const { cliToolsEntry = 'other', ...sessionParams } = params
+  const sdkOptions = await assembleSdkOptions(sessionParams, readUserAgentSettings())
   // Installed CLI tools are for the user's own sessions; internal tasks never
   // get them. Appended to PATH, so no command the user has is shadowed.
-  await applyCliToolsEnv(sdkOptions.env, { entry: 'other', engine: String(sdkOptions.engineId) })
+  await applyCliToolsEnv(sdkOptions.env, { entry: cliToolsEntry, engine: String(sdkOptions.engineId) })
   return sdkOptions
 }
 

@@ -1627,6 +1627,7 @@ async function ensureSessionWarmInner(spaceId: string, conversationId: string, m
   // Build SDK options using shared configuration
   const sdkOptions = await buildUserSessionSdkOptions({
     engineId,
+    cliToolsEntry: 'chat',
     // Must match send-message.ts: a warmed session is reused for the first
     // turn, so deriving this differently there would hand that turn a process
     // whose credentials disagree with its tools.

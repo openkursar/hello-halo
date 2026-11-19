@@ -977,11 +977,11 @@ export class CliToolStore {
 
   /**
    * Pin the tool set that is current right now on behalf of `holder`. The
-   * same holder and tool set map to one lock (`<holder>-<viewKey>`), so a
-   * caller that assembles an environment per request can call this every
-   * time: it gets the current set, and a set it used earlier stays pinned
-   * until the holder's locks are released. Nothing is written when no tool
-   * is usable.
+   * same holder, entry and tool set map to one lock
+   * (`<holder>-<entry>-<viewKey>`), so a caller that assembles an environment
+   * per request can call this every time: it gets the current set, a set it
+   * used earlier stays pinned until that lock is released, and each lock
+   * records the entry it serves. Nothing is written when no tool is usable.
    */
   pinCurrent(options: PinCurrentOptions): Promise<PinnedExecution | null> {
     return this.serialize(async () => {
@@ -990,7 +990,7 @@ export class CliToolStore {
       await this.checkExternals(state)
       const draft = this.composeLock({ ...options, executionId: options.holder }, state)
       if (draft.commands.length === 0) return null
-      const executionId = `${options.holder}-${draft.viewKey}`
+      const executionId = `${options.holder}-${options.entry}-${draft.viewKey}`
       const existing = await this.readExecutionLock(executionId)
       if (existing && existing.viewKey === draft.viewKey) {
         return { binDir: await this.ensureView(existing, state), lock: existing, reused: true }

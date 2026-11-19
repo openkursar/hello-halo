@@ -73,6 +73,12 @@ describe('installed CLI tools in session options', () => {
     expect(String(options.env.PATH).endsWith(':/cli/views/v/bin')).toBe(true)
   })
 
+  it('pin the entry the caller names, and only pin it', async () => {
+    const options = await buildUserSessionSdkOptions({ ...params(), engineId: 'halo', cliToolsEntry: 'automation' })
+    expect(cliTools.apply).toHaveBeenCalledWith(options.env, { entry: 'automation', engine: 'halo' })
+    expect(options).not.toHaveProperty('cliToolsEntry')
+  })
+
   it('never reach an internal task', async () => {
     const options = await buildInternalTaskSdkOptions(params())
     expect(cliTools.apply).not.toHaveBeenCalled()

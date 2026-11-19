@@ -348,6 +348,7 @@ async function sendMessageInner(request: AgentRequest, maintenanceSignal: AbortS
     // Build base SDK options
     const sdkOptions = await buildUserSessionSdkOptions({
       engineId,
+      cliToolsEntry: 'chat',
       // Same switch that loads the halo_api_ref tool: a session without the
       // manual has no way to discover the API, so the credentials would only
       // widen what an injected instruction can reach.
