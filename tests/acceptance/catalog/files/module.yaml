@@ -12,6 +12,14 @@ paths:
   - src/renderer/components/canvas/**
   - src/renderer/stores/canvas.store.ts
   - src/renderer/services/canvas-lifecycle.ts
+  - src/renderer/services/canvas-budget.ts
+  - src/renderer/services/ai-work-*.ts
+  - src/renderer/services/canvas-show-handler.ts
+  - src/renderer/services/typing-activity.ts
+  - src/renderer/hooks/useAIWork.ts
+  - src/main/services/canvas-show/**
+  - src/shared/ai-operating.ts
+  - src/shared/types/canvas-show.ts
 dependsOn:
   - workspaces
 scope:

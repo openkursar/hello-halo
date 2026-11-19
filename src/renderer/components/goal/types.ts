@@ -32,6 +32,6 @@ export interface GoalComposerConfig {
    * The composer's cards ride on the message, never on the goal text.
    */
   submit: (text: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, references?: ContentReference[]) => Promise<boolean>
-  /** Current goal, shown between the live-sessions capsule and the composer card. */
+  /** Current goal, shown on the composer card's top edge. */
   shelf: ReactNode
 }

@@ -52,7 +52,7 @@ const sessions = () => useTerminalStore.getState().sessions
 
 describe('terminal store / mirror of the main-process registry', () => {
   beforeEach(() => {
-    useTerminalStore.setState({ sessions: new Map(), aiWriting: new Set() })
+    useTerminalStore.setState({ sessions: new Map(), operating: new Set(), operators: new Map() })
   })
 
   it('keeps a long-idle session that exits behind many fresher ones', () => {
@@ -80,15 +80,46 @@ describe('terminal store / mirror of the main-process registry', () => {
     expect(sessions().has('dead-39')).toBe(true)
   })
 
-  it('clears the AI-writing flag of a removed session', () => {
+  it('tracks whether the AI is operating a session and whose conversation it is', () => {
     live(info('t1', 'running', 0))
-    apply({ sessionId: 't1', type: 'ai-activity', info: info('t1', 'running', 0), aiWriting: true })
-    expect(useTerminalStore.getState().hasAiActivity()).toBe(true)
+    apply({ sessionId: 't1', type: 'ai-activity', info: info('t1', 'running', 0), operating: true, conversationId: 'conv-1' })
+    expect(useTerminalStore.getState().operating.has('t1')).toBe(true)
+    expect(useTerminalStore.getState().operators.get('t1')).toBe('conv-1')
 
-    apply({ sessionId: 't1', type: 'removed' })
-    expect(sessions().has('t1')).toBe(false)
-    expect(useTerminalStore.getState().aiWriting.size).toBe(0)
-    expect(useTerminalStore.getState().hasAiActivity()).toBe(false)
+    apply({ sessionId: 't1', type: 'ai-activity', info: info('t1', 'running', 0), operating: false })
+    expect(useTerminalStore.getState().operating.has('t1')).toBe(false)
+    expect(useTerminalStore.getState().operators.get('t1')).toBe('conv-1')
+  })
+
+  it('forgets the operating state of a session that ended or was removed', () => {
+    live(info('t1', 'running', 0))
+    apply({ sessionId: 't1', type: 'ai-activity', info: info('t1', 'running', 0), operating: true, conversationId: 'conv-1' })
+    apply({ sessionId: 't1', type: 'exited', info: info('t1', 'exited', 0) })
+    expect(useTerminalStore.getState().operating.size).toBe(0)
+    expect(useTerminalStore.getState().operators.size).toBe(0)
+
+    live(info('t2', 'running', 0))
+    apply({ sessionId: 't2', type: 'ai-activity', info: info('t2', 'running', 0), operating: true, conversationId: 'conv-2' })
+    apply({ sessionId: 't2', type: 'removed' })
+    expect(sessions().has('t2')).toBe(false)
+    expect(useTerminalStore.getState().operating.size).toBe(0)
+    expect(useTerminalStore.getState().operators.size).toBe(0)
+  })
+
+  it('reconciles an authenticated client snapshot with a running operator and newer lifecycle events', () => {
+    live(info('old', 'running', 0))
+    live(info('removed-during-read', 'running', 0))
+    apply({ type: 'removed', sessionId: 'removed-during-read' })
+    apply({ type: 'created', sessionId: 'new-live', info: info('new-live', 'running', 2) })
+    const state = useTerminalStore.getState()
+    state.applySnapshot([
+      { ...info('removed-during-read', 'running', 0), operating: true },
+      { ...info('still-working', 'running', 4), operating: true, conversationId: 'active-chat' },
+      { ...info('idle', 'running', 1), operating: false, conversationId: 'previous-chat' },
+    ], new Set(['session:removed-during-read', 'activity:removed-during-read', 'session:new-live']))
+    expect([...sessions().keys()].sort()).toEqual(['idle', 'new-live', 'still-working'])
+    expect(useTerminalStore.getState().operating).toEqual(new Set(['still-working']))
+    expect(useTerminalStore.getState().operators).toEqual(new Map([['still-working', 'active-chat'], ['idle', 'previous-chat']]))
   })
 
   it('ignores a removal for a session it never saw', () => {

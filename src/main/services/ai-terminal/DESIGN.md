@@ -220,6 +220,7 @@ Main (`src/main/services/ai-terminal/`):
 | `flow-control.ts` | Viewer-ack flow controller (high/low watermarks; see §3) |
 | `context.ts` | Proxy registry; worker-event fan-out; one process-global singleton |
 | `events.ts` | Process-global event bus the context forwards to; transport subscribes here |
+| `person-input.ts` | Whether keyboard-channel input came from a person (terminal replies stripped); see §12 |
 | `sdk-mcp-server.ts` | `createTerminalMcpServer(ctx, scope)` — the 7 MCP tools |
 | `service.ts` | User/transport-facing ops (list/input/resize/kill/create/replay/viewer attach-detach-ack) |
 | `index.ts` | Public API and service metadata exports |
@@ -267,8 +268,12 @@ buffer (`replay` RPC) so it can reproduce colors/cursor faithfully.
   `http/routes/terminal.routes.ts`. Events `terminal:data` / `terminal:lifecycle`
   are forwarded from the global event bus to the renderer and WS clients.
   `terminal:lifecycle` carries `created` / `exited` / `title` / `ai-activity` /
-  `touched` / `removed` (§11.6) — one channel, so a new kind costs no transport
-  wiring.
+  `touched` / `removed` (§11.6). The client snapshot (`terminal:list` or
+  `GET /api/terminal/list`) adds main's `operating` and `conversationId` to each
+  `TerminalInfo`, without changing the worker protocol. Desktop reads it when
+  attaching; remote clients read it after authentication, including reconnects.
+  The store reconciles missed events without polling or overwriting newer events
+  delivered during the read.
 - Remote keyboard/resize use dedicated WS inbound messages
   (`terminal-input` / `terminal-resize` in `http/websocket.ts`) for low-latency
   takeover, with an HTTP fallback. Flow control adds `terminal-attach` /
@@ -277,12 +282,10 @@ buffer (`replay` RPC) so it can reproduce colors/cursor faithfully.
   A WS disconnect force-detaches that client's attachments.
 - Renderer: `stores/terminal.store.ts`, `components/canvas/viewers/TerminalViewer.tsx`
   (xterm + fit + replay + attach/ack), the canvas `terminal` tab type,
-  `components/tool/TerminalTaskCard.tsx` (chat card → opens the tab), and
-  `components/chat/LiveSessionsHeader.tsx` (ambient strip docked to the composer's
-  top edge to perceive, reveal, and stop live AI sessions; sourced via the
-  `hooks/useLiveSessions.ts` seam, which surfaces every running **aiTouched**
-  session — see §12), and `components/canvas/TerminalCloseGuard.tsx` (tab-close
-  policy — see §12).
+  `components/tool/TerminalTaskCard.tsx` (chat card → opens the tab). A running
+  **aiTouched** session is one of the AI's canvas tabs, added quietly by
+  `renderer/services/ai-work-tabs.ts` (see §12); closing it goes through
+  `components/canvas/CanvasCloseGuard.tsx`.
 
 ## 11) Lifecycle hard rules
 
@@ -311,7 +314,7 @@ buffer (`replay` RPC) so it can reproduce colors/cursor faithfully.
    entry re-opens its keyboard onto a dead pty (hence the latch in
    `lib/terminal-liveness.ts`).
 
-## 12) aiTouched & the tab-close policy
+## 12) aiTouched, the AI's tabs and closing them
 
 The pty outlives its tab (§11.1), so closing a terminal tab is a separate question
 from ending the process. That question is answered by **`aiTouched`**, a sticky
@@ -320,35 +323,49 @@ flag on `TerminalInfo` (worker-authoritative, mirrored in the proxy):
 - `owner: 'ai'` sessions are `aiTouched` from birth (the AI created them).
 - A `owner: 'user'` session flips to `aiTouched` the first time the AI drives it
   through **any** `terminal_*` tool (`ctx.markAiTouched`, called in
-  `sdk-mcp-server` for write/read/search/wait; create is AI-owned already). The
-  flip emits the `touched` lifecycle event **once** so the renderer store updates
-  the session's close policy and tray membership. Never cleared.
+  `sdk-mcp-server` for write/read/search/wait; create is AI-owned already), or
+  brings it in front of the user with `canvas_show`. The flip emits the
+  `touched` lifecycle event **once**. Never cleared.
 
-Two surfaces key off it, replacing the old `owner === 'ai'` checks:
+**Every running `aiTouched` session is a canvas tab of its space** — there is no
+background list. Each client derives the set from its terminal store
+(`renderer/services/ai-work-tabs.ts`) and the canvas adds missing tabs at the
+end of that space's tabs without opening the canvas or switching tabs, in a
+space not on screen too. When the process ends, a tab nobody ever looked at
+disappears; one someone looked at stays as the "Session ended" replay, unmarked.
 
-- **Tab close** (`TerminalCloseGuard` registers a two-method policy via
-  `canvasLifecycle.setTerminalClosePolicy`, mounted at **SpacePage** so it stays
-  active even when the canvas is collapsed):
-  - `confirmSingleClose` — deliberate single-tab close (tab X, middle-click, ⌘W,
-    context menu): a not-running session just closes; a running non-`aiTouched`
-    session (the user's own) is terminated with its tab; a running `aiTouched`
-    session prompts keep-in-background vs terminate (killing a pty is
-    irreversible, so keep is the safe default).
-  - `disposeOnBulkClose` — non-interactive bulk teardown (`closeAll`, and
-    `forgetSpace` when a space is deleted or removed from the list): **no
-    prompt**; terminate the user's own terminals (the tab was their only
-    handle), keep `aiTouched` ones running (they remain in the tray). This
-    holds the invariant *every live pty is reachable via a tab or the tray* on
-    every tab-removal path. A space switch removes no tab: the space's tabs are
-    parked with it, terminals running, and come back on return.
-- **Live-sessions tray** (`useLiveSessions`): shows every running `aiTouched`
-  terminal **scoped to the current space** (`spaceId === currentSpaceId`), so a
-  user terminal the AI drove stays perceivable and stoppable after its tab is
-  closed, without leaking another space's sessions into this one (it reappears on
-  return). AI browser pages are listed the same way.
+**Closing** (`CanvasCloseGuard` registers the canvas close policy, decisions in
+`renderer/services/ai-work-close.ts`, mounted at SpacePage / TlonPage so it
+holds while the canvas is collapsed):
+- one tab (×, ⌘W, middle-click, context menu): the AI's terminal asks once
+  ("End this terminal?" — end and close / cancel; Enter never confirms) and
+  closing really ends the process; the user's own running terminal ends with its
+  tab, unasked; an exited one just closes;
+- several at once (close canvas, close others, close to the right): the user's
+  own terminals end with their tabs and the AI's stay, unasked; only when the
+  AI's tabs are all that is closing does it ask once — cancel / end all;
+- a removed space: everything ends, unasked — main ends the space's sessions
+  (`endSpaceTerminals`, called by the space controller), the renderer ends what
+  its tabs held.
 
-Contrast with the AI browser (`services/ai-browser`): a canvas tab only borrows
-an AI page (its `browserViewId` is the page's view), so closing the tab hides
-the page and its conversation keeps it. A pty's running process and state are
-not recreatable either, so the terminal decouples the same way and keeps
-`aiTouched` work alive with the tray as the reclaim path.
+**Whether the AI is operating a session** comes from main, not from any chat UI:
+every `terminal_*` call wraps itself in `ctx.beginAiOperation(id, conversationId)`
+/ `endAiOperation(id)`. `shared/ai-operating.ts` holds the state from the first
+call until 10 s after the last one ends, and only those two moments are emitted,
+as the `ai-activity` lifecycle event (`operating`, plus the operating
+`conversationId` so the tab can name whose work it is). A conversation taking a
+session over mid-hold re-announces it. Exit, eviction and a worker crash forget
+it silently.
+
+**A person typed.** User keyboard input (`service.terminalInput`, IPC and WS
+alike) calls `ctx.noteUserInput`: on an `aiTouched` session, input a person made
+(`person-input.ts` strips what the terminal writes by itself: cursor/device/
+focus/colour reports, mouse motion and releases) sets a per-session flag. The
+next `terminal_write`/`read`/`search`/`wait_for` on that session takes the flag
+and puts one line in front of its result — the user typed here, read the screen
+first. A `read` in `screen` mode takes it silently (it is the resync). What was
+typed is never stored; no new message or turn is created.
+
+Contrast with the AI browser (`services/ai-browser`): its pages are canvas tabs
+the same way (owned pages of a context with a UI), and closing one ends the page
+through `ai-browser:stop-page`, refused while another conversation is on it.

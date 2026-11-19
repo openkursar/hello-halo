@@ -153,7 +153,7 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
       {/* Content area - bg-background matches the active tab (see canvas-tabs.css
           .canvas-tab.active) for visual continuity, and the prototype's own
           `.canvas{background:var(--bg)}`. */}
-      <div className="flex-1 min-h-0 overflow-hidden bg-background">
+      <div className="flex-1 min-h-0 overflow-hidden bg-background" data-canvas-tab-content={activeTabId ?? undefined}>
         {activeTab ? (
           // One viewer instance per tab: switching tabs remounts, so no
           // editor history, edit mode or per-document UI state carries over.

@@ -169,6 +169,7 @@ export const CodeMirrorEditor = memo(
         parent: containerRef.current,
       }))
 
+      view.contentDOM.dataset.canvasContentReady = 'true'
       viewRef.current = view
       originalContentRef.current = content
 

@@ -9,7 +9,7 @@
 
 import { getGlobalTerminalContext, peekGlobalTerminalContext } from './context'
 import { isTerminalAvailable } from './available'
-import type { CreateTerminalOptions, TerminalInfo } from '../../../shared/types/terminal'
+import type { CreateTerminalOptions, TerminalInfo, TerminalSnapshotEntry } from '../../../shared/types/terminal'
 
 export interface TerminalCreateResult {
   ok: boolean
@@ -18,15 +18,17 @@ export interface TerminalCreateResult {
 }
 
 /** List current sessions (empty when no context/session exists yet). */
-export function listTerminals(): TerminalInfo[] {
-  return peekGlobalTerminalContext()?.list() ?? []
+export function listTerminals(): TerminalSnapshotEntry[] {
+  return peekGlobalTerminalContext()?.listForClient() ?? []
 }
 
 /** User keyboard input → pty. */
 export function terminalInput(sessionId: string, data: string): boolean {
-  const session = peekGlobalTerminalContext()?.get(sessionId)
-  if (!session) return false
+  const ctx = peekGlobalTerminalContext()
+  const session = ctx?.get(sessionId)
+  if (!ctx || !session) return false
   session.input(data)
+  ctx.noteUserInput(sessionId, data)
   return true
 }
 
@@ -41,6 +43,12 @@ export function terminalResize(sessionId: string, cols: number, rows: number): b
 /** User closes a session. */
 export function killTerminal(sessionId: string): boolean {
   return peekGlobalTerminalContext()?.kill(sessionId) ?? false
+}
+
+/** A space was removed: its terminals could never be shown again, so they end. */
+export function endSpaceTerminals(spaceId: string): void {
+  const ended = peekGlobalTerminalContext()?.killSpaceSessions(spaceId) ?? 0
+  if (ended > 0) console.log(`[AI Terminal] Ended ${ended} terminal(s) of removed space ${spaceId}`)
 }
 
 /** Raw output for replaying into a freshly-attached xterm viewer. */

@@ -366,6 +366,7 @@ vi.mock('../../../../../src/main/apps/runtime/notify-tool', () => ({
 vi.mock('../../../../../src/main/apps/runtime/reminders/tool', () => ({
   createRemindersMcpServer: () => ({ _isMcpServer: true, name: 'halo-reminders' }),
 }))
+vi.mock('../../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer: () => ({}) }))
 vi.mock('../../../../../src/main/apps/runtime/im-session-registry', () => ({
   getImSessionRegistry: () => null,
 }))

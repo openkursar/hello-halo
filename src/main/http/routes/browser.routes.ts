@@ -1,10 +1,11 @@
 /**
  * Browser REST API routes (remote access).
  *
- * What a remote client needs of the browser: the pages it can watch, and
- * answering a page that is waiting for text the model must not hold — a PIN,
- * a one-time code. The page itself is driven by the AI browser tools in the
- * main process; nothing here creates, navigates or reads a page.
+ * What a remote client needs of the browser beyond the page list
+ * (`ai-browser.routes.ts`): answering a page that is waiting for text the model
+ * must not hold — a PIN, a one-time code. The page itself is driven by the AI
+ * browser tools in the main process; nothing here creates, navigates or reads a
+ * page.
  *
  * Why the credential routes are remote-reachable at all: the person who holds
  * the code is not necessarily sitting at the desktop app, and the alternative
@@ -28,17 +29,6 @@ function serverOnly(_req: Request, res: Response, next: NextFunction): void {
 
 export function registerBrowserRoutes(app: Express): void {
   app.use('/api/browser', serverOnly)
-
-  // Events only fire on change, so a remote client that connected after the AI
-  // opened a page learns of it only from this snapshot.
-  app.get('/api/browser/live-pages', async (_req: Request, res: Response) => {
-    try {
-      const { listLivePages } = await import('../../services/ai-browser')
-      res.json({ success: true, data: listLivePages() })
-    } catch (error) {
-      res.json({ success: false, error: (error as Error).message })
-    }
-  })
 
   app.get('/api/browser/credential-requests', async (_req: Request, res: Response) => {
     try {

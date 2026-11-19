@@ -56,6 +56,7 @@ vi.mock('../../../../src/main/services/ai-browser/events', () => ({
   emitBrowserActiveView: () => {},
   emitBrowserViewGone: () => {},
   emitBrowserConversationReleased: () => {},
+  emitBrowserOperating: () => {},
   onBrowserActiveView: () => () => {},
   onBrowserViewGone: () => () => {},
   onBrowserConversationReleased: () => () => {},

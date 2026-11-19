@@ -50,9 +50,11 @@ const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(resolv
 const tabOf = (id: string) => canvasLifecycle.getTab(id)!
 const shownIds = () => canvasLifecycle.getTabs().map(tab => tab.id)
 
-const disposeOnBulkClose = vi.fn(async (_sessionId: string) => {})
-const terminalPolicy = { confirmSingleClose: async () => true, disposeOnBulkClose }
-let unregisterPolicy = canvasLifecycle.setTerminalClosePolicy(terminalPolicy)
+const endRemoved = vi.fn(async (_tabs: readonly unknown[]) => {})
+const closeMany = vi.fn(async (_tabs: readonly unknown[]): Promise<{ keep: ReadonlySet<string> } | null> => ({ keep: new Set() }))
+const closePolicy = { closeOne: async () => true, closeMany, endRemoved }
+const removedSessions = () => endRemoved.mock.calls.flatMap(call => (call[0] as Array<{ terminalSessionId?: string }>).map(tab => tab.terminalSessionId))
+let unregisterPolicy = canvasLifecycle.setClosePolicy(closePolicy)
 
 async function openFile(path: string, content: string): Promise<string> {
   disk.set(path, content)
@@ -63,7 +65,7 @@ async function openFile(path: string, content: string): Promise<string> {
 
 beforeEach(async () => {
   unregisterPolicy()
-  unregisterPolicy = canvasLifecycle.setTerminalClosePolicy(terminalPolicy)
+  unregisterPolicy = canvasLifecycle.setClosePolicy(closePolicy)
   for (const spaceId of ['space-a', 'space-b']) await canvasLifecycle.forgetSpace(spaceId)
   await canvasLifecycle.enterSpace('space-a')
   disk.clear()
@@ -71,7 +73,8 @@ beforeEach(async () => {
   createBrowserView.mockReset().mockImplementation(async () => ({ success: true }))
   hideBrowserView.mockClear()
   destroyBrowserView.mockClear()
-  disposeOnBulkClose.mockClear()
+  endRemoved.mockClear()
+  closeMany.mockClear()
 })
 
 describe('switching spaces', () => {
@@ -197,7 +200,7 @@ describe('terminals', () => {
   it('keep running while their space is away', async () => {
     const id = await canvasLifecycle.openTerminal('pty-1', 'zsh')
     await canvasLifecycle.enterSpace('space-b')
-    expect(disposeOnBulkClose).not.toHaveBeenCalled()
+    expect(endRemoved).not.toHaveBeenCalled()
 
     canvasLifecycle.setTerminalTitle('pty-1', 'npm run dev')
     await canvasLifecycle.enterSpace('space-a')
@@ -210,10 +213,10 @@ describe('terminals', () => {
     await canvasLifecycle.openTerminal('pty-b', 'zsh')
 
     await canvasLifecycle.forgetSpace('space-a')
-    expect(disposeOnBulkClose.mock.calls.map(call => call[0])).toEqual(['pty-a'])
+    expect(removedSessions()).toEqual(['pty-a'])
 
     await canvasLifecycle.forgetSpace('space-b')
-    expect(disposeOnBulkClose.mock.calls.map(call => call[0])).toEqual(['pty-a', 'pty-b'])
+    expect(endRemoved).toHaveBeenCalledTimes(2)
     expect(shownIds()).toEqual([])
     expect(canvasLifecycle.getIsOpen()).toBe(false)
 
@@ -227,11 +230,11 @@ describe('terminals', () => {
     unregisterPolicy()
 
     await canvasLifecycle.forgetSpace('space-a')
-    expect(disposeOnBulkClose).not.toHaveBeenCalled()
+    expect(endRemoved).not.toHaveBeenCalled()
 
-    unregisterPolicy = canvasLifecycle.setTerminalClosePolicy(terminalPolicy)
+    unregisterPolicy = canvasLifecycle.setClosePolicy(closePolicy)
     await flush()
-    expect(disposeOnBulkClose.mock.calls.map(call => call[0])).toEqual(['pty-a'])
+    expect(removedSessions()).toEqual(['pty-a'])
   })
 })
 
@@ -349,13 +352,14 @@ describe('closing all tabs while the space changes', () => {
 
     expect(shownIds()).toEqual([fileB, terminalB])
     expect(canvasLifecycle.getIsOpen()).toBe(true)
-    expect(disposeOnBulkClose).not.toHaveBeenCalled()
+    expect(closeMany).not.toHaveBeenCalled()
 
     await canvasLifecycle.enterSpace('space-a')
     expect(tabOf(goal)).toMatchObject({ content: '{}', isDirty: true })
   })
 
   it('leaves the entered space alone when the switch comes while a page is released', async () => {
+    unregisterPolicy()
     await canvasLifecycle.enterSpace('space-b')
     const fileB = await openFile('/b/b.ts', 'b')
     await canvasLifecycle.enterSpace('space-a')
@@ -373,9 +377,27 @@ describe('closing all tabs while the space changes', () => {
 
     expect(shownIds()).toEqual([fileB])
     expect(canvasLifecycle.getIsOpen()).toBe(true)
-    expect(disposeOnBulkClose).not.toHaveBeenCalled()
 
     await canvasLifecycle.enterSpace('space-a')
     expect(shownIds()).toEqual([page, terminalA])
+  })
+
+  it('leaves the entered space alone when the switch comes during the question about the AI\'s work', async () => {
+    await canvasLifecycle.enterSpace('space-b')
+    const fileB = await openFile('/b/b.ts', 'b')
+    await canvasLifecycle.enterSpace('space-a')
+    const terminalA = await canvasLifecycle.openTerminal('pty-a', 'zsh')
+    let answer!: (decision: { keep: ReadonlySet<string> } | null) => void
+    closeMany.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+
+    const closing = canvasLifecycle.closeAll()
+    await flush()
+    await canvasLifecycle.enterSpace('space-b')
+    answer({ keep: new Set() })
+    await closing
+
+    expect(shownIds()).toEqual([fileB])
+    await canvasLifecycle.enterSpace('space-a')
+    expect(shownIds()).toEqual([terminalA])
   })
 })

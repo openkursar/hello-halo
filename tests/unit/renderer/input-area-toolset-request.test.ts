@@ -39,7 +39,6 @@ vi.mock('../../../src/renderer/components/chat/composer-menu/useComposerToolsets
     return { list: env.toolsets.list, requested: env.toolsets.requested, toggle: env.toggle }
   },
 }))
-vi.mock('../../../src/renderer/components/chat/LiveSessionsHeader', () => ({ LiveSessionsHeader: () => null }))
 vi.mock('../../../src/renderer/components/chat/KnowledgeBaseButton', () => ({ KnowledgeBaseButton: () => null }))
 vi.mock('../../../src/renderer/components/chat/DigitalHumanSelector', () => ({ DigitalHumanSelector: () => null }))
 vi.mock('../../../src/renderer/components/chat/cross-conversation', () => ({ ConversationMentionRow: () => null }))

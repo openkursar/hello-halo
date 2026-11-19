@@ -80,6 +80,9 @@ const canvasActions = {
   setRefreshHandler: (type: ContentType, handler: (tab: TabState) => Promise<void>) =>
     canvasLifecycle.setRefreshHandler(type, handler),
   closeTab: (tabId: string) => canvasLifecycle.closeTab(tabId),
+  /** Close several tabs, asking once for the AI's work among them. */
+  closeTabs: (tabIds: readonly string[], options?: { confirmDirty?: boolean; collapse?: boolean }) =>
+    canvasLifecycle.closeTabs(tabIds, options),
   closeAllTabs: () => canvasLifecycle.closeAll({ confirmDirty: true }),
   switchTab: (tabId: string) => canvasLifecycle.switchTab(tabId),
   switchToNextTab: () => canvasLifecycle.switchToNextTab(),

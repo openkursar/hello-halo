@@ -23,6 +23,7 @@
  */
 
 import type { BrowserContext } from '../context'
+import type { SdkMcpToolDefinition } from '../../agent/mcp/types'
 import { isServerMode } from '../../../foundation/runtime-mode'
 import { buildNavigationTools } from './navigation'
 import { buildInputTools } from './input'
@@ -50,7 +51,8 @@ export function buildAllTools(ctx: BrowserContext) {
   ]
   // Only a remote live view (server mode) lets a person operate a page from
   // outside its window, so only there can a tool result need the notice.
-  return isServerMode() ? tools.map(definition => withUserInputNotice(ctx, definition)) : tools
+  const inputAware = isServerMode() ? tools.map(definition => withUserInputNotice(ctx, definition)) : tools
+  return inputAware.map(definition => operating(ctx, definition))
 }
 
 interface ToolDefinition {
@@ -68,6 +70,22 @@ function withUserInputNotice<T extends ToolDefinition>(ctx: BrowserContext, defi
       const result = await definition.handler(args, extra)
       if (!notice || !result) return result
       return { ...result, content: [...(result.content ?? []), { type: 'text', text: notice }] }
+    },
+  }
+}
+
+/** Every call shows the conversation's page as operated by the AI while it runs. */
+function operating(ctx: BrowserContext, definition: SdkMcpToolDefinition): SdkMcpToolDefinition {
+  const handler = definition.handler
+  return {
+    ...definition,
+    handler: async (args, extra) => {
+      ctx.beginToolCall()
+      try {
+        return await handler(args, extra)
+      } finally {
+        ctx.endToolCall()
+      }
     },
   }
 }

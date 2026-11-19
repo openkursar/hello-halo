@@ -105,11 +105,11 @@ scenarios:
     steps:
       - en: Observe both loaded page labels, then let the local website asynchronously change an inactive title and URL, change the active title and navigate the active page.
         zh: 查看两个页面加载后的标签，再由本地网站异步改变非活动页标题和 URL、活动页标题，并导航活动页。
-      - en: Reopen through the conversation's live-view action and choose the target's current label in the live-session tray, then ask the AI to read it.
-        zh: 从对话实时查看入口重开，再在活动会话托盘中按目标当前标签选择页面，并让 AI 读取。
+      - en: Reopen through the conversation's live-view action, choose the target's tab by its current title, then ask the AI to read it.
+        zh: 从对话实时查看入口重开，按目标当前标题选择其标签，并让 AI 读取。
     expected:
-      - en: Live rows show their own current titles and reopen the current URLs while the target remains selected; metadata updates do not open the canvas, move focus, alter the draft or reassign page ownership.
-        zh: 活动条目显示自身当前标题并重开当前 URL，目标选择不变；元数据更新不打开画布、不移动焦点、不改草稿或页面归属。
+      - en: The AI's page tabs show their own current titles and reopen the current URLs while the target remains selected; metadata updates do not open the canvas, move focus, alter the draft or reassign page ownership.
+        zh: AI 网页标签显示自身当前标题并重开当前 URL，目标选择不变；元数据更新不打开画布、不移动焦点、不改草稿或页面归属。
       - en: Reopening uses the same view and guest, control content stays intact, and the AI receives the actual navigated document state.
         zh: 重开使用原视图及网页进程，对照内容完整，AI 收到实际导航后的文档状态。
   - id: browser.work.isolation
@@ -329,8 +329,8 @@ scenarios:
       - en: Ask the AI to read the selected child page.
         zh: 让 AI 读取已选择的子页面。
     expected:
-      - en: The child remains owned by the same AI context, keeps the caller's hidden or visible mode, and can be read after selection.
-        zh: 子页面仍归同一 AI 上下文，继承隐藏或可见模式，并可在选择后继续读取。
+      - en: The child remains owned by the same AI context, keeps the caller's hidden or visible mode, and can be read after selection. A child of a watchable page gets its own AI tab without expanding the canvas.
+        zh: 子页面仍归同一 AI 上下文，继承隐藏或可见模式，并可在选择后继续读取。可观看网页打开的新标签会作为 AI 标签出现，不弹出画布。
       - en: The original page and native authentication relationships are unchanged.
         zh: 原网页及原生认证关系保持不变。
     notes:

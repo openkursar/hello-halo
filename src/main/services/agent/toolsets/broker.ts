@@ -11,6 +11,7 @@ import { getAvailableToolsets, getToolset } from './registry'
 import { getOpenToolsets, getExcludedToolsets, markOpen, markClosed, setToolsetContextMode } from './state'
 import { isToolsetIncluded, isToolsetConfigurable } from './selection'
 import { createBrokerMetaServer, CAPABILITIES_SERVER_NAME } from './meta-server'
+import { createCanvasMcpServer } from '../../canvas-show'
 import type { ToolsetOpener, ToolsetScope, ToolsetStatus, ToolsetsChangedEvent, ToolsetContextMode } from './types'
 
 /**
@@ -105,6 +106,9 @@ export function buildMcpServerRecord(scope: ToolsetScope): Record<string, unknow
       )
     )
   }
+
+  // A space conversation can always bring its work in front of the user.
+  add('canvas', () => createCanvasMcpServer({ spaceId: scope.spaceId, conversationId: scope.conversationId, workDir: scope.workDir }))
 
   // On-demand toolsets currently enabled for this conversation
   const openIds = getOpenToolsets(scope.spaceId, scope.conversationId)

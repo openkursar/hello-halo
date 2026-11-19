@@ -29,6 +29,8 @@ function context(notice: string | null): Ctx {
   return {
     takeUserInputNotice: vi.fn(() => notice),
     getActiveViewId: () => null,
+    beginToolCall: vi.fn(),
+    endToolCall: vi.fn(),
   } as unknown as Ctx
 }
 

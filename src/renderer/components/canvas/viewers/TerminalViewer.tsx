@@ -8,9 +8,10 @@
  *    HTTP fallback) — full-duplex human takeover,
  *  - keeps the pty size in sync via the fit addon + ResizeObserver.
  *
- * A soft border highlight indicates when the AI is actively writing, so the two
- * parties never surprise each other (Ctrl+C reaches the pty unless, off macOS,
- * a selection turns it into a copy — see lib/terminal-keys.ts).
+ * On a terminal the AI used, one line above it says whether the AI is
+ * operating it, so the two parties never surprise each other (Ctrl+C reaches
+ * the pty unless, off macOS, a selection turns it into a copy — see
+ * lib/terminal-keys.ts).
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -37,6 +38,7 @@ import {
   terminalTopRect,
 } from '../../references'
 import { useViewerResources } from '../viewer-resources'
+import { AIWorkStatusLine } from '../AIWorkMarks'
 
 interface TerminalViewerProps {
   tab: TabState
@@ -59,7 +61,6 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
   const resources = useViewerResources()
   const sessionId = tab.terminalSessionId
 
-  const aiWriting = useTerminalStore(s => (sessionId ? s.aiWriting.has(sessionId) : false))
   const sessionInfo = useTerminalStore(s => (sessionId ? s.sessions.get(sessionId) : undefined))
   // Session gone entirely (e.g. app restarted — ptys don't survive restarts)
   const [missing, setMissing] = useState(false)
@@ -290,7 +291,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
   }
 
   return (
-    <div className="flex flex-col h-full w-full bg-card">
+    <div className="flex flex-col h-full w-full bg-card" data-canvas-content-ready={replayed && !dead}>
       {/* Ended banner — the terminal below stays as a read-only replay */}
       {dead && (
         <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs
@@ -303,12 +304,9 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
               : t('Session ended')}
         </div>
       )}
+      {!dead && tab.aiWork && <AIWorkStatusLine tab={tab} />}
 
-      <div
-        className={`flex-1 min-h-0 p-2 transition-shadow duration-200 ${
-          aiWriting ? 'ring-2 ring-inset ring-primary/60' : ''
-        } ${dead ? 'opacity-80' : ''}`}
-      >
+      <div className={`flex-1 min-h-0 p-2 ${dead ? 'opacity-80' : ''}`}>
         <div ref={containerRef} className="h-full w-full" />
       </div>
 

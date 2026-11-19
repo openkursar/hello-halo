@@ -288,9 +288,26 @@ export type WsConnectionState = 'connected' | 'disconnected' | 'connecting'
 
 const wsStateListeners = new Set<(state: WsConnectionState) => void>()
 let wsBrowserLive = false
+let authenticatedSocket: WebSocket | null = null
+const wsAuthenticatedListeners = new Set<(isCurrent: () => boolean) => void>()
 
 export function supportsBrowserLive(): boolean {
   return wsBrowserLive
+}
+
+/** Recover missed data only when the new socket can already receive live events. */
+export function onWsAuthenticated(callback: (isCurrent: () => boolean) => void): () => void {
+  wsAuthenticatedListeners.add(callback)
+  if (authenticatedSocket && wsConnection === authenticatedSocket) notifyWsAuthenticated(authenticatedSocket, callback)
+  return () => { wsAuthenticatedListeners.delete(callback) }
+}
+
+function notifyWsAuthenticated(socket: WebSocket, callback: (isCurrent: () => boolean) => void): void {
+  try {
+    callback(() => socket === wsConnection && socket === authenticatedSocket)
+  } catch (error) {
+    console.warn('[WS] Authenticated connection listener failed', error)
+  }
 }
 
 /** Subscribe to WebSocket connection state changes */
@@ -345,6 +362,10 @@ export function connectWebSocket(): void {
           connection.send(JSON.stringify({ type: 'subscribe', payload: { conversationId: convId } }))
         }
         emitWsState('connected')
+        if (authenticatedSocket !== connection) {
+          authenticatedSocket = connection
+          for (const listener of wsAuthenticatedListeners) notifyWsAuthenticated(connection, listener)
+        }
 
         if (isCapacitor()) {
           import('./foreground-service').then(({ startForegroundService }) => {
@@ -364,6 +385,7 @@ export function connectWebSocket(): void {
   }
 
   connection.onclose = () => {
+    if (authenticatedSocket === connection) authenticatedSocket = null
     if (wsConnection !== connection) return
     console.log('[WS] Disconnected')
     wsConnection = null
@@ -513,9 +535,12 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'browser:tab-opened': 'onBrowserTabOpened',
       'browser:zoom-changed': 'onBrowserZoomChanged',
       'canvas:tab-action': 'onCanvasTabAction',
+      'canvas:show-request': 'onCanvasShowRequest',
       'ai-browser:active-view-changed': 'onAIBrowserActiveViewChanged',
+      'ai-browser:page-opened': 'onAIBrowserPageOpened',
       'ai-browser:view-gone': 'onAIBrowserViewGone',
       'ai-browser:conversation-released': 'onAIBrowserConversationReleased',
+      'ai-browser:operating': 'onAIBrowserOperating',
       'artifact:tree-update': 'onArtifactTreeUpdate',
       'artifact:changed-batch': 'onArtifactChangedBatch',
       'perf:snapshot': 'onPerfSnapshot',

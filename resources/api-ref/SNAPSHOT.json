@@ -1,9 +1,9 @@
 {
-  "totalRoutes": 345,
+  "totalRoutes": 346,
   "expose": {
     "ai": 214,
     "wrapped": 11,
-    "internal": 120,
+    "internal": 121,
     "unlabeled": 0
   },
   "groups": {
@@ -37,6 +37,8 @@
     "task",
     "git",
     "code-review",
-    "skills"
+    "skills",
+    "canvas",
+    "ai-browser"
   ]
 }

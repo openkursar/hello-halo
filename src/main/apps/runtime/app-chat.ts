@@ -56,6 +56,7 @@ import { currentGuestPolicy } from './im-sender-standing'
 import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
+import { createCanvasMcpServer } from '../../services/canvas-show'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
 import { opensWithSlashCommand } from '../../services/agent/opening-context'
 import { closeSessionAndWait, captureToolsetExecutionOptions, openAgentExecution, emitHumanRequest, getToolset, acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, resolveHistoricalEngine, getSessionEngineId, type AgentExecution, type ExecutionSource, type V2SessionLease } from '../../services/agent'
@@ -1083,8 +1084,10 @@ async function runAppChatTurn(
       : {}),
     ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
     ...(usesTerminal
-      ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId, workDir }) }
+      ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId, workDir, conversationId }) }
       : {}),
+    // Only the owner's chat in Halo itself has a screen to bring things to.
+    ...(parseNativeChatKey(conversationId)?.appId === appId ? { 'canvas': createCanvasMcpServer({ spaceId, conversationId, workDir }) } : {}),
     ...(usesHaloApi ? { 'halo-api-ref': createApiRefMcpServer() } : {}),
     ...(conversationCollab
       ? { 'halo-conversations': await createConversationCollabMcpServer({ spaceId, conversationId }, conversationCollab) }

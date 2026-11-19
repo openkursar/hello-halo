@@ -127,8 +127,8 @@ tool result tells the model the user cannot watch it live — a native chat woke
 by a reminder while nobody is there still gets its page, as when every
 digital-human page lived in the hidden window. Such a page joins the
 process-wide `backgroundOnlyViewIds`: `isWatchable(viewId)` is false for every
-context, so selecting it announces nothing, it is never listed, the tray cannot
-stop it, and its destruction is not announced. Like every other hidden-host
+context, so selecting it announces nothing, it is never listed, it gets no tab
+that could end it, and its destruction is not announced. Like every other hidden-host
 page, it is muted, its autoplay blocked and its visibility reported as visible
 (`trackView`), in a space chat too. The context's other pages stay
 watchable. While the browser host reports the main window stalled
@@ -198,52 +198,62 @@ BrowserWindow + remote WebSocket clients:
 
 | Event | Channel | Meaning | Renderer effect |
 |-------|---------|---------|-----------------|
-| active-view | `ai-browser:active-view-changed` | a conversation's AI created/selected a view, or that active view's url/title changed (a page is picked before it loads; the manager's `onViewStateChanged` fires in server mode too); payload `{conversationId, spaceId, viewId, url, title}` | renderer store keeps the active view per conversation ("View live feed" and the operating indicator of the conversation on screen) and every page per viewId (the tray) |
-| gone | `ai-browser:view-gone` | a view a UI context held — its active page or any other it opened — was destroyed; payload `{viewId}` | store drops the page and any active entry pointing at it; canvas tabs attached to it close |
-| conversation-released | `ai-browser:conversation-released` | a UI context ended (`release()` or `destroy()`); payload `{conversationId}` | store drops that conversation's views, operating state and owned pages, so a page it only selected (now the user's) is not left listed or stoppable as its own |
+| active-view | `ai-browser:active-view-changed` | a conversation's AI created or selected a view, or that active view's url/title changed (a page is picked before it loads; the manager's `onViewStateChanged` fires in server mode too); `owned` distinguishes the two relationships | update the active view per conversation without resetting when it was picked; keep page ownership separate |
+| page-opened | `ai-browser:page-opened` | a watchable website child tab is ready; it belongs to the parent's AI context | add an AI tab in the same space without selecting the child or opening the canvas |
+| gone | `ai-browser:view-gone` | a watched, owned or previously released page was destroyed; payload `{viewId}` | drop the page and active entries still pointing to it; close its tabs |
+| conversation-released | `ai-browser:conversation-released` | a UI context no longer holds pages; payload `{conversationId}` | clear its selection and activity; adopt its surviving owned pages |
+| operating | `ai-browser:operating` | a conversation's AI started, or stopped (10 s after its last browser tool call), operating its browser | mark the page the conversation actually operates, even when another conversation opened it |
 
-Payload types live in `shared/types/ai-browser.ts`. The renderer filters by the
-active conversation; events go out with `broadcastToAll` (remote clients cannot
-host a page and watch it through the live view instead). An event only fires on
-change, so a renderer that starts late (reload, late connect) seeds itself with
-`listLivePages()` — the request `ai-browser:list-live-pages` on the desktop,
-`GET /api/browser/live-pages` remotely, re-requested on every WebSocket reconnect
-since events broadcast while the socket was down are lost. It returns every owned
-or active page of a UI context, `active` marking the one it acts on.
+Payload types live in `shared/types/ai-browser.ts`. Both desktop and remote
+clients consume lifecycle events; only desktop shows the browser guest itself.
+A Halo Server's remote clients watch it through the live view
+(`services/browser-live`); a desktop's remote clients show a placeholder tab.
+A late renderer reads `ai-browser:list-live-pages` (IPC) or
+`GET /api/ai-browser/live-pages` (HTTP). The snapshot includes owned and active
+pages, current activity, and surviving pages handed back to the user. On an
+authenticated reconnect, remote clients read it once again to recover missed
+changes, preserving newer events that arrived during the read.
+
+**Operating.** Every browser tool built by `buildAllTools(ctx)` is wrapped to call
+`ctx.beginToolCall()` / `ctx.endToolCall()`; contexts with a UI and a
+conversation feed one process-wide hold per conversation
+(`shared/ai-operating.ts`: on at the first call, off 10 s after the last). The
+signal therefore holds for a conversation nobody has on screen, and no chat card
+sets it any more. In server mode the same tools are first wrapped with the
+user-input notice (below), so a call answered only with that notice still counts
+as operating.
 
 Page titles and URLs keep changing after creation, including on inactive pages.
-The existing desktop `browser:state-change` stream carries those updates by
-`viewId`; the AI browser store patches only pages and active references it already
-knows. This does not establish ownership, select a page, change activity time or
-reveal Canvas. Unknown and released pages stay unknown. Canvas consumes that same
-stream independently for its tab metadata; neither consumer calls the other to
-refresh titles. Lifecycle events remain responsible for ownership and selection.
+`browser:state-change` carries those updates by `viewId`; the AI browser store
+patches known pages and active references. Canvas updates the affected tab, not
+tab membership in every space. Metadata changes do not establish ownership,
+select a page, or reveal Canvas.
 
-**Live-session tray.** Lists every live AI page of the CURRENT space that a
-conversation OPENED ITSELF (`owned` in the event/snapshot), one row each,
-labelled "owner · page" (digital human name — for its native chats and for a
-run started from the desktop — or the space conversation's title)
-with its own stop — not only the on-screen conversation's page. Never listed: a
-page the conversation only selected (the user's own tab, another conversation's
-page), and a page another conversation is currently on (`isPageInUseByOthers`,
-re-checked at stop time) — stopping either would close it under someone else.
-Remote clients get no stop control (no browser pages there); a refused stop is
-reported, not swallowed. The decision is the main process's: the tray stop goes
-through `ai-browser:stop-page` (`stopLivePage(viewId, conversationId)`), which
-refuses `not-owned` unless that conversation's context opened the page and
-`in-use` while any other context is on it; the renderer's check is only a fast
-path and can be one event behind. Closing a canvas tab is the user's own action
-and still goes through `browser:destroy` unchecked. The space
-comes from the context (`spaceId`: `getInteractiveBrowserContext(conversationId,
-spaceId)` for space chat, the `liveView` for a native digital-human chat or a
-Run once); a page with no space is never listed. Rows are built by
-`renderer/hooks/browser-live-sessions.ts`.
+**The AI's pages are canvas tabs.** Every live page of a space that a
+conversation OPENED ITSELF (`owned` in the event/snapshot) is a canvas tab of that
+space, added quietly by `renderer/services/ai-work-tabs.ts` (no canvas opening,
+no tab switch), titled after the page itself and marked as the AI's. A page the
+conversation only selected (the user's own tab, another conversation's) gets no
+tab of its own. Closing an AI page's tab asks once and ends the page through
+`ai-browser:stop-page` (`stopLivePage(viewId, conversationId)`), which refuses
+`not-owned` unless that conversation's context opened the page and `in-use`
+while any other context is on it — the tab then stays and the user is told why.
+The renderer's check (`isPageInUseByOthers`) is only a fast path. Remote clients
+show the tab without a close (they hold no browser guests). When a conversation
+is released (`conversation-released`) its surviving pages become the user's own:
+their tabs take ownership (`canvasLifecycle.adoptPages`) and the mark goes.
+Main retains the originating space for those guests until they are destroyed,
+so removing a space also ends its released pages even if it was never reopened.
+The space comes from the context (`spaceId` for space chat, the `liveView` for
+a native digital-human chat or a Run once); a page with no space gets no tab.
+`conversationPage(conversationId)` gives the page a conversation acts on;
+`canvas_show` also checks that this conversation opened it in that space.
 `gone` is emitted from `notifyViewDestroyed(viewId)`, which reconciles EVERY live
 context and announces once — whenever a context with a UI owned the view or was
 pointing at it, not only for the active page: a page the chat moved away from can
 still be open in a canvas tab. It is wired to `browserViewManager.onViewDestroyed`
-at module load, so whichever path destroyed the view (canvas-tab close, tray
-"stop", an agent closing a tab, window teardown, a context ending) reaches it.
+at module load, so whichever path destroyed the view (canvas-tab close, the
+user closing an AI tab, an agent closing a tab, window teardown, a context ending) reaches it.
 This keeps `activeViewId` from dangling on a dead WebContents — essential once a
 context outlives a turn.
 

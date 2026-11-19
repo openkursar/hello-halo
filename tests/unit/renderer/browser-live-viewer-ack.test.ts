@@ -33,13 +33,15 @@ vi.mock('react', async original => ({
 }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
 vi.mock('../../../src/renderer/api', () => ({ api: env.api }))
-// The desktop link fallback drags in the whole browser store; not under test here.
+// The desktop link fallback and the AI work line drag in the whole browser store; not under test here.
 vi.mock('../../../src/renderer/components/canvas/viewers/BrowserViewer', () => ({ BrowserViewerFallback: () => null }))
+vi.mock('../../../src/renderer/components/canvas/AIWorkMarks', () => ({ AIWorkStatusLine: () => null }))
 vi.mock('../../../src/renderer/components/canvas/viewer-resources', () => ({
   useViewerResources: () => env.resources,
 }))
 
 import { BrowserLiveViewer } from '../../../src/renderer/components/canvas/viewers/BrowserLiveViewer'
+import { AIWorkStatusLine } from '../../../src/renderer/components/canvas/AIWorkMarks'
 
 class Runner {
   values: any[] = []; index = 0; pending: (() => void)[] = []
@@ -141,5 +143,12 @@ describe('BrowserLiveViewer acknowledgement', () => {
     env.onFrame!({ ...frame(1), url: 'https://example.com/home' })
     const header = nodes(draw()).find(n => n.type === 'span' && n.props.title !== undefined)
     expect(header.props.children).toBe('https://example.com/home')
+  })
+
+  it('carries the AI work line only on the AI’s own page', () => {
+    const line = (aiWork: boolean) => nodes(new Runner().render(() => BrowserLiveViewer({ tab: { ...tab, aiWork } })))
+      .some(n => n.type === AIWorkStatusLine)
+    expect(line(true)).toBe(true)
+    expect(line(false)).toBe(false)
   })
 })

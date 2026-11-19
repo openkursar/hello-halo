@@ -362,10 +362,6 @@
   },
   {
     "method": "GET",
-    "path": "/api/browser/live-pages"
-  },
-  {
-    "method": "GET",
     "path": "/api/browser/credential-requests"
   },
   {
@@ -1603,5 +1599,13 @@
     "method": "POST",
     "path": "/api/skills/delete-legacy",
     "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/canvas/show-reply"
+  },
+  {
+    "method": "GET",
+    "path": "/api/ai-browser/live-pages"
   }
 ]

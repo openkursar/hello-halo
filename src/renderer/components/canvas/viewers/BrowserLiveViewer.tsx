@@ -22,6 +22,7 @@ import type {
 } from '../../../../shared/types/browser-live'
 import { BrowserLiveInputController } from './browser-live-input'
 import { BrowserViewerFallback } from './BrowserViewer'
+import { AIWorkStatusLine } from '../AIWorkMarks'
 import type { WsConnectionState } from '../../../api/transport'
 import { useViewerResources } from '../viewer-resources'
 import { useTranslation } from '../../../i18n'
@@ -227,6 +228,7 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
 
   return (
     <div className="relative flex flex-col h-full bg-background">
+      {tab.aiWork && <AIWorkStatusLine tab={tab} />}
       <div className="flex items-center gap-2 px-2 sm:px-3 py-2 border-b border-border-soft shrink-0">
         <span className="flex-1 min-w-0 truncate text-xs text-muted-foreground" title={pageUrl ?? ''}>
           {pageUrl ?? tab.title}

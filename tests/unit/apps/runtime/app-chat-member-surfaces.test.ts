@@ -237,6 +237,7 @@ vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({
   createRemindersMcpServer: () => ({ _isMcpServer: true, name: 'halo-reminders' }),
 }))
+vi.mock('../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer: () => ({}) }))
 const { listStandingTeams } = vi.hoisted(() => ({
   listStandingTeams: vi.fn((_appId: string): Array<{ teamId: string; name: string; role: string; isLead: boolean; hostedElsewhere: boolean }> => []),
 }))
