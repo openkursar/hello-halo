@@ -12,7 +12,7 @@
  * request.
  *
  * Recognized variables (all optional):
- *   HALO_REMOTE_PASSWORD   service access token (Authorization: Bearer <token>); default "halo123"
+ *   HALO_REMOTE_PASSWORD   service access token; required if none is configured
  *   HALO_AI_PROVIDER       LLM provider id (anthropic | openai | custom | ...)
  *   HALO_AI_API_URL        LLM endpoint base URL (the deployment's own model gateway)
  *   HALO_AI_API_KEY        LLM API key
@@ -26,8 +26,10 @@
 import { v4 as uuidv4 } from 'uuid'
 import type { AISource, ProviderId } from '../../shared/types'
 import { getConfig, saveConfig } from './config.service'
+import { decodeFromStorage } from './crypto-envelope'
 
-const DEFAULT_SERVICE_PASSWORD = 'halo123'
+const LEGACY_SERVER_PASSWORD = 'halo123'
+const EXAMPLE_SERVER_PASSWORD = 'change-me-to-a-long-random-token'
 const FALLBACK_MODEL = 'claude-opus-4-5-20251101'
 const FALLBACK_API_URL = 'https://api.anthropic.com'
 
@@ -53,16 +55,12 @@ export function applyEnvConfig(): void {
   const cfg = getConfig()
   const overrides: Record<string, unknown> = {}
 
-  // --- Service access token (the fixed "PIN" used as a Bearer API key) ---
-  // Env wins (authoritative plaintext). With no env: keep an existing persisted
-  // value (enableRemoteAccess decodes it internally — it may be encoded at rest,
-  // so we must not treat it as plaintext here), else seed the default.
   const envPwd = env('HALO_REMOTE_PASSWORD')
-  if (envPwd) {
-    overrides.remoteAccess = { ...cfg.remoteAccess, password: envPwd }
-  } else if (!cfg.remoteAccess?.password) {
-    overrides.remoteAccess = { ...cfg.remoteAccess, password: DEFAULT_SERVICE_PASSWORD }
+  const password = envPwd ?? (cfg.remoteAccess?.password ? decodeFromStorage(cfg.remoteAccess.password) : '')
+  if (password.length < 4 || password === LEGACY_SERVER_PASSWORD || password === EXAMPLE_SERVER_PASSWORD) {
+    throw new Error('Set HALO_REMOTE_PASSWORD to a unique access token before starting Halo Server')
   }
+  if (envPwd) overrides.remoteAccess = { ...cfg.remoteAccess, password: envPwd }
 
   // --- LLM source (the deployment's own model gateway) ---
   // Triggered when at least an endpoint or a key is provided. Replaces the
@@ -77,10 +75,19 @@ export function applyEnvConfig(): void {
     const model = env('HALO_AI_MODEL') || FALLBACK_MODEL
     const now = new Date().toISOString()
     const name = `${provider} (env)`
-    // Conversations bind to a source id; a fresh id each boot would orphan them.
-    const previous = cfg.aiSources?.sources?.find(s => s.name === name)
+    const legacyProvider = provider === 'openai' ? 'openai' : provider === 'anthropic' ? 'anthropic' : 'custom'
+    const sources = cfg.aiSources?.sources ?? []
+    const managed = sources.find(s => s.managedBy === 'server-env')
+    const only = sources.length === 1 ? sources[0] : undefined
+    // Older deployments wrote one active account and mirrored its credentials into api.
+    const legacy = !managed && only && only.id === cfg.aiSources?.currentId && only.name === name &&
+      only.provider === provider && only.authType === 'api-key' && cfg.api?.provider === legacyProvider &&
+      only.apiUrl === cfg.api.apiUrl && only.model === cfg.api.model && only.apiKey === cfg.api.apiKey
+      ? only : undefined
+    const previous = managed?.provider === provider ? managed : legacy
     const source: AISource = {
       id: previous?.id ?? uuidv4(),
+      managedBy: 'server-env',
       name,
       provider,
       authType: 'api-key',
@@ -91,19 +98,18 @@ export function applyEnvConfig(): void {
       createdAt: previous?.createdAt ?? now,
       updatedAt: now,
     }
-    overrides.aiSources = { version: 2, currentId: source.id, sources: [source] }
+    overrides.aiSources = {
+      ...cfg.aiSources, version: 2, currentId: source.id, currentGroupId: null,
+      sources: [...sources.filter(s => s !== managed && s !== previous), source],
+    }
     // Keep the legacy api field consistent for any code path still reading it.
-    const legacyProvider = provider === 'openai' ? 'openai' : provider === 'anthropic' ? 'anthropic' : 'custom'
     overrides.api = { provider: legacyProvider, apiKey, apiUrl, model }
   }
 
   // --- Egress proxy ---
-  // A container has no Settings page, so env is how its proxy is set. Each
-  // field is written only when its variable is, so the persisted value and the
-  // product.json `proxyOnly` default otherwise stand.
+  // Only route lists are persistent. proxy-policy resolves the proxy URL from
+  // the live environment so credentials never enter a configuration snapshot.
   const network: Record<string, unknown> = {}
-  const proxy = env('HALO_PROXY', 'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy')
-  if (proxy) network.proxy = proxy
   const proxyOnly = envList('HALO_PROXY_ONLY')
   if (proxyOnly) network.proxyOnly = proxyOnly.includes('*') ? [] : proxyOnly
   const noProxy = envList('HALO_NO_PROXY')

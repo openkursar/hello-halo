@@ -17,8 +17,7 @@ import { broadcastToAll } from '../../http/websocket'
 import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
 import { isServerMode } from '../../foundation/runtime-mode'
-import { getOutputDir } from '../../services/space-scope'
-import { reclaimReportedFile } from './report-output'
+import { reportOutputDir, resolveReportFile } from './report-output'
 import { getActiveTeamRuntime } from './team'
 import { oneLineExcerpt } from './text-truncate'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
@@ -37,8 +36,8 @@ export interface ReportToolContext {
   sessionKey: string
   /** Notification level: 'all' | 'important' | 'none'. Defaults to 'important'. */
   notificationLevel?: 'all' | 'important' | 'none'
-  /** Space owning this run; bounds where reported files may live in server mode. */
-  spaceId?: string
+  workDir?: string
+  refuseFile?: (realPath: string) => string | null
   /** Absolute path to the plans directory for file-based data_path guidance */
   plansDir?: string
   /** Drives team-specific report routing when present. */
@@ -144,12 +143,9 @@ export function createReportToolServer(
     'Plans, proposals and long reports go in a .md file: pass its absolute path ' +
     'as `data_path` and Edit that file to revise.'
 
-  // A server user reaches files only through the space, so name that directory
-  // explicitly; the desktop can open any local path.
-  const outputDir = isServerMode() ? getOutputDir(runContext.spaceId) : ''
-  const fileGuidance = outputDir
-    ? `\nWrite those files under: ${outputDir}\n` +
-      'Files written elsewhere are not visible to the user.'
+  const serverMode = isServerMode()
+  const fileGuidance = serverMode
+    ? runContext.workDir ? `\nWrite report files under: ${reportOutputDir(runContext.workDir)}` : '\nNo workspace is available. Provide the report inline.'
     : runContext.plansDir
       ? `\nBy default, write files to: ${runContext.plansDir}`
       : ''
@@ -266,9 +262,15 @@ export function createReportToolServer(
       // Optional fields
       if (input.data) content.data = input.data
       if (input.data_path) {
-        content.dataPath = isServerMode()
-          ? await reclaimReportedFile(input.data_path, runContext.spaceId)
-          : input.data_path
+        try {
+          content.dataPath = serverMode
+            ? await resolveReportFile(input.data_path, runContext.workDir, runContext.refuseFile)
+            : input.data_path
+        } catch (cause) {
+          const reason = cause instanceof Error ? cause.message : 'Report file unavailable.'
+          console.warn(`[Runtime][${runTag}] Report file rejected: ${reason}`)
+          return textResult(reason, true)
+        }
       }
       // With several questions each carries its own choices and `message` is
       // the framing, so a top-level `choices` has no question to belong to.

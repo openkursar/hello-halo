@@ -121,9 +121,26 @@ describe('browser live session', () => {
     expect(watcher.frames).toHaveLength(2)
 
     session.ack('client-1', 2)
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(250)
     expect(watcher.frames).toHaveLength(3)
 
+    session.stop('gone')
+    await vi.advanceTimersByTimeAsync(0)
+  })
+
+  it('does not capture faster when frames are acknowledged quickly', async () => {
+    const contents = new LiveContents()
+    let n = 0
+    contents.capturePage.mockImplementation(async () => image(`frame-${n++}`))
+    const session = new BrowserLiveSession('view-1', contents as never, vi.fn())
+    const watcher = viewer()
+    session.addViewer(watcher.link)
+    await vi.advanceTimersByTimeAsync(0)
+    session.ack('client-1', 1)
+    await vi.advanceTimersByTimeAsync(249)
+    expect(contents.capturePage).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(contents.capturePage).toHaveBeenCalledTimes(2)
     session.stop('gone')
     await vi.advanceTimersByTimeAsync(0)
   })
@@ -339,6 +356,7 @@ describe('browser live session', () => {
 
     session.input('client-1', { kind: 'mouse', action: 'down', x: 0.1, y: 0.1, button: 'left', clickCount: 1 })
     session.input('client-1', { kind: 'mouse', action: 'move', x: 0.2, y: 0.2 })
+    await vi.advanceTimersByTimeAsync(0)
     session.removeViewer('client-1')
     await vi.advanceTimersByTimeAsync(0)
 

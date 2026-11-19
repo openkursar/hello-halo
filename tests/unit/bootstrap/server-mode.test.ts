@@ -123,30 +123,30 @@ describe('assertDisplayAvailable', () => {
   })
 
   it('passes with x11 and a live local X socket', () => {
-    expect(() => assertDisplayAvailable()).not.toThrow()
+    expect(() => assertDisplayAvailable('linux')).not.toThrow()
     expect(exists).toHaveBeenCalledWith('/tmp/.X11-unix/X99')
   })
 
   it('refuses the headless Ozone platform', () => {
     ozonePlatform = 'headless'
-    expect(() => assertDisplayAvailable()).toThrow(/ozone-platform=headless/)
+    expect(() => assertDisplayAvailable('linux')).toThrow(/ozone-platform=headless/)
   })
 
   it('refuses to boot without DISPLAY', () => {
     vi.stubEnv('DISPLAY', '')
-    expect(() => assertDisplayAvailable()).toThrow(/DISPLAY is not set/)
+    expect(() => assertDisplayAvailable('linux')).toThrow(/DISPLAY is not set/)
   })
 
   it('refuses a local display with no X server socket', () => {
     vi.stubEnv('DISPLAY', ':99.0')
     exists.mockReturnValue(false)
-    expect(() => assertDisplayAvailable()).toThrow(/X99 does not exist/)
+    expect(() => assertDisplayAvailable('linux')).toThrow(/X99 does not exist/)
   })
 
   it('leaves a remote display to Chromium', () => {
     vi.stubEnv('DISPLAY', 'xserver.example:0')
     exists.mockReturnValue(false)
-    expect(() => assertDisplayAvailable()).not.toThrow()
+    expect(() => assertDisplayAvailable('linux')).not.toThrow()
     expect(exists).not.toHaveBeenCalled()
   })
 })

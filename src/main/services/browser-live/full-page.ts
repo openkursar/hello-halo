@@ -5,6 +5,10 @@ const PAGE_WIDTH = 1024
 const PAGE_QUALITY = 60
 /** In CSS pixels. A page that long is better reached by dragging the scrollbar. */
 const MAX_PAGE_HEIGHT = 12_000
+const MAX_BITMAP_BYTES = 16 * 1024 * 1024
+const MAX_PAGE_SCREENS = 24
+const MAX_CAPTURE_MS = 4000
+const MAX_PAGE_JPEG_BYTES = 2 * 1024 * 1024
 
 export interface FullPageImage {
   image: string
@@ -36,8 +40,9 @@ export async function captureFullPage(contents: WebContents, capture: () => Prom
   let rowsPerCss = 0
   let wanted = 0
   let emitted = 0
+  const deadline = Date.now() + MAX_CAPTURE_MS
   try {
-    while (!wanted || emitted < wanted) {
+    for (let screen = 0; screen < MAX_PAGE_SCREENS && Date.now() < deadline && (!wanted || emitted < wanted); screen++) {
       const top = await runPageScript(contents, scrollScript(rowsPerCss ? Math.floor(emitted / rowsPerCss) : 0))
       if (typeof top !== 'number' || !Number.isFinite(top)) throw new Error('Page did not scroll')
       const shot = await capture()
@@ -47,7 +52,7 @@ export async function captureFullPage(contents: WebContents, capture: () => Prom
       if (!rowsPerCss) {
         width = size.width
         rowsPerCss = size.height / metrics.height
-        wanted = Math.max(1, Math.round(covered * rowsPerCss))
+        wanted = Math.min(Math.floor(MAX_BITMAP_BYTES / (4 * width)), Math.max(1, Math.round(covered * rowsPerCss)))
       } else if (size.width !== width) {
         throw new Error('Page changed size while being captured')
       }
@@ -67,8 +72,10 @@ export async function captureFullPage(contents: WebContents, capture: () => Prom
 
   if (!emitted) throw new Error('Page yielded nothing to stitch')
   const stitched = nativeImage.createFromBitmap(Buffer.concat(slices), { width, height: emitted })
+  const jpeg = stitched.toJPEG(PAGE_QUALITY)
+  if (jpeg.length > MAX_PAGE_JPEG_BYTES) throw new Error('Whole-page capture exceeds its size limit')
   return {
-    image: `data:image/jpeg;base64,${stitched.toJPEG(PAGE_QUALITY).toString('base64')}`,
+    image: `data:image/jpeg;base64,${jpeg.toString('base64')}`,
     width,
     height: emitted,
     covered: Math.min(covered, Math.round(emitted / rowsPerCss)),

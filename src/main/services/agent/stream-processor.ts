@@ -56,8 +56,6 @@ import { AnalyticsEvents } from '../analytics/types'
 import { deriveErrorCode } from '../analytics/error-code'
 import { beginApiRetry, endApiRetry, parseApiRetryMessage } from './api-retry'
 import { explainEngineError } from './local-connection'
-import { isServerMode } from '../../foundation/runtime-mode'
-import { logWriteOutsideSpace } from '../space-scope'
 
 // Unified fallback error suffix - guides user to check logs
 const FALLBACK_ERROR_HINT = 'Check logs in Settings > System > Logs.'
@@ -1018,7 +1016,6 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
             }
             emitAgentEvent('agent:tool-call', spaceId, conversationId, toolCall as unknown as Record<string, unknown>)
             incrementToolCall(conversationId, blockState.toolName || '', toolInput)
-            if (isServerMode()) logWriteOutsideSpace(blockState.toolName || '', toolInput, spaceId, `[Agent][${conversationId}]`)
 
             if (is.dev) {
               console.log(`[Agent][${conversationId}] Tool block complete [${blockState.toolName}], input: ${JSON.stringify(toolInput).substring(0, 100)}`)
@@ -1211,7 +1208,6 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
           emitAgentEvent('agent:tool-call', spaceId, conversationId, toolCall as unknown as Record<string, unknown>)
           // Non-stream_event path, e.g. assistant SDK messages.
           incrementToolCall(conversationId, thought.toolName || '', thought.toolInput)
-          if (isServerMode()) logWriteOutsideSpace(thought.toolName || '', thought.toolInput || {}, spaceId, `[Agent][${conversationId}]`)
         } else if (thought.type === 'error') {
           // SDK reported an error (rate_limit, authentication_failed, etc.)
           // Send error to frontend - user should see the actual error from provider

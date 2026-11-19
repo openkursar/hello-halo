@@ -19,7 +19,7 @@ vi.mock('../../../../src/main/foundation/config.service', async importOriginal =
 
 import { buildSdkEnv } from '../../../../src/main/services/agent/sdk-config'
 
-const PROXY_VARS = ['NO_PROXY', 'no_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+const PROXY_VARS = ['HALO_PROXY', 'NO_PROXY', 'no_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
 let saved: Record<string, string | undefined> = {}
 
 beforeEach(() => {
@@ -86,7 +86,7 @@ describe('proxy environment of the engine process', () => {
       },
     })
 
-    expect(built.NO_PROXY).toBe('localhost,127.0.0.1,[::1],llm.corp.example,mcp.corp.example')
+    expect(built.NO_PROXY).toBe('localhost,127.0.0.1,[::1],llm.corp.example:443,mcp.corp.example:443')
     expect(built.HTTPS_PROXY).toBe('http://127.0.0.1:7890')
   })
 

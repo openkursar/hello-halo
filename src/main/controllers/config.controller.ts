@@ -128,12 +128,14 @@ export function preserveManagedSources(updates: Record<string, unknown>, existin
   if (new Set(incoming.sources.map(source => source.id)).size !== incoming.sources.length) {
     throw new Error('Duplicate AI source ids')
   }
-  const managed = (current?.version === 2 ? current.sources : []).filter(source => source.authType === 'oauth' || source.authType === 'delegated')
+  const managed = (current?.version === 2 ? current.sources : []).filter(source => source.authType === 'oauth' || source.authType === 'delegated' || source.managedBy === 'server-env')
   const byId = new Map(managed.map(source => [source.id, source]))
   const sources = incoming.sources.flatMap(source => {
     const live = byId.get(source.id)
     if (live) return [live]
-    return source.authType === 'oauth' || source.authType === 'delegated' ? [] : [source]
+    if (source.authType === 'oauth' || source.authType === 'delegated') return []
+    const { managedBy: _clientMarker, ...editable } = source
+    return [editable]
   })
   const includedIds = new Set(sources.map(source => source.id))
   for (const source of managed) {

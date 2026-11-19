@@ -61,6 +61,10 @@ const browserLiveAttach = vi.fn((_viewId: string, _link: LiveLink) => true)
 const browserLiveAck = vi.fn()
 const browserLiveRequestDetail = vi.fn()
 const browserLiveInput = vi.fn()
+const isLiveConversationPage = vi.fn((_viewId: string) => true)
+vi.mock('../../../src/main/services/ai-browser', () => ({
+  isLiveConversationPage: (viewId: string) => isLiveConversationPage(viewId),
+}))
 vi.mock('../../../src/main/services/browser-live', () => ({
   browserLiveAttach: (viewId: string, link: LiveLink) => browserLiveAttach(viewId, link),
   browserLiveDetach: vi.fn(),
@@ -167,7 +171,7 @@ describe('websocket handleClientMessage', () => {
 
     client.emitMessage({ type: 'auth', payload: { token: 'good' } })
 
-    expect(client.sent).toContainEqual({ type: 'auth:success' })
+    expect(client.sent).toContainEqual({ type: 'auth:success', payload: { browserLive: true } })
   })
 
   it('rejects terminal-resize with non-integer or negative dimensions', async () => {

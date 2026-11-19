@@ -971,6 +971,27 @@ describe('Tlon Service', () => {
       expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
     })
 
+    it('does not acknowledge a failed revocation or lose the previous grant on restart', () => {
+      const kb = createKB({ name: 'Shared' })
+      bindToApp(kb.id, 'app-1')
+      setKBGuestRead(kb.id, true)
+      const blocked = getKBIndexPath() + '.tmp'
+      fs.mkdirSync(blocked)
+      expect(() => setKBGuestRead(kb.id, false)).toThrow()
+      expect(getKB(kb.id)?.allowGuestRead).toBe(true)
+      _resetTlonRegistry()
+      expect(getKB(kb.id)?.allowGuestRead).toBe(true)
+      fs.rmdirSync(blocked)
+
+      vi.mocked(observedReadFileSync).mockClear()
+      const running = getKnowledgeReadDirsForApp('app-1')
+      expect(vi.mocked(observedReadFileSync).mock.calls.some(([p]) => p === getKBIndexMdPath(kb.id))).toBe(false)
+      setKBGuestRead(kb.id, false)
+      _resetTlonRegistry()
+      expect(getKnowledgeReadDirsForApp('app-1')).toEqual([])
+      expect(running).toEqual([getKBTextDir(kb.id)])
+    })
+
     it('leaves out a paused knowledge base even when allowed', () => {
       const kb = createKB({ name: 'Paused' })
       bindToApp(kb.id, 'app-1')

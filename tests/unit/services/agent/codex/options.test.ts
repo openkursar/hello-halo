@@ -231,7 +231,7 @@ describe('Codex proxy environment', () => {
 
     const resolved = await resolveCodexOptions({ cwd: '/work', env: {}, apiCredentials: credentials(), mcpServers })
 
-    expect(resolved.env.NO_PROXY).toBe('localhost,127.0.0.1,[::1],mcp.corp.example')
+    expect(resolved.env.NO_PROXY).toBe('localhost,127.0.0.1,[::1],mcp.corp.example:443')
     state.network = {}
   })
 })

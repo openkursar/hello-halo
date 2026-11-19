@@ -7,11 +7,11 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
 
-async function availabilityFor(platform: NodeJS.Platform): Promise<boolean> {
+async function availabilityFor(platform: NodeJS.Platform, arch = 'x64'): Promise<boolean> {
   vi.resetModules()
   vi.doMock('os', async (importOriginal) => {
     const actual = await importOriginal<typeof import('os')>()
-    return { ...actual, platform: () => platform }
+    return { ...actual, platform: () => platform, arch: () => arch }
   })
   const mod = await import('../../../../src/main/services/ai-terminal/available')
   return mod.isTerminalAvailable()
@@ -29,8 +29,9 @@ describe('isTerminalAvailable', () => {
   it('is available on Windows', async () => {
     expect(await availabilityFor('win32')).toBe(true)
   })
-  it('is available on Linux', async () => {
-    expect(await availabilityFor('linux')).toBe(true)
+  it('offers only the Linux architecture with a packaged addon', async () => {
+    expect(await availabilityFor('linux', 'x64')).toBe(true)
+    expect(await availabilityFor('linux', 'arm64')).toBe(false)
   })
   it('is NOT available on platforms without a packaged prebuild', async () => {
     expect(await availabilityFor('freebsd')).toBe(false)

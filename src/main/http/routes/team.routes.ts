@@ -1,5 +1,6 @@
 /** Digital Team REST API routes. Thin delegation to TeamService. */
 import type { Express, Request, Response } from 'express'
+import { z } from 'zod'
 import { getTeamService, getTeamStore, workMemberPrincipalId } from '../../apps/team'
 import { readTeamMemberHistory } from '../../apps/runtime/app-chat'
 import { getOfficeCredential } from '../auth/middleware'
@@ -30,6 +31,10 @@ import type {
   TeamActivity,
   TeamArtifactGroup,
 } from '../../../shared/apps/team-types'
+
+const leaveSelection = z.object({
+  appIds: z.array(z.string().min(1).refine(id => id === id.trim())).min(1).optional(),
+}).strict()
 
 export function registerTeamRoutes(app: Express, options: { assistant?: boolean } = {}): void {
   if (options.assistant) {
@@ -867,10 +872,16 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
   // optional `appIds` list makes only those members leave; the node stays.
   app.post('/api/teams/:teamId/leave', async (req: Request, res: Response) => {
     try {
-      const appIds = Array.isArray(req.body?.appIds)
-        ? (req.body.appIds as unknown[]).filter((id): id is string => typeof id === 'string')
-        : undefined
-      res.json(await leaveTeamOffice(req.params.teamId, appIds))
+      // An unparsed body is not an empty selection: only a truly bodyless
+      // request or an explicit {} can withdraw the whole node.
+      const bodyless = !req.headers['transfer-encoding'] && !Number(req.headers['content-length'])
+      const selection = leaveSelection.safeParse(bodyless && req.body === undefined ? {} : req.body)
+      if (!selection.success) {
+        console.warn('[HTTP] Refused malformed office leave request', { officeId: req.params.teamId })
+        res.status(400).json({ success: false, error: 'Expected an empty object or a non-empty list of member appIds.' })
+        return
+      }
+      res.json(await leaveTeamOffice(req.params.teamId, selection.data.appIds))
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

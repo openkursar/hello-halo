@@ -56,11 +56,11 @@ describe('whole-page capture', () => {
     expect(result).toEqual({ image: `data:image/jpeg;base64,${Buffer.from('stitched').toString('base64')}`, width: 1024, height: 1600, covered: 2000, total: 2000 })
   })
 
-  it('stops at the height cap', async () => {
+  it('stops at the bitmap byte budget and reports the covered part', async () => {
     const { contents, capture } = page([1280, 800, 0, 20_000], { viewport: 800, total: 20_000 })
     const result = await captureFullPage(contents, capture)
-    expect(result).toMatchObject({ height: 9600, covered: 12_000, total: 20_000 })
-    expect(capture).toHaveBeenCalledTimes(15)
+    expect(result).toMatchObject({ height: 4096, covered: 5120, total: 20_000 })
+    expect(capture).toHaveBeenCalledTimes(7)
   })
 
   it('gives up on a page that does not answer, and still puts it back', async () => {

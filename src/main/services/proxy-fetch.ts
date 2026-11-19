@@ -33,7 +33,7 @@ import { Readable } from 'node:stream'
 import { ProxyAgent } from 'proxy-agent'
 import { getConfig, onNetworkConfigChange } from '../foundation/config.service'
 import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from '../foundation/logging'
-import { chromiumBypassRules, compileBypassList, effectiveProxyOnly, proxyBypassList, type ProxySettings } from './proxy-policy'
+import { chromiumBypassRules, compileBypassList, effectiveProxyOnly, proxyBypassList, serverProxyUrl, type ProxySettings } from './proxy-policy'
 import { proxyRequiredMessage, type ProxyRequiredReason } from '../../shared/constants/proxy-required'
 import type { ProxyRouteInfo } from '../../shared/rpc/contracts/system.contract'
 
@@ -130,7 +130,7 @@ async function resolveSystemProxy(url: string): Promise<string | null> {
     proxyCache.set(origin, { proxyUrl, expiresAt: now + PROXY_CACHE_TTL_MS })
 
     if (proxyUrl) {
-      console.log(`[ProxyFetch] Resolved proxy for ${origin}: ${proxyUrl}`)
+      console.debug('[ProxyFetch] System proxy selected')
     }
 
     return proxyUrl
@@ -191,7 +191,7 @@ function proxyStateFrom(network: (ProxySettings & { requireProxyForOAuth?: boole
   const bypass = proxyBypassList(network, [process.env.NO_PROXY, process.env.no_proxy])
   const proxyOnly = effectiveProxyOnly(network?.proxyOnly)
   return {
-    proxy: network?.proxy?.trim() || null,
+    proxy: serverProxyUrl() || network?.proxy?.trim() || null,
     bypass,
     goesDirect: compileBypassList(bypass),
     proxyOnly,
@@ -237,12 +237,10 @@ function applyProxyToBrowserSession(proxy: string | null, bypass: string[]): voi
     sess.setProxy(config)
       .then(() => {
         console.log(
-          `[ProxyFetch] Browser session (${BROWSER_PARTITION}) proxy: ${proxy || 'system'}`
+          `[ProxyFetch] Browser session (${BROWSER_PARTITION}) proxy: ${proxy ? 'configured' : 'system'}`
         )
       })
-      .catch((err) => {
-        console.error(`[ProxyFetch] Failed to set browser session proxy:`, err)
-      })
+      .catch(() => console.error('[ProxyFetch] Browser session rejected proxy configuration'))
   } catch (err) {
     // session.fromPartition may throw if called before app.whenReady()
     // — safe to ignore during very early module loading.
@@ -255,8 +253,7 @@ onNetworkConfigChange(({ proxy, browserUseProxy, noProxy, proxyOnly, requireProx
   // AI Browser only follows Settings proxy when explicitly opted-in;
   // otherwise it uses the system proxy (Electron default behavior).
   applyProxyToBrowserSession(browserUseProxy ? _proxyState.proxy : null, _proxyState.bypass)
-  console.log(`[ProxyFetch] App proxy updated: ${_proxyState.proxy || 'none (auto-detect from system)'}, browser: ${browserUseProxy ? 'follows settings' : 'system'}, direct: ${_proxyState.bypass.join(',')}` +
-    (_proxyState.proxyOnly.length > 0 ? `, proxied only: ${_proxyState.proxyOnly.join(',')}` : ''))
+  console.log(`[ProxyFetch] App proxy: ${_proxyState.proxy ? 'configured' : 'system'}, browser: ${browserUseProxy ? 'follows settings' : 'system'}, bypass rules: ${_proxyState.bypass.length}, proxy-only rules: ${_proxyState.proxyOnly.length}`)
 })
 
 function getProxyState(): ProxyState {
@@ -314,6 +311,8 @@ export function isProxyRequiredError(error: unknown): error is ProxyRequiredErro
 }
 
 export interface ProxyFetchOptions {
+  /** Do not persist this request or its response in developer HTTP diagnostics. */
+  privateDiagnostics?: boolean
   /** The request belongs to an account that must not connect directly when Settings requires a proxy. */
   guarded?: boolean
 }
@@ -594,7 +593,7 @@ export async function proxyFetch(
   const proxyUrl = await resolveGuardedProxyUrlFor(urlStr, guarded)
 
   const method = (init?.method || 'GET').toUpperCase()
-  const logging = isHttpLoggingEnabled()
+  const logging = !options?.privateDiagnostics && isHttpLoggingEnabled()
 
   // Developer HTTP logging — no-op when disabled (isHttpLoggingEnabled is O(1))
   if (logging) {
@@ -614,10 +613,10 @@ export async function proxyFetch(
     // Keep it at debug so it is suppressed in normal production (file level=info) and
     // only surfaces when Developer Mode raises the level to debug. Important requests
     // (LLM/upstream) are already traced at info by their own handlers.
-    console.debug(`[ProxyFetch] DIRECT ${method} ${urlStr}`)
+    if (!options?.privateDiagnostics) console.debug(`[ProxyFetch] DIRECT ${method} ${urlStr}`)
     response = await _originalFetch(url, init)
   } else {
-    console.debug(`[ProxyFetch] VIA ${proxyUrl} → ${method} ${urlStr}`)
+    if (!options?.privateDiagnostics) console.debug(`[ProxyFetch] PROXIED ${method} ${urlStr}`)
     const agent = getOrCreateAgent(proxyUrl)
     try {
       response = await makeRequest(urlStr, init, agent)

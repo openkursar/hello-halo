@@ -1,46 +1,47 @@
-/**
- * useServerBackend — whether this client is driving a headless server.
- *
- * A web client looks the same whether its backend is a headless server or a
- * desktop shared over Remote Access. The difference matters for node-level
- * settings: a desktop owner changes them in the desktop window, while a server
- * has no window, so its web client is the only place left to do it.
- *
- * Fixed for the life of the backend process, so it is fetched once per
- * renderer and shared. `false` while loading and on any failure: settings stay
- * hidden rather than briefly appearing on a desktop-backed web client. The
- * HTTP routes behind those settings enforce their own auth either way — this
- * is a UX gate, not a security boundary.
- */
-
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { api } from '../api'
+import { getRemoteServerUrl, getServerUrl, isCapacitor, isElectron, onServerUrlChange, onWsStateChange } from '../api/transport'
 
-let cached: Promise<boolean> | null = null
+type Runtime = { serverMode: boolean }
+const desktop: Runtime = { serverMode: false }
+const noSubscription = () => () => {}
+const noServer = () => null
+const currentServer = () => isCapacitor() ? getServerUrl() : getRemoteServerUrl()
+let pending: { url: string; request: Promise<Runtime | null> } | undefined
 
-async function fetchServerBackend(): Promise<boolean> {
-  try {
-    const res = await api.getRuntimeInfo()
-    return res.success === true && res.data?.serverMode === true
-  } catch (error) {
-    console.error('[useServerBackend] Fetch failed, assuming a desktop backend:', error)
-    return false
-  }
+function readRuntime(url: string): Promise<Runtime | null> {
+  if (pending?.url === url) return pending.request
+  const request: Promise<Runtime | null> = api.getRuntimeInfo().then(result => {
+    if (result.success && typeof result.data?.serverMode === 'boolean') return result.data
+    console.warn('[Runtime] Backend capabilities unavailable:', result.error ?? 'Invalid response')
+    return null
+  }).catch(error => {
+    console.warn('[Runtime] Backend capabilities unavailable:', error)
+    return null
+  }).finally(() => { if (pending?.request === request) pending = undefined })
+  pending = { url, request }
+  return request
+}
+
+/** An unknown backend grants no server-only controls. Retry when the view opens or its connection returns. */
+export function useBackendRuntime(enabled = true): Runtime | null {
+  const remote = enabled && !isElectron()
+  const url = useSyncExternalStore(remote && isCapacitor() ? onServerUrlChange : noSubscription, remote ? currentServer : noServer, noServer)
+  const [answer, setAnswer] = useState<{ url: string; runtime: Runtime | null } | null>(null)
+  useEffect(() => {
+    if (!url) return
+    let active = true
+    const refresh = () => {
+      void readRuntime(url).then(runtime => { if (active) setAnswer({ url, runtime }) })
+    }
+    refresh()
+    const unsubscribe = onWsStateChange(state => { if (state === 'connected') refresh() })
+    return () => { active = false; unsubscribe() }
+  }, [url])
+  if (!enabled) return null
+  return remote ? (url && answer?.url === url ? answer.runtime : null) : desktop
 }
 
 export function useServerBackend(): boolean {
-  const [serverBackend, setServerBackend] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    if (!cached) cached = fetchServerBackend()
-    cached.then((value) => {
-      if (!cancelled) setServerBackend(value)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  return serverBackend
+  return useBackendRuntime()?.serverMode === true
 }

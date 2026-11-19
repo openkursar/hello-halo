@@ -260,6 +260,24 @@ describe('HTTP response validation', () => {
     expect(fetcher).toHaveBeenCalledWith('https://host.example.com/mounted/api/store/apps?search=x', expect.any(Object))
   })
 
+  it.each(['server', 'credential'])('does not sign out the new connection after a %s change', async change => {
+    const fetcher = prepare(new Response())
+    const reload = vi.fn()
+    const removeItem = vi.fn()
+    let token = 'first'
+    setGlobal('window', { location: { reload } })
+    setGlobal('localStorage', { getItem: () => token, removeItem })
+    let finish!: (response: Response) => void
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const previous = httpRequest('GET', '/api/system/runtime')
+    if (change === 'server') setGlobal('document', { baseURI: 'https://second.example.com/' })
+    else token = 'second'
+    finish(new Response(null, { status: 401 }))
+    expect((await previous).success).toBe(false)
+    expect(removeItem).not.toHaveBeenCalled()
+    expect(reload).not.toHaveBeenCalled()
+  })
+
   it('still handles unauthorized responses before content-type validation', async () => {
     prepare(new Response('Unauthorized', { status: 401 }))
     const reload = vi.fn()

@@ -5,9 +5,9 @@
  * platforms whose node-pty prebuild is not packaged.
  */
 
-import { platform } from 'os'
+import { arch, platform } from 'os'
 
 export function isTerminalAvailable(): boolean {
   const os = platform()
-  return os === 'darwin' || os === 'win32' || os === 'linux'
+  return os === 'darwin' || os === 'win32' || (os === 'linux' && arch() === 'x64')
 }

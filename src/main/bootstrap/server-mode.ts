@@ -15,7 +15,7 @@ import { existsSync } from 'fs'
 import { initializeEssentialServices, initializeExtendedServices } from './index'
 import { enableRemoteAccess } from '../services/remote'
 import { initAnalytics } from '../services/analytics'
-import { getInstanceId, getServerPort } from '../foundation/runtime-mode'
+import { getServerPort } from '../foundation/runtime-mode'
 import { applyEnvConfig } from '../foundation/env-config'
 import { registerBrowserHostHandlers } from '../ipc/browser-host'
 
@@ -39,15 +39,9 @@ import { registerBrowserHostHandlers } from '../ipc/browser-host'
  * survived purely on that accident. Not worth keeping a line that reads as an
  * intent the process cannot satisfy.
  *
- * The same caveat applies to no-sandbox below, and it is not academic: the
- * container runs as root, and Electron's root check also reads the real command
- * line before this file is loaded, aborting with a FATAL at
- * electron_main_delegate.cc (exit 133). So --no-sandbox has to be on argv too —
- * the switch here only reaches process launches that happen later. Both flags
- * are the entrypoint's responsibility; see deploy/server/docker-entrypoint.sh.
+ * The platform and sandbox flags are owned by the launcher, not by server mode.
  */
 export function applyServerModeSwitches(app: App): void {
-  app.commandLine.appendSwitch('no-sandbox')
   app.commandLine.appendSwitch('disable-gpu')
   app.disableHardwareAcceleration()
 }
@@ -70,7 +64,8 @@ export function applyServerModeSwitches(app: App): void {
  * platform Chromium's own Ozone init already fails fast and loudly ("Missing X
  * server or $DISPLAY"), before this code is ever reached.
  */
-export function assertDisplayAvailable(): void {
+export function assertDisplayAvailable(hostPlatform: NodeJS.Platform = process.platform): void {
+  if (hostPlatform !== 'linux') return
   // Reflects the real command line, which is what Ozone actually loaded —
   // unlike an in-process appendSwitch, which cannot change the platform because
   // Ozone selects before the main script runs.
@@ -157,7 +152,6 @@ export async function bootServerMode(): Promise<void> {
     // The GUI path starts analytics once its window is ready; there is no
     // window here, so it never started. Not awaited: a telemetry backend
     // outage must not keep the server from becoming reachable.
-    console.log(`[ServerMode] instance id: ${getInstanceId() ?? 'unavailable'}`)
     initAnalytics().catch(err => console.warn('[Analytics] Init failed:', err))
 
     const status = await enableRemoteAccess(port)

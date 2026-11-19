@@ -44,7 +44,9 @@ import {
   getKBIndexMdPath,
   getKBTextDir,
   getKBStagingDir,
+  getKBRetainedDir,
 } from './paths'
+import { publishRelease } from './release-publication'
 import {
   getKB,
   listKBs,
@@ -52,7 +54,7 @@ import {
   writeHashes,
   refreshStats,
   markIngestCompleted,
-  collectIngestCandidates,
+  releaseRetirements,
   clearWikiAndHashes,
   retireRemovedSources,
   sweepRemovedSources,
@@ -66,7 +68,6 @@ import {
   collectLinkedVersions,
   linkedDirForSource,
   pendingForgets,
-  retireForgottenSources,
 } from './service'
 import { extractText } from './extract'
 import { DEFAULT_INDEX_MD } from './defaults'
@@ -167,10 +168,13 @@ export async function triggerFullIngest(kbId: string): Promise<void> {
     }
   }
 
-  await sweepRemovedSourcesAndIndex(kbId)
-  if (!getKB(kbId)) return
-  markRetirementMigrated(kbId)
-  const candidates = collectIngestCandidates(kbId)
+  const hashes = readHashes(kbId)
+  if (!replacingRelease(kbId, hashes)) {
+    await sweepRemovedSourcesAndIndex(kbId)
+    if (!getKB(kbId)) return
+    markRetirementMigrated(kbId)
+  }
+  const candidates = collectCandidatesRetiringRemoved(kbId)
   enqueueFiles(kbId, candidates)
 
   const queue = queues.get(kbId) || []
@@ -203,8 +207,16 @@ function afterRetirement(kbId: string, removed: number): number {
  * retired — no second pass over the KB.
  */
 export function collectCandidatesRetiringRemoved(kbId: string): ReturnType<typeof scanIngestSources>['candidates'] {
-  const { candidates, unseen } = scanIngestSources(kbId)
-  if (unseen.length > 0) afterRetirement(kbId, retireRemovedSources(kbId, unseen))
+  const hashes = readHashes(kbId)
+  const versions = hashes.versions || hashes.forget?.length ? collectLinkedVersions(kbId, hashes.versions) : undefined
+  const { candidates, unseen, incomplete } = scanIngestSources(kbId, hashes)
+  if (versions && replacingRelease(kbId, hashes, versions)) {
+    const scan = { unseen: new Set(unseen), incomplete, versions, forget: hashes.forget ?? [] }
+    releaseScans.set(kbId, scan)
+  } else {
+    releaseScans.delete(kbId)
+    if (unseen.length > 0) afterRetirement(kbId, retireRemovedSources(kbId, unseen))
+  }
   return candidates
 }
 
@@ -225,6 +237,7 @@ export function evictIngestState(kbId: string): void {
   // otherwise keep extracting for the deleted KB.
   if (queue) queue.length = 0
   queues.delete(kbId)
+  releaseScans.delete(kbId)
   progress.delete(kbId)
 }
 
@@ -252,13 +265,13 @@ export async function migrateKBsToTextIndex(): Promise<void> {
     try {
       // Text left behind by removals before this cleanup existed is found by
       // one full pass per KB; afterwards each scan's own walk finds removals.
-      if (!isRetirementMigrated(kb.id)) {
+      if (!isRetirementMigrated(kb.id) && !replacingRelease(kb.id, readHashes(kb.id))) {
         await sweepRemovedSourcesAndIndex(kb.id)
         if (!getKB(kb.id)) continue
         markRetirementMigrated(kb.id)
       }
       const candidates = collectCandidatesRetiringRemoved(kb.id)
-      if (candidates.length > 0) {
+      if (candidates.length > 0 || hasPendingCommit(kb.id)) {
         enqueueFiles(kb.id, candidates, { automatic: true })
         await processQueue(kb.id)
       }
@@ -287,6 +300,17 @@ function sameVersions(a: Record<string, string> | undefined, b: Record<string, s
   return keys.length === Object.keys(b).length && keys.every(k => a?.[k] === b[k])
 }
 
+type ReleaseScan = { unseen: Set<string>; incomplete: boolean; versions: Record<string, string>; forget: string[] }
+const releaseScans = new Map<string, ReleaseScan>()
+
+function replacingRelease(kbId: string, hashes: IngestHashesV1, versions?: Record<string, string>): boolean {
+  if (hashes.forget?.length) return true
+  if (!hashes.versions) return false
+  const current = versions ?? collectLinkedVersions(kbId, hashes.versions)
+  return getKB(kbId)?.linkedDirs.some(dir =>
+    hashes.versions?.[dir.path] !== undefined && hashes.versions[dir.path] !== current[dir.path]) === true
+}
+
 type IngestRecord = IngestHashesV1['files'][string]
 
 /**
@@ -300,6 +324,7 @@ interface IngestBatch {
   records: Map<string, { record: IngestRecord; staged?: string; read: TextStamp; job: IngestJob }>
   /** Folder versions at batch start, recorded on each learned source. */
   versions: Record<string, string>
+  release?: ReleaseScan
 }
 
 /** Extracted by this batch and not changed since. */
@@ -325,7 +350,11 @@ export async function processQueue(kbId: string): Promise<void> {
   // Registered so the watcher enqueues into the array this batch drains.
   queues.set(kbId, queue)
 
-  processing.add(kbId)
+  const hashes = readHashes(kbId)
+  const versions = collectLinkedVersions(kbId, hashes.versions)
+  if (replacingRelease(kbId, hashes, versions) && !releaseScans.has(kbId)) {
+    enqueueFiles(kbId, collectCandidatesRetiringRemoved(kbId), { automatic: true })
+  }
   let completed = 0
   let pausedJobs = 0
   const errors: Array<{ file: string; message: string }> = []
@@ -335,8 +364,10 @@ export async function processQueue(kbId: string): Promise<void> {
   const batch: IngestBatch = {
     stagingDir,
     records: new Map(),
-    versions: collectLinkedVersions(kbId, readHashes(kbId).versions),
+    versions,
+    release: releaseScans.get(kbId),
   }
+  processing.add(kbId)
   activeBatches.set(kbId, batch)
 
   emitProgress({
@@ -357,6 +388,7 @@ export async function processQueue(kbId: string): Promise<void> {
           job.status = 'skipped'
           pausedJobs++
         } else await extractSource(kbId, job, batch)
+        if (batch.release && job.status !== 'completed') throw new Error('Replacement source was not learned')
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         console.error(`[Tlon] Extract failed for ${job.sourcePath}:`, message)
@@ -378,19 +410,30 @@ export async function processQueue(kbId: string): Promise<void> {
       })
     }
     // A KB deleted mid-batch has nothing to commit into.
-    if (getKB(kbId)) commitBatch(kbId, batch)
+    if (getKB(kbId)) {
+      if (batch.release) {
+        if (errors.length || batch.release.incomplete) throw new Error('Replacement sources were not fully learned')
+        commitRelease(kbId, batch, batch.release)
+      } else commitBatch(kbId, batch)
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(`[Tlon] Publication did not complete for ${kbId}:`, error)
+    emitProgress({ kbId, total: completed, completed, phase: 'error', error: message, errors })
+    return
   } finally {
     activeBatches.delete(kbId)
-    rmSync(stagingDir, { recursive: true, force: true })
     processing.delete(kbId)
     queues.delete(kbId)
+    releaseScans.delete(kbId)
+    rmSync(stagingDir, { recursive: true, force: true })
   }
 
   if (!getKB(kbId)) return
   if (pausedJobs) console.log(`[Tlon] Deferred ${pausedJobs} automatic source(s) while knowledge base ${kbId} is paused`)
 
   // Rebuild the document map once per batch (not per file) — O(n), not O(n^2).
-  rebuildIndexMd(kbId)
+  if (!batch.release) rebuildIndexMd(kbId)
   markIngestCompleted(kbId)
   emitProgress({
     kbId,
@@ -443,8 +486,13 @@ async function extractSource(kbId: string, job: IngestJob, batch: IngestBatch): 
   const textPath = generatedTextName(job.sourcePath)
   // Legacy spreadsheet upgrades keep writing in place: they replace text with
   // an equivalent rendering, not a new document set.
-  if (await upgradeXlsxSource(job, textPath, () => appendLog(job, textPath))) return
   const revision = extractionRevision(job.absolutePath)
+  if (batch.release && revision !== undefined) {
+    const previous = readHashes(kbId).files[job.sourcePath]
+    if (previous && (previous.protection || (previous.extractorRevision ?? 0) < revision)) {
+      throw new Error('Previous spreadsheet text needs preservation before this release can replace it')
+    }
+  } else if (await upgradeXlsxSource(job, textPath, () => appendLog(job, textPath))) return
   const kb = getKB(kbId)
   const dir = kb && job.sourceType === 'linked' ? linkedDirForSource(kb, job.sourcePath) : undefined
   const folderVersion = dir ? batch.versions[dir.path] : undefined
@@ -519,6 +567,11 @@ async function extractSource(kbId: string, job: IngestJob, batch: IngestBatch): 
  * A source replaced or removed since it was read is left out.
  */
 function commitBatch(kbId: string, batch: IngestBatch): void {
+  const previous = readHashes(kbId)
+  const current = collectLinkedVersions(kbId, previous.versions)
+  if (replacingRelease(kbId, previous, current) || !sameVersions(batch.versions, current)) {
+    throw new Error('Knowledge sources changed while learning; rescan to publish the new release')
+  }
   const textDir = getKBTextDir(kbId)
   const accepted: Array<[string, IngestRecord]> = []
   for (const [sourcePath, entry] of batch.records) {
@@ -536,13 +589,67 @@ function commitBatch(kbId: string, batch: IngestBatch): void {
     }
     accepted.push([sourcePath, entry.record])
   }
-  const hashes: IngestHashesV1 = readHashes(kbId)
-  for (const [sourcePath, record] of accepted) hashes.files[sourcePath] = record
-  const versions = collectLinkedVersions(kbId, hashes.versions)
-  if (Object.keys(versions).length > 0) hashes.versions = versions
-  else delete hashes.versions
-  writeHashes(kbId, hashes)
-  retireForgottenSources(kbId)
+  for (const [sourcePath, record] of accepted) previous.files[sourcePath] = record
+  if (Object.keys(current).length > 0) previous.versions = current
+  else delete previous.versions
+  writeHashes(kbId, previous)
+}
+
+function commitRelease(kbId: string, batch: IngestBatch, scan: ReleaseScan): void {
+  const kb = getKB(kbId)!
+  const hashes = readHashes(kbId)
+  const current = collectLinkedVersions(kbId, hashes.versions)
+  const latest = releaseScans.get(kbId)
+  if (!latest || latest.incomplete || !sameVersions(scan.versions, current) || !sameVersions(batch.versions, current)
+      || JSON.stringify(hashes.forget ?? []) !== JSON.stringify(scan.forget)) {
+    throw new Error('Knowledge sources changed while learning; the previous release was kept')
+  }
+  for (const entry of batch.records.values()) {
+    if (!entry.staged || sourceChangedDuringExtraction(entry.job, entry.read)) throw new Error('Replacement text is not ready')
+  }
+  for (const dir of hashes.replacements ?? []) {
+    const hasNewText = [...batch.records.keys()].some(key => isWithinDir(dir, key))
+    const hasExistingText = !hasNewText && Object.entries(hashes.files).some(([key, doc]) =>
+      doc.textPath && !latest.unseen.has(key) && isWithinDir(dir, key) && ownedTextPath(getKBTextDir(kbId), doc.textPath))
+    if (!hasNewText && !hasExistingText) throw new Error('Replacement folder has no learned text; the previous release was kept')
+  }
+  const retiring = releaseRetirements(kb, hashes, latest.unseen)
+  const names = [...batch.records.values()].map(item => item.record.textPath!)
+  const textDir = getKBTextDir(kbId)
+  const retained = new Map<string, string>()
+  for (const item of retiring) {
+    if (!item.name) continue
+    names.push(item.name)
+    if (!item.retain) continue
+    const dir = getKBRetainedDir(kbId)
+    mkdirSync(dir, { recursive: true })
+    if (!lstatSync(dir).isDirectory()) throw new Error('Retained text directory is not owned')
+    let name = item.name
+    for (let n = 2; lstatSync(join(dir, name), { throwIfNoEntry: false }); n++) name = `${item.name.slice(0, -4)}-${n}.txt`
+    retained.set(item.key, join(dir, name))
+    names.push(`retained/${name}`)
+  }
+  publishRelease(kbId, names, () => {
+    for (const [source, item] of batch.records) {
+      renameSync(item.staged!, join(textDir, item.record.textPath!))
+      hashes.files[source] = item.record
+    }
+    for (const item of retiring) {
+      if (item.name) {
+        const path = join(textDir, item.name)
+        const destination = retained.get(item.key)
+        if (destination) renameSync(path, destination)
+        else rmSync(path)
+      }
+      delete hashes.files[item.key]
+    }
+    if (Object.keys(current).length) hashes.versions = current
+    else delete hashes.versions
+    delete hashes.forget
+    delete hashes.replacements
+    writeHashes(kbId, hashes, true)
+    rebuildIndexMd(kbId, true)
+  })
 }
 
 /** Rename within one volume; copy then remove when staging and text/ differ. */
@@ -567,7 +674,7 @@ function moveFile(from: string, to: string): void {
  *
  * Exported so a bootstrap refresh can regenerate the map without re-extracting.
  */
-export function rebuildIndexMd(kbId: string): void {
+export function rebuildIndexMd(kbId: string, publishing = false): void {
   const kb = getKB(kbId)
   if (!kb) return
   const indexPath = getKBIndexMdPath(kbId)
@@ -582,6 +689,13 @@ export function rebuildIndexMd(kbId: string): void {
   const textDir = getKBTextDir(kbId)
   const hashes = readHashes(kbId)
   const { mapMaxDocs } = effectiveKBOptions(kb)
+  const save = (content: string) => {
+    if (!publishing) return writeFileSync(indexPath, content, 'utf-8')
+    const staged = join(getKBStagingDir(kbId), 'index.md')
+    mkdirSync(getKBStagingDir(kbId), { recursive: true })
+    writeFileSync(staged, content, 'utf-8')
+    renameSync(staged, indexPath)
+  }
 
   // Grouped by watched folder (in configured order, named relative to it and
   // tagged with its version), then added files, then anything else learned.
@@ -605,7 +719,7 @@ export function rebuildIndexMd(kbId: string): void {
 
   const total = groups.reduce((n, g) => n + g.docs.length, 0) + added.length + other.length
   if (total === 0) {
-    writeFileSync(getKBIndexMdPath(kbId), DEFAULT_INDEX_MD, 'utf-8')
+    save(DEFAULT_INDEX_MD)
     return
   }
 
@@ -644,7 +758,7 @@ export function rebuildIndexMd(kbId: string): void {
     md += `\n…and ${total - listed} more documents — Glob \`${textDir}\` to list all.\n`
   }
   md += '\n'
-  writeFileSync(getKBIndexMdPath(kbId), md, 'utf-8')
+  save(md)
 }
 
 interface MapDoc { name: string; absPath: string }

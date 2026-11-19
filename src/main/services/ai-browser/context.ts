@@ -131,6 +131,13 @@ export function listLivePages(): AIBrowserLivePage[] {
   return pages
 }
 
+export function isLiveConversationPage(viewId: string): boolean {
+  for (const ctx of liveContexts) {
+    if (ctx.conversationId && ctx.isWatchable(viewId) && (ctx.ownsView(viewId) || ctx.getActiveViewId() === viewId)) return true
+  }
+  return false
+}
+
 /**
  * Stop a page from the live-session tray on behalf of `conversationId`.
  *
@@ -534,7 +541,10 @@ export class BrowserContext implements BrowserContextInterface {
 
   /** A person operated a page from outside its window; only the page this context acts on matters. */
   handleUserInput(viewId: string): void {
-    if (this.activeViewId === viewId) this.userInputPending = true
+    if (this.activeViewId !== viewId) return
+    this.userInputPending = true
+    this.lastSnapshot = null
+    this.snapshotContents = null
   }
 
   /** Tells the AI, once, that the page changed under it since it last looked. */
@@ -1227,7 +1237,7 @@ export class BrowserContext implements BrowserContextInterface {
     if (!this.pageOperations && this.released) this.pageTarget.disable()
   }
 
-  private async withPageFrames<T>(operation: () => Promise<T>, timeoutMs = CDP_TIMEOUT): Promise<T> {
+  private async withPageFrames<T>(operation: () => Promise<T>, timeoutMs = CDP_TIMEOUT, signal?: AbortSignal): Promise<T> {
     const contents = this.getWebContents()
     if (!contents || this.released) throw new Error('No active browser view')
     const inherited = this.pageTarget.getStore()
@@ -1242,6 +1252,9 @@ export class BrowserContext implements BrowserContextInterface {
       deadline: inherited?.deadline ?? Date.now() + timeoutMs,
       signal: controller.signal,
     }
+    const cancel = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', cancel, { once: true })
+    if (signal?.aborted) cancel()
     this.pageOperations++
     this.operationCancellations.set(controller, target)
     try {
@@ -1254,6 +1267,7 @@ export class BrowserContext implements BrowserContextInterface {
         beforeRelease: () => target.input?.release() ?? Promise.resolve(),
       })
     } finally {
+      signal?.removeEventListener('abort', cancel)
       controller.abort(new Error('Browser operation finished'))
       void target.input?.dispose()
       this.operationCancellations.delete(controller)
@@ -1268,7 +1282,7 @@ export class BrowserContext implements BrowserContextInterface {
     return this.withPageFrames(() => this.clickElementWithFrames(uid, options))
   }
 
-  private async clickElementWithFrames(uid: string, options?: { dblClick?: boolean }): Promise<void> {
+  private async clickElementWithFrames(uid: string, options?: { dblClick?: boolean; beforeClick?: () => void }): Promise<void> {
     const element = this.getElementByUid(uid)
     if (!element) {
       throw new Error(`Element not found: ${uid}`)
@@ -1292,6 +1306,7 @@ export class BrowserContext implements BrowserContextInterface {
     const x = box.x + box.width / 2
     const y = box.y + box.height / 2
 
+    options?.beforeClick?.()
     // Perform click using CDP
     if (options?.dblClick) {
       // Double-click requires two full click cycles.
@@ -1367,18 +1382,36 @@ export class BrowserContext implements BrowserContextInterface {
     return this.withPageFrames(() => this.fillElementWithFrames(uid, value))
   }
 
-  /**
-   * Fill a field with text the user typed themselves (see credential-broker),
-   * and withhold what it holds from every later snapshot of this page.
-   *
-   * Marked before the text goes in, so a fill that fails half-way still leaves
-   * the field redacted.
-   */
-  async fillElementWithUserText(uid: string, value: string): Promise<FieldReadBack> {
-    const element = this.getElementByUid(uid)
-    if (!element) throw new Error(`Element not found: ${uid}`)
-    this.redactValue(element.backendNodeId)
-    return this.fillElement(uid, value)
+  async submitUserText(
+    snapshot: AccessibilitySnapshot,
+    values: ReadonlyMap<string, string>,
+    submitUid: string | undefined,
+    signal: AbortSignal,
+    beginSubmission: () => void,
+  ): Promise<boolean> {
+    return this.withPageFrames(async () => {
+      if (this.getLastSnapshot() !== snapshot || this.pageTarget.getStore()?.snapshot !== snapshot) {
+        throw new Error('The page no longer has the original form')
+      }
+      for (const [uid, value] of values) {
+        const element = this.getElementByUid(uid)
+        if (!element) throw new Error('The credential field is no longer available')
+        this.redactValue(element.backendNodeId)
+        const filled = await this.fillElementWithFrames(uid, value)
+        if (filled.kind === 'unreadable' || filled.value !== value) return false
+      }
+      if (this.getLastSnapshot() !== snapshot) return false
+      const markSubmitted = () => {
+        if (this.getLastSnapshot() !== snapshot) throw new Error('The original form changed before submission')
+        beginSubmission()
+      }
+      if (submitUid) await this.clickElementWithFrames(submitUid, { beforeClick: markSubmitted })
+      else {
+        markSubmitted()
+        await this.pressKeyWithFrames('Enter')
+      }
+      return true
+    }, 30_000, signal)
   }
 
   private redactValue(backendNodeId: number): void {

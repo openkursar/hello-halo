@@ -276,6 +276,8 @@ export interface AISource {
   // ===== Basic Info (Required) =====
   /** Unique identifier, UUID format */
   id: string
+  /** This account is maintained from the server deployment environment. */
+  managedBy?: 'server-env'
   /** Display name, user-defined */
   name: string
   /** Provider ID (e.g., 'anthropic', 'deepseek', 'custom') */

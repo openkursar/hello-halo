@@ -46,9 +46,11 @@ renders outside the captured surface).
 
 ## Watching is explicit
 
-Nothing streams until a viewer attaches, and attaching is a deliberate click on
-the page's own tab. Most of the time nobody needs to see the browser, and a page
-nobody is looking at must cost nothing:
+Opening the page's canvas tab attaches the viewer; switching tabs, collapsing
+Canvas, hiding the client, or disconnecting detaches it. There is no separate
+watch/operate mode. An eligible remote owner learns support from the existing
+WebSocket authentication reply; a desktop-backed web client keeps its link,
+without probing browser endpoints. No stream runs for a page nobody is viewing:
 
 - the frame lease is taken on the first viewer and released by the last one,
   restoring the page's original background-throttling policy
@@ -58,10 +60,10 @@ nobody is looking at must cost nothing:
 ## Pacing
 
 A viewer acknowledges the frames it rendered, and a viewer that owes two frames
-stops being sent more — the stream self-adjusts to the link instead of filling
-the socket's send buffer. Captures are 250 ms apart; after eight unchanged
-captures they slow to one a second, and for 1.5 s after the viewer operates the
-page they speed up to 100 ms so a click visibly lands.
+stops being sent more. Only frames actually sent to that viewer count; an
+acknowledgement cannot accelerate capture. Capture starts are at least 250 ms
+apart, 1 s apart for a still page and at least 100 ms apart after input. The
+socket also caps queued image bytes, and input waiting on the page is bounded.
 
 Each changed frame carries the page's scroll position (`scroll`), measured in
 an isolated world and abandoned after 300 ms, since a page blocked in a modal
@@ -69,13 +71,12 @@ dialog runs no script. The frame shows one screen of a taller page; the
 position tells the viewer where that screen sits.
 
 Frames are 1024 px wide JPEG at quality 40. The stream answers "where is the
-page now", for which latency beats fidelity. An unchanged frame is not sent at
-all, so a login page waiting for a scan costs nothing while it waits.
+page now", for which latency beats fidelity. Static pages still incur slow
+capture and encoding while somebody watches, but matching frames are not resent.
 
 That bitrate cannot carry a QR code a phone camera has to read, so a viewer can
-ask for one full-resolution PNG still outside the stream (`detail`). The two
-uses have opposite requirements and are served separately rather than by
-compromising the stream.
+ask for one high-quality still outside the stream (`detail`). Large stills are
+scaled down and may be encoded as JPEG to stay within the 2 MiB encoded limit.
 
 ## Reaching the rest of a taller page
 
@@ -91,7 +92,8 @@ before the next frame):
 
 `full-page.ts` scrolls the document a screen at a time, captures each screen
 through the same surface copy as the stream, stitches the slices (1024 px wide
-JPEG, capped at 12,000 CSS px) and scrolls the page back. CDP
+JPEG) and scrolls the page back. It stops at the earliest of the 12,000 CSS px,
+16 MiB bitmap, 24-screen or time budgets and reports partial coverage. CDP
 `captureBeyondViewport` is not used: on a hidden host window it waits for a
 compositor frame that never comes, and when frames are forced it returns tiled
 garbage. Stream frames pause while the screens are taken, so the viewer does not
@@ -132,8 +134,8 @@ viewer and reports a dead link by returning false from the sink.
 
 ## Transport
 
-Control is WebSocket-only (`browser-live-attach` / `-detach` / `-ack` /
-`-detail` / `-input`), so it is reachable by a human's client and not by the model, whose
-self-API is HTTP. The browser IPC surface is not an option here: it is not
-registered at all without a main window, which is exactly the configuration
-this module serves.
+The remote viewer uses the owner's authenticated WebSocket. The transport only
+attaches it to pages already exposed by interactive conversation contexts;
+unattended pages stay out. The model's HTTP self-API cannot use this surface.
+Server deployments should serve the remote client over HTTPS (including WSS),
+through a trusted reverse proxy, because pages and input may contain private data.

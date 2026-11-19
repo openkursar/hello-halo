@@ -123,6 +123,10 @@ export function sendFederationFrameToClient(clientId: string, frame: unknown): b
 export function sendEventToClient(clientId: string, channel: string, data: Record<string, unknown>): boolean {
   const client = clients.get(clientId)
   if (!client || !client.authenticated || client.ws.readyState !== WebSocket.OPEN) return false
+  if (channel === 'browser:live-frame' && client.ws.bufferedAmount > 4 * 1024 * 1024) {
+    sendToClient(client, { type: 'event', channel: 'browser:live-stopped', data: { viewId: data.viewId, reason: 'stalled' } })
+    return false
+  }
   client.ws.send(JSON.stringify({ type: 'event', channel, data }))
   return true
 }
@@ -331,9 +335,9 @@ function releaseViewerAttachments(clientId: string): void {
   void import('../services/ai-terminal').then(({ terminalViewerDisconnected }) => {
     terminalViewerDisconnected(clientId)
   }).catch(() => { /* terminal module unavailable on this platform */ })
-  void import('../services/browser-live').then(({ browserLiveViewerDisconnected }) => {
+  if (isServerMode()) void import('../services/browser-live').then(({ browserLiveViewerDisconnected }) => {
     browserLiveViewerDisconnected(clientId)
-  }).catch(() => { /* no page was being watched */ })
+  }).catch(() => console.warn('[WS] Could not release remote browser attachments'))
 }
 
 /**
@@ -408,7 +412,9 @@ function handleClientMessage(
       } else if (typeof token === 'string' && authenticateWebSocket(token, client.ip)) {
         client.authenticated = true
         client.credential = { type: 'remote-control' }
-        sendToClient(client, { type: 'auth:success' })
+        sendToClient(client, isServerMode()
+          ? { type: 'auth:success', payload: { browserLive: true } }
+          : { type: 'auth:success' })
         console.log(`[WS] Client ${client.id} authenticated successfully`)
         break
       }
@@ -605,8 +611,9 @@ function handleClientMessage(
         sendEventToClient(client.id, 'browser:live-stopped', { viewId, reason: 'unavailable' })
         break
       }
-      void import('../services/browser-live').then(({ browserLiveAttach }) => {
-        const started = browserLiveAttach(viewId, {
+      void Promise.all([import('../services/browser-live'), import('../services/ai-browser')]).then(([{ browserLiveAttach }, { isLiveConversationPage }]) => {
+        if (clients.get(client.id) !== client || client.ws.readyState !== WebSocket.OPEN || !mayUseBrowserLive(client)) return
+        const started = isLiveConversationPage(viewId) && browserLiveAttach(viewId, {
           viewerId: client.id,
           frame: (frame) => sendEventToClient(client.id, 'browser:live-frame', frame as unknown as Record<string, unknown>),
           stopped: (stopped) => { sendEventToClient(client.id, 'browser:live-stopped', stopped as unknown as Record<string, unknown>) },
@@ -631,8 +638,8 @@ function handleClientMessage(
     case 'browser-live-ack': {
       if (!mayUseBrowserLive(client)) break
       const viewId = message.payload?.viewId
-      const seq = Number(message.payload?.seq)
-      if (typeof viewId !== 'string' || !Number.isFinite(seq)) break
+      const seq = message.payload?.seq
+      if (typeof viewId !== 'string' || typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq <= 0) break
       void import('../services/browser-live').then(({ browserLiveAck }) => {
         browserLiveAck(viewId, client.id, seq)
       }).catch(() => { /* nothing was streaming */ })
@@ -766,6 +773,14 @@ export function getClientCount(): number {
 /**
  * Get authenticated client count
  */
+export function disconnectRemoteControlClients(): void {
+  for (const client of clients.values()) {
+    if (client.credential?.type !== 'remote-control') continue
+    client.authenticated = false
+    client.ws.close(1008, 'Access code changed')
+  }
+}
+
 export function getAuthenticatedClientCount(): number {
   let count = 0
   for (const client of Array.from(clients.values())) {

@@ -26,14 +26,14 @@ vi.mock('../../../../src/main/services/notification.service', () => ({ notifyApp
 vi.mock('../../../../src/main/apps/runtime/team', () => ({ getActiveTeamRuntime: vi.fn(() => null) }))
 vi.mock('../../../../src/main/apps/runtime/im-escalation', () => ({ deliverEscalationToIm: vi.fn() }))
 
-const { isServerMode, getOutputDir, reclaimReportedFile } = vi.hoisted(() => ({
+const { isServerMode, resolveReportFile } = vi.hoisted(() => ({
   isServerMode: vi.fn(() => false),
-  getOutputDir: vi.fn(() => '/spaces/s1/outputs'),
-  reclaimReportedFile: vi.fn(async () => '/spaces/s1/outputs/plan.md'),
+  resolveReportFile: vi.fn(async () => '/spaces/s1/outputs/plan.md'),
 }))
 vi.mock('../../../../src/main/foundation/runtime-mode', () => ({ isServerMode }))
-vi.mock('../../../../src/main/services/space-scope', () => ({ getOutputDir }))
-vi.mock('../../../../src/main/apps/runtime/report-output', () => ({ reclaimReportedFile }))
+vi.mock('../../../../src/main/apps/runtime/report-output', async original => ({
+  ...await original<typeof import('../../../../src/main/apps/runtime/report-output')>(), resolveReportFile,
+}))
 
 import { createReportToolServer } from '../../../../src/main/apps/runtime/report-tool'
 import type { ReportToolContext } from '../../../../src/main/apps/runtime/report-tool'
@@ -44,7 +44,7 @@ const ctx: ReportToolContext = {
   appName: 'App',
   runId: 'run-1',
   sessionKey: 'app:app-1:run-1',
-  spaceId: 's1',
+  workDir: '/spaces/s1',
   plansDir: '/config/plans',
 }
 
@@ -62,7 +62,7 @@ function build() {
 describe('report_to_user file location', () => {
   beforeEach(() => {
     toolMock.mockClear()
-    reclaimReportedFile.mockClear()
+    resolveReportFile.mockClear()
   })
 
   it('desktop keeps the plans directory and the reported path as given', async () => {
@@ -73,19 +73,29 @@ describe('report_to_user file location', () => {
     expect(description).not.toContain('/spaces/s1/outputs')
 
     await handler({ type: 'output', message: 'Plan ready', data_path: '/tmp/plan.md' })
-    expect(reclaimReportedFile).not.toHaveBeenCalled()
+    expect(resolveReportFile).not.toHaveBeenCalled()
     expect(entries[0].content.dataPath).toBe('/tmp/plan.md')
   })
 
-  it('server names the space output directory and records the reclaimed copy', async () => {
+  it('server names the output directory and records the validated file', async () => {
     isServerMode.mockReturnValue(true)
     const { entries, description, handler } = build()
 
-    expect(description).toContain('Write those files under: /spaces/s1/outputs')
+    expect(description).toContain('Write report files under: /spaces/s1/outputs')
     expect(description).not.toContain('/config/plans')
 
-    await handler({ type: 'output', message: 'Plan ready', data_path: '/tmp/plan.md' })
-    expect(reclaimReportedFile).toHaveBeenCalledWith('/tmp/plan.md', 's1')
+    await handler({ type: 'output', message: 'Plan ready', data_path: 'outputs/plan.md' })
+    expect(resolveReportFile).toHaveBeenCalledWith('outputs/plan.md', '/spaces/s1', undefined)
     expect(entries[0].content.dataPath).toBe('/spaces/s1/outputs/plan.md')
+  })
+
+  it('refuses a bad file before publishing any result or finishing the run', async () => {
+    isServerMode.mockReturnValue(true)
+    resolveReportFile.mockRejectedValueOnce(new Error('Write a report in the workspace.'))
+    const { entries, handler } = build()
+    const result = await handler({ type: 'run_complete', message: 'Report', data_path: 'gone.md' })
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('workspace')
+    expect(entries).toEqual([])
   })
 })

@@ -24,7 +24,7 @@ async function freePort() {
   return port
 }
 
-async function startLink(port: number) {
+export async function startLink(port: number) {
   let online = true
   const sockets = new Set<Socket>()
   const events: Array<{ type: string; code?: string }> = []

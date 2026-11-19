@@ -22,7 +22,7 @@ export { createAIBrowserMcpServer }
 export { createScopedBrowserContext }
 export { getInteractiveBrowserContext, releaseInteractiveBrowserContext } from './context'
 // Every page a conversation holds, for a client that missed the live events.
-export { listLivePages } from './context'
+export { isLiveConversationPage, listLivePages } from './context'
 // A tray stop, refused unless the page is the named conversation's alone.
 export { stopLivePage } from './context'
 export type { BrowserContext } from './context'

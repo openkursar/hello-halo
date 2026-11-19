@@ -12,8 +12,9 @@ const ids = (isRemoteMode: boolean, serverBackend?: boolean) =>
   getFilteredNavItems(isRemoteMode, serverBackend).map(item => item.id)
 
 describe('getFilteredNavItems', () => {
-  it('shows every section on the desktop', () => {
-    expect(ids(false)).toEqual(expect.arrayContaining(['system', 'advanced', 'remote', 'federation']))
+  it('keeps the desktop gateway under Remote Access', () => {
+    expect(ids(false)).toEqual(expect.arrayContaining(['system', 'advanced', 'remote']))
+    expect(ids(false)).not.toContain('federation')
   })
 
   it('hides node-level sections from a web client of a desktop', () => {
@@ -29,8 +30,4 @@ describe('getFilteredNavItems', () => {
     expect(server).not.toContain('remote')
   })
 
-  it('places the federation entry right after Remote Access', () => {
-    const desktop = ids(false)
-    expect(desktop.indexOf('federation')).toBe(desktop.indexOf('remote') + 1)
-  })
 })

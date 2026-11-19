@@ -127,6 +127,8 @@ export interface IngestHashesV1 {
   versions?: Record<string, string>
   /** Unlinked folders whose learned text leaves the corpus at the next batch commit. */
   forget?: string[]
+  /** Folders linked while a forget was pending must have readable text before the old sources leave. */
+  replacements?: string[]
 }
 
 export interface IngestJob {

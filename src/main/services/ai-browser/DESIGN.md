@@ -324,11 +324,10 @@ trusted native paste event. The browser-host design records this distinction.
 A person watching through `browser-live` can click, scroll and type on the page
 the AI drives. `browserViewManager.onUserInput` reports it (hover does not
 count); a context whose `activeViewId` is that page holds one pending notice,
-and in server mode (the only place a live view exists) `buildAllTools` wraps
-every tool so the next tool result carries it as an extra text item, telling the model its snapshot and UIDs may be stale and not
-to undo what the user did. The notice is dropped when the context moves to
-another page. The model learns of it on its next browser call, not
-mid-thought: nothing here interrupts a turn.
+and invalidates its previous snapshot. The next browser call gets the notice
+before acting: if it is not a snapshot, the call returns without running and
+asks for a fresh snapshot. A snapshot itself may run and includes the notice.
+No separate takeover, lock or hand-back mode interrupts a running turn.
 
 ### Text the model must not hold (server mode)
 
@@ -336,12 +335,13 @@ mid-thought: nothing here interrupts a turn.
 at the page and would otherwise type a password or one-time code into the chat.
 The model names fields by uid; `credential-broker.ts` emits
 `ai-browser:credential-request` (origin, field labels, the model's stated
-purpose), the user answers in `BrowserCredentialPrompt` (IPC on the desktop,
-`/api/browser/credential-requests/*` remotely, both internal), and the value is
-held in memory for one fill. Fill and submit happen in one tool call, the origin
-is re-checked after the wait, and the filled fields are redacted from later
-snapshots of that document. The model gets back only the outcome. Requests are
-abandoned when their page or conversation goes away.
+purpose), and the remote owner answers through internal HTTP routes. There is
+no desktop IPC for credentials. The request is bound to the snapshot and page;
+main-frame navigation or tool cancellation ends the wait. If field reads do
+not confirm a fill, Halo does not submit. This keeps the submitted text out of
+the chat and redacts the identified fields in later accessibility snapshots.
+It is not an isolation boundary against the receiving website or everything
+that can subsequently be read on that page.
 
 ## File Map
 

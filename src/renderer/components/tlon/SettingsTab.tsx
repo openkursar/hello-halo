@@ -57,6 +57,8 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
   const [name, setName] = useState(kb.name)
   const [description, setDescription] = useState(kb.description)
   const [retryingLinkId, setRetryingLinkId] = useState<string | null>(null)
+  const [savingGuestRead, setSavingGuestRead] = useState(false)
+  const [failedGuestRead, setFailedGuestRead] = useState<string | null>(null)
 
   useEffect(() => {
     loadSpaces()
@@ -318,10 +320,17 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
           <div className="min-w-0">
             <p className="text-sm">{t('Let guests read its documents')}</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {t('When on, people who chat with a digital human that uses this knowledge base, including people you do not know through a connected chat app, can have it read the full text of its documents. When off, the digital human only sees the list of documents.')}
+              {t('When on, guests can ask a digital human to read these documents, even through a connected chat app. When off, document names and excerpts may still be shared. Changes apply to new turns, not work already in progress.')}
             </p>
+            {failedGuestRead === kb.id && <p role="alert" className="text-xs text-destructive mt-1">{t('Could not confirm this change. Check the setting and try again.')}</p>}
           </div>
-          <Switch checked={kb.allowGuestRead === true} onCheckedChange={next => setGuestRead(kb.id, next)} />
+          <Switch checked={kb.allowGuestRead === true} disabled={savingGuestRead} ariaLabel={t('Let guests read its documents')} onCheckedChange={async next => {
+            setSavingGuestRead(true)
+            setFailedGuestRead(null)
+            try {
+              if (!await setGuestRead(kb.id, next)) setFailedGuestRead(kb.id)
+            } finally { setSavingGuestRead(false) }
+          }} />
         </div>
       </section>
 

@@ -58,6 +58,7 @@ async function routes(network: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  for (const key of ['HALO_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) vi.stubEnv(key, '')
   electron.resolveProxy.mockReset()
   electron.resolveProxy.mockResolvedValue('DIRECT')
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -73,6 +74,15 @@ afterEach(() => {
 describe('proxyOnly on a server', () => {
   beforeEach(() => {
     vi.stubEnv('HALO_SERVER_MODE', '1')
+  })
+
+  it('applies deployment proxy credentials without logging their value', async () => {
+    vi.stubEnv('HALO_PROXY', 'http://fixture:private-value@proxy.example:3128')
+    const route = await load({})
+    expect(await route.describeProxyRoute(OAUTH)).toMatchObject({ kind: 'proxy', address: 'proxy.example:3128' })
+    for (const listener of config.listeners) listener({ browserUseProxy: true })
+    await Promise.resolve()
+    expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain('private-value')
   })
 
   it('proxies only the listed hosts and sends the rest direct', async () => {

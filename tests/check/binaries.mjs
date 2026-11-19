@@ -35,6 +35,7 @@ import { BETTER_SQLITE3_TARGETS, getBetterSqlite3PrebuildPath, validateBetterSql
 import { CLOUDFLARED_MINIMUM_MACOS } from '../../scripts/lib/cloudflared.mjs'
 import deployment from '../../scripts/lib/macho-deployment-target.cjs'
 import ripgrep from '../../scripts/lib/ripgrep.cjs'
+import nodePty from '../../scripts/lib/node-pty-prebuild.cjs'
 
 const { ENGINE_RUNTIMES, VALID_ENGINES, resolveEngineEntry, engineArtifactPaths, validateNativeRuntime } = engineRuntimes
 
@@ -255,10 +256,10 @@ const BINARY_DEPENDENCIES = [
     fix: 'npm run prepare:all',
     validate: (filePath) => {
       try {
-        const stats = fs.statSync(filePath)
-        return { valid: stats.size > 20 * 1024, info: `${(stats.size / 1024).toFixed(0)} KB` }
-      } catch {
-        return { valid: false, info: 'cannot read file' }
+        nodePty.verifyLinuxPty(filePath, PROJECT_ROOT)
+        return { valid: true, info: 'verified linux-x64 prebuild' }
+      } catch (error) {
+        return { valid: false, info: error.message }
       }
     }
   },

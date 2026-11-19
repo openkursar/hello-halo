@@ -4,6 +4,7 @@
  */
 
 import { BrowserWindow } from 'electron'
+import { disconnectRemoteControlClients } from '../../http/websocket'
 import {
   startHttpServer,
   stopHttpServer,
@@ -426,6 +427,7 @@ export function setCustomPassword(password: string): { success: boolean; error?:
 
   const result = setCustomAccessToken(password)
   if (result.ok) {
+    disconnectRemoteControlClients()
     // Persist so the password survives restarts.
     persistRemotePassword(password)
     console.log('[Remote] Custom password set successfully')
@@ -448,6 +450,7 @@ export function regeneratePassword(): void {
   }
 
   const newToken = generateAccessToken()
+  disconnectRemoteControlClients()
   persistRemotePassword(newToken)
   console.log('[Remote] Password regenerated')
 

@@ -22,7 +22,7 @@ import { z } from 'zod'
 import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
 import { isServerMode } from '../../../foundation/runtime-mode'
-import { textResult, withTimeout, fillFormElement, fillSecretFields, SECRET_TOOL_TIMEOUT, TOOL_TIMEOUT } from './helpers'
+import { textResult, withTimeout, fillFormElement, fillSecretFields, TOOL_TIMEOUT } from './helpers'
 
 export function buildInputTools(ctx: BrowserContext) {
 
@@ -187,47 +187,34 @@ const browser_fill_secret = tool(
 
 Use this instead of browser_fill whenever the value is a credential you were not already given. Never ask the user to type a credential into the chat: anything said there is kept in the transcript, and you would be handling it yourself.
 
-You do not supply or receive the text. Halo prompts the user, showing them the page's origin and the fields you named; what they type goes straight into the page. You get back only whether it was typed and submitted.
-
-The fields are filled and the form is submitted in this one call, so fill every non-secret field (username, account) with browser_fill first. Afterwards take a browser_snapshot to see what the page did — the value itself stays hidden there too.
+Halo prompts the user, showing the site's origin and the fields you named. This call does not take or return their text. Fill non-secret fields first. Halo only submits when the typed values match the requested fields. Afterward check the result without reading any credential back from the page.
 
 If the user declines, stop and ask them how they want to proceed. Do not retry and do not ask them for the value.`,
   {
-    uids: z.array(z.string()).min(1).describe(
+    uids: z.array(z.string().max(80)).min(1).max(12).refine(uids => new Set(uids).size === uids.length).describe(
       'The uids of the fields the user should type into, from the latest browser_snapshot. A code split across single-character boxes takes one uid per box, in order.'
     ),
-    purpose: z.string().describe(
+    purpose: z.string().max(250).describe(
       'One short sentence telling the user what the page is asking for, e.g. "the 6-digit code from your authenticator app". Shown to them as your words.'
     ),
     submit_uid: z.string().optional().describe(
       'The uid of the button that submits the form. Omit to press Enter in the last filled field.'
     )
   },
-  async (args) => {
-    if (!ctx.getActiveViewId()) {
-      return textResult('No active browser page.', true)
-    }
-
+  async (args, extra) => {
     try {
-      const result = await withTimeout(
-        fillSecretFields(ctx, args.uids, args.purpose, args.submit_uid),
-        SECRET_TOOL_TIMEOUT,
-        'browser_fill_secret'
-      )
-      if (result.status === 'declined') {
-        return textResult('The user declined to provide this. Nothing was typed. Ask them how they want to proceed instead of retrying, and do not ask them for the value.', true)
+      const { signal } = (extra ?? {}) as { signal?: AbortSignal }
+      const status = await fillSecretFields(ctx, args.uids, args.purpose, args.submit_uid, signal)
+      switch (status) {
+        case 'declined': return textResult('The user declined. Nothing was typed. Ask how to proceed without asking for the value.', true)
+        case 'expired': return textResult('The prompt ended before the form could be filled. Ask the user before trying again.', true)
+        case 'moved': return textResult('The page changed. Nothing was typed. Take a fresh browser snapshot.', true)
+        case 'unconfirmed': return textResult('The fields did not match what the user typed. Halo did not submit the form. Let the user check the page.', true)
+        case 'submitted': return textResult('Halo submitted the form. Check the result without reading the credential.')
       }
-      if (result.status === 'expired') {
-        return textResult('The prompt expired with no answer. Nothing was typed. Ask the user whether they still want to go on before trying again.', true)
-      }
-      if (result.status === 'moved') {
-        return textResult(`Nothing was typed: ${result.detail}. Take a browser_snapshot to see where the page is now.`, true)
-      }
-      return result.detail
-        ? textResult(`Submitted, but a field may not hold what the user typed:\n${result.detail}`)
-        : textResult('The user filled the fields and the form was submitted. Take a browser_snapshot to see the result.')
-    } catch (error) {
-      return textResult(`Secret fill failed: ${(error as Error).message}`, true)
+    } catch {
+      console.warn('[AIBrowser] Could not complete credential entry', { viewId: ctx.getActiveViewId() })
+      return textResult('Halo could not finish entering the credential. Check with the user before submitting or trying again.', true)
     }
   }
 )

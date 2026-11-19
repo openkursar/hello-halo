@@ -15,8 +15,8 @@ import { MarkdownViewer } from './viewers/MarkdownViewer'
 import { ImageViewer } from './viewers/ImageViewer'
 import { HtmlViewer } from './viewers/HtmlViewer'
 import { CsvViewer } from './viewers/CsvViewer'
-import { BrowserViewer } from './viewers/BrowserViewer'
-import { BrowserLiveViewer } from './viewers/BrowserLiveViewer'
+import { BrowserViewer, BrowserViewerFallback } from './viewers/BrowserViewer'
+import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { TerminalViewer } from './viewers/TerminalViewer'
 import { TeamViewer } from './viewers/TeamViewer'
 
@@ -55,10 +55,15 @@ function MarkdownEntry(props: ViewerProps) {
   return props.tab.isEditMode ? <CodeViewer {...props} /> : <MarkdownViewer {...props} />
 }
 
-// A desktop gets a webview guest (Chromium's own renderer, PDFs included); a
-// remote client has none, so PDFs render with pdfjs and a page is watched as
-// paced frames instead of hosted (server only; otherwise BrowserLiveViewer
-// shows the link fallback).
+const BrowserLiveViewer = lazy(() => import('./viewers/BrowserLiveViewer').then(module => ({ default: module.BrowserLiveViewer })))
+
+function RemoteBrowserEntry({ tab }: ViewerProps) {
+  const available = useAIBrowserStore(state => state.remoteLive)
+  return available && tab.browserViewId
+    ? <BrowserLiveViewer tab={tab} />
+    : <BrowserViewerFallback tab={tab} />
+}
+
 const remote = api.isRemoteMode()
 
 export const VIEWERS: Record<ContentType, ViewerSpec> = {
@@ -73,7 +78,7 @@ export const VIEWERS: Record<ContentType, ViewerSpec> = {
   docx: { Component: DocxViewer, ownsError: true },
   pptx: { Component: PptxViewer, ownsError: true },
   pdf: remote ? { Component: PdfViewer, ownsError: true } : { Component: BrowserViewer, ownsLoading: true },
-  browser: { Component: remote ? BrowserLiveViewer : BrowserViewer, ownsLoading: true },
+  browser: { Component: remote ? RemoteBrowserEntry : BrowserViewer, ownsLoading: true },
   terminal: { Component: TerminalViewer },
   team: { Component: TeamViewer },
   goal: { Component: GoalEditor },

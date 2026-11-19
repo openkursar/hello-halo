@@ -72,6 +72,7 @@ import {
 import { isExtractable } from './extract'
 import { isExtractionCurrent, ownedTextPath, unchangedProtection } from './extraction-revision'
 import { resolveFolderVersion } from './version'
+import { recoverPublication } from './release-publication'
 import { CPP_LEVEL_IGNORE_DIRS } from '../../../shared/constants/ignore-patterns'
 import { isDiskRoot } from '../../../shared/disk-paths'
 
@@ -330,7 +331,7 @@ function loadIndex(): Map<KnowledgeBaseId, KnowledgeBaseEntry> {
   return map
 }
 
-function persistIndex(map: Map<KnowledgeBaseId, KnowledgeBaseEntry>): void {
+function persistIndex(map: Map<KnowledgeBaseId, KnowledgeBaseEntry>, requireSave = false): void {
   const knowledgeBases: Record<KnowledgeBaseId, KnowledgeBaseEntry> = {}
   for (const [id, entry] of map) {
     knowledgeBases[id] = entry
@@ -347,6 +348,7 @@ function persistIndex(map: Map<KnowledgeBaseId, KnowledgeBaseEntry>): void {
   } catch (error) {
     console.error('[Tlon] Failed to persist index:', error)
     try { if (existsSync(tmpPath)) rmSync(tmpPath) } catch { /* ignore */ }
+    if (requireSave) throw error
   }
 }
 
@@ -411,8 +413,15 @@ export function createKB(input: CreateKBInput): KnowledgeBaseEntry {
   return entry
 }
 
+const recoveredEntries = new WeakSet<KnowledgeBaseEntry>()
+
 export function getKB(kbId: string): KnowledgeBaseEntry | null {
-  return getRegistry().get(kbId) || null
+  const entry = getRegistry().get(kbId)
+  if (entry && !recoveredEntries.has(entry)) {
+    recoverPublication(kbId)
+    recoveredEntries.add(entry)
+  }
+  return entry ?? null
 }
 
 /**
@@ -817,8 +826,14 @@ export function addLinkedDir(
   }
   entry.linkedDirs.push(linked)
   saveEntry(entry)
-  // Linked again before a pending forget applied: what it taught stays.
-  updateForgetList(kbId, list => list.filter(p => p !== dir.path))
+  const hashes = readHashes(kbId)
+  if (hashes.forget?.length) {
+    if (hashes.forget.includes(dir.path)) {
+      hashes.forget = hashes.forget.filter(p => p !== dir.path)
+      if (!hashes.forget.length) { delete hashes.forget; delete hashes.replacements }
+    } else hashes.replacements = [...new Set([...(hashes.replacements ?? []), dir.path])]
+    writeHashes(kbId, hashes, true)
+  }
 
   // Start watching + initial scan (best-effort, lazy import to avoid cycle).
   import('./watcher')
@@ -841,8 +856,11 @@ export function removeLinkedDir(kbId: string, linkId: string, options: RemoveLin
   entry.linkedDirs = entry.linkedDirs.filter(d => d.id !== linkId)
   saveEntry(entry)
   lastCapWarnStatus.delete(linked.path)
-  if (options.forget) {
-    updateForgetList(kbId, list => list.includes(linked.path) ? list : [...list, linked.path])
+  const hashes = readHashes(kbId)
+  if (options.forget || hashes.replacements?.includes(linked.path)) {
+    if (options.forget) hashes.forget = [...new Set([...(hashes.forget ?? []), linked.path])]
+    if (hashes.replacements) hashes.replacements = hashes.replacements.filter(p => p !== linked.path)
+    writeHashes(kbId, hashes, true)
   }
 
   import('./watcher')
@@ -859,16 +877,6 @@ export function removeLinkedDir(kbId: string, linkId: string, options: RemoveLin
 
 /** How long a forget waits for a replacement folder before applying on its own. */
 export const FORGET_GRACE_MS = 10_000
-
-function updateForgetList(kbId: string, update: (list: string[]) => string[]): void {
-  const hashes = readHashes(kbId)
-  const current = hashes.forget ?? []
-  const next = update(current)
-  if (next.length === current.length && next.every((p, i) => p === current[i])) return
-  if (next.length > 0) hashes.forget = next
-  else delete hashes.forget
-  writeHashes(kbId, hashes)
-}
 
 /** Unlinked folders waiting to be forgotten. */
 export function pendingForgets(kbId: string, hashes: IngestHashesV1 = readHashes(kbId)): string[] {
@@ -1308,29 +1316,32 @@ function retireUnwanted(kbId: string, keys: string[]): number {
   return commitRetirement(kbId, new Retirement(entry, new Set(keys)), keys, [])
 }
 
+/** Plan only the generated text that can leave with a replacement; do not touch the published corpus during extraction. */
+export function releaseRetirements(entry: KnowledgeBaseEntry, hashes: IngestHashesV1, unseen: Set<string>): Array<{ key: string; name?: string; retain?: boolean }> {
+  const run = new Retirement(entry)
+  const actions: Array<{ key: string; name?: string; retain?: boolean }> = []
+  const textDir = getKBTextDir(entry.id)
+  for (const [key, record] of Object.entries(hashes.files)) {
+    const forgotten = hashes.forget?.some(dir => isAbsolute(key) && isWithin(dir, key)) && !entryWatches(entry, key)
+    if (!forgotten && !(unseen.has(key) && run.presence(key, record.sourceDev) === 'gone')) continue
+    if (!record.textPath) { actions.push({ key }); continue }
+    if (record.textPath !== generatedTextName(key)) continue
+    const abs = ownedTextPath(textDir, record.textPath)
+    if (!abs) {
+      if (pathState(join(textDir, record.textPath)) === 'missing') actions.push({ key })
+    } else if (record.protection || generatedSourceOf(abs) === key) {
+      actions.push({ key, name: record.textPath, retain: !!record.protection })
+    }
+  }
+  return actions
+}
+
 /** Retire sources of extensions the KB stopped accepting. */
 export function retireUnacceptedSources(kbId: string, dropped: string[], accepted: ReadonlySet<string>): number {
   const drop = new Set(dropped)
   const keys = Object.keys(readHashes(kbId).files)
     .filter(key => drop.has(extensionOf(key)) && !isAcceptedSourceFile(key, accepted))
   return retireUnwanted(kbId, keys)
-}
-
-/**
- * Apply pending forgets: retire what each forgotten folder taught, unless a
- * current link still covers it. Run by the batch commit, right after the
- * batch's own text lands.
- */
-export function retireForgottenSources(kbId: string): number {
-  const entry = getRegistry().get(kbId)
-  const hashes = readHashes(kbId)
-  const forget = hashes.forget ?? []
-  if (!entry || forget.length === 0) return 0
-  const keys = Object.keys(hashes.files)
-    .filter(key => isAbsolute(key) && forget.some(dir => isWithin(dir, key)) && !entryWatches(entry, key))
-  const retired = retireUnwanted(kbId, keys)
-  updateForgetList(kbId, list => list.filter(dir => !forget.includes(dir)))
-  return retired
 }
 
 /**
@@ -1434,6 +1445,7 @@ function stripMarkdownFence(content: string): string {
 }
 
 export function readIndexMd(kbId: string): string | null {
+  if (!getKB(kbId)) return null
   const path = getKBIndexMdPath(kbId)
   if (!existsSync(path)) return null
   try {
@@ -1613,9 +1625,16 @@ export function getKBReferenceById(kbId: string): KBReference | null {
 export function setKBGuestRead(kbId: string, allow: boolean): KnowledgeBaseEntry | null {
   const entry = getRegistry().get(kbId)
   if (!entry) return null
-  if (allow) entry.allowGuestRead = true
-  else delete entry.allowGuestRead
-  saveEntry(entry)
+  const next = { ...entry, updatedAt: new Date().toISOString() }
+  if (allow) next.allowGuestRead = true
+  else delete next.allowGuestRead
+  // The registry is read at restart; do not change the live grant until its atomic rename succeeds.
+  const registry = getRegistry()
+  persistIndex(new Map(registry).set(kbId, next), true)
+  Object.assign(entry, next)
+  if (!allow) delete entry.allowGuestRead
+  try { writeFileSync(getKBMetaPath(kbId), JSON.stringify(entry, null, 2), 'utf-8') }
+  catch (error) { console.error(`[Tlon] Failed to mirror the saved guest access for ${kbId}:`, error) }
   return entry
 }
 
@@ -1630,7 +1649,7 @@ export function getKnowledgeReadDirsForApp(appId: string): string[] {
     if (kb.allowGuestRead !== true) continue
     if (kb.status !== 'active') continue
     if (!kb.appIds.includes(appId)) continue
-    if (!readIndexMd(kb.id)) continue
+    if (!isKBIndexReady(kb.id)) continue
     dirs.push(getKBTextDir(kb.id))
   }
   return dirs
@@ -1653,6 +1672,7 @@ export function getKBReferencesForApp(appId: string): KBReference[] {
 // ============================================================================
 
 export function readHashes(kbId: string): IngestHashesV1 {
+  if (!getKB(kbId)) return { version: 1, files: {} }
   const path = getKBHashesPath(kbId)
   if (!existsSync(path)) {
     return { version: 1, files: {} }
@@ -1668,7 +1688,7 @@ export function readHashes(kbId: string): IngestHashesV1 {
   return { version: 1, files: {} }
 }
 
-export function writeHashes(kbId: string, hashes: IngestHashesV1): void {
+export function writeHashes(kbId: string, hashes: IngestHashesV1, requireSave = false): void {
   const dir = getKBIngestDir(kbId)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const path = getKBHashesPath(kbId)
@@ -1679,6 +1699,7 @@ export function writeHashes(kbId: string, hashes: IngestHashesV1): void {
   } catch (error) {
     console.error(`[Tlon] Failed to write hashes.json for ${kbId}:`, error)
     try { if (existsSync(tmp)) rmSync(tmp) } catch { /* ignore */ }
+    if (requireSave) throw error
   }
 }
 
@@ -1878,10 +1899,10 @@ export function collectIngestCandidates(kbId: string): IngestCandidate[] {
  * retireRemovedSources proves each one gone before acting — but finding them
  * costs nothing beyond the walk itself.
  */
-export function scanIngestSources(kbId: string): { candidates: IngestCandidate[]; unseen: string[] } {
+export function scanIngestSources(kbId: string, hashes = readHashes(kbId)): { candidates: IngestCandidate[]; unseen: string[]; incomplete: boolean } {
   const entry = getRegistry().get(kbId)
-  if (!entry) return { candidates: [], unseen: [] }
-  const hashes = readHashes(kbId)
+  if (!entry) return { candidates: [], unseen: [], incomplete: true }
+  let incomplete = false
   const textDir = getKBTextDir(kbId)
   const candidates: IngestCandidate[] = []
   const seen = new Set<string>()
@@ -1901,7 +1922,7 @@ export function scanIngestSources(kbId: string): { candidates: IngestCandidate[]
       if (!isExtractable(absolutePath) && info.binary) return
       current = info.hash
       dev = info.dev
-    } catch { return }
+    } catch { incomplete = true; return }
     const recorded = hashes.files[sourcePath]
     // Records learned before devices were kept gain one while their file is
     // still here, so a later removal can be told from an unmounted drive.
@@ -1927,9 +1948,9 @@ export function scanIngestSources(kbId: string): { candidates: IngestCandidate[]
   const rawListed = !rawWalk.truncated && existsSync(rawDir)
 
   for (const linked of entry.linkedDirs) {
-    if (!existsSync(linked.path)) continue
+    if (!existsSync(linked.path)) { incomplete = true; continue }
     const sources = listLinkedSourceFiles(entry, linked)
-    if (sources === null) continue
+    if (sources === null) { incomplete = true; continue }
     listedRoots.push(linked.path)
     for (const rel of sources) {
       const absolutePath = join(linked.path, rel)
@@ -1942,7 +1963,7 @@ export function scanIngestSources(kbId: string): { candidates: IngestCandidate[]
 
   const unseen = Object.keys(hashes.files).filter(key => !seen.has(key)
     && (isAbsolute(key) ? listedRoots.some(root => isWithin(root, key)) : rawListed))
-  return { candidates, unseen }
+  return { candidates, unseen, incomplete: incomplete || rawWalk.truncated }
 }
 
 /**

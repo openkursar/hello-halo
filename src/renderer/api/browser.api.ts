@@ -11,6 +11,7 @@ import {
   isElectron,
   onEvent,
   sendWsMessage,
+  supportsBrowserLive,
 } from './_shared'
 import type {
   ApiResponse,
@@ -239,26 +240,23 @@ export const browserApi = {
 
   // Requests still waiting, for a client that joined after the event
   listAIBrowserCredentialRequests: async (): Promise<AIBrowserCredentialRequest[]> => {
-    const result = isElectron()
-      ? await window.halo.listAIBrowserCredentialRequests()
-      : await httpRequest<AIBrowserCredentialRequest[]>('GET', '/api/browser/credential-requests')
+    if (!supportsBrowserLive()) return []
+    const result = await httpRequest<AIBrowserCredentialRequest[]>('GET', '/api/browser/credential-requests')
     return result.success && result.data ? result.data : []
   },
 
   // The values go straight to the waiting page fill and are never stored
   submitAIBrowserCredential: async (requestId: string, values: Record<string, string>): Promise<ApiResponse> => {
-    if (isElectron()) {
-      return window.halo.submitAIBrowserCredential(requestId, values)
-    }
+    if (!supportsBrowserLive()) return { success: false }
     return httpRequest('POST', '/api/browser/credential-requests/submit', { requestId, values })
   },
 
   declineAIBrowserCredential: async (requestId: string): Promise<ApiResponse> => {
-    if (isElectron()) {
-      return window.halo.declineAIBrowserCredential(requestId)
-    }
+    if (!supportsBrowserLive()) return { success: false }
     return httpRequest('POST', '/api/browser/credential-requests/decline', { requestId })
   },
+
+  supportsBrowserLive,
 
   // ===== Browser live view (remote clients only) =====
   // A client that cannot host a page watches it as paced frames instead. The

@@ -17,14 +17,10 @@ import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
-import { useAIBrowserStore, useOldestCredentialRequest } from '../../stores/ai-browser.store'
+import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import type { AIBrowserCredentialRequest } from '../../../shared/types/ai-browser'
 
-export function BrowserCredentialPrompt() {
-  const request = useOldestCredentialRequest()
-  if (!request) return null
-  // Keyed so moving to the next request starts with empty inputs instead of
-  // carrying the previous one's keystrokes into a different page.
+export function BrowserCredentialPrompt({ request }: { request: AIBrowserCredentialRequest }) {
   return <CredentialDialog key={request.requestId} request={request} />
 }
 
@@ -52,15 +48,19 @@ function CredentialDialog({ request }: { request: AIBrowserCredentialRequest }) 
     setValues({})
     setBusy(false)
     if (result.success) removeCredentialRequest(request.requestId)
-    else setError(result.error ?? t('Could not send this to the page'))
+    else setError(t('Could not send this to the page'))
   }
 
   const decline = async () => {
     if (busy) return
     setBusy(true)
     setValues({})
-    await api.declineAIBrowserCredential(request.requestId)
-    removeCredentialRequest(request.requestId)
+    const result = await api.declineAIBrowserCredential(request.requestId)
+    if (result.success) removeCredentialRequest(request.requestId)
+    else {
+      setBusy(false)
+      setError(t('Could not dismiss this request. Try again.'))
+    }
   }
 
   return createPortal(
@@ -69,7 +69,7 @@ function CredentialDialog({ request }: { request: AIBrowserCredentialRequest }) 
         role="dialog"
         aria-modal="true"
         aria-labelledby="browser-credential-title"
-        className="relative w-full max-w-[440px] bg-card border border-border rounded-2xl shadow-pop p-[22px]"
+        className="relative w-full max-w-md max-h-full overflow-y-auto bg-card border border-border rounded-2xl shadow-pop p-5"
         onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); void decline() } }}
       >
         <p id="browser-credential-title" className="text-base font-semibold text-foreground">
@@ -77,7 +77,7 @@ function CredentialDialog({ request }: { request: AIBrowserCredentialRequest }) 
         </p>
 
         <p className="mt-2 text-xs text-muted-foreground">
-          {t('What you type goes straight into the page. It is not added to the conversation and the assistant never sees it.')}
+          {t('Halo sends this to the website, not to the chat. Check the address before you continue.')}
         </p>
 
         <div className="mt-4 rounded-sm border border-border bg-secondary px-3 py-2">
@@ -100,7 +100,8 @@ function CredentialDialog({ request }: { request: AIBrowserCredentialRequest }) 
               <input
                 ref={index === 0 ? firstInputRef : undefined}
                 type="password"
-                autoComplete="one-time-code"
+                autoComplete="off"
+                maxLength={4096}
                 spellCheck={false}
                 value={values[field.uid] ?? ''}
                 onChange={e => setValues(prev => ({ ...prev, [field.uid]: e.target.value }))}

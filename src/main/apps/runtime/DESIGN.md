@@ -255,6 +255,8 @@ serving that digital human or fronting its team:
 `tool()` + `createSdkMcpServer()`, same pattern as
 `services/ai-browser/sdk-mcp-server.ts`. Memory uses native file tools, not an MCP server.
 
+A server report may link an existing readable file inside the turn's working directory. Team turns also apply their live file-export restrictions before saving a report. A denied or missing file leaves the report unsaved; the tool never copies host files into a workspace. The desktop retains its local file links.
+
 **Rationale**:
 - Consistent with existing Halo patterns for injecting custom tools.
 - SDK MCP servers are first-class citizens in V2 sessions.
@@ -2364,8 +2366,10 @@ checks, file guards, execution and audit records.
     only, but only when its owner turned on "Let guests read its documents"
     (`allowGuestRead`, off by default, set through the internal
     `PUT /api/tlon/:kbId/guest-read`, which the model cannot call); without it
-    the turn sees the document map in its prompt and nothing more
-    (`getKnowledgeReadDirsForApp` → `knowledgeFolders`). A borrowed turn does
+    the grant adds no read access; the prompt may still include names and
+    short excerpts. The file grant is captured at the start of a restricted
+    turn. Changes affect subsequent turns, not work already in progress or
+    content already delivered. A borrowed turn does
     not carry this digital human's grant: it reads what its lender could.
   - a file tool (Write, Edit, MultiEdit, NotebookEdit) never writes what an
     engine, or git that it runs, reads as settings, hooks or standing

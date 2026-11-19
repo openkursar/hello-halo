@@ -26,6 +26,7 @@ import type { BrowserContext } from '../context'
 import { isServerMode } from '../../../foundation/runtime-mode'
 import { buildNavigationTools } from './navigation'
 import { buildInputTools } from './input'
+import { textResult } from './helpers'
 import { buildSnapshotTools } from './snapshot'
 import { buildScriptTools } from './script'
 import { buildTabTools } from './tab'
@@ -53,16 +54,18 @@ export function buildAllTools(ctx: BrowserContext) {
 }
 
 interface ToolDefinition {
+  name: string
   handler: (args: unknown, extra: unknown) => Promise<{ content?: unknown[] } | undefined>
 }
 
-/** Whatever tool the AI calls next carries the news that a person changed the page under it. */
+/** Do not run an action chosen before the person touched the page. */
 function withUserInputNotice<T extends ToolDefinition>(ctx: BrowserContext, definition: T): T {
   return {
     ...definition,
     handler: async (args: unknown, extra: unknown) => {
-      const result = await definition.handler(args, extra)
       const notice = ctx.takeUserInputNotice()
+      if (notice && definition.name !== 'browser_snapshot') return textResult(notice, true)
+      const result = await definition.handler(args, extra)
       if (!notice || !result) return result
       return { ...result, content: [...(result.content ?? []), { type: 'text', text: notice }] }
     },

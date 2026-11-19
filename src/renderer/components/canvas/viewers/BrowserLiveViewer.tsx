@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CompositionEvent, FormEvent, KeyboardEvent, MouseEvent, PointerEvent } from 'react'
-import { Eye, ExternalLink, Keyboard, Loader2, Maximize2, MousePointer2, ScrollText, Square, X } from 'lucide-react'
+import { Eye, ExternalLink, Keyboard, Loader2, Maximize2, ScrollText, X } from 'lucide-react'
 import { api } from '../../../api'
 import type { TabState } from '../../../services/canvas-lifecycle'
 import type {
@@ -45,12 +45,12 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
   const { t } = useTranslation()
   const resources = useViewerResources()
   const viewId = tab.browserViewId
-  const [watching, setWatching] = useState(false)
+  const [watching, setWatching] = useState(true)
   const [frame, setFrame] = useState<StreamFrame | null>(null)
   const [stopped, setStopped] = useState<BrowserLiveStopped['reason'] | null>(null)
   const [still, setStill] = useState<Still | null>(null)
   const [stillPending, setStillPending] = useState(false)
-  const [operating, setOperating] = useState(true)
+  const acceptingFrames = useRef(false)
   const acked = useRef(-1)
   const frameImage = useRef<HTMLImageElement>(null)
   const keyboard = useRef<HTMLTextAreaElement>(null)
@@ -68,13 +68,19 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
     // A stream claimed again may be a new session whose seq restarts, so
     // acknowledgements from before no longer apply.
     const attach = (): boolean => {
+      if (document.visibilityState === 'hidden' || acceptingFrames.current) return true
       acked.current = -1
-      return api.attachBrowserLive(viewId)
+      acceptingFrames.current = api.attachBrowserLive(viewId)
+      return acceptingFrames.current
     }
-    scope.add(() => api.detachBrowserLive(viewId))
+    const detach = () => {
+      acceptingFrames.current = false
+      api.detachBrowserLive(viewId)
+    }
+    scope.add(detach)
 
     scope.add(api.onBrowserLiveFrame((incoming: BrowserLiveFrame) => {
-      if (incoming.viewId !== viewId) return
+      if (!acceptingFrames.current || incoming.viewId !== viewId) return
       if (incoming.detail) {
         setStill({ image: incoming.image, width: incoming.width, page: incoming.page })
         setStillPending(false)
@@ -87,9 +93,11 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
     }))
 
     scope.add(api.onBrowserLiveStopped((event: BrowserLiveStopped) => {
-      if (event.viewId !== viewId) return
+      if (!acceptingFrames.current || event.viewId !== viewId) return
       setWatching(false)
       setStopped(event.reason)
+      setFrame(null)
+      setStill(null)
       setStillPending(false)
     }))
 
@@ -100,8 +108,14 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
 
     // Nothing should stream to a window the person switched away from.
     const onVisibility = () => {
-      if (document.visibilityState === 'hidden') api.detachBrowserLive(viewId)
-      else attach()
+      if (document.visibilityState === 'hidden') {
+        controller.current?.pointerCancel()
+        controller.current?.releaseKeys()
+        detach()
+        setFrame(null)
+        setStill(null)
+        setStillPending(false)
+      } else attach()
     }
     document.addEventListener('visibilitychange', onVisibility)
     scope.add(() => document.removeEventListener('visibilitychange', onVisibility))
@@ -116,7 +130,7 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
   // Acknowledging after paint is what paces the stream: the next frame is sent
   // only once this one is on screen.
   const onFramePainted = useCallback(() => {
-    if (!viewId || !frame || frame.seq <= acked.current) return
+    if (!acceptingFrames.current || !viewId || !frame || frame.seq <= acked.current) return
     acked.current = frame.seq
     api.ackBrowserLive(viewId, frame.seq)
   }, [viewId, frame])
@@ -130,27 +144,29 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
 
   // Nothing may stay pressed on the page once this viewer stops operating it.
   useEffect(() => {
-    if (!watching || !operating || !viewId) return
-    const input = new BrowserLiveInputController(event => api.sendBrowserLiveInput(viewId, event))
+    if (!watching || !viewId) return
+    const input = new BrowserLiveInputController(event => {
+      if (acceptingFrames.current) api.sendBrowserLiveInput(viewId, event)
+    })
     controller.current = input
     return () => {
       input.dispose()
       if (controller.current === input) controller.current = null
     }
-  }, [watching, operating, viewId])
+  }, [watching, viewId])
 
   const hasFrame = frame !== null
   // React listens to wheel passively, so it could not keep the viewer itself from scrolling.
   useEffect(() => {
     const img = frameImage.current
-    if (!img || !operating || !hasFrame) return
+    if (!img || !hasFrame) return
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
       controller.current?.wheel(event, img.getBoundingClientRect())
     }
     img.addEventListener('wheel', onWheel, { passive: false })
     return () => img.removeEventListener('wheel', onWheel)
-  }, [operating, hasFrame])
+  }, [hasFrame])
 
   const onPointerDown = (event: PointerEvent<HTMLImageElement>) => {
     if (!controller.current) return
@@ -196,7 +212,7 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
   }
 
   const requestStill = useCallback((scope: BrowserLiveDetailScope) => {
-    if (!viewId) return
+    if (!viewId || !acceptingFrames.current) return
     setStillPending(true)
     api.requestBrowserLiveDetail(viewId, scope)
   }, [viewId])
@@ -215,23 +231,15 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
         <span className="flex-1 min-w-0 truncate text-xs text-muted-foreground" title={pageUrl ?? ''}>
           {pageUrl ?? tab.title}
         </span>
-        {watching && (
+        {watching && frame && (
           <>
-            {operating && (
-              <button
-                onClick={() => keyboard.current?.focus()}
-                title={t('Type on the page')}
-                className="p-1.5 rounded-md hover:bg-accent text-muted-foreground"
-              >
-                <Keyboard className="w-4 h-4" />
-              </button>
-            )}
             <button
-              onClick={() => setOperating(value => !value)}
-              title={operating ? t('Operating the page — click to only watch') : t('Only watching — click to operate the page')}
-              className={`p-1.5 rounded-md hover:bg-accent ${operating ? 'text-primary bg-primary/10' : 'text-muted-foreground'}`}
+              onClick={() => keyboard.current?.focus()}
+              title={t('Type on the page')}
+              aria-label={t('Type on the page')}
+              className="p-2 rounded-md hover:bg-accent text-muted-foreground"
             >
-              <MousePointer2 className="w-4 h-4" />
+              <Keyboard className="w-4 h-4" />
             </button>
             <button
               onClick={() => requestStill('page')}
@@ -248,13 +256,6 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
               className="p-1.5 rounded-md hover:bg-accent text-muted-foreground disabled:opacity-50"
             >
               {stillPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Maximize2 className="w-4 h-4" />}
-            </button>
-            <button
-              onClick={() => setWatching(false)}
-              title={t('Stop watching')}
-              className="p-1.5 rounded-md hover:bg-accent text-muted-foreground"
-            >
-              <Square className="w-4 h-4" />
             </button>
           </>
         )}
@@ -273,35 +274,33 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
               onLoad={onFramePainted}
               alt={tab.title}
               draggable={false}
-              onPointerDown={operating ? onPointerDown : undefined}
-              onPointerMove={operating ? onPointerMove : undefined}
-              onPointerUp={operating ? onPointerUp : undefined}
-              onPointerCancel={operating ? onPointerCancel : undefined}
-              onContextMenu={operating ? event => event.preventDefault() : undefined}
-              // Sized to fit without scrolling, so every drag and wheel turn belongs to the page.
-              className={`max-w-full max-h-full w-auto h-auto select-none ${operating ? 'touch-none cursor-default' : ''}`}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
+              onContextMenu={event => event.preventDefault()}
+              className="max-w-full max-h-full w-auto h-auto select-none touch-none cursor-default"
             />
-            {frame.scroll && <BrowserLiveScrollbar scroll={frame.scroll} onJump={operating ? jump : undefined} />}
-            {operating && (
-              <textarea
-                ref={keyboard}
-                aria-label={t('Type on the page')}
-                autoCapitalize="off"
-                autoComplete="off"
-                autoCorrect="off"
-                spellCheck={false}
-                onKeyDown={onKeyDown}
-                onKeyUp={onKeyUp}
-                onInput={onInput}
-                onCompositionEnd={onCompositionEnd}
-                onPaste={event => {
-                  event.preventDefault()
-                  controller.current?.text(event.clipboardData.getData('text/plain'))
-                }}
-                onBlur={() => controller.current?.releaseKeys()}
-                className="absolute left-0 bottom-0 w-px h-px opacity-0 resize-none pointer-events-none"
-              />
-            )}
+            {frame.scroll && <BrowserLiveScrollbar scroll={frame.scroll} onJump={jump} />}
+            <textarea
+              ref={keyboard}
+              aria-label={t('Keyboard input for this page')}
+              tabIndex={-1}
+              autoCapitalize="off"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              onKeyDown={onKeyDown}
+              onKeyUp={onKeyUp}
+              onInput={onInput}
+              onCompositionEnd={onCompositionEnd}
+              onPaste={event => {
+                event.preventDefault()
+                controller.current?.text(event.clipboardData.getData('text/plain'))
+              }}
+              onBlur={() => controller.current?.releaseKeys()}
+              className="absolute left-0 bottom-0 w-px h-px opacity-0 resize-none pointer-events-none"
+            />
           </>
         ) : (
           <div className="flex flex-col items-center gap-3 text-muted-foreground">
@@ -316,7 +315,7 @@ export function BrowserLiveViewer({ tab }: { tab: TabState }) {
           still={still}
           page={still.page}
           scroll={frame?.scroll}
-          onJump={operating ? jump : undefined}
+          onJump={jump}
           onClose={() => setStill(null)}
         />
       ) : still && (

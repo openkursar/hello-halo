@@ -61,7 +61,13 @@ export function parseBrowserLiveInput(raw: unknown): BrowserLiveInput | null {
       const key = input.key
       if (typeof key !== 'string' || !key || key.length > MAX_KEY_LENGTH) return null
       if (input.action !== 'down' && input.action !== 'up') return null
-      return { kind: 'key', action: input.action, key, modifiers: modifiersOf(input.modifiers) }
+      const modifiers = modifiersOf(input.modifiers)
+      const shortcut = modifiers.includes('control') || modifiers.includes('meta')
+      // Paste uses the client clipboard through the text message, never the host's.
+      if ((shortcut && /^[cvx]$/i.test(key)) ||
+          (key === 'Insert' && (shortcut || modifiers.includes('shift'))) ||
+          (key === 'Delete' && modifiers.includes('shift'))) return null
+      return { kind: 'key', action: input.action, key, modifiers }
     }
     case 'text': {
       const text = input.text

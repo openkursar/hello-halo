@@ -1012,6 +1012,8 @@ async function runAppChatTurn(
     runId: CHAT_RUN_ID,
     sessionKey: conversationId,
     notificationLevel: app.userOverrides?.notificationLevel,
+    workDir,
+    refuseFile: path => turnFileExportRefusal(conversationId, path),
     // Team turns route report() to the team runtime instead of the inbox. A
     // question asked while serving a request from outside persists that
     // request's origin, so the turn its answer resumes serves it too (see
@@ -1202,9 +1204,7 @@ async function runAppChatTurn(
     spaceMemoryOffered: app.userOverrides?.spaceMemoryAccess === true && isSpaceMemoryEnabled(spaceId),
     workDir,
     attachedFiles: [...(request.attachedFiles ?? []), ...(imageFallback?.filePaths ?? [])],
-    // Bound knowledge bases whose owner allowed guest reading: their map is in
-    // the prompt, and these are the files it names. Off by default.
-    knowledgeFolders: getKnowledgeReadDirsForApp(appId),
+    knowledgeFolders: strictFiles && !participant?.execution.fileAccess ? getKnowledgeReadDirsForApp(appId) : [],
   })
   const inheritedFiles = participant?.execution.fileAccess
   const turnFileAccess = inheritedFiles ? {

@@ -301,9 +301,7 @@ function cleanNodePtyPrebuilds(context) {
   const prebuildsDir = path.join(unpackedDir, 'node_modules', 'node-pty', 'prebuilds');
 
   if (!fs.existsSync(prebuildsDir)) {
-    console.warn(`[afterPack] node-pty prebuilds not found in unpacked output: ${prebuildsDir}`);
-    console.warn(`[afterPack] Check that asarUnpack includes "node_modules/node-pty/prebuilds/**"`);
-    return;
+    throw new Error(`[afterPack] Missing unpacked node-pty prebuilds for ${key}: ${prebuildsDir}`);
   }
 
   const entries = fs.readdirSync(prebuildsDir, { withFileTypes: true });
@@ -339,6 +337,9 @@ function cleanNodePtyPrebuilds(context) {
     throw new Error(`Missing node-pty prebuild for ${key}`);
   }
 
+  if (key === 'linux-x64') {
+    require('./lib/node-pty-prebuild.cjs').verifyLinuxPty(targetBinary, path.join(__dirname, '..'));
+  }
   console.log(`[afterPack] ${key}: keeping node-pty prebuilds/${targetDir}`);
 
   // The ConPTY runtime ships one directory per Windows architecture; only the

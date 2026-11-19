@@ -16,11 +16,7 @@ export interface SettingsNavItem {
   labelKey: string
   /** Lucide icon component */
   icon: LucideIcon
-  /** Only show in desktop app (not remote mode) */
-  desktopOnly?: boolean
-  /** With desktopOnly: also show in remote mode when the backend is a headless
-   *  server, which has no desktop window to change the setting in instead */
-  serverRemote?: boolean
+  audience?: 'desktop' | 'headless' | 'node'
 }
 
 /**

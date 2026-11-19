@@ -28,6 +28,16 @@ describe('browser live input parsing', () => {
     expect(parseBrowserLiveInput({ kind: 'scroll-to', top: Number.NaN })).toBeNull()
   })
 
+  it('does not route host clipboard shortcuts through remote key input', () => {
+    for (const modifiers of [['control'], ['meta']]) {
+      for (const key of ['c', 'v', 'x']) {
+        expect(parseBrowserLiveInput({ kind: 'key', action: 'down', key, modifiers })).toBeNull()
+      }
+    }
+    expect(parseBrowserLiveInput({ kind: 'key', action: 'down', key: 'a', modifiers: ['meta'] })).toMatchObject({ key: 'a' })
+    expect(parseBrowserLiveInput({ kind: 'text', text: 'Pasted from the client' })).not.toBeNull()
+  })
+
   it('counts hovering as watching, not changing the page', () => {
     expect(changesPage({ kind: 'mouse', action: 'move', x: 0, y: 0 })).toBe(false)
     expect(changesPage({ kind: 'mouse', action: 'down', x: 0, y: 0 })).toBe(true)

@@ -251,7 +251,7 @@
         "proxyOnly": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "When non-empty, the only hosts that take the proxy; every other host goes direct. Same syntax as the proxy bypass list: exact host, \"*.example.com\" or \".example.com\" for subdomains only, \"host:port\", IP range. Applied in server mode only; config.json network.proxyOnly (or HALO_PROXY_ONLY) replaces it."
+          "description": "Server-mode routing for requests made by Halo: unlisted hosts go direct unless an account requires a proxy. Accepts exact hosts, subdomain patterns, host:port and IP ranges. For child processes Halo can only add known model and MCP endpoints to NO_PROXY; other destinations follow the child client. Chromium uses its own browser proxy settings. This is not an egress security boundary. config.json network.proxyOnly or HALO_PROXY_ONLY overrides the product default."
         },
         "imScanViaProxy": {
           "type": "boolean",

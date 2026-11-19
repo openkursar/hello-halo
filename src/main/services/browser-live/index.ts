@@ -111,9 +111,8 @@ export function browserLiveRequestDetail(viewId: string, viewerId: string, scope
 export function browserLiveInput(viewId: string, viewerId: string, raw: unknown): boolean {
   const input = parseBrowserLiveInput(raw)
   const session = sessions.get(viewId)
-  if (!input || !session?.input(viewerId, input)) return false
-  if (changesPage(input)) browserViewManager.noteUserInput(viewId)
-  return true
+  if (!input || !session) return false
+  return session.input(viewerId, input, changesPage(input) ? () => browserViewManager.noteUserInput(viewId) : undefined)
 }
 
 /** A vanished client stops gating every page it was watching. */

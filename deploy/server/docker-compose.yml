@@ -12,7 +12,8 @@ services:
       HALO_DATA_DIR: /data
       # Set to /data/mcp-proxy.json after preparing the deployment-owned config.
       HALO_MCP_PROXY_CONFIG: "${HALO_MCP_PROXY_CONFIG:-}"
-      HALO_REMOTE_PASSWORD: change-me-to-a-long-random-token
+      HALO_REMOTE_PASSWORD: "${HALO_REMOTE_PASSWORD:?Set a unique Halo Server access token}"
+      HALO_SERVER_SOFTWARE_WEBGL: "${HALO_SERVER_SOFTWARE_WEBGL:-0}"
       HALO_AI_PROVIDER: openai
       HALO_AI_API_URL: https://your-model-gateway.example.com/v1
       HALO_AI_API_KEY: your-api-key

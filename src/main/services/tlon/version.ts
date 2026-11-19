@@ -8,7 +8,7 @@
  * Undefined when neither is found. Plain file reads; no git binary.
  */
 
-import { existsSync, readFileSync, realpathSync, statSync } from 'fs'
+import { closeSync, fstatSync, openSync, readSync, realpathSync, statSync } from 'fs'
 import { dirname, isAbsolute, join, resolve } from 'path'
 
 const VERSION_FILE = 'VERSION.md'
@@ -25,11 +25,21 @@ export function resolveFolderVersion(folder: string): string | undefined {
   return readVersionFile(dir) ?? readGitHead(dir)
 }
 
+function readHead(path: string, cap = 4096): string {
+  if (!statSync(path).isFile()) return ''
+  const fd = openSync(path, 'r')
+  try {
+    const stat = fstatSync(fd)
+    if (!stat.isFile()) return ''
+    const bytes = Buffer.alloc(Math.min(stat.size, cap))
+    return bytes.toString('utf8', 0, readSync(fd, bytes, 0, bytes.length, 0))
+  } finally { closeSync(fd) }
+}
+
 function readVersionFile(dir: string): string | undefined {
   const file = join(dir, VERSION_FILE)
-  if (!existsSync(file)) return undefined
   try {
-    for (const raw of readFileSync(file, 'utf-8').split('\n')) {
+    for (const raw of readHead(file).split('\n')) {
       const line = raw.replace(/^#+\s*/, '').trim()
       if (line) return line.length > VERSION_MAX_LEN ? line.slice(0, VERSION_MAX_LEN) : line
     }
@@ -55,7 +65,7 @@ function resolveGitDir(dotGit: string): string | undefined {
     const st = statSync(dotGit)
     if (st.isDirectory()) return dotGit
     if (st.isFile()) {
-      const m = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, 'utf-8'))
+      const m = /^gitdir:\s*(.+)$/m.exec(readHead(dotGit))
       if (!m) return undefined
       const target = m[1].trim()
       return isAbsolute(target) ? target : resolve(dirname(dotGit), target)
@@ -67,7 +77,7 @@ function resolveGitDir(dotGit: string): string | undefined {
 function headSha(gitDir: string): string | undefined {
   let head: string
   try {
-    head = readFileSync(join(gitDir, 'HEAD'), 'utf-8').trim()
+    head = readHead(join(gitDir, 'HEAD')).trim()
   } catch {
     return undefined
   }
@@ -83,16 +93,18 @@ function headSha(gitDir: string): string | undefined {
 function readRef(gitDir: string, refName: string): string | undefined {
   const dirs = [gitDir]
   try {
-    const common = readFileSync(join(gitDir, 'commondir'), 'utf-8').trim()
+    const common = readHead(join(gitDir, 'commondir')).trim()
     if (common) dirs.push(isAbsolute(common) ? common : resolve(gitDir, common))
   } catch { /* not a linked worktree */ }
   for (const d of dirs) {
     try {
-      const sha = readFileSync(join(d, refName), 'utf-8').trim()
+      const sha = readHead(join(d, refName)).trim()
       if (isSha(sha)) return sha
     } catch { /* not loose here */ }
     try {
-      for (const line of readFileSync(join(d, 'packed-refs'), 'utf-8').split('\n')) {
+      // Version labels are optional; never scan an unbounded ref catalog on the watcher thread.
+      const packed = readHead(join(d, 'packed-refs'), 64 * 1024)
+      for (const line of packed.slice(0, packed.lastIndexOf('\n') + 1).split('\n')) {
         const [sha, name] = line.trim().split(/\s+/)
         if (name === refName && isSha(sha)) return sha
       }

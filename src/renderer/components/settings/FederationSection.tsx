@@ -17,9 +17,10 @@ const SUPPORTED_PROTOCOLS = ['http:', 'https:', 'ws:', 'wss:']
 interface FederationSectionProps {
   config: HaloConfig | null
   setConfig: (config: HaloConfig) => void
+  embedded?: boolean
 }
 
-export function FederationSection({ config, setConfig }: FederationSectionProps) {
+export function FederationSection({ config, setConfig, embedded = false }: FederationSectionProps) {
   const { t } = useTranslation()
 
   const [gatewayInput, setGatewayInput] = useState(config?.federation?.gatewayUrl || '')
@@ -82,9 +83,9 @@ export function FederationSection({ config, setConfig }: FederationSectionProps)
   }
 
   return (
-    <section id="federation" className="bg-card rounded-xl border border-border-faint p-6">
-      <div className="mb-4 space-y-1">
-        <h2 className="text-lg font-medium">{t('Federation Gateway')}</h2>
+    <section id="federation" className={embedded ? 'space-y-2 border-t border-border pt-4' : 'rounded-xl border border-border-faint bg-card p-4 sm:p-6'}>
+      <div className={embedded ? 'space-y-1' : 'mb-4 space-y-1'}>
+        <h2 className={embedded ? 'font-medium' : 'text-lg font-medium'}>{t('Federation Gateway')}</h2>
         <p className="text-sm text-muted-foreground">
           {t('Relay team collaboration through a gateway server so members outside your local network can join.')}
         </p>
@@ -120,7 +121,7 @@ export function FederationSection({ config, setConfig }: FederationSectionProps)
           {isSavingGateway ? t('Saving...') : gatewaySaved ? t('Saved') : t('Save')}
         </button>
       </div>
-      {gatewayError && <p className="text-xs text-red-500 mt-2">{gatewayError}</p>}
+      {gatewayError && <p className="mt-2 text-xs text-destructive">{gatewayError}</p>}
 
       {/* An office already hosted without a gateway keeps its LAN-only
           attachment; the relay is picked up the next time it is hosted. */}

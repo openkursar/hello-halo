@@ -12,7 +12,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { hostname } from 'os'
-import { writeFileSync } from 'fs'
+import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { AnalyticsConfig, UserContext } from '../../../../src/main/services/analytics/types'
 
@@ -32,6 +32,8 @@ type Internals = {
   config: AnalyticsConfig | null
   loadOrCreateConfig(): AnalyticsConfig
   buildUserContext(): UserContext
+  userContext: UserContext | null
+  handleLifecycleEvents(): Promise<void>
   initProviders(): Promise<void>
   providers: unknown[]
 }
@@ -39,7 +41,7 @@ const internals = analytics as unknown as Internals
 
 function seedConfig(analyticsConfig: AnalyticsConfig): void {
   const configPath = join(globalThis.__HALO_TEST_DIR__, '.halo', 'config.json')
-  writeFileSync(configPath, JSON.stringify({ analytics: analyticsConfig }), 'utf-8')
+  writeFileSync(configPath, JSON.stringify({ analytics: analyticsConfig, isFirstLaunch: false }), 'utf-8')
 }
 
 afterEach(() => {
@@ -51,14 +53,24 @@ afterEach(() => {
 })
 
 describe('telemetry identity', () => {
-  it('uses the hostname as userId in server mode', () => {
+  it('keeps the hostname out of persisted history when saving a version or watermark', async () => {
     seedConfig({ userId: 'disk-uuid-0001', lastVersion: '0.9.0' })
     process.env.HALO_SERVER_MODE = '1'
 
-    const config = internals.loadOrCreateConfig()
-
-    expect(config.userId).toBe(hostname())
-    expect(config.lastVersion).toBe('1.0.0-test')
+    internals.config = internals.loadOrCreateConfig()
+    internals.userContext = internals.buildUserContext()
+    expect(internals.userContext.userId).toBe(hostname())
+    expect(internals.config.lastVersion).toBe('0.9.0')
+    const track = vi.spyOn(analytics, 'track').mockResolvedValue(undefined)
+    try {
+      await internals.handleLifecycleEvents()
+      expect(track).toHaveBeenCalledWith('app_update', { from_version: '0.9.0', to_version: '1.0.0-test' })
+    } finally {
+      track.mockRestore()
+    }
+    analytics.setSnapshotState({ runId: 'next', ts: 42 })
+    const disk = JSON.parse(readFileSync(join(globalThis.__HALO_TEST_DIR__, '.halo', 'config.json'), 'utf8'))
+    expect(disk.analytics).toEqual({ userId: 'disk-uuid-0001', lastVersion: '1.0.0-test', lastSnapshotRunId: 'next', lastSnapshotTs: 42 })
   })
 
   it('keeps the snapshot watermarks when overriding userId', () => {
@@ -103,6 +115,7 @@ describe('telemetry backend from the environment', () => {
     process.env.HALO_TELEMETRY_API_KEY = 'example-key'
     internals.config = { userId: 'x', lastVersion: '1.0.0' }
 
+    internals.userContext = internals.buildUserContext()
     await internals.initProviders()
 
     expect(createTelemetryProvider).toHaveBeenCalledWith('https://telemetry.example.test', 'example-key', [])
@@ -113,6 +126,7 @@ describe('telemetry backend from the environment', () => {
     process.env.HALO_TELEMETRY_API_KEY = 'example-key'
     internals.config = { userId: 'x', lastVersion: '1.0.0' }
 
+    internals.userContext = internals.buildUserContext()
     await internals.initProviders()
 
     expect(createTelemetryProvider).toHaveBeenCalledWith('', '', [])

@@ -7,7 +7,7 @@
  * never at the cost of the user's own NO_PROXY.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const product = vi.hoisted(() => ({ networkPolicy: undefined as { proxyOnly?: string[] } | undefined }))
 vi.mock('../../../src/main/foundation/product-config', () => ({
@@ -23,6 +23,10 @@ import {
   parseBypassList,
   proxyBypassList,
 } from '../../../src/main/services/proxy-policy'
+
+beforeEach(() => {
+  for (const key of ['HALO_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) vi.stubEnv(key, '')
+})
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -181,8 +185,16 @@ describe('applyProxyEnv', () => {
       'https://llm.corp.example/v1', 'https://qyapi.weixin.qq.com/mcp', 'http://10.0.0.8:8080/sse', undefined, 'not a url',
     ])
 
-    expect(env.NO_PROXY).toBe('localhost,127.0.0.1,[::1],.internal,llm.corp.example,10.0.0.8')
+    expect(env.NO_PROXY).toBe('localhost,127.0.0.1,[::1],.internal,llm.corp.example:443,10.0.0.8:8080')
     expect(env.HTTP_PROXY).toBe('http://127.0.0.1:7890')
+  })
+
+  it('does not exempt a proxied port on a host with a direct endpoint', () => {
+    vi.stubEnv('HALO_SERVER_MODE', '1')
+    const env: Record<string, string> = {}
+    applyProxyEnv(env, { proxyOnly: ['mcp.internal:443'] }, ['https://mcp.internal', 'http://mcp.internal:8080'])
+    expect(env.NO_PROXY.split(',')).toContain('mcp.internal:8080')
+    expect(env.NO_PROXY.split(',')).not.toContain('mcp.internal')
   })
 
   it('ignores proxyOnly on the desktop', () => {

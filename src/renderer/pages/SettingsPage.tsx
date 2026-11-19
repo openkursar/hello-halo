@@ -115,16 +115,17 @@ export function SettingsPage() {
               {/* Advanced Section - desktop, or the web client of a headless server;
                   its desktop-only parts gate themselves */}
               {showNodeSettings && (
-                <AdvancedSection config={config} setConfig={setConfig} />
+                <AdvancedSection config={config} setConfig={setConfig} localRuntimeSetup={!isRemoteMode} />
               )}
 
               {/* Remote Access Section - Desktop only */}
               {!isRemoteMode && (
-                <RemoteAccessSection />
+                <RemoteAccessSection>
+                  <FederationSection embedded config={config} setConfig={setConfig} />
+                </RemoteAccessSection>
               )}
 
-              {/* Federation Gateway - desktop, or the web client of a headless server */}
-              {showNodeSettings && (
+              {serverBackend && (
                 <FederationSection config={config} setConfig={setConfig} />
               )}
 

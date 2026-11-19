@@ -142,8 +142,8 @@ export class GAProvider extends BaseProvider {
       if (response.ok) {
         this.log(`tracked: ${event.name}`)
       } else {
-        const errorText = await response.text().catch(() => '')
-        this.log(`track failed: ${response.status} ${errorText}`)
+        await response.body?.cancel()
+        this.log(`track failed: ${response.status}`)
       }
     })
   }

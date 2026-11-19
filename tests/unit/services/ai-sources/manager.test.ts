@@ -1107,6 +1107,17 @@ describe('independent OAuth account lifecycle', () => {
     expect(() => mgr.addSource(account('a'))).toThrow('Managed accounts must be added')
   })
 
+  it('does not let API-key account edits claim or remove deployment ownership', () => {
+    seed({ sources: [apiKeySource({ managedBy: 'server-env' })] })
+    const mgr = new AISourceManager()
+    mgr.addSource(apiKeySource({ id: 'new', managedBy: 'server-env' }))
+    mgr.updateSource('new', { managedBy: 'server-env' })
+    mgr.updateSource('s1', { managedBy: undefined, provider: 'other' })
+    expect(mgr.getSourceConfig('new')?.managedBy).toBeUndefined()
+    expect(mgr.getSourceConfig('s1')?.managedBy).toBe('server-env')
+    expect(mgr.getSourceConfig('s1')?.provider).not.toBe('other')
+  })
+
   it('metadata updates cannot replace managed credentials with stale values', () => {
     seed({ currentId: 'a', sources: [account('a')] })
     const mgr = new AISourceManager()

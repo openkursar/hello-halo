@@ -136,6 +136,29 @@ const waits = [
 const releaseCommands = ['Network.disable', 'Runtime.disable', 'Page.disable']
 
 describe('browser context cancellation', () => {
+  it('does not submit when the page held different credential text after entry', async () => {
+    const { context, contents } = await harness()
+    contents.commands.set('Accessibility.getFullAXTree', async () => ({ nodes: [
+      { ...accessibilityTree().nodes[0], childIds: ['field'] },
+      { nodeId: 'field', ignored: false, role: { value: 'textbox' }, name: { value: 'Code' }, backendDOMNodeId: 8 },
+    ] }))
+    contents.commands.set('DOM.resolveNode', async () => ({ object: { objectId: 'fixture-field' } }))
+    contents.commands.set('Runtime.callFunctionOn', vi.fn()
+      .mockResolvedValueOnce({ result: { value: 'ok' } })
+      .mockResolvedValueOnce({ result: { value: { kind: 'field', value: 'different' } } }))
+    const takingSnapshot = context.createSnapshot()
+    await vi.advanceTimersByTimeAsync(0)
+    const snapshot = await takingSnapshot
+    const field = [...snapshot.idToNode.values()].find(node => node.name === 'Code')!
+    const markSubmit = vi.fn()
+    const filling = context.submitUserText(snapshot, new Map([[field.uid, 'owner-input']]), undefined, new AbortController().signal, markSubmit)
+    await vi.advanceTimersByTimeAsync(0)
+    await expect(filling).resolves.toBe(false)
+    expect(contents.insertText).toHaveBeenCalledWith('owner-input')
+    expect(markSubmit).not.toHaveBeenCalled()
+    expect(contents.sendInputEvent).not.toHaveBeenCalled()
+  })
+
   it.each(waits)('stops the $name polling sleep immediately when its context is released', async ({ method, start }) => {
     const { context, contents } = await harness()
     const request = start(context)

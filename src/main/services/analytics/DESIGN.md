@@ -49,7 +49,7 @@ src/main/services/analytics/
 
 ### UserContext + external ID
 
-`UserContext` always carries an anonymous per-install UUID (`userId`). When
+On desktop, `UserContext` carries an anonymous per-install UUID (`userId`). When
 `product.json.identitySource` is configured, `track()` resolves an
 externally-meaningful UID from the active AI source via a dot-path
 (e.g. `user.uid`) and sets `UserContext.externalUserId`. Resolution is
@@ -58,8 +58,8 @@ product config invalidates the cache on the next `track()`.
 
 ### UserContext in server mode
 
-In server mode (`HALO_SERVER_MODE`) `loadOrCreateConfig()` replaces `userId`
-with `foundation/runtime-mode.ts#getInstanceId()`, the container hostname. A
+In server mode (`HALO_SERVER_MODE`) the outbound event context uses
+`foundation/runtime-mode.ts#getInstanceId()`, the container hostname, instead of the stored install UUID. A
 container filesystem is not a dependable anchor: when it resets, the
 "persisted" UUID is regenerated and every cold start is ingested as a new
 install. A random UUID also cannot be traced back to a deployment, while the
@@ -76,8 +76,7 @@ remote client.
 desktop events are unchanged. It is the only signal separating a server
 deployment from a Linux desktop (`platform` is `linux` for both).
 
-The desktop never calls `getInstanceId()` (it returns `undefined` there): its
-hostname is the person's machine name.
+The desktop never reads the hostname for this identity: `getInstanceId()` returns `undefined` there.
 
 ### UserContext + host identity (enterprise-internal only)
 
@@ -354,7 +353,7 @@ Shutdown (`cleanupExtendedServices`):
 
 | Field                | Meaning                                                             |
 |----------------------|---------------------------------------------------------------------|
-| `userId`             | Anonymous per-install UUID, generated on first launch               |
+| `userId`             | Desktop install UUID, or server instance hostname in the outbound event only |
 | `lastVersion`        | Last launched app version (drives `app_install`/`app_update` events)|
 | `lastSnapshotRunId`  | Watermark for `app.run.replay` — most recent replayed runId         |
 | `lastSnapshotTs`     | Watermark for `app.run.replay` — most recent replayed finishedAt    |

@@ -275,11 +275,12 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/teams/:teamId/leave': {
       expose: 'ai',
       group: 'team',
-      summary: 'Leave a team hosted on someone else\'s computer',
-      body: '{}',
+      summary: 'Withdraw selected local members or leave a team hosted on another computer',
+      body: '{"appIds":["local-app-id"]} or {}',
       returns: '{success:true} | {success:false,error}',
       notes: [
-        'Only for a team joined from another computer (hostNodeId set in GET /api/teams). All of this computer\'s digital humans in it leave with it; their duties there are kept on this computer and come back if they join the same team again, which needs a new invite from the host. Confirm with the user first.',
+        'Confirm which members should leave first. Provide their local appIds as a non-empty list of non-blank strings. Other local members stay. With no members left, this computer leaves the office. With no body or {}, the entire computer and all of its members leave. A malformed selection returns 400; do not retry it as {}.',
+        'Only for a team joined from elsewhere (hostNodeId set in GET /api/teams). Duties are kept on this computer; rejoining requires a new invitation from the host.',
         'NOT_JOINED: this computer has no team joined from elsewhere with that id; nothing changed. A team it hosts is not left but dissolved (DELETE /api/teams/:teamId), which deletes much more — ask the user, never switch to it on your own.',
       ].join('\n'),
       impact: 'irreversible',

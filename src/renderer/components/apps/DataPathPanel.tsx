@@ -10,6 +10,7 @@
  * server mode.
  */
 
+import { useState } from 'react'
 import { FileText, FolderOpen, Download, FileWarning } from 'lucide-react'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { useTranslation } from '../../i18n'
@@ -28,9 +29,16 @@ export function DataPathPanel({ dataPath, text, unreadable }: DataPathPanelProps
   const remote = api.isRemoteMode()
   const ActionIcon = remote ? Download : FolderOpen
 
-  const handleOpen = () => {
-    const action = remote ? api.downloadArtifact(dataPath) : api.showArtifactInFolder(dataPath)
-    action.catch(err => console.error('[DataPathPanel] Failed to open file:', err))
+  const [failedPath, setFailedPath] = useState<string | null>(null)
+  const handleOpen = async () => {
+    setFailedPath(null)
+    try {
+      const result = await (remote ? api.downloadArtifact(dataPath) : api.showArtifactInFolder(dataPath))
+      if (!result.success) throw new Error(result.error ?? 'File opening rejected')
+    } catch (error) {
+      console.warn('[Activity] Report file could not open:', error)
+      setFailedPath(dataPath)
+    }
   }
 
   return (
@@ -46,6 +54,8 @@ export function DataPathPanel({ dataPath, text, unreadable }: DataPathPanelProps
         <span className="truncate">{dataPath.split('/').pop()}</span>
         <ActionIcon className="w-3 h-3 flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
       </button>
+      {failedPath === dataPath && <p role="alert" className="p-3 text-xs text-destructive">{t('Could not open this file. Please try again.')}</p>}
+      {text === '' && !unreadable && <p className="p-3 text-xs text-muted-foreground">{t('This file is empty.')}</p>}
       {text ? (
         <div className="p-3">
           <MarkdownRenderer content={text} className="text-sm" />
@@ -53,10 +63,7 @@ export function DataPathPanel({ dataPath, text, unreadable }: DataPathPanelProps
       ) : unreadable ? (
         <div className="flex items-start gap-1.5 p-3 text-xs text-muted-foreground">
           <FileWarning className="w-3.5 h-3.5 flex-shrink-0 mt-px" />
-          <span>
-            {t('This file is outside the workspace and cannot be read here.')}{' '}
-            <span className="font-mono break-all">{dataPath}</span>
-          </span>
+          <span>{t('This file could not be previewed.')}</span>
         </div>
       ) : null}
     </div>

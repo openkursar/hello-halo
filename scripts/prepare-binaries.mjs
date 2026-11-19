@@ -16,6 +16,7 @@ import path from 'node:path'
 import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import nodePty from './lib/node-pty-prebuild.cjs'
 import { BETTER_SQLITE3_TARGETS, getBetterSqlite3PrebuildPath, validateBetterSqlite3Prebuild } from './lib/better-sqlite3-prebuilds.mjs'
 import {
   CLOUDFLARED_ASSETS,
@@ -74,7 +75,7 @@ const WATCHER_PACKAGES = {
 // rebuilding when node-pty itself changes.
 //
 // To rebuild for a new node-pty version:
-//   docker run --rm -v "$PWD:/w" -w /w node:20-bookworm sh -c \
+//   docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w node:20-bookworm sh -c \
 //     'npm i -g node-gyp && cd node_modules/node-pty && node-gyp rebuild && \
 //      cp build/Release/pty.node /w/resources/prebuilds/node-pty/linux-x64/pty.node'
 // Build on Debian bookworm (glibc 2.36) or older — the resulting binary must not
@@ -474,10 +475,7 @@ function installNodePtyLinux() {
     throw new Error('Missing vendored node-pty linux-x64 binary')
   }
 
-  const detected = detectBinaryPlatform(src)
-  if (detected !== 'linux') {
-    throw new Error(`Vendored node-pty binary is ${detected || 'unrecognized'}, expected linux ELF`)
-  }
+  nodePty.verifyLinuxPty(src, PROJECT_ROOT)
 
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   fs.copyFileSync(src, dest)

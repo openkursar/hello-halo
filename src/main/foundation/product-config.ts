@@ -99,10 +99,9 @@ export interface BrowserPolicy {
  */
 export interface NetworkPolicy {
   /**
-   * When non-empty, the only hosts that take the proxy; every other host goes
-   * direct. Same syntax as the bypass list (exact host, `*.suffix` or
-   * `.suffix` for subdomains only, `host:port`, IP range). Server mode only,
-   * and config.json `network.proxyOnly` replaces it.
+   * Server-side routing for Halo requests (subject to account proxy requirements).
+   * Children receive NO_PROXY entries for known endpoints; Chromium uses its own
+   * settings. This is not an egress restriction. config.json can override the list.
    */
   proxyOnly?: string[]
   /**

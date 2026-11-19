@@ -23,6 +23,11 @@ const MAX_OUTSTANDING_FRAMES = 2
 const ACK_TIMEOUT_MS = 10_000
 /** A page that yields nothing to capture for this long is reported instead of spinning forever. */
 const BLANK_TIMEOUT_MS = 10_000
+const CAPTURE_TIMEOUT_MS = 3000
+const MAX_PENDING_INPUTS = 64
+const MAX_STILL_BYTES = 2 * 1024 * 1024
+const MAX_DETAIL_PIXELS = 3_000_000
+const DETAIL_INTERVAL_MS = 1000
 
 /** Delivers one frame; false means the viewer's link is gone. */
 export type BrowserLiveFrameSink = (frame: BrowserLiveFrame) => boolean
@@ -36,9 +41,8 @@ export interface BrowserLiveViewerLink {
 }
 
 interface Viewer extends BrowserLiveViewerLink {
-  outstanding: number
-  /** When the oldest unacknowledged frame went out; a static page owes nothing however long it sits. */
-  owingSince: number | null
+  outstanding: { seq: number; sentAt: number }[]
+  lastDigest: string | null
   wantsDetail: Set<BrowserLiveDetailScope>
   input: BrowserLiveInputState
 }
@@ -72,6 +76,9 @@ export class BrowserLiveSession {
   /** The page's size in DIP as last measured, which input positions scale against. */
   private viewport: BrowserLiveViewport | null = null
   private inputChain: Promise<void> = Promise.resolve()
+  private pendingInputs = 0
+  private lastCaptureAt = -Infinity
+  private lastDetailAt = -Infinity
 
   constructor(
     readonly viewId: string,
@@ -88,12 +95,10 @@ export class BrowserLiveSession {
   }
 
   addViewer(link: BrowserLiveViewerLink): void {
+    if (this.viewers.has(link.viewerId)) return
     this.viewers.set(link.viewerId, {
-      ...link, outstanding: 0, owingSince: null, wantsDetail: new Set(), input: new BrowserLiveInputState(this.contents),
+      ...link, outstanding: [], lastDigest: null, wantsDetail: new Set(), input: new BrowserLiveInputState(this.contents),
     })
-    // A viewer that joins mid-stream has seen nothing, so the suppression state
-    // from the previous frame would hide a static page from it entirely.
-    this.lastDigest = null
     this.unchangedStreak = 0
     this.start()
     this.wake?.()
@@ -115,9 +120,8 @@ export class BrowserLiveSession {
   ack(viewerId: string, seq: number): void {
     const viewer = this.viewers.get(viewerId)
     if (!viewer) return
-    viewer.outstanding = Math.max(0, this.seq - seq)
-    viewer.owingSince = viewer.outstanding > 0 ? Date.now() : null
-    this.wake?.()
+    const index = viewer.outstanding.findIndex(frame => frame.seq === seq)
+    if (index >= 0) viewer.outstanding.splice(0, index + 1)
   }
 
   /** Queue one still for this viewer outside the stream, delivered before its next frame. */
@@ -132,13 +136,32 @@ export class BrowserLiveSession {
    * Operate the page on a viewer's behalf. Inputs run strictly in arrival order;
    * false means there is no such viewer or no frame yet to aim at.
    */
-  input(viewerId: string, input: BrowserLiveInput): boolean {
+  input(viewerId: string, input: BrowserLiveInput, onDispatch?: () => void): boolean {
     const viewer = this.viewers.get(viewerId)
-    if (!viewer || !this.viewport) return false
-    this.enqueueInput(() => viewer.input.dispatch(input, this.viewport ?? { width: 0, height: 0 }))
-    if (changesPage(input)) this.burstUntil = Date.now() + INPUT_BURST_MS
-    this.unchangedStreak = 0
-    this.wake?.()
+    const viewport = this.viewport
+    if (!viewer || !viewport || viewer.lastDigest === null) return false
+    if (this.pendingInputs >= MAX_PENDING_INPUTS) {
+      if (input.kind !== 'mouse' || input.action !== 'move') {
+        console.warn(`[BrowserLive] Input queue full for page ${this.viewId}; ending the viewer's input`)
+        this.removeViewer(viewerId, 'stalled')
+      }
+      return false
+    }
+    this.pendingInputs++
+    this.enqueueInput(async () => {
+      try {
+        if (this.viewers.get(viewerId) !== viewer || this.contents.isDestroyed()) return
+        if (changesPage(input)) {
+          onDispatch?.()
+          this.burstUntil = Date.now() + INPUT_BURST_MS
+          this.unchangedStreak = 0
+          this.wake?.()
+        }
+        await viewer.input.dispatch(input, viewport)
+      } finally {
+        this.pendingInputs--
+      }
+    })
     return true
   }
 
@@ -176,33 +199,42 @@ export class BrowserLiveSession {
 
   private async loop(): Promise<void> {
     while (!this.stopping && this.viewers.size > 0 && !this.contents.isDestroyed()) {
-      const started = Date.now()
       await this.serveDetail()
+      if (this.stopping || this.viewers.size === 0) break
       await this.serveStream()
-      const idle = Math.max(0, this.interval() - (Date.now() - started))
-      if (idle > 0) await this.sleep(idle)
+      const idle = this.lastCaptureAt + this.interval() - Date.now()
+      await this.sleep(idle > 0 ? idle : INPUT_INTERVAL_MS)
     }
   }
 
   private async serveDetail(): Promise<void> {
-    for (const viewer of Array.from(this.viewers.values())) {
-      const scopes = Array.from(viewer.wantsDetail)
-      viewer.wantsDetail.clear()
-      for (const scope of scopes) {
-        const frame = scope === 'page' ? await this.wholePage() : await this.screenStill()
-        if (frame && this.viewers.get(viewer.viewerId) === viewer) this.send(viewer, frame, { counted: false })
-      }
-    }
+    if (Date.now() - this.lastDetailAt < DETAIL_INTERVAL_MS) return
+    const viewer = [...this.viewers.values()].find(candidate => candidate.wantsDetail.size > 0 &&
+      candidate.outstanding.length < MAX_OUTSTANDING_FRAMES)
+    if (!viewer) return
+    const scope = viewer.wantsDetail.values().next().value
+    viewer.wantsDetail.clear()
+    this.lastDetailAt = Date.now()
+    const frame = scope === 'page' ? await this.wholePage() : await this.screenStill()
+    if (this.viewers.get(viewer.viewerId) !== viewer) return
+    if (frame) this.send(viewer, frame, { counted: false })
+    else this.removeViewer(viewer.viewerId, 'unavailable')
   }
 
   private async screenStill(): Promise<BrowserLiveFrame | null> {
-    const image = await this.capture()
-    if (!image) return null
+    const captured = await this.capture()
+    if (!captured) return null
+    const { width, height } = captured.getSize()
+    const scale = Math.min(1, Math.sqrt(MAX_DETAIL_PIXELS / (width * height)))
+    const image = scale < 1 ? captured.resize({ width: Math.max(1, Math.floor(width * scale)) }) : captured
     const size = image.getSize()
+    const png = image.toPNG()
+    const encoded = png.length <= MAX_STILL_BYTES ? png : image.toJPEG(85)
+    if (encoded.length > MAX_STILL_BYTES) return null
     return {
       viewId: this.viewId,
       seq: this.seq,
-      image: `data:image/png;base64,${image.toPNG().toString('base64')}`,
+      image: `data:image/${encoded === png ? 'png' : 'jpeg'};base64,${encoded.toString('base64')}`,
       width: size.width,
       height: size.height,
       detail: true,
@@ -241,22 +273,23 @@ export class BrowserLiveSession {
 
   private async serveStream(): Promise<void> {
     this.dropStalledViewers()
-    const waiting = Array.from(this.viewers.values()).filter(v => v.outstanding < MAX_OUTSTANDING_FRAMES)
-    if (waiting.length === 0) return
+    if (Date.now() - this.lastCaptureAt < this.interval()) return
+    this.lastCaptureAt = Date.now()
+    if (![...this.viewers.values()].some(viewer => viewer.outstanding.length < MAX_OUTSTANDING_FRAMES)) return
     const image = await this.capture()
-    if (!image) return
+    if (!image || this.stopping || !this.viewers.size) return
     const scaled = this.scale(image)
     const jpeg = scaled.toJPEG(STREAM_QUALITY)
-    const digest = createHash('sha1').update(jpeg).digest('base64')
-    // A login page waiting for a scan is unchanged for minutes on end; sending
-    // it again would cost bandwidth to say nothing.
-    if (digest === this.lastDigest) {
+    const url = this.contents.getURL()
+    const digest = createHash('sha1').update(jpeg).update(url).digest('base64')
+    this.unchangedStreak = digest === this.lastDigest ? this.unchangedStreak + 1 : 0
+    this.lastDigest = digest
+    const waiting = [...this.viewers.values()].filter(viewer =>
+      viewer.outstanding.length < MAX_OUTSTANDING_FRAMES && viewer.lastDigest !== digest)
+    if (waiting.length === 0) {
       this.suppressed++
-      this.unchangedStreak++
       return
     }
-    this.lastDigest = digest
-    this.unchangedStreak = 0
     const scroll = await this.measure(image)
     const size = scaled.getSize()
     const frame: BrowserLiveFrame = {
@@ -265,16 +298,26 @@ export class BrowserLiveSession {
       image: `data:image/jpeg;base64,${jpeg.toString('base64')}`,
       width: size.width,
       height: size.height,
-      url: this.contents.getURL(),
+      url,
       ...(scroll ? { scroll } : {}),
     }
     this.frames++
     this.bytes += jpeg.length
-    for (const viewer of waiting) this.send(viewer, frame)
+    for (const viewer of waiting) {
+      if (this.viewers.get(viewer.viewerId) !== viewer) continue
+      viewer.lastDigest = digest
+      this.send(viewer, frame)
+    }
   }
 
   private async capture(): Promise<NativeImage | null> {
-    const image = await capturePageFrame(this.contents)
+    let timer: NodeJS.Timeout | undefined
+    const image = await Promise.race([
+      capturePageFrame(this.contents),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Browser frame capture timed out')), CAPTURE_TIMEOUT_MS)
+      }),
+    ]).finally(() => clearTimeout(timer))
     if (image) {
       this.blankSince = null
       return image
@@ -288,10 +331,7 @@ export class BrowserLiveSession {
   }
 
   private send(viewer: Viewer, frame: BrowserLiveFrame, options: { counted?: boolean } = {}): void {
-    if (options.counted !== false) {
-      if (viewer.outstanding === 0) viewer.owingSince = Date.now()
-      viewer.outstanding++
-    }
+    if (options.counted !== false) viewer.outstanding.push({ seq: frame.seq, sentAt: Date.now() })
     let delivered = false
     try {
       delivered = viewer.frame(frame)
@@ -302,8 +342,9 @@ export class BrowserLiveSession {
   private dropStalledViewers(): void {
     const now = Date.now()
     for (const viewer of Array.from(this.viewers.values())) {
-      if (viewer.owingSince !== null && now - viewer.owingSince > ACK_TIMEOUT_MS) {
-        console.warn(`[BrowserLive] Dropping stalled viewer ${viewer.viewerId} of ${this.viewId}: ${viewer.outstanding} frame(s) unacknowledged for ${now - viewer.owingSince} ms`)
+      const oldest = viewer.outstanding[0]
+      if (oldest && now - oldest.sentAt > ACK_TIMEOUT_MS) {
+        console.warn(`[BrowserLive] Dropping stalled viewer ${viewer.viewerId} of ${this.viewId}: ${viewer.outstanding.length} unacknowledged frame(s)`)
         this.removeViewer(viewer.viewerId, 'stalled')
       }
     }

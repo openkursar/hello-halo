@@ -71,8 +71,6 @@ const frame = (seq: number) => ({ viewId: 'view-1', seq, image: 'data:image/jpeg
 function watch() {
   const runner = new Runner()
   const draw = () => runner.render(() => BrowserLiveViewer({ tab }))
-  const idle = nodes(draw()).find(n => typeof n.type === 'function' && n.props?.onStart)
-  idle.props.onStart()
   draw()
   return draw
 }

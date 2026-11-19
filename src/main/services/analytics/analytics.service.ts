@@ -334,16 +334,6 @@ class AnalyticsService {
     const config = getConfig()
     const currentVersion = app.getVersion()
 
-    // Server mode takes its identity from the platform rather than from disk:
-    // a reset container filesystem would make every cold start look like a
-    // new install, and a random UUID cannot be traced back to a deployment.
-    // The snapshot watermarks still come from disk (losing them re-sends
-    // already-forwarded runs), and the identity is never written back.
-    const instanceId = getInstanceId()
-    if (instanceId) {
-      return { ...config.analytics, userId: instanceId, lastVersion: currentVersion }
-    }
-
     // Create new config if not exists
     if (!config.analytics) {
       const newAnalyticsConfig: AnalyticsConfig = {
@@ -366,7 +356,7 @@ class AnalyticsService {
    */
   private buildUserContext(): UserContext {
     return {
-      userId: this.config!.userId,
+      userId: getInstanceId() ?? this.config!.userId,
       ...(isServerMode() ? { runtimeMode: 'server' as const } : {}),
       appVersion: app.getVersion(),
       platform: process.platform,
@@ -487,7 +477,7 @@ class AnalyticsService {
    * Initialize all providers
    */
   private async initProviders(): Promise<void> {
-    const userId = this.config!.userId
+    const userId = this.userContext!.userId
     const PROVIDER_CONFIG = loadProviderConfig()
 
     // Create and initialize providers
@@ -575,7 +565,7 @@ class AnalyticsService {
    * Get user ID (for future account binding)
    */
   getUserId(): string | null {
-    return this.config?.userId || null
+    return this.userContext?.userId || null
   }
 
   /**

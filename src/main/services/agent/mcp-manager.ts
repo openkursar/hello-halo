@@ -305,7 +305,7 @@ async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
       mcpServers: enabledMcpServers,
     })
     console.log(`[Agent] MCP test: ${credentials.provider} credential via ${resolved.anthropicBaseUrl}${resolved.delegatedRoutingHeader ? ' (delegated)' : ''}`)
-    console.log('[Agent] MCP test config:', JSON.stringify(enabledMcpServers, null, 2))
+    console.log(`[Agent] Testing ${Object.keys(enabledMcpServers).length} MCP server(s)`)
 
     // Create query with proper configuration (matching sendMessage)
     // Use a simple prompt that will get a quick response

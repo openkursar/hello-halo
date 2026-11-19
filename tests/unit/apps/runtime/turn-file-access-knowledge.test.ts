@@ -57,6 +57,12 @@ describe('knowledge folders in a restricted turn', () => {
     expect(decision?.allow).toBe(false)
   })
 
+  it('keeps shared text read-only even inside a writable workspace', () => {
+    const shared = { ...access([kbText]), workspaceRoots: [root] }
+    expect(decideFileAccess(shared, 'Write', { file_path: join(kbText, 'a.txt') }, true)?.allow).toBe(false)
+    expect(decideFileAccess(shared, 'Write', { file_path: join(workspace, 'notes.txt') }, true)?.allow).toBe(true)
+  })
+
   it('keeps a knowledge base it was not handed closed', () => {
     const decision = decideFileAccess(access([kbText]), 'Read', { file_path: join(otherKbText, 'b.txt') }, true)
     expect(decision?.allow).toBe(false)

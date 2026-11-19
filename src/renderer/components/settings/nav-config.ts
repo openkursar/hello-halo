@@ -37,27 +37,25 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     id: 'system',
     labelKey: 'System',
     icon: Settings,
-    desktopOnly: true
+    audience: 'desktop'
   },
   {
     id: 'advanced',
     labelKey: 'Advanced',
     icon: Code,
-    desktopOnly: true,
-    serverRemote: true
+    audience: 'node'
   },
   {
     id: 'remote',
     labelKey: 'Remote Access',
     icon: Globe,
-    desktopOnly: true
+    audience: 'desktop'
   },
   {
     id: 'federation',
     labelKey: 'Federation Gateway',
     icon: Network,
-    desktopOnly: true,
-    serverRemote: true
+    audience: 'headless'
   },
   {
     id: 'recommend',
@@ -77,6 +75,10 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
  * @param serverBackend - Whether the remote backend is a headless server
  */
 export function getFilteredNavItems(isRemoteMode: boolean, serverBackend = false): SettingsNavItem[] {
-  return SETTINGS_NAV_ITEMS.filter(item =>
-    !item.desktopOnly || !isRemoteMode || (serverBackend && item.serverRemote === true))
+  return SETTINGS_NAV_ITEMS.filter(({ audience }) => {
+    if (audience === 'desktop') return !isRemoteMode
+    if (audience === 'headless') return isRemoteMode && serverBackend
+    if (audience === 'node') return !isRemoteMode || serverBackend
+    return true
+  })
 }

@@ -35,7 +35,22 @@ promises:
   upgrade-control:
     en: Automatic upgrades respect paused learning and do not repeatedly rewrite completed or protected results.
     zh: 自动升级遵守学习暂停设置，不反复改写已完成或已保护的结果。
+  replace:
+    en: Replacing a published document release preserves the previously searchable text until the replacement succeeds. A failed replacement can be retried after restart.
+    zh: 替换已发布资料时，成功之前保留之前可检索的正文；替换失败后重启仍可重试。
 scenarios:
+  - id: knowledge.sources.replace-release
+    title: Keep using the previous document release until its replacement is ready
+    verifies: [replace]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      replacement: [versioned-folder, forget-and-relink]
+    steps: [Learn the original release. Attempt a replacement that cannot be fully learned or written. Search the knowledge base before and after restart. Repair the replacement and learn again.]
+    expected: [The failed attempt leaves the published text and index available. After successful learning the new documents are searchable and retired text is no longer found.]
   - id: knowledge.sources.import
     title:
       en: Import supported document types

@@ -4,7 +4,7 @@
  * never another chat's.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 let activeHandler: ((e: unknown) => void) | null = null
 let goneHandler: ((e: unknown) => void) | null = null
@@ -16,6 +16,8 @@ let wsStateHandler: ((state: string) => void) | null = null
 const unsub = { active: vi.fn(), gone: vi.fn(), released: vi.fn(), metadata: vi.fn(), credential: vi.fn(), credentialResolved: vi.fn(), ws: vi.fn() }
 const listActive = vi.fn()
 const listCredentials = vi.fn()
+let remote = false
+let browserLive = false
 
 vi.mock('../../../src/renderer/api', () => ({
   api: {
@@ -25,6 +27,8 @@ vi.mock('../../../src/renderer/api', () => ({
     onBrowserStateChange: (cb: (e: unknown) => void) => { metadataHandler = cb; return unsub.metadata },
     onAIBrowserCredentialRequest: (cb: (e: unknown) => void) => { credentialHandler = cb; return unsub.credential },
     onAIBrowserCredentialResolved: (cb: (e: unknown) => void) => { credentialResolvedHandler = cb; return unsub.credentialResolved },
+    isRemoteMode: () => remote,
+    supportsBrowserLive: () => browserLive,
     listAIBrowserLivePages: (...args: unknown[]) => listActive(...args),
     listAIBrowserCredentialRequests: (...args: unknown[]) => listCredentials(...args),
     onWsStateChange: (cb: (state: string) => void) => { wsStateHandler = cb; return unsub.ws },
@@ -241,6 +245,8 @@ describe('ai browser store', () => {
 })
 
 describe('store listeners', () => {
+  afterEach(() => { remote = false; browserLive = false })
+
   beforeEach(() => {
     useAIBrowserStore.setState({ views: {}, pages: {}, operating: {}, credentialRequests: {} })
     listActive.mockReset()
@@ -266,14 +272,15 @@ describe('store listeners', () => {
     expect(unsub.released).toHaveBeenCalled()
     expect(unsub.active).toHaveBeenCalled()
     expect(unsub.gone).toHaveBeenCalled()
-    expect(unsub.credential).toHaveBeenCalled()
-    expect(unsub.credentialResolved).toHaveBeenCalled()
-    expect(unsub.ws).toHaveBeenCalled()
+    expect(listCredentials).not.toHaveBeenCalled()
   })
 
   it('catches up on pages opened while a remote client was disconnected', async () => {
+    remote = true
     listActive.mockResolvedValue([])
-    initAIBrowserStoreListeners()
+    const dispose = initAIBrowserStoreListeners()
+    expect(listActive).not.toHaveBeenCalled()
+    expect(listCredentials).not.toHaveBeenCalled()
     await flush()
     expect(useAIBrowserStore.getState().views).toEqual({})
 
@@ -282,17 +289,23 @@ describe('store listeners', () => {
     await flush()
     expect(useAIBrowserStore.getState().views).toEqual({})
 
+    browserLive = true
     wsStateHandler!('connected')
     await flush()
     expect(useAIBrowserStore.getState().views['app-chat:dh1'].viewId).toBe('v1')
     expect(Object.keys(useAIBrowserStore.getState().pages)).toEqual(['v1'])
+    browserLive = false
+    wsStateHandler!('disconnected')
+    expect(useAIBrowserStore.getState().pages).toEqual({})
+    dispose()
   })
 
   it('holds a page’s request for a code until it is answered somewhere', async () => {
+    remote = browserLive = true
     listActive.mockResolvedValue([])
     // Already waiting when this client connected: the prompt must still appear.
     listCredentials.mockResolvedValue([credentialRequest('req-old')])
-    initAIBrowserStoreListeners()
+    const dispose = initAIBrowserStoreListeners()
     await flush()
 
     credentialHandler!(credentialRequest('req-new'))
@@ -301,6 +314,7 @@ describe('store listeners', () => {
     // Answered on another client, or expired: this one stops asking.
     credentialResolvedHandler!({ requestId: 'req-old', outcome: 'provided' })
     expect(Object.keys(useAIBrowserStore.getState().credentialRequests)).toEqual(['req-new'])
+    dispose()
   })
 
   it('learns pages opened before the renderer started, without overriding a newer live event', async () => {

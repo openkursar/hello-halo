@@ -1,0 +1,50 @@
+version: 1
+id: remote.browser
+module: remote
+title:
+  en: Help the AI on the same Server browser page
+  zh: 在 Server 的同一网页上协助 AI
+story:
+  en: As a Halo Server owner, I can open the AI's browser in the canvas, interact with its actual page and let it continue there.
+  zh: 作为 Halo Server 主人，我能在画布打开 AI 的浏览器、操作它正在使用的网页，并让 AI 从那里继续。
+basis: documented
+references:
+  - src/main/services/browser-live/DESIGN.md
+  - tests/e2e/specs/acceptance-server-browser.spec.ts
+promises:
+  continuity:
+    en: Browser input and the AI's next read go to the same page, including after a reconnect.
+    zh: 用户的操作和 AI 后续读取发生在同一网页，重连后也不变。
+  on-demand:
+    en: The remote client attaches only while the live browser tab is visible.
+    zh: 只有实时浏览器标签可见时，远程客户端才订阅网页画面。
+scenarios:
+  - id: remote.browser.same-page
+    title:
+      en: Edit the AI's page remotely and reconnect to it
+      zh: 远程编辑 AI 的网页并在重连后继续
+    verifies:
+      - continuity
+      - on-demand
+    platforms: [darwin, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk, chromium-browser]
+    preconditions:
+      - en: An isolated Halo process runs in Server mode with a local website and a scripted model.
+        zh: 隔离的 Halo 进程以 Server 模式运行，使用本地网页与脚本模型。
+    steps:
+      - en: Sign in over the web, have the AI open a page, show it and type into the page.
+        zh: 通过 Web 登录，让 AI 打开网页，然后查看并向网页输入。
+      - en: Interrupt and restore the connection, then collapse the canvas and ask the AI to read the page.
+        zh: 中断并恢复连接，收起画布，再让 AI 读取该页。
+    expected:
+      - en: The same page retains the user's change and the model reads it, with a notice that the user interacted.
+        zh: 同一网页保留用户的修改，AI 能读取内容，并收到用户操作过的提示。
+      - en: The client doesn't subscribe before reveal and detaches on collapse.
+        zh: 客户端打开标签前不订阅，收起画布后取消订阅。
+    notes:
+      en: A source build running on macOS exercises Server mode but is not evidence about the shipped Linux container or native mobile clients.
+      zh: macOS 源码构建验证 Server 模式，不代表发布的 Linux 镜像或原生手机客户端已通过。

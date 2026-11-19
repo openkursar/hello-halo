@@ -1,90 +1,28 @@
-/**
- * apps/runtime -- Report Output Containment
- *
- * `report_to_user` accepts a `data_path` pointing at a file the agent wrote.
- * A path outside the space produces an activity entry the user cannot open —
- * silently, since the reader falls back to the (usually absent) inline data.
- *
- * Rather than reject such a path — the work is already done, and failing the
- * report loses it — the file is copied into the space and the entry points at
- * the copy.
- *
- * This is deliberately NOT FileExportGate: that gate answers "may this file
- * leave the machine" and admits tmpdir(), which is exactly one of the places
- * the user cannot see.
- */
+import { access, realpath, stat } from 'fs/promises'
+import { constants } from 'fs'
+import { join, resolve } from 'path'
+import { isCanonicalWithin } from '../../foundation/path-containment'
 
-import { copyFile, mkdir, realpath, stat } from 'fs/promises'
-import { basename, extname, isAbsolute, join, resolve } from 'path'
-import { getSpaceDir } from '../../services/space.service'
-import { getOutputDir, isInsideSpace } from '../../services/space-scope'
+export const reportOutputDir = (workDir: string) => join(workDir, 'outputs')
 
-/** Upper bound on collision-avoiding renames before falling back to a timestamp. */
-const MAX_NAME_ATTEMPTS = 100
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await stat(path)
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function allocateName(dir: string, name: string): Promise<string> {
-  const ext = extname(name)
-  const stem = name.slice(0, name.length - ext.length)
-  for (let i = 0; i < MAX_NAME_ATTEMPTS; i++) {
-    const candidate = i === 0 ? name : `${stem}-${i}${ext}`
-    const path = join(dir, candidate)
-    if (!(await exists(path))) return path
-  }
-  return join(dir, `${stem}-${Date.now()}${ext}`)
-}
-
-/**
- * Resolve a reported `data_path` to a path the user can actually open.
- *
- * Returns the path unchanged when the space is unknown or the target is not a
- * regular file — a directory or a device node is not something to copy, and a
- * missing file is the agent's mistake to surface, not this function's to hide.
- */
-export async function reclaimReportedFile(
-  reportedPath: string,
-  spaceId: string | undefined
+export async function resolveReportFile(
+  path: string,
+  workDir?: string,
+  refuse?: (realPath: string) => string | null,
 ): Promise<string> {
-  const spaceDir = spaceId ? getSpaceDir(spaceId) : ''
-  if (!spaceDir) return reportedPath
-
-  const absolute = isAbsolute(reportedPath)
-    ? reportedPath
-    : resolve(spaceDir, reportedPath)
-
-  let stats: Awaited<ReturnType<typeof stat>>
+  if (!workDir) throw new Error('No workspace is available for this report. Provide the report inline instead.')
+  const guidance = `Write your report under ${reportOutputDir(workDir)} and report its path, or provide it inline.`
+  const [file, root] = await Promise.all([realpath(resolve(workDir, path)), realpath(workDir)]).catch(() => {
+    throw new Error(`The report file could not be located. ${guidance}`)
+  })
+  if (!isCanonicalWithin(file, root)) throw new Error(`The report file is outside this workspace. ${guidance}`)
+  const refusal = refuse?.(file)
+  if (refusal) throw new Error(refusal)
   try {
-    stats = await stat(absolute)
+    if (!(await stat(file)).isFile()) throw new Error('Not a file')
+    await access(file, constants.R_OK)
   } catch {
-    return reportedPath
+    throw new Error(`The report path is not a readable file. ${guidance}`)
   }
-  if (!stats.isFile()) return reportedPath
-
-  const fileReal = await realpath(absolute)
-  if (isInsideSpace(fileReal, spaceId)) return fileReal
-
-  const outputDir = getOutputDir(spaceId)
-  try {
-    await mkdir(outputDir, { recursive: true })
-    const target = await allocateName(outputDir, basename(fileReal))
-    await copyFile(fileReal, target)
-    console.log(
-      `[Runtime] Reported file copied into the space: "${fileReal}" -> "${target}"`
-    )
-    return target
-  } catch (err) {
-    console.error(
-      `[Runtime] Failed to copy reported file "${fileReal}" into "${outputDir}":`,
-      err
-    )
-    return reportedPath
-  }
+  return file
 }

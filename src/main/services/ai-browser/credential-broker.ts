@@ -35,6 +35,7 @@ interface PendingRequest {
   detail: AIBrowserCredentialRequest
   timer: NodeJS.Timeout
   settle: (outcome: CredentialOutcome) => void
+  dispose: () => void
 }
 
 const pending = new Map<string, PendingRequest>()
@@ -43,10 +44,11 @@ function finish(requestId: string, outcome: CredentialOutcome): void {
   const entry = pending.get(requestId)
   if (!entry) return
   clearTimeout(entry.timer)
+  entry.dispose()
   pending.delete(requestId)
   entry.settle(outcome)
-  emitBrowserCredentialResolved({ requestId, outcome: outcome.status === 'provided' ? 'provided' : outcome.status })
-  console.log(`[BrowserCredential] ${outcome.status} for ${entry.detail.origin} (${entry.detail.fields.length} field(s))`)
+  emitBrowserCredentialResolved({ requestId, outcome: outcome.status })
+  console.log(`[BrowserCredential] ${outcome.status} for page ${entry.detail.viewId}`)
 }
 
 /**
@@ -63,13 +65,16 @@ export function requestCredential(request: {
   title: string | null
   fields: AIBrowserSecretField[]
   purpose: string
-}): Promise<CredentialOutcome> {
+}, signal?: AbortSignal): Promise<CredentialOutcome> {
+  if (signal?.aborted) return Promise.resolve({ status: 'expired' })
   const requestId = randomUUID()
   const detail: AIBrowserCredentialRequest = { requestId, ...request, expiresAt: Date.now() + CREDENTIAL_WAIT_MS }
   return new Promise<CredentialOutcome>(resolve => {
-    const timer = setTimeout(() => finish(requestId, { status: 'expired' }), CREDENTIAL_WAIT_MS)
+    const expire = () => finish(requestId, { status: 'expired' })
+    const timer = setTimeout(expire, CREDENTIAL_WAIT_MS)
     timer.unref()
-    pending.set(requestId, { detail, timer, settle: resolve })
+    pending.set(requestId, { detail, timer, settle: resolve, dispose: () => signal?.removeEventListener('abort', expire) })
+    signal?.addEventListener('abort', expire, { once: true })
     emitBrowserCredentialRequest(detail)
   })
 }
@@ -85,8 +90,8 @@ export function submitCredential(requestId: string, values: Record<string, strin
   const collected = new Map<string, string>()
   for (const field of entry.detail.fields) {
     const value = values[field.uid]
-    if (typeof value !== 'string' || value.length === 0) {
-      return { accepted: false, error: `No text was given for "${field.label}"` }
+    if (!Object.hasOwn(values, field.uid) || typeof value !== 'string' || value.length === 0 || value.length > 4096) {
+      return { accepted: false, error: 'Enter a value of up to 4096 characters for each field' }
     }
     collected.set(field.uid, value)
   }

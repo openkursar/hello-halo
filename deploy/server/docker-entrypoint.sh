@@ -102,13 +102,12 @@ echo "[halo-entrypoint] Xvfb ready on :${DISPLAY_NUM} (pid ${XVFB_PID})"
 
 export DISPLAY=":${DISPLAY_NUM}"
 
-# The container runs as root, and the Claude Code CLI that Halo spawns refuses to
-# start as root ("--dangerously-skip-permissions cannot be used with root/sudo
-# privileges") unless this is set — it exits 1 and the agent produces nothing at
-# all. Exported rather than passed to Halo, because the CLI is a grandchild that
-# inherits the environment. The container IS the sandbox here: it is the isolation
-# boundary the flag is asking about.
-export IS_SANDBOX=1
+# Electron runs without its own sandbox only in a root container. Use an
+# isolated deployment with no host mounts beyond its data directory.
+if [ "$(id -u)" -eq 0 ]; then
+    echo '[halo-entrypoint] Running as root: Chromium relies on container isolation' >&2
+    set -- --no-sandbox "$@"
+fi
 
 # Without a display Halo does not degrade, it crashes. If Xvfb ever dies, bring
 # the container down so the platform restarts it cleanly instead of leaving a
@@ -121,19 +120,9 @@ export IS_SANDBOX=1
     kill -TERM "${MAIN_PID}" 2>/dev/null || true
 ) &
 
-# --enable-unsafe-swiftshader is what makes WebGL work at all here. Since M112
-# Chromium refuses to silently fall back to software WebGL: without the flag a
-# page's getContext("webgl") returns null and the canvas never paints (measured:
-# renderer "none"). The flag opts into the bundled SwiftShader rasterizer, after
-# which the renderer reports "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device
-# (Subzero)), SwiftShader driver)" and GL pixels composite into captures.
-#
-# --disable-gpu must STAY. Dropping it does not help WebGL — there is no GPU to
-# find, and Chromium then blocklists GL outright (ContextResult::kFatalFailure:
-# WebGL1 blocklisted), which is strictly worse than the flag. "unsafe" refers to
-# exposing a software GL implementation that was not security-hardened for
-# untrusted content; the cost otherwise is CPU, since every GL frame is rasterized
-# on the CPU. Pages that do not use WebGL are unaffected.
+# Software WebGL is opt-in; it is not needed for ordinary page capture.
+if [ "${HALO_SERVER_SOFTWARE_WEBGL:-0}" = "1" ]; then
+    set -- --enable-unsafe-swiftshader "$@"
+fi
 exec /app/linux-unpacked/halo \
-    --ozone-platform=x11 --no-sandbox --disable-gpu --disable-dev-shm-usage \
-    --enable-unsafe-swiftshader "$@"
+    --ozone-platform=x11 --disable-gpu --disable-dev-shm-usage "$@"

@@ -119,7 +119,7 @@ function attachWebhookIngress(app: Express): void {
   })
 }
 
-async function isPortAvailable(port: number): Promise<boolean> {
+async function isPortAvailable(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const tester = createNetServer()
     tester.once('error', () => {
@@ -128,15 +128,15 @@ async function isPortAvailable(port: number): Promise<boolean> {
     tester.once('listening', () => {
       tester.close(() => resolve(true))
     })
-    tester.listen(port, '0.0.0.0')
+    tester.listen(port, host)
   })
 }
 
-async function findAvailablePort(startPort: number): Promise<number> {
+async function findAvailablePort(startPort: number, host: string): Promise<number> {
   for (let i = 0; i < MAX_PORT_SEARCH_ATTEMPTS; i++) {
     const portToTry = startPort + i
     // eslint-disable-next-line no-await-in-loop
-    const available = await isPortAvailable(portToTry)
+    const available = await isPortAvailable(portToTry, host)
     if (available) {
       if (i > 0) {
         console.warn(`[HTTP] Port ${startPort} is in use, falling back to ${portToTry}`)
@@ -180,7 +180,9 @@ export async function startHttpServer(
   port: number = DEFAULT_PORT,
   existingToken?: string
 ): Promise<{ port: number; token: string }> {
-  const listenPort = await findAvailablePort(port)
+  const host = process.env.HALO_E2E_TEST === '1' && isServerMode() ? '127.0.0.1' : '0.0.0.0'
+  const useViteProxy = is.dev && (!isServerMode() || Boolean(process.env.ELECTRON_RENDERER_URL))
+  const listenPort = await findAvailablePort(port, host)
   // The routes reach almost every service; loaded here, they stay out of
   // what the main process loads before its window opens.
   const { registerApiRoutes } = await import('./routes')
@@ -277,7 +279,7 @@ export async function startHttpServer(
   })
 
   // Serve static files (frontend)
-  if (is.dev) {
+  if (useViteProxy) {
     // In development, proxy to Vite dev server
     expressApp.use('/{*path}', (req, res) => {
       // Check if authenticated (has valid token in query or localStorage check via cookie)
@@ -373,7 +375,7 @@ export async function startHttpServer(
   initWebSocket(httpServer)
 
   // In dev mode, proxy Vite HMR WebSocket connections
-  if (is.dev) {
+  if (useViteProxy) {
     httpServer.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url || '/', `http://${req.headers.host}`)
 
@@ -447,7 +449,7 @@ export async function startHttpServer(
 
   // Start listening
   return new Promise((resolve, reject) => {
-    httpServer!.listen(listenPort, '0.0.0.0', () => {
+    httpServer!.listen(listenPort, host, () => {
       serverPort = listenPort
       console.log(`[HTTP] Server started on port ${listenPort}`)
       // Never log the access token itself — the remote-access PIN must not

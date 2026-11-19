@@ -61,6 +61,8 @@ import {
   processQueue,
   triggerFullIngest,
   hasPendingCommit,
+  getIngestProgress,
+  migrateKBsToTextIndex,
 } from '../../../../src/main/services/tlon/ingest'
 import { resolveFolderVersion } from '../../../../src/main/services/tlon/version'
 import { getKBTextDir, getKBIndexMdPath, getKBStagingDir, getKBRetainedDir } from '../../../../src/main/services/tlon/paths'
@@ -209,6 +211,90 @@ describe('Tlon curated sources', () => {
       expect(readHashes(kb.id).versions?.[dir]).toBe('v1.2.4')
       expect(indexMd(kb.id)).toContain('(version v1.2.4)')
       expect(hasPendingCommit(kb.id)).toBe(false)
+    })
+
+    it('keeps removed and changed documents on the published version when replacement extraction fails', async () => {
+      const kb = createKB({ name: 'Handbook' })
+      const dir = scratch()
+      put(dir, 'VERSION.md', 'v1')
+      const old = put(dir, 'removed.md', 'OLD-ONLY')
+      put(dir, 'terms.md', 'OLD-TERMS')
+      linkOk(kb.id, dir)
+      await triggerFullIngest(kb.id)
+      const previous = indexMd(kb.id)
+
+      fs.unlinkSync(old)
+      put(dir, 'VERSION.md', 'v2')
+      put(dir, 'terms.md', 'NEW-TERMS')
+      const broken = put(dir, 'broken.docx', 'not a document')
+      await triggerFullIngest(kb.id)
+      expect(getIngestProgress(kb.id).phase).toBe('error')
+      expect(indexMd(kb.id)).toBe(previous)
+      expect(corpusContains(kb.id, 'OLD-ONLY')).toBe(true)
+      expect(corpusContains(kb.id, 'NEW-TERMS')).toBe(false)
+      _resetTlonRegistry()
+      await migrateKBsToTextIndex()
+      expect(readHashes(kb.id).versions?.[dir]).toBe('v1')
+      expect(corpusContains(kb.id, 'OLD-TERMS')).toBe(true)
+
+      fs.unlinkSync(broken)
+      await triggerFullIngest(kb.id)
+      expect(getIngestProgress(kb.id).phase).toBe('done')
+      expect(indexMd(kb.id)).toContain('(version v2)')
+      expect(corpusContains(kb.id, 'OLD-ONLY')).toBe(false)
+      expect(corpusContains(kb.id, 'NEW-TERMS')).toBe(true)
+    })
+
+    it('reverts published files if recording a folder swap fails and retries after restart', async () => {
+      const kb = createKB({ name: 'Swap' })
+      const old = scratch()
+      put(old, 'terms.md', 'LAST-GOOD')
+      const link = linkOk(kb.id, old)
+      await triggerFullIngest(kb.id)
+      const previous = indexMd(kb.id)
+      removeLinkedDir(kb.id, link.id, { forget: true })
+      const next = scratch()
+      put(next, 'next.md', 'NEW-RELEASE')
+      linkOk(kb.id, next)
+      const blocked = path.join(kb.path, '.ingest', 'hashes.json.tmp')
+      fs.mkdirSync(blocked)
+      await triggerFullIngest(kb.id)
+      expect(getIngestProgress(kb.id).phase).toBe('error')
+      expect(indexMd(kb.id)).toBe(previous)
+      expect(readHashes(kb.id).forget).toEqual([old])
+      expect(corpusContains(kb.id, 'LAST-GOOD')).toBe(true)
+      expect(corpusContains(kb.id, 'NEW-RELEASE')).toBe(false)
+      fs.rmdirSync(blocked)
+      _resetTlonRegistry()
+      await migrateKBsToTextIndex()
+      expect(corpusContains(kb.id, 'LAST-GOOD')).toBe(false)
+      expect(corpusContains(kb.id, 'NEW-RELEASE')).toBe(true)
+    })
+
+    it('restores an interrupted publication before serving a knowledge base, including after an interrupted rollback', async () => {
+      const kb = createKB({ name: 'Interrupted' })
+      const source = put(scratch(), 'terms.md', 'ORIGINAL-RELEASE')
+      addRawFiles(kb.id, [source])
+      await triggerFullIngest(kb.id)
+      const name = textName('terms.md')
+      const generated = path.join(getKBTextDir(kb.id), name)
+      const extra = textName('new.md')
+      const pub = path.join(kb.path, '.ingest', 'publication')
+      fs.mkdirSync(pub)
+      fs.linkSync(generated, path.join(pub, name))
+      fs.linkSync(getKBIndexMdPath(kb.id), path.join(pub, 'index.md'))
+      put(pub, 'pending.json', JSON.stringify([{ name, existed: true }, { name: extra, existed: false }, { name: 'index.md', existed: true }]))
+      fs.renameSync(put(scratch(), 'terms.txt', 'PARTIAL-NEW'), generated)
+      put(getKBTextDir(kb.id), extra, 'PARTIAL-NEW')
+      fs.linkSync(path.join(pub, name), path.join(pub, 'restoring'))
+      _resetTlonRegistry()
+      expect(getKB(kb.id)).not.toBeNull()
+      expect(corpusContains(kb.id, 'ORIGINAL-RELEASE')).toBe(true)
+      expect(corpusContains(kb.id, 'PARTIAL-NEW')).toBe(false)
+      expect(fs.existsSync(pub)).toBe(false)
+      _resetTlonRegistry()
+      expect(getKB(kb.id)).not.toBeNull()
+      expect(corpusContains(kb.id, 'ORIGINAL-RELEASE')).toBe(true)
     })
 
     it('falls back to the enclosing git commit, loose or packed, and refuses odd refs', () => {
@@ -382,6 +468,25 @@ describe('Tlon curated sources', () => {
       expect(readHashes(kb.id).files[path.join(oldDir, 'policy.md')]).toBeUndefined()
       expect(readHashes(kb.id).forget).toBeUndefined()
       expect(indexMd(kb.id)).not.toContain('**policy.md**')
+    })
+
+    it('keeps the old folder when a replacement has no usable sources, including after restart', async () => {
+      const kb = createKB({ name: 'Empty replacement' })
+      const old = scratch()
+      put(old, 'terms.md', 'KEEP-UNTIL-READY')
+      const linked = linkOk(kb.id, old)
+      await triggerFullIngest(kb.id)
+      removeLinkedDir(kb.id, linked.id, { forget: true })
+      const next = scratch()
+      linkOk(kb.id, next)
+      _resetTlonRegistry()
+      await migrateKBsToTextIndex()
+      expect(getIngestProgress(kb.id).phase).toBe('error')
+      expect(corpusContains(kb.id, 'KEEP-UNTIL-READY')).toBe(true)
+      put(next, 'readme.md', 'NEXT-READY')
+      await triggerFullIngest(kb.id)
+      expect(corpusContains(kb.id, 'KEEP-UNTIL-READY')).toBe(false)
+      expect(corpusContains(kb.id, 'NEXT-READY')).toBe(true)
     })
 
     it('applies on its own when nothing else is learned', async () => {

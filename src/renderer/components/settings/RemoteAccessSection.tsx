@@ -41,7 +41,7 @@ function describePolicyFailure(codes: PasswordPolicyCode[], t: TranslateFn): str
   return t('Password must include: {{items}}', { items: fragments.join(', ') })
 }
 
-export function RemoteAccessSection() {
+export function RemoteAccessSection({ children }: { children?: React.ReactNode }) {
   const { t } = useTranslation()
 
   // Build-time security policy. While `null` (first fetch in flight)
@@ -510,6 +510,7 @@ export function RemoteAccessSection() {
             )}
           </>
         )}
+        {children}
       </div>
     </section>
   )

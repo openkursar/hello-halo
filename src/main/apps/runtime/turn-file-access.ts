@@ -227,6 +227,9 @@ function judgeTargets(
         reason: "An engine's own settings and instructions (.claude, .agents, .codex, .git, CLAUDE.md, AGENTS.md, .mcp.json) cannot be changed here.",
       }
     }
+    if (!reading && withinAny(target, c.knowledge)) {
+      return { allow: false, reason: 'Shared knowledge documents are read-only.' }
+    }
     if (withinAny(target, memory)) continue
     if (reading && c.attached.has(target)) continue
     if (reading && withinAny(target, c.skills) && !withinAny(target, c.closed)) continue

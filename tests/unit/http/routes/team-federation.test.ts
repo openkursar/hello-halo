@@ -188,17 +188,26 @@ describe('POST /api/teams/:teamId/leave', () => {
 
   it('passes appIds through so only those members leave', async () => {
     await withServer(buildApp(), async (base) => {
-      const res = await postJson(base, '/api/teams/office-9/leave', { appIds: ['app-a', 7, 'app-b'] })
+      const res = await postJson(base, '/api/teams/office-9/leave', { appIds: ['app-a', 'app-b'] })
       expect(res.status).toBe(200)
     })
-    // Non-string entries are dropped rather than forwarded to the controller.
     expect(leaveTeamOffice).toHaveBeenCalledWith('office-9', ['app-a', 'app-b'])
   })
 
-  it('ignores a non-array appIds and leaves with the whole node', async () => {
-    await withServer(buildApp(), async (base) => {
-      const res = await postJson(base, '/api/teams/office-9/leave', { appIds: 'app-a' })
-      expect(res.status).toBe(200)
+  it('rejects malformed selections without withdrawing anyone', async () => {
+    await withServer(buildApp(), async base => {
+      for (const body of [{ appIds: 'app-a' }, { appIds: ['a', 7] }, { appIds: [] }, { appIds: null }, { appIds: [' '] }, { appId: 'a' }, []]) {
+        const res = await postJson(base, '/api/teams/office-9/leave', body)
+        expect(res.status).toBe(400)
+      }
+      expect((await fetch(`${base}/api/teams/office-9/leave`, { method: 'POST', body: 'appIds=a' })).status).toBe(400)
+    })
+    expect(leaveTeamOffice).not.toHaveBeenCalled()
+  })
+
+  it('retains the bodyless whole-node operation', async () => {
+    await withServer(buildApp(), async base => {
+      expect((await fetch(`${base}/api/teams/office-9/leave`, { method: 'POST' })).status).toBe(200)
     })
     expect(leaveTeamOffice).toHaveBeenCalledWith('office-9', undefined)
   })
