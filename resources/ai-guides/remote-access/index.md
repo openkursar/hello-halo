@@ -89,14 +89,13 @@ desktop use. Don't conflate this with "regular Halo with Remote Access on":
   `HALO_SERVER_PORT`, falling back to `8080` (`runtime-mode.ts:20-27`). `bootServerMode()` passes
   this straight into `enableRemoteAccess(port)`, overriding the normal persisted-config default
   (`src/main/bootstrap/server-mode.ts:57,73`; `service.ts:98-118`).
-- **Password comes from `HALO_REMOTE_PASSWORD`**, defaulting to the literal string `halo123` if
-  the env var is unset and no password was already persisted
-  (`src/main/foundation/env-config.ts:15,25,46-51`). Anyone deploying headless must set this env
-  var explicitly — never tell a user the default is safe to leave as-is. The env value is not
-  checked against the password policy, but the built-in browser login page and the Android
-  connect screen refuse anything under 8 characters (`server.ts:627`,
-  `ServerConnect.tsx:479`), so `halo123` works only as a bearer token from scripts — tell the
-  user to set an 8–64 character password.
+- **Set a unique access token through `HALO_REMOTE_PASSWORD`** before the first boot. Server
+  mode can reuse a previously configured token but rejects the legacy default and the example
+  placeholder. To connect with the web or mobile login screen, use an 8–64 character token.
+  Serve authenticated remote access over HTTPS and WSS in production.
+- **Live browser viewing and input are available to the Server owner.** Opening the AI's canvas
+  tab shows the same running page; switching away releases the stream. This does not enable
+  remote browser control on a desktop shared through Remote Access, or for office members.
 - This mode is for scripted/automated deployment, not something a desktop end user toggles from
   Settings — don't suggest `HALO_SERVER_MODE` to a user who's just trying to reach their desktop
   Halo from a phone; that's the ordinary Settings → Remote Access flow in §2.
