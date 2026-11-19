@@ -55,12 +55,14 @@ export async function guestChannelCard(page: Page, context: GuestApp): Promise<L
   return card
 }
 
-async function switchByText(card: Locator, label: string, value: boolean) {
+export async function switchByText(card: Locator, label: string, value: boolean) {
   const control = card.getByText(label, { exact: true }).locator('xpath=ancestor::*[.//*[@role="switch"]][1]').getByRole('switch')
   await expect(control).toHaveCount(1)
   await expect(control).toHaveAttribute('aria-checked', /^(true|false)$/)
-  if (await control.getAttribute('aria-checked') !== String(value)) await control.click()
+  const previous = await control.getAttribute('aria-checked') === 'true'
+  if (previous !== value) await control.click()
   await expect(control).toHaveAttribute('aria-checked', String(value))
+  return previous
 }
 
 export async function waitForGuestChannel(page: Page, context: GuestApp, wecom: AcceptanceWecom) {

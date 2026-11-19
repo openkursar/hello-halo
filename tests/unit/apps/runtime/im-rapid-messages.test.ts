@@ -739,6 +739,23 @@ describe('a relay action whose listener is still starting', () => {
     expect(engine.state.answered[0][1]).toContain('按刚才说的继续')
   })
 
+  it.each([true, false])('acknowledges /stop itself only if the long reply was not delivered (%s)', async delivered => {
+    channel.config = { ...channel.config, streaming: true }
+    const first = directReply()
+    const stopLongReply = vi.fn(async () => delivered)
+    first.streaming = { update: vi.fn(async () => {}), finish: vi.fn(async () => {}), stopLongReply }
+    const control = directReply()
+    const dispatch = dispatchInboundMessage(directMessage('华东吧'), first, 'app-1', 'inst-1')
+    await vi.waitFor(() => expect(relays.preparing).toBe(true))
+
+    await dispatchInboundMessage(directMessage('/stop'), control, 'app-1', 'inst-1')
+    expect(stopLongReply).toHaveBeenCalledOnce()
+    expect(control.sent).toEqual(delivered ? [] : ['Generation stopped.'])
+    relays.release()
+    await dispatch
+    expect(first.streaming.finish).not.toHaveBeenCalled()
+  })
+
   it.each([
     { command: '/stop', confirmation: 'Generation stopped.', retained: true },
     { command: '/clear', confirmation: 'Context cleared. Starting a fresh conversation.', retained: false },

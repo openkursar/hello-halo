@@ -180,7 +180,7 @@ import { classifySessionSource, LOCAL_SESSION_CHANNEL, NATIVE_SESSION_CHANNEL, N
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
-import type { ProgressEvent } from '../../../shared/types/inbound-message'
+import type { ProgressEvent, WorkProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import { ProgressEventParser } from './progress-formatter'
 import { ReplyTextAccumulator } from './reply-accumulator'
@@ -275,6 +275,7 @@ export interface AppChatRequest {
    * Errors in this callback are caught and logged — they must not interrupt execution.
    */
   onProgress?: (event: ProgressEvent) => void
+  onWorkProgress?: (event: WorkProgressEvent) => void
   /** Releases this dispatch's mailbox reservation when its acquired engine retires. */
   onSessionRetired?: () => void
   /**
@@ -1697,7 +1698,7 @@ async function runAppChatTurn(
     // claim this round — is as narrow as the SDK allows. From here the queued
     // round, not the start, is what holds the conversation.
     round = sink.beginRound({
-      onProgress, onMessageAccepted, onResult: request.onResult,
+      onProgress, onWorkProgress: request.onWorkProgress, onMessageAccepted, onResult: request.onResult,
       onReply: (content, ending) => {
         finalReply = content
         // Answered with what was written, but its team hears of a failure.
@@ -1865,8 +1866,8 @@ function handBackHeldMessage(request: AppChatRequest, conversationId: string, re
  * entry point below delegates here so no route can forget a step.
  *
  * Two things must happen together, in this order:
- *   1. Dispose (not finish) the IM stream. Stop means "send nothing"; finish()
- *      would push a final message into the chat.
+ *   1. Release the IM stream before aborting. A long WeCom reply can close
+ *      with a stop notice; other streams are abandoned without sending.
  *   2. Abort as a person's stop: their own unsent words are void (kept in the
  *      record, marked), what others sent waits for the next turn instead of
  *      starting one right after the stop, and the engine withdraws what it had
@@ -1877,13 +1878,14 @@ function handBackHeldMessage(request: AppChatRequest, conversationId: string, re
  *
  * @returns whether a generation was actually running
  */
-async function stopConversation(conversationId: string): Promise<boolean> {
+async function stopConversation(conversationId: string, notifyLongReply = true): Promise<boolean> {
   const streamHandle = getImStreamHandle(conversationId)
   if (streamHandle) {
     try {
-      streamHandle.dispose?.()
+      const delivery = notifyLongReply ? streamHandle.stopLongReply?.() : undefined
+      if (!delivery) streamHandle.dispose?.()
     } catch (err) {
-      console.error(`[AppChat] Stream dispose failed: ${conversationId}`, err)
+      console.error(`[AppChat] Stream cleanup failed: ${conversationId}`, err)
     }
   }
   clearImStreamHandle(conversationId)
@@ -1963,7 +1965,7 @@ export async function stopAndDrainAppChats(appId: string): Promise<void> {
   const settling = [...chatSettlements.get(appId)?.keys() ?? []]
   const starting = ids.flatMap(pendingAppChatTurnStarts)
   await awaitWorkspaceDrain(appId, 'chat replies', (async () => {
-    await Promise.all(ids.map(stopConversation))
+    await Promise.all(ids.map(id => stopConversation(id, false)))
     await Promise.all(ids.map(id => closeSessionAndWait(id, 'digital human workspace change')))
     await Promise.allSettled([...settling, ...starting])
     const remaining = workspaceChatIds(appId)
@@ -2193,6 +2195,9 @@ async function clearSessionByConversationId(
   appId: string,
   spaceId: string
 ): Promise<void> {
+  // Clearing is not an explicit stop reply; abandon any scheduled progress first.
+  const stream = getImStreamHandle(conversationId)
+  if (stream?.updateWork) stream.dispose?.()
   // 1. Abort active generation (if any) before closing
   if (isAppChatConversationGenerating(conversationId)) {
     console.log(`[AppChat][${appId}] Session is generating, aborting first...`)
