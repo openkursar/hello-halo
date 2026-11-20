@@ -242,6 +242,26 @@ export interface StoreProductConfig {
   categories?: CategoryTaxonomy
 }
 
+/** One tool that receives a credential while the user is signed in. */
+export interface EnterpriseToolCredentialConfig {
+  /** CLI tool id; only versions shipped with the build or from the enterprise catalog are bound. */
+  toolId: string
+  /** Session capability the tool needs, e.g. "intranet". */
+  capability: string
+  /** Audience the provider issues the credential for. */
+  audience: string
+  /** Variable the tool reads the credential from. */
+  env: string
+  /** Fixed variables set for the tool, such as its server address. No secrets. */
+  staticEnv?: Record<string, string>
+}
+
+export interface EnterpriseIdentityProductConfig {
+  /** Provider module path, relative to product.json (same rule as `authProviders[].path`). */
+  provider: string
+  toolCredentials?: EnterpriseToolCredentialConfig[]
+}
+
 // ============================================
 // Product Configuration
 // ============================================
@@ -367,6 +387,14 @@ export interface ProductConfig {
    * provider.
    */
   identityProvider?: string
+
+  /**
+   * Company sign-in for command-line tools (optional, enterprise builds only).
+   * Unrelated to `identityProvider` above, which names the store's account.
+   * See services/enterprise-identity/DESIGN.md; omitted → no such sign-in and
+   * no Settings entry.
+   */
+  enterpriseIdentity?: EnterpriseIdentityProductConfig
 
   /**
    * Identity source for telemetry (optional).
@@ -739,6 +767,12 @@ export function getStoreCategoriesConfig(): CategoryTaxonomy | undefined {
  */
 export function getStoreIdentityProvider(): string | undefined {
   return loadProductConfig().identityProvider
+}
+
+/** The enterprise identity block from product.json, or undefined when the build has none. */
+export function getEnterpriseIdentityConfig(): EnterpriseIdentityProductConfig | undefined {
+  const value = loadProductConfig().enterpriseIdentity
+  return value && typeof value.provider === 'string' && value.provider ? value : undefined
 }
 
 /**

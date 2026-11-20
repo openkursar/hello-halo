@@ -50,6 +50,8 @@ export type {
   PinnedExecution,
 } from './store'
 export { CliToolError, isCliToolError } from './errors'
+export { validateCredentialBinding } from './credentials'
+export type { CliCredentialBinding } from './credentials'
 export type { CliToolErrorCode } from './errors'
 export { CLI_MANIFEST_SCHEMA, parseCliManifest } from './manifest'
 export type { CliManifest } from './manifest'

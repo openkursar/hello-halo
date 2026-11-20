@@ -64,6 +64,7 @@ import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
 import { closeAllV2Sessions, initializeSdkRuntime, closeSdkRuntime, requestSessionRebuild, getHeadlessElectronPath } from '../services/agent'
 import { initCliTools, prepareCliTools } from '../services/cli-tools'
+import { getToolCredentialBindings, initEnterpriseIdentity, shutdownEnterpriseIdentity } from '../services/enterprise-identity'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
@@ -103,6 +104,7 @@ import { analytics } from '../services/analytics/analytics.service'
 import { registerAppHandlers } from '../ipc/app'
 import { registerSkillsHandlers } from '../ipc/skills'
 import { registerCliToolsHandlers } from '../ipc/cli-tools'
+import { registerEnterpriseIdentityHandlers } from '../ipc/enterprise-identity'
 import { registerTeamIpc } from '../ipc/team'
 import { registerTaskHandlers } from '../ipc/task'
 import { registerAnalyticsHandlers } from '../ipc/analytics'
@@ -1506,6 +1508,8 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
  */
 export function initializeExtendedServices(): void {
   void initializeSdkRuntime().catch(error => console.error('[Bootstrap] SDK worker prewarm failed:', error))
+  // Paths only; the provider is loaded when Settings first asks for the state.
+  initEnterpriseIdentity({ credentialDir: join(app.getPath('userData'), 'enterprise-identity') })
   // Paths only; the store is read when a session or terminal first asks for tools.
   initCliTools({
     root: join(app.getPath('userData'), 'cli'),
@@ -1513,6 +1517,7 @@ export function initializeExtendedServices(): void {
     presetDir: app.isPackaged
       ? join(process.resourcesPath, 'cli-preset')
       : join(app.getAppPath(), 'resources', 'cli-preset'),
+    credentialBindings: getToolCredentialBindings(),
   })
   const start = performance.now()
   console.log('[Bootstrap] Extended services starting...')
@@ -1669,6 +1674,7 @@ export function initializeExtendedServices(): void {
   registerAppHandlers()
   registerSkillsHandlers()
   registerCliToolsHandlers()
+  registerEnterpriseIdentityHandlers()
 
   // Digital Team IPC handlers (team:list, team:create, team:run, etc.)
   registerTeamIpc()
@@ -1770,6 +1776,8 @@ export function initializeExtendedServices(): void {
  */
 export async function cleanupExtendedServices(): Promise<void> {
   let cacheShutdown: Promise<void> | null = null
+  // Withdraw tool credentials first: nothing may use them once quitting starts.
+  shutdownEnterpriseIdentity()
   const runtimeManagerShutdown = shutdownExternalRuntimes().catch(error => console.error('[Bootstrap] External runtime shutdown failed:', error))
   try {
     // Space: Flush any throttled activity timestamps to disk before teardown

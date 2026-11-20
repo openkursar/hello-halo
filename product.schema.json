@@ -339,6 +339,35 @@
       },
       "additionalProperties": false
     },
+    "enterpriseIdentity": {
+      "type": "object",
+      "description": "Company sign-in for command-line tools (enterprise builds only). Unrelated to identityProvider. The provider module is loaded on first use; bound tools receive a short-lived credential in their own process only while the user is signed in. Omit for no enterprise sign-in.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider module path relative to product.json; it exports a get...Provider() function implementing EnterpriseIdentityProvider (src/shared/interfaces/enterprise-identity-provider.ts)."
+        },
+        "toolCredentials": {
+          "type": "array",
+          "description": "Tools that receive a credential while the user is signed in. Only versions shipped with the build or installed from the enterprise catalog are bound.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "toolId": { "type": "string", "minLength": 1 },
+              "capability": { "type": "string", "minLength": 1, "description": "Session capability required, e.g. intranet." },
+              "audience": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "description": "Audience the provider issues the credential for." },
+              "env": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$", "description": "Variable the tool reads the credential from." },
+              "staticEnv": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Fixed non-secret variables, such as the server address." }
+            },
+            "required": ["toolId", "capability", "audience", "env"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["provider"],
+      "additionalProperties": false
+    },
     "registryOverrides": {
       "type": "object",
       "description": "Per-built-in-registry override map (enterprise/custom builds only). Keys are built-in registry IDs ('official', 'mcp-official', 'smithery', 'claude-skills', 'skillhub'). Each entry is merged on top of the built-in defaults during ensureBuiltinRegistries() on every startup. Omit any field to keep the built-in default. Open-source builds omit this entirely.",

@@ -161,6 +161,9 @@ src/
 │       │                              #   bundled tools (resources/cli-preset) in an idle task and
 │       │                              #   appends launchers to user sessions (every engine) and
 │       │                              #   AI terminals. See cli-tools/DESIGN.md
+│       ├── enterprise-identity/       # Optional company sign-in (QR) from a build-supplied provider;
+│       │                              #   hands short-lived per-audience credentials to bound
+│       │                              #   CLI tools' processes only. See enterprise-identity/DESIGN.md
 │       ├── analytics/                 # Usage analytics
 │       ├── api-ref/                   # `halo_api_ref` toolset — the manual for Halo's own
 │       │                              #   HTTP API, generated at build time into
@@ -1250,6 +1253,7 @@ When touching a module, read its design doc first:
 - `src/main/services/browser-live/DESIGN.md` — Remote AI browser on desktop and Server: owner-only access, on-demand streaming, frame pacing, and stop reasons
 - `src/main/services/git/DESIGN.md` — Git for the changes view: how git is run and located (Windows included), the request gate, compare scopes, snapshots, writes, measured costs
 - `src/main/services/cli-tools/DESIGN.md` — CLI tools: the `halo.cli/1` package contract, the pure-JS rule, the import transaction, how executions pin versions and get launchers, and how bundled tools and sessions are wired
+- `src/main/services/enterprise-identity/DESIGN.md` — Enterprise identity: the provider contract, the QR flow, the in-memory session, per-audience tool credentials on disk and how bound tools receive them
 - `src/main/services/code-review/DESIGN.md` — Starting an AI review of a repository's changes as a background conversation, its built-in task, and the latest review per repository
 - `src/main/services/conversation-interop/DESIGN.md` — Cross-conversation read/send/wait: delivery rules, circuit breaker, and the `ConversationSource` contract (space conversations built in, digital-human chats registered by `apps/runtime`)
 - `src/main/apps/spec/DESIGN.md`

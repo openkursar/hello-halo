@@ -1660,5 +1660,25 @@
   {
     "method": "POST",
     "path": "/api/cli-tools/register-external"
+  },
+  {
+    "method": "POST",
+    "path": "/api/enterprise-identity/state"
+  },
+  {
+    "method": "POST",
+    "path": "/api/enterprise-identity/begin"
+  },
+  {
+    "method": "POST",
+    "path": "/api/enterprise-identity/poll"
+  },
+  {
+    "method": "POST",
+    "path": "/api/enterprise-identity/cancel"
+  },
+  {
+    "method": "POST",
+    "path": "/api/enterprise-identity/sign-out"
   }
 ]

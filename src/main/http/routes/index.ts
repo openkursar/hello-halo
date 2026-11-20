@@ -30,6 +30,7 @@ import { registerSkillsRoutes } from './skills.routes'
 import { registerCanvasRoutes } from './canvas.routes'
 import { registerAIBrowserRoutes } from './ai-browser.routes'
 import { registerCliToolsRoutes } from './cli-tools.routes'
+import { registerEnterpriseIdentityRoutes } from './enterprise-identity.routes'
 
 /**
  * Register all API routes.
@@ -58,6 +59,7 @@ export function registerApiRoutes(app: Express, options: { assistant?: boolean }
   registerCanvasRoutes(app)
   registerAIBrowserRoutes(app)
   registerCliToolsRoutes(app)
+  registerEnterpriseIdentityRoutes(app)
 
   console.log('[HTTP] API routes registered')
 }

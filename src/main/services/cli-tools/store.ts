@@ -25,6 +25,13 @@ import { CliToolError, isCliToolError } from './errors'
 import { assertManifestSupported, parseCliManifest, type CliManifest } from './manifest'
 import { inspectPayload, integrityOf, integrityShortHex, scanPayload } from './payload'
 import { ARGV_PRELOAD_FILE, launcherFiles, renderArgvPreload } from './shims'
+import {
+  credentialPreloadFile,
+  renderCredentialPreload,
+  sourceMayBind,
+  validateCredentialBinding,
+  type CliCredentialBinding,
+} from './credentials'
 
 /**
  * Where an installed version came from. `external` is a program already on the
@@ -146,6 +153,8 @@ export interface CliToolStoreOptions {
   archiveLimits?: ArchiveLimits
   /** Logger; defaults to console. Messages never contain credentials or file contents. */
   log?: Pick<Console, 'log' | 'error'>
+  /** Tools whose process receives a host-held credential (see credentials.ts). */
+  credentialBindings?: CliCredentialBinding[]
 }
 
 export interface ImportOptions {
@@ -342,6 +351,7 @@ export class CliToolStore {
   private readonly arch: string
   private readonly limits: ArchiveLimits
   private readonly log: Pick<Console, 'log' | 'error'>
+  private readonly bindings = new Map<string, CliCredentialBinding>()
   /** Serializes every mutation in this process; Halo runs as a single instance. */
   private queue: Promise<unknown> = Promise.resolve()
 
@@ -354,6 +364,11 @@ export class CliToolStore {
     this.arch = options.arch ?? process.arch
     this.limits = options.archiveLimits ?? DEFAULT_ARCHIVE_LIMITS
     this.log = options.log ?? console
+    for (const candidate of options.credentialBindings ?? []) {
+      const checked = validateCredentialBinding(candidate)
+      if (checked.ok) this.bindings.set(checked.binding.toolId, checked.binding)
+      else this.log.error('[CliTools] Credential binding ignored', { tool: candidate?.toolId, field: checked.field })
+    }
   }
 
   private serialize<T>(task: () => Promise<T>): Promise<T> {
@@ -1086,7 +1101,7 @@ export class CliToolStore {
   private launcherTargets(
     lock: CliExecutionLock,
     state: CliToolState,
-  ): Array<{ exposedAs: string; entry: string; direct?: true; fingerprint?: string }> {
+  ): Array<{ exposedAs: string; entry: string; direct?: true; fingerprint?: string; credential?: CliCredentialBinding }> {
     return lock.commands.map(command => {
       const record = state.tools[command.toolId]?.versions[command.version]
       if (!record) {
@@ -1103,7 +1118,13 @@ export class CliToolStore {
       }
       const entry = record.commands.find(c => c.name === command.command)?.entry
       if (!entry) throw new CliToolError('NOT_FOUND', `command "${command.command}" is missing`)
-      return { exposedAs: command.exposedAs, entry: join(this.path(...record.dir.split('/')), 'payload', ...entry.split('/')) }
+      // Part of the view key: a bound tool gets its own view, unbound views keep theirs.
+      const credential = sourceMayBind(record.source) ? this.bindings.get(command.toolId) : undefined
+      return {
+        exposedAs: command.exposedAs,
+        entry: join(this.path(...record.dir.split('/')), 'payload', ...entry.split('/')),
+        ...(credential ? { credential } : {}),
+      }
     })
   }
 
@@ -1128,8 +1149,14 @@ export class CliToolStore {
       // Launchers name the preload by its final path, where the view lands after the rename.
       await fsp.writeFile(join(tmp, ARGV_PRELOAD_FILE), renderArgvPreload(), 'utf-8')
       const preloadPath = join(viewDir, ARGV_PRELOAD_FILE)
-      for (const target of this.launcherTargets(lock, state)) {
-        const paths = { runtimePath: this.runtimePath, preloadPath, entryPath: target.entry, direct: target.direct === true }
+      for (const [index, target] of this.launcherTargets(lock, state).entries()) {
+        let credentialPreloadPath: string | undefined
+        if (target.credential) {
+          const file = credentialPreloadFile(index)
+          await fsp.writeFile(join(tmp, file), renderCredentialPreload(target.credential), 'utf-8')
+          credentialPreloadPath = join(viewDir, file)
+        }
+        const paths = { runtimePath: this.runtimePath, preloadPath, entryPath: target.entry, direct: target.direct === true, credentialPreloadPath }
         for (const file of launcherFiles(this.platform, target.exposedAs, paths)) {
           const path = join(tmp, 'bin', file.name)
           await fsp.writeFile(path, file.content, { encoding: 'utf-8', mode: file.executable ? 0o755 : 0o644 })
@@ -1165,6 +1192,7 @@ export class CliToolStore {
       '| Command | Tool | Version | Side effects | Sign-in | Guide |',
       '|---|---|---|---|---|---|',
     ]
+    let anyBound = false
     for (const command of lock.commands) {
       const record = state.tools[command.toolId]?.versions[command.version]
       if (record?.external) {
@@ -1172,7 +1200,18 @@ export class CliToolStore {
         continue
       }
       const guide = record?.guide ? join(this.path(...record.dir.split('/')), ...record.guide.split('/')) : ''
-      lines.push(`| \`${command.exposedAs}\` | ${command.toolId} | ${command.version} | ${record?.sideEffects ?? 'unknown'} | ${record?.auth ?? 'unknown'} | ${guide ? `\`${guide}\`` : '-'} |`)
+      const bound = record !== undefined && sourceMayBind(record.source) && this.bindings.has(command.toolId)
+      if (bound) anyBound = true
+      const signIn = bound ? 'enterprise sign-in (provided by Halo)' : record?.auth ?? 'unknown'
+      lines.push(`| \`${command.exposedAs}\` | ${command.toolId} | ${command.version} | ${record?.sideEffects ?? 'unknown'} | ${signIn} | ${guide ? `\`${guide}\`` : '-'} |`)
+    }
+    if (anyBound) {
+      lines.push(
+        '',
+        'A tool marked "enterprise sign-in" gets its credential from Halo while the user is signed in.',
+        'If it reports that it is not signed in or not authorized, ask the user to sign in under',
+        'Settings > Enterprise identity, then run it again. Never ask for, print, store or pass a credential.',
+      )
     }
     lines.push(
       '',

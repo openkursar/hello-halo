@@ -66,6 +66,7 @@ import { gitBashRpc } from '../shared/rpc/contracts/git-bash.contract'
 import { appRpc } from '../shared/rpc/contracts/app.contract'
 import { skillsRpc } from '../shared/rpc/contracts/skills.contract'
 import { cliToolsRpc } from '../shared/rpc/contracts/cli-tools.contract'
+import { enterpriseIdentityRpc } from '../shared/rpc/contracts/enterprise-identity.contract'
 import { TEAM_IPC, TEAM_EVENTS } from '../shared/apps/team-types'
 import type {
   CreateTeamInput,
@@ -98,6 +99,7 @@ type CodeReviewRpcClient = RpcClient<typeof codeReviewRpc>
 type AuthRpcClient = RpcClient<typeof authRpc>
 type SkillsRpcClient = RpcClient<typeof skillsRpc>
 type CliToolsRpcClient = RpcClient<typeof cliToolsRpc>
+type EnterpriseIdentityRpcClient = RpcClient<typeof enterpriseIdentityRpc>
 
 // Seed --display-scale before the renderer's first paint. The main process
 // passes the persisted scale via additionalArguments at window creation;
@@ -662,6 +664,13 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   cliToolsRegisterExternal: CliToolsRpcClient['cliToolsRegisterExternal']
   cliToolsReconfirmExternal: CliToolsRpcClient['cliToolsReconfirmExternal']
 
+  // Enterprise identity (company sign-in for command-line tools)
+  enterpriseIdentityState: EnterpriseIdentityRpcClient['enterpriseIdentityState']
+  enterpriseIdentityBegin: EnterpriseIdentityRpcClient['enterpriseIdentityBegin']
+  enterpriseIdentityPoll: EnterpriseIdentityRpcClient['enterpriseIdentityPoll']
+  enterpriseIdentityCancel: EnterpriseIdentityRpcClient['enterpriseIdentityCancel']
+  enterpriseIdentitySignOut: EnterpriseIdentityRpcClient['enterpriseIdentitySignOut']
+
   // App Import / Export
   appExportSpec: (appId: string) => Promise<IpcResponse<{ yaml: string; filename: string }>>
   appImportSpec: (input: { spaceId: string; yamlContent: string; userConfig?: Record<string, unknown> }) => Promise<IpcResponse>
@@ -1175,6 +1184,7 @@ const api: HaloAPI = {
   ...bindRpc(appRpc),
   ...bindRpc(skillsRpc),
   ...bindRpc(cliToolsRpc),
+  ...bindRpc(enterpriseIdentityRpc),
 
   // App Event Listeners
   onAppStatusChanged: (callback) => createEventListener('app:status_changed', callback),

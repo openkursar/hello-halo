@@ -1,9 +1,9 @@
 {
-  "totalRoutes": 359,
+  "totalRoutes": 364,
   "expose": {
     "ai": 215,
     "wrapped": 11,
-    "internal": 133,
+    "internal": 138,
     "unlabeled": 0
   },
   "groups": {
@@ -40,6 +40,7 @@
     "skills",
     "canvas",
     "ai-browser",
-    "cli-tools"
+    "cli-tools",
+    "enterprise-identity"
   ]
 }

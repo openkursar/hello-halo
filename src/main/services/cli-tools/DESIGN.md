@@ -239,6 +239,25 @@ Revocation excludes a tool from new pins. It is not credential revocation: a
 tool's authorization is checked when the tool uses its identity, which a
 version pin never freezes.
 
+### Credential bindings
+
+`CliToolStoreOptions.credentialBindings` lists tools whose process receives a
+host-held credential (`credentials.ts`; supplied by enterprise-identity, see
+its DESIGN.md). A binding applies only to a version whose source is `preset` or
+`catalog`; a user import or a registered program of the same id never gets
+one. Invalid bindings (reserved or malformed variable names such as `PATH`,
+`NODE_OPTIONS`, `DYLD_*`, a relative file, a NUL in a value) are ignored and
+logged by field only.
+
+For a bound command the view holds `credential-<n>.cjs`, loaded as a second
+`--require` after the argv preload. It removes an inherited value of the
+variable, sets the binding's fixed variables, and sets the variable from the
+credential file only when the file holds an unexpired token. The binding is
+part of the view key, so bound and unbound tool sets get different views, and a
+tool set without a binding keeps the view it had. TOOLS.md marks a bound tool's
+sign-in as "enterprise sign-in (provided by Halo)" and tells the AI to ask the
+user to sign in under Settings rather than handle a credential.
+
 ## Host wiring (`host.ts`)
 
 - **Init.** Bootstrap calls `initCliTools` after the SDK runtime is set up, with

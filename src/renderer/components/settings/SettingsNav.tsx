@@ -20,6 +20,8 @@ interface SettingsNavProps {
   activeSection: string
   /** Callback when section changes */
   onSectionChange: (sectionId: string) => void
+  /** Sections not shown in this build or state */
+  hiddenIds?: readonly string[]
 }
 
 /**
@@ -142,9 +144,9 @@ function MobileNavDropdown({
  * Main Settings Navigation Component
  * Renders sidebar on desktop, dropdown on mobile
  */
-export function SettingsNav({ isRemoteMode, serverBackend = false, activeSection, onSectionChange }: SettingsNavProps) {
+export function SettingsNav({ isRemoteMode, serverBackend = false, activeSection, onSectionChange, hiddenIds }: SettingsNavProps) {
   const isMobile = useIsMobile()
-  const navItems = getFilteredNavItems(isRemoteMode, serverBackend)
+  const navItems = getFilteredNavItems(isRemoteMode, serverBackend, hiddenIds)
 
   if (isMobile) {
     return (

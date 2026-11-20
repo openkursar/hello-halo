@@ -23,6 +23,7 @@ import {
   type RegisterExternalOptions,
 } from './store'
 import { CliToolError, isCliToolError } from './errors'
+import type { CliCredentialBinding } from './credentials'
 import {
   TRUSTED_KEYS_FILE,
   assertCatalogSignature,
@@ -42,6 +43,8 @@ export interface CliToolsHostOptions {
   runtimePath: string
   /** Directory of `.hcli` packages shipped with the build; null when the build has none. */
   presetDir: string | null
+  /** Tools whose process receives a host-held credential; supplied by the caller, never read here. */
+  credentialBindings?: CliCredentialBinding[]
 }
 
 type Env = Record<string, string | number | undefined>
@@ -83,6 +86,7 @@ function getStore(): CliToolStore | null {
     root: options.root,
     runtimePath: options.runtimePath,
     runtimeNodeVersion: process.versions.node,
+    credentialBindings: options.credentialBindings,
   })
   return store
 }

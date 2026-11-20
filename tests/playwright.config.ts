@@ -161,6 +161,12 @@ export default defineConfig({
       use: { actionTimeout: 10000 }
     },
     {
+      // Needs a package with an enterprise identity provider and bound presets, plus the mock identity server; see the spec header.
+      name: 'enterprise-identity-packaged',
+      testMatch: '**/enterprise-identity-packaged.spec.ts',
+      use: { actionTimeout: 10000 }
+    },
+    {
       name: 'settings',
       testMatch: '**/settings.spec.ts',
       use: {
