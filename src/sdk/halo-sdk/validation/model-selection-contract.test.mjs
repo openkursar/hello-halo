@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { entryUrl } from './fixtures/model-selection-entry.mjs';
 
 const reference = process.env.SDK_REFERENCE_TEST_ROOT;
-test('unregistered collaboration declarations, guidance and parser remain byte-identical to the reference SDK', { skip: !reference }, async () => {
+test('unregistered collaboration preserves declarations, guidance and valid parsed input and adds recovery guidance to spawn refusals', { skip: !reference }, async () => {
   const descriptor = join(resolve(reference), 'package.json');
   const referenceEntry = existsSync(descriptor)
     ? resolve(reference, JSON.parse(readFileSync(descriptor, 'utf8')).exports['./collaboration'].import)
@@ -19,9 +19,15 @@ test('unregistered collaboration declarations, guidance and parser remain byte-i
     timeout: 10_000, maxBuffer: 1024 * 1024,
   })).stdout;
   const [baseline, candidate] = await Promise.all([run(pathToFileURL(referenceEntry)), run(new URL(entryUrl('collaboration')))]);
-  assert.equal(candidate, baseline);
-  assert.equal(JSON.parse(candidate).rejected.length, 6);
-  assert.ok(JSON.parse(candidate).rejected.every(result => result.error));
+  const expected = JSON.parse(baseline);
+  assert.equal(expected.rejected.length, 6);
+  for (const result of expected.rejected) {
+    assert.ok(result.error, result.field);
+    assert.equal(result.error.message, `Unexpected argument: ${result.field}.`);
+    result.error.message = `No collaborator was created. Unsupported argument: ${result.field}. Accepted arguments: prompt, name, cwd, isolation.`;
+    if (result.field === 'model') result.error.message += ' Model selection is not available in this conversation.';
+  }
+  assert.equal(candidate, JSON.stringify(expected));
 });
 
 for (const name of ['collaboration', 'collaboration/protocol']) {

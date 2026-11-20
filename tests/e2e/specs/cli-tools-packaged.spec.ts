@@ -234,7 +234,7 @@ for (const [sdkEngine, caseId] of [
         await window.locator('textarea').fill('Run the packaged tool check')
         await window.locator('[data-onboarding="send-button"]').click({ force: true })
         await expect.poll(() => model.results.size, { timeout: 120000 }).toBe(5)
-        await expect(window.getByText('Halo is working', { exact: true })).toHaveCount(0, { timeout: 60000 })
+        await expect(window.locator('.message-working')).toHaveCount(0, { timeout: 60000 })
 
         // Soft, so one run reports every capability a build lost, not just the first.
         const result = (id: string): ToolResult => model.results.get(id)!

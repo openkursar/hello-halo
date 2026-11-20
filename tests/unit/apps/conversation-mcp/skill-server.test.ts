@@ -28,6 +28,7 @@ vi.mock('../../../../src/main/apps/team', () => ({ getTeamService: () => null })
 vi.mock('../../../../src/main/apps/runtime/team', () => ({ getActiveTeamRuntime: () => null }))
 vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createCoordinationMcpServer: () => ({ name: 'halo-team' }) }))
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => settings, saveConfig: vi.fn() }))
+vi.mock('../../../../src/main/services/agent', () => ({ createDelegatedModelEndpoint: () => undefined }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn(), emitHumanRequest: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/toolsets/registry', () => ({
   getAvailableToolsets: () => [], getToolset: () => undefined,

@@ -116,6 +116,13 @@ describe('thoughts helpers', () => {
     })
   })
 
+  it('counts context compactions apart from other system steps, and only when there are some', () => {
+    const notice = thought('system', 0)
+    const compaction = { ...thought('system', 4), compaction: { trigger: 'auto' as const } }
+    expect(summarizeThoughts([notice, compaction])).toMatchObject({ types: { system: 2 }, compactions: 1 })
+    expect(summarizeThoughts([notice])).not.toHaveProperty('compactions')
+  })
+
   it('has no duration for a single thought', () => {
     expect(summarizeThoughts([thought('thinking', 0)]).duration).toBeUndefined()
   })
@@ -167,6 +174,16 @@ describe('sameTranscriptInput', () => {
     }
     expect(sameTranscriptInput(input, stored)).toBe(true)
     expect(sameTranscriptInput({ ...input, metadata: { ...input.metadata, references: [{ kind: 'file', path: 'a', name: 'a' }] } as never }, { ...input, metadata: { references: [{ name: 'a', path: 'a', kind: 'file' }], ...input.metadata } as never })).toBe(true)
+  })
+
+  it('matches a sent message to its stored twin, which carries the reasoning setting it was recorded with', () => {
+    const sent: TranscriptMessage = { id: 'pending-1', role: 'user', content: 'restart the machine', timestamp: 't' }
+    const reasoning = { thinkingEnabled: true }
+    const references = [{ kind: 'file', path: 'a', name: 'a' }]
+    expect(sameTranscriptInput(sent, { ...sent, id: 'session-msg-1', metadata: { reasoning } })).toBe(true)
+    expect(sameTranscriptInput({ ...sent, metadata: { references } as never }, { ...sent, id: 'session-msg-1', metadata: { reasoning, references } as never })).toBe(true)
+    // What the person attached still tells two sends apart.
+    expect(sameTranscriptInput(sent, { ...sent, id: 'session-msg-1', metadata: { reasoning, references } as never })).toBe(false)
   })
 
   it('still tells different inputs apart', () => {

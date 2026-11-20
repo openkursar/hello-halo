@@ -6,6 +6,7 @@ import {
   describeCollaborationTool,
   parseCollaborationInput,
 } from '../../native/collaboration.js';
+import { CollaborationRefusal } from '../../collaboration/errors.js';
 import { bridgeSdkMcpTools } from '../../native/mcp-bridge.js';
 import type { McpSdkServerConfigWithInstance } from '../../tools/mcp/sdk-server.js';
 import type { ToolContext } from '../../types/tool.js';
@@ -64,6 +65,60 @@ describe('collaboration tool contract', () => {
     expect(() => parseCollaborationInput('team_read_member', { member: 'reader', before: 0 })).toThrow('before');
     expect(() => parseCollaborationInput('team_read_member', { member: 'reader', before: 1.5 })).toThrow('before');
     expect(() => parseCollaborationInput('team_update_task', { taskId: 'task', status: 'finished' })).toThrow('status');
+  });
+
+  it('delivers a message carrying an unknown label without changing its receipt', async () => {
+    const send = vi.fn(async () => collaborationText('Message delivered.'));
+    const server = createCollaborationServer({ team_send: send });
+    const result = await server.instance.callTool('team_send', { to: 'reviewer', message: 'Report back.', summary: 'Ask for report' });
+    expect(send).toHaveBeenCalledWith({ to: 'reviewer', message: 'Report back.' }, {});
+    expect(result).toEqual(collaborationText('Message delivered.'));
+    expect(parseCollaborationInput('team_send', { to: 'reviewer', message: 'Report back.', summary: 'x' })).toEqual({ to: 'reviewer', message: 'Report back.' });
+  });
+
+  it('reaches the model through the SDK MCP bridge as one result', async () => {
+    const server = createCollaborationServer({ team_send: async () => collaborationText('Message delivered.') });
+    const [tool] = bridgeSdkMcpTools(server as McpSdkServerConfigWithInstance);
+    const result = await tool.execute({ to: 'reviewer', message: 'Report back.', summary: 'x' }, { abortSignal: new AbortController().signal } as ToolContext);
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toBe('Message delivered.');
+  });
+
+  it('keeps the original refusal and host result when discarding a label', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const refused = createCollaborationServer({ team_send: async () => { throw new CollaborationRefusal('unknown_recipient', 'No such recipient.'); } });
+    const result = await refused.instance.callTool('team_send', { to: 'nobody', message: 'Hi', summary: 'x' });
+    expect(result).toEqual(collaborationText('No such recipient.', true));
+    const odd = { content: 'plain' } as never;
+    const unusual = createCollaborationServer({ team_send: async () => odd });
+    expect(await unusual.instance.callTool('team_send', { to: 'reviewer', message: 'Hi', summary: 'x' })).toBe(odd);
+  });
+
+  it('tolerates labels when creating a collaborator but refuses anything that might shape it', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const receipt = JSON.stringify({ handle: 'member-1', name: 'reviewer', status: 'accepted' });
+    const spawn = vi.fn(async () => collaborationText(receipt));
+    const server = createCollaborationServer({ spawn_agent: spawn });
+    const labelled = await server.instance.callTool('spawn_agent', { prompt: 'Review.', description: 'Review', title: 'Review' });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn).toHaveBeenCalledWith({ prompt: 'Review.' }, {});
+    expect(labelled).toEqual(collaborationText(receipt));
+    const shaped = await server.instance.callTool('spawn_agent', { prompt: 'Review.', description: 'Review', subagent_type: 'explore' });
+    expect(shaped?.isError).toBe(true);
+    expect(shaped?.content).toEqual([{ type: 'text', text: 'No collaborator was created. Unsupported argument: subagent_type. Accepted arguments: prompt, name, cwd, isolation.' }]);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses undeclared arguments on recording tools instead of recording without them', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const update = vi.fn(async () => collaborationText('Task updated.'));
+    const server = createCollaborationServer({ team_update_task: update });
+    const refused = await server.instance.callTool('team_update_task', { taskId: 't1', status: 'done', summary: 'Verified both runs.' });
+    expect(refused).toEqual(collaborationText('Nothing was recorded. Unsupported argument: summary. Accepted arguments: taskId, status, resultRef, note.', true));
+    expect(update).not.toHaveBeenCalled();
+    const input = { taskId: 't1', status: 'done', note: 'Verified both runs.' };
+    expect(await server.instance.callTool('team_update_task', input)).toEqual(collaborationText('Task updated.'));
+    expect(update).toHaveBeenCalledWith(input, {});
   });
 
   it('preserves optional workspace isolation while refusing contradictory placement', () => {

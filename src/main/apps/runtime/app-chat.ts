@@ -56,6 +56,7 @@ import { currentGuestPolicy } from './im-sender-standing'
 import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
+import { createCanvasMcpServer } from '../../services/canvas-show'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
 import { opensWithSlashCommand } from '../../services/agent/opening-context'
 import { closeSessionAndWait, captureToolsetExecutionOptions, openAgentExecution, emitHumanRequest, getToolset, acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, resolveHistoricalEngine, getSessionEngineId, type AgentExecution, type ExecutionSource, type V2SessionLease } from '../../services/agent'
@@ -152,7 +153,7 @@ import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
 import { withheldWebSearch, withholdWebSearchBuiltins } from './web-search-switch'
 import { getSpace, getSpaceDir, isSpaceMemoryEnabled } from '../../services/space.service'
-import { readSessionMessages, readSessionTranscript, readSessionMessageThoughts, loadChatEngineState, copyChatEngineState, saveChatEngineRouting, reloadChatInstructions, deleteChatSessionId, copySessionJsonl } from './session-store'
+import { readSessionMessages, readSessionMessagesFrom, readSessionTranscript, readSessionMessageThoughts, transcriptImagesDir, deleteTranscriptImages, loadChatEngineState, copyChatEngineState, saveChatEngineRouting, reloadChatInstructions, deleteChatSessionId, copySessionJsonl } from './session-store'
 import { prepareAppEngineSession, resolveAppSessionEngine } from './engine-selection'
 import type { Thought, TranscriptMessage, TranscriptPageRequest, TranscriptProvenance } from '../../../shared/types/transcript'
 import { getAppMemoryService, getActivityStore } from './index'
@@ -180,13 +181,14 @@ import { classifySessionSource, LOCAL_SESSION_CHANNEL, NATIVE_SESSION_CHANNEL, N
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
-import type { ProgressEvent } from '../../../shared/types/inbound-message'
+import type { ProgressEvent, WorkProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import { ProgressEventParser } from './progress-formatter'
 import { ReplyTextAccumulator } from './reply-accumulator'
 import { holdSupplementsAfterStop, getPendingSupplementInputIds } from './dispatch-inbound'
 import { getPendingConversationInputIds } from '../../services/conversation-interop'
 import { holdConversationAfterStop } from '../../services/conversation-interop'
+import { getKnowledgeReadDirsForApp } from '../../services/tlon'
 import { getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
 import { createAppChatDelivery, isPersonRequest } from './app-chat-delivery'
 import { awaitWorkspaceDrain, pendingWorkspaceChange, pendingWorkspaceRecovery } from './workspace-admission'
@@ -274,6 +276,7 @@ export interface AppChatRequest {
    * Errors in this callback are caught and logged — they must not interrupt execution.
    */
   onProgress?: (event: ProgressEvent) => void
+  onWorkProgress?: (event: WorkProgressEvent) => void
   /** Releases this dispatch's mailbox reservation when its acquired engine retires. */
   onSessionRetired?: () => void
   /**
@@ -1011,6 +1014,8 @@ async function runAppChatTurn(
     runId: CHAT_RUN_ID,
     sessionKey: conversationId,
     notificationLevel: app.userOverrides?.notificationLevel,
+    workDir,
+    refuseFile: path => turnFileExportRefusal(conversationId, path),
     // Team turns route report() to the team runtime instead of the inbox. A
     // question asked while serving a request from outside persists that
     // request's origin, so the turn its answer resumes serves it too (see
@@ -1079,8 +1084,10 @@ async function runAppChatTurn(
       : {}),
     ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
     ...(usesTerminal
-      ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId, workDir }) }
+      ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId, workDir, conversationId }) }
       : {}),
+    // Only the owner's chat in Halo itself has a screen to bring things to.
+    ...(parseNativeChatKey(conversationId)?.appId === appId ? { 'canvas': createCanvasMcpServer({ spaceId, conversationId, workDir }) } : {}),
     ...(usesHaloApi ? { 'halo-api-ref': createApiRefMcpServer() } : {}),
     ...(conversationCollab
       ? { 'halo-conversations': await createConversationCollabMcpServer({ spaceId, conversationId }, conversationCollab) }
@@ -1201,11 +1208,15 @@ async function runAppChatTurn(
     spaceMemoryOffered: app.userOverrides?.spaceMemoryAccess === true && isSpaceMemoryEnabled(spaceId),
     workDir,
     attachedFiles: [...(request.attachedFiles ?? []), ...(imageFallback?.filePaths ?? [])],
+    knowledgeFolders: strictFiles && !participant?.execution.fileAccess ? getKnowledgeReadDirsForApp(appId) : [],
   })
   const inheritedFiles = participant?.execution.fileAccess
   const turnFileAccess = inheritedFiles ? {
     ...currentFileAccess,
     memoryWritable: [], memoryReadable: [],
+    // A borrowed turn reads only what its lender could; this digital human's
+    // knowledge grant does not travel with it.
+    knowledgeFolders: inheritedFiles.knowledgeFolders ?? [],
     attachedFiles: [...new Set([...inheritedFiles.attachedFiles, ...currentFileAccess.attachedFiles])],
     workspaceRoots: inheritedFiles.workspaceRoots,
     closed: [...new Set([...currentFileAccess.closed, ...inheritedFiles.closed])],
@@ -1582,7 +1593,8 @@ async function runAppChatTurn(
       resumeSessionId,
       workDir,
       { displayModel: resolvedCreds.displayModel, contextWindow: resolvedCreds.capabilities?.contextWindow,
-        sink: bindAppChatEngine(sink, { spacePath, appId, runId: chatRunId, engineId, expected: engineState }) },
+        sink: bindAppChatEngine(sink, { spacePath, appId, runId: chatRunId, engineId, expected: engineState }),
+        toolImagesDir: () => transcriptImagesDir(spacePath, appId, chatRunId) },
       undefined,
       undefined,
       undefined,
@@ -1702,7 +1714,7 @@ async function runAppChatTurn(
     // claim this round — is as narrow as the SDK allows. From here the queued
     // round, not the start, is what holds the conversation.
     round = sink.beginRound({
-      onProgress, onMessageAccepted, onResult: request.onResult,
+      onProgress, onWorkProgress: request.onWorkProgress, onMessageAccepted, onResult: request.onResult,
       onReply: (content, ending) => {
         finalReply = content
         // Answered with what was written, but its team hears of a failure.
@@ -1870,8 +1882,8 @@ function handBackHeldMessage(request: AppChatRequest, conversationId: string, re
  * entry point below delegates here so no route can forget a step.
  *
  * Two things must happen together, in this order:
- *   1. Dispose (not finish) the IM stream. Stop means "send nothing"; finish()
- *      would push a final message into the chat.
+ *   1. Release the IM stream before aborting. A long WeCom reply can close
+ *      with a stop notice; other streams are abandoned without sending.
  *   2. Abort as a person's stop: their own unsent words are void (kept in the
  *      record, marked), what others sent waits for the next turn instead of
  *      starting one right after the stop, and the engine withdraws what it had
@@ -1882,13 +1894,14 @@ function handBackHeldMessage(request: AppChatRequest, conversationId: string, re
  *
  * @returns whether a generation was actually running
  */
-async function stopConversation(conversationId: string): Promise<boolean> {
+async function stopConversation(conversationId: string, notifyLongReply = true): Promise<boolean> {
   const streamHandle = getImStreamHandle(conversationId)
   if (streamHandle) {
     try {
-      streamHandle.dispose?.()
+      const delivery = notifyLongReply ? streamHandle.stopLongReply?.() : undefined
+      if (!delivery) streamHandle.dispose?.()
     } catch (err) {
-      console.error(`[AppChat] Stream dispose failed: ${conversationId}`, err)
+      console.error(`[AppChat] Stream cleanup failed: ${conversationId}`, err)
     }
   }
   clearImStreamHandle(conversationId)
@@ -1968,7 +1981,7 @@ export async function stopAndDrainAppChats(appId: string): Promise<void> {
   const settling = [...chatSettlements.get(appId)?.keys() ?? []]
   const starting = ids.flatMap(pendingAppChatTurnStarts)
   await awaitWorkspaceDrain(appId, 'chat replies', (async () => {
-    await Promise.all(ids.map(stopConversation))
+    await Promise.all(ids.map(id => stopConversation(id, false)))
     await Promise.all(ids.map(id => closeSessionAndWait(id, 'digital human workspace change')))
     await Promise.allSettled([...settling, ...starting])
     const remaining = workspaceChatIds(appId)
@@ -2061,8 +2074,10 @@ export function loadImChatMessages(
  *
  * Single source of truth for the team-channel read, shared by the
  * `team:chat-messages` IPC handler and the team read-only HTTP route.
+ * `from` (0-based) returns only the messages from there on, without reading a
+ * large transcript whole when that can be avoided.
  */
-export function readTeamMemberMessages(appId: string, teamId: string, epochId: string): any[] {
+export function readTeamMemberMessages(appId: string, teamId: string, epochId: string, from?: number): any[] {
   const app = getAppManager()?.getApp(appId)
   const execution = !app ? getTeamStore()?.participants.getExecution(teamId, epochId, appId) : null
   const spaceId = app?.spaceId ?? execution?.environment.spaceId ?? null
@@ -2071,7 +2086,7 @@ export function readTeamMemberMessages(appId: string, teamId: string, epochId: s
   const spacePath = chatRecordPath(appId, conversationId, getSpace(spaceId)?.path ?? '')
   if (!spacePath) return []
   const runId = deriveRunId(conversationId, appId)
-  return readSessionMessages(spacePath, appId, runId)
+  return from === undefined ? readSessionMessages(spacePath, appId, runId) : readSessionMessagesFrom(spacePath, appId, runId, from)
 }
 
 /**
@@ -2155,20 +2170,27 @@ export function loadChatMessageThoughts(
  * @param conversationId - Optional specific session; defaults to the app's
  *   native default session ("app-chat:{appId}"). Native local sessions pass
  *   their own "app-chat:{appId}:local:direct:{uuid}" key.
+ * @param since - For a reader polling a running turn: the `thoughtsRevision`
+ *   of its previous read ('' at first). The answer then holds only the thoughts
+ *   changed since, placed by `thoughtsDelta`.
  */
-export function getAppChatSessionState(appId: string, conversationId?: string): {
+export function getAppChatSessionState(appId: string, conversationId?: string, since?: string): {
   isActive: boolean
   thoughts: any[]
   spaceId?: string
+  thoughtsRevision?: string
+  thoughtsDelta?: { total: number; at: number[] }
 } {
   const convId = conversationId ?? getAppChatConversationId(appId)
-  const state = getSessionState(convId)
+  const state = since === undefined ? getSessionState(convId) : getSessionState(convId, { since })
   return {
     // A message still starting or a queued round has no turn state yet, but the
     // client is already waiting on it and must not be told the session went idle.
     isActive: state.isActive || isAppChatConversationGenerating(convId),
     thoughts: state.thoughts,
     spaceId: state.spaceId,
+    ...(state.thoughtsRevision !== undefined ? { thoughtsRevision: state.thoughtsRevision } : {}),
+    ...(state.thoughtsDelta ? { thoughtsDelta: state.thoughtsDelta } : {}),
   }
 }
 
@@ -2198,6 +2220,9 @@ async function clearSessionByConversationId(
   appId: string,
   spaceId: string
 ): Promise<void> {
+  // Clearing is not an explicit stop reply; abandon any scheduled progress first.
+  const stream = getImStreamHandle(conversationId)
+  if (stream?.updateWork) stream.dispose?.()
   // 1. Abort active generation (if any) before closing
   if (isAppChatConversationGenerating(conversationId)) {
     console.log(`[AppChat][${appId}] Session is generating, aborting first...`)
@@ -2224,7 +2249,7 @@ async function clearHeldSession(conversationId: string, appId: string, spaceId: 
   // 3. Clean up scoped browser context
   destroyChatBrowserContext(conversationId, 'session-cleared')
 
-  // 4. Clear the JSONL file and saved sessionId
+  // 4. Clear the JSONL file, its saved images and the saved sessionId
   const spacePath = chatRecordPath(appId, conversationId, getSpace(spaceId)?.path ?? '')
   if (spacePath) {
     const runId = deriveRunId(conversationId, appId)
@@ -2236,6 +2261,13 @@ async function clearHeldSession(conversationId: string, appId: string, spaceId: 
         console.error(`[AppChat][${appId}] Failed to clear transcript for ${conversationId}:`, error)
         throw error
       }
+    }
+    try {
+      deleteTranscriptImages(spacePath, appId, runId)
+    } catch (error) {
+      // Like the transcript: the clear is reported as failed, and clearing again retries.
+      console.error(`[AppChat][${appId}] Failed to remove saved images for ${conversationId}:`, error)
+      throw error
     }
     // Remove saved sessionId so next session starts truly fresh
     deleteChatSessionId(spacePath, appId, runId)

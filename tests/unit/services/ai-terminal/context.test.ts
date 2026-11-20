@@ -7,7 +7,7 @@
  * the worker's retention, so an unannounced removal is invisible to the UI.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { TerminalInfo } from '../../../../src/main/services/ai-terminal'
 
 type Handler<T> = (arg: T) => void
@@ -176,5 +176,117 @@ describe('TerminalContext removal announcements', () => {
 
     expect(ctx.get('t2')?.info.state).toBe('running')
     expect(types('t2')).toEqual(['created'])
+  })
+})
+
+describe('TerminalContext AI operation', () => {
+  type Activity = { sessionId: string; type: string; operating?: boolean; conversationId?: string }
+  const activity = (): Activity[] => (lifecycle as Activity[]).filter(e => e.type === 'ai-activity')
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('lists the operator and current hold for a late client', async () => {
+    await createSession('t1')
+    ctx.beginAiOperation('t1', 'operator')
+    expect(ctx.listForClient()).toEqual([expect.objectContaining({ id: 't1', operating: true, conversationId: 'operator' })])
+    ctx.endAiOperation('t1')
+    vi.advanceTimersByTime(10_000)
+    expect(ctx.listForClient()).toEqual([expect.objectContaining({ id: 't1', operating: false, conversationId: 'operator' })])
+  })
+
+  it('announces operating once at the first call and once ten seconds after the last, with the conversation', async () => {
+    await createSession('t1')
+    ctx.beginAiOperation('t1', 'conv-1')
+    ctx.endAiOperation('t1')
+    vi.advanceTimersByTime(4000)
+    ctx.beginAiOperation('t1', 'conv-1')
+    ctx.endAiOperation('t1')
+    expect(activity()).toEqual([expect.objectContaining({ sessionId: 't1', operating: true, conversationId: 'conv-1' })])
+
+    vi.advanceTimersByTime(10_000)
+    expect(activity().map(e => e.operating)).toEqual([true, false])
+  })
+
+  it('tells clients again when another conversation takes the session over mid-operation', async () => {
+    await createSession('t1')
+    ctx.beginAiOperation('t1', 'conv-1')
+    ctx.beginAiOperation('t1', 'conv-2')
+    expect(activity().map(e => [e.operating, e.conversationId])).toEqual([[true, 'conv-1'], [true, 'conv-2']])
+  })
+
+  it('stays silent for a session it does not know', () => {
+    ctx.beginAiOperation('ghost', 'conv-1')
+    ctx.endAiOperation('ghost')
+    vi.advanceTimersByTime(20_000)
+    expect(activity()).toEqual([])
+  })
+
+  it('stops reporting a session that exited during its hold', async () => {
+    await createSession('t1')
+    ctx.beginAiOperation('t1', 'conv-1')
+    ctx.endAiOperation('t1')
+    workerExit('t1')
+    vi.advanceTimersByTime(20_000)
+    expect(activity().map(e => e.operating)).toEqual([true])
+  })
+
+  it('stops reporting a session the worker evicted, and forgets what a person typed in it', async () => {
+    await createSession('t1')
+    ;(ctx.get('t1')!.info as TerminalInfo).aiTouched = true
+    ctx.beginAiOperation('t1', 'conv-1')
+    ctx.noteUserInput('t1', 'ls')
+    workerEvict('t1')
+    vi.advanceTimersByTime(20_000)
+    expect(activity().map(e => e.operating)).toEqual([true])
+    expect(ctx.takeUserInputNote('t1')).toBe(false)
+  })
+})
+
+describe('TerminalContext notes of what a person typed', () => {
+  async function aiSession(id: string): Promise<void> {
+    await createSession(id)
+    ;(ctx.get(id)!.info as TerminalInfo).aiTouched = true
+  }
+
+  it('remembers that a person typed once the AI has worked in the session, and reports it once', async () => {
+    await aiSession('t1')
+    ctx.noteUserInput('t1', 'ls\r')
+    expect(ctx.takeUserInputNote('t1')).toBe(true)
+    expect(ctx.takeUserInputNote('t1')).toBe(false)
+  })
+
+  it('ignores input to a session the AI never touched: nobody has anything to resync', async () => {
+    await createSession('t1')
+    ctx.noteUserInput('t1', 'ls\r')
+    expect(ctx.takeUserInputNote('t1')).toBe(false)
+  })
+
+  it('ignores what the viewer\'s terminal writes by itself', async () => {
+    await aiSession('t1')
+    ctx.noteUserInput('t1', '\x1b[12;40R\x1b[I')
+    expect(ctx.takeUserInputNote('t1')).toBe(false)
+  })
+
+  it('keeps no trace of what was typed', async () => {
+    await aiSession('t1')
+    ctx.noteUserInput('t1', 'my-secret-password\r')
+    expect(JSON.stringify([...Object.values(ctx as unknown as Record<string, unknown>)].map(v => v instanceof Set || v instanceof Map ? [...v] : v)))
+      .not.toContain('my-secret-password')
+  })
+})
+
+describe('TerminalContext ending a removed space\'s sessions', () => {
+  it('ends every running session of that space and no other', async () => {
+    await createSession('mine')
+    hostMock.ptyHostRequest.mockResolvedValueOnce({ info: { ...makeInfo('other'), spaceId: 'space-2' } })
+    await ctx.create({ owner: 'user', spaceId: 'space-2' })
+    hostMock.ptyHostRequest.mockResolvedValueOnce({ info: makeInfo('over', 'exited') })
+    await ctx.create({ owner: 'user', spaceId: 'space-1' })
+
+    expect(ctx.killSpaceSessions('space-1')).toBe(1)
+    expect(hostMock.ptyHostNotify).toHaveBeenCalledWith({ type: 'kill', sessionId: 'mine' })
+    expect(hostMock.ptyHostNotify).not.toHaveBeenCalledWith({ type: 'kill', sessionId: 'other' })
+    expect(ctx.killSpaceSessions('space-none')).toBe(0)
   })
 })

@@ -4,16 +4,20 @@
  */
 
 import { createPortal } from 'react-dom'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 interface ConfirmDialogProps {
   title: string
   message?: string
+  /** What the action affects, listed under the message. */
+  details?: ReactNode
   confirmLabel: string
   cancelLabel: string
   onConfirm: () => void
   onCancel: () => void
   variant?: 'danger' | 'warning' | 'default'
+  /** False when the confirmation ends something for good: Enter then never confirms. */
+  confirmOnEnter?: boolean
 }
 
 /**
@@ -44,11 +48,13 @@ export function confirmationIsShown(root: { isConnected: boolean } | null): bool
 export function ConfirmDialog({
   title,
   message,
+  details,
   confirmLabel,
   cancelLabel,
   onConfirm,
   onCancel,
-  variant = 'danger'
+  variant = 'danger',
+  confirmOnEnter = true,
 }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const [host] = useState(() => confirmationHost(document))
@@ -104,14 +110,14 @@ export function ConfirmDialog({
         return
       }
 
-      if (e.key === 'Enter' && enterConfirms(e.target as HTMLElement | null)) {
+      if (e.key === 'Enter' && confirmOnEnter && enterConfirms(e.target as HTMLElement | null)) {
         onConfirm()
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onConfirm, onCancel])
+  }, [onConfirm, onCancel, confirmOnEnter])
 
   const confirmButtonClass =
     variant === 'danger'
@@ -139,6 +145,7 @@ export function ConfirmDialog({
           {message && (
             <p className="text-xs text-muted-foreground break-words">{message}</p>
           )}
+          {details}
         </div>
 
         {/* Actions — unified bordered `.btn` treatment; primary/danger

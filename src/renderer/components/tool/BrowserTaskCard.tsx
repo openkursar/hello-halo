@@ -12,7 +12,7 @@
  * - Supports user observation and intervention in AI operations
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import {
   Globe,
   CheckCircle2,
@@ -22,8 +22,8 @@ import {
 } from 'lucide-react'
 import { useCanvasStore } from '../../stores/canvas.store'
 import { useAIBrowserStore, useActiveConversationBrowserView } from '../../stores/ai-browser.store'
-import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
 import { trackToolOpen } from '../../services/tool-session-telemetry'
+import { api } from '../../api'
 import type { ToolCall } from '../../types'
 import { useTranslation } from '../../i18n'
 
@@ -155,10 +155,10 @@ function StepItem({ step, isLatest }: { step: BrowserStep; isLatest: boolean }) 
 export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = true }: BrowserTaskCardProps) {
   const [isExpanded, setIsExpanded] = useState(true)
   const attachAIBrowserView = useCanvasStore(state => state.attachAIBrowserView)
-  const conversationId = useChatStore(selectActiveConversationId)
   const view = useActiveConversationBrowserView()
   const activeViewId = view?.viewId ?? null
-  const setOperating = useAIBrowserStore(state => state.setOperating)
+  const remoteLive = useAIBrowserStore(state => state.remoteLive)
+  const canOpenView = showViewButton && (!api.isRemoteMode() || remoteLive)
 
   const { t } = useTranslation()
   const actionMap = useMemo(() => ({
@@ -278,16 +278,6 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
   // Has running steps
   const hasRunningStep = steps.some(s => s.status === 'running')
 
-  // Only the card of the running turn reports operating state: an older card
-  // mounting with nothing running must not clear a newer one's.
-  // Surfaces that hide the live view (IM, run detail, team) are not the conversation
-  // on screen, whose id `conversationId` is: they must not mark it as operating.
-  useEffect(() => {
-    if (!isActive || !conversationId || !showViewButton) return
-    setOperating(conversationId, hasRunningStep)
-    return () => setOperating(conversationId, false)
-  }, [isActive, hasRunningStep, conversationId, showViewButton, setOperating])
-
   // Show recent steps
   const visibleSteps = isExpanded ? steps : steps.slice(-3)
 
@@ -298,7 +288,7 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
   const handleViewLive = () => {
     if (!activeViewId) return
     const urlToOpen = view?.url || currentUrl || ''
-    trackToolOpen('browser', 'task_card', attachAIBrowserView(activeViewId, urlToOpen, t('🤖 AI Browser')))
+    trackToolOpen('browser', 'task_card', attachAIBrowserView(activeViewId, urlToOpen, view?.title ?? undefined))
   }
 
   // Don't render if no browser tool calls
@@ -337,7 +327,7 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
           {/* Hidden in contexts without the Canvas browser (e.g. automation apps). Enabled only
               once the AI's live view id is known, so it always reveals the exact view the AI
               drives (never a divergent copy). */}
-          {showViewButton && (
+          {canOpenView && (
             <button
               onClick={handleViewLive}
               disabled={!activeViewId}

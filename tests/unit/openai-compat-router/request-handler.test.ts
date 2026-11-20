@@ -320,6 +320,31 @@ describe('handleMessagesRequest dispatch', () => {
     expect(handleKiroRequest).not.toHaveBeenCalled()
   })
 
+  it.each(['authorization', 'Authorization'])('sends a provider %s as the only credential header on the conversion path', async name => {
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true, json: { id: 'x' } }))
+
+    await handleMessagesRequest(
+      anthReq(),
+      baseConfig({ apiType: 'chat_completions', headers: { [name]: 'Bearer provider' } }),
+      makeRes() as unknown as ExpressResponse,
+    )
+
+    const sent = proxyFetch.mock.calls[0][1].headers as Record<string, string>
+    expect(Object.entries(sent).filter(([key]) => key.toLowerCase() === 'authorization')).toEqual([[name, 'Bearer provider']])
+  })
+
+  it('adds the account key as Authorization when the provider sends none', async () => {
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true, json: { id: 'x' } }))
+
+    await handleMessagesRequest(
+      anthReq(),
+      baseConfig({ apiType: 'chat_completions', headers: { 'x-other': '1' } }),
+      makeRes() as unknown as ExpressResponse,
+    )
+
+    expect(proxyFetch.mock.calls[0][1].headers).toMatchObject({ Authorization: 'Bearer sk-test', 'x-other': '1' })
+  })
+
   it('keeps account-scoped capabilities attached to both an initial Responses request and its retry', async () => {
     const capabilities = { reasoningSummary: false, responsesLite: true, reasoningLevels: ['low'] }
     convertAnthropicToOpenAIResponses.mockReturnValue({ request: { model: 'shared', input: [] } })

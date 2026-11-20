@@ -9,6 +9,8 @@
 
 import type { Thought, ImageAttachment, CanvasContext } from './types'
 import { readSkillNotice, SKILL_NOTICE_TEXT } from '../../../shared/skill-notice'
+import { toolResultDisplayText } from './tool-result-images'
+import { COMPACTION_STEP_TEXT, readCompaction } from '../../../shared/compaction-step'
 
 // ============================================
 // Canvas Context Formatting
@@ -107,9 +109,10 @@ function generateThoughtId(): string {
  *
  * @param message - Raw SDK message
  * @param displayModel - The actual model name to display (user-configured model, not SDK's internal model)
+ * @param toolImagesDir - Where a tool result's images are saved for the display copy; without it they stay inline
  * @returns Thought object or null if message type is not relevant
  */
-export function parseSDKMessage(message: any, displayModel?: string): Thought | null {
+export function parseSDKMessage(message: any, displayModel?: string, toolImagesDir?: string | null): Thought | null {
   const timestamp = new Date().toISOString()
 
   // System initialization
@@ -117,6 +120,10 @@ export function parseSDKMessage(message: any, displayModel?: string): Thought | 
     const skillNotice = readSkillNotice(message)
     if (skillNotice) {
       return { id: generateThoughtId(), type: 'system', content: SKILL_NOTICE_TEXT[skillNotice], skillNotice, timestamp }
+    }
+    const compaction = readCompaction(message)
+    if (compaction) {
+      return { id: generateThoughtId(), type: 'system', content: COMPACTION_STEP_TEXT, compaction, timestamp }
     }
     if (message.subtype === 'init') {
       // Use displayModel (user's configured model) instead of SDK's internal model
@@ -193,9 +200,7 @@ export function parseSDKMessage(message: any, displayModel?: string): Thought | 
       for (const block of content) {
         if (block.type === 'tool_result') {
           const isError = block.is_error || false
-          const resultContent = typeof block.content === 'string'
-            ? block.content
-            : JSON.stringify(block.content)
+          const resultContent = toolResultDisplayText(block.content, toolImagesDir)
 
           return {
             id: block.tool_use_id || generateThoughtId(),

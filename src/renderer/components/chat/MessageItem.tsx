@@ -34,6 +34,7 @@ import { TokenUsageIndicator } from './TokenUsageIndicator'
 import { truncateText, getToolFriendlyFormat } from './thought-utils'
 import type { Message, Thought, ThoughtsSummary } from '../../types'
 import { TurnErrorBubble } from './TurnErrorBubble'
+import { ReplyEndingNote } from './ReplyEndingNote'
 import { useTranslation } from '../../i18n'
 import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
 import { SourceChips } from './SourceChips'
@@ -62,6 +63,8 @@ interface MessageItemProps {
   actionsOnHover?: boolean
   /** A user message written by someone other than the reader: drawn on the left, the reader's own side being the right. */
   alignStart?: boolean
+  /** The chat shows how this reply ended right below it, so its own note steps aside. */
+  hideEnding?: boolean
 }
 
 // Collapsible thought history component
@@ -256,7 +259,7 @@ function ThoughtItem({ thought }: { thought: Thought }) {
   )
 }
 
-export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false, allowViewChanges = false, actionsOnHover = false, alignStart = false }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false, allowViewChanges = false, actionsOnHover = false, alignStart = false, hideEnding = false }: MessageItemProps) {
   const isUser = message.role === 'user'
   const alignEnd = isUser && !alignStart
   const isStreaming = (message as any).isStreaming
@@ -404,6 +407,10 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
       {/* Knowledge-base citations — documents the agent Read this turn, click to open in the canvas */}
       {!isUser && message.sources && message.sources.length > 0 && (
         <SourceChips sources={message.sources} />
+      )}
+
+      {!isUser && !hideEnding && message.metadata?.ending && (
+        <ReplyEndingNote ending={message.metadata.ending} hasAnswer={!!message.content?.trim()} />
       )}
 
       {/* Persisted error - shown for assistant messages that failed (e.g., 429 rate limit) */}

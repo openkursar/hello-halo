@@ -160,9 +160,9 @@ export async function waitForAIResponse(window: Page, timeout = 45000) {
   // Wait for AI response to start
   await window.waitForSelector('.message-assistant', { timeout: 30000 })
 
-  // Wait for AI to finish working (supports both EN and CN)
+  // Wait for the live reply to settle into the saved one
   await window.waitForSelector(
-    'text=/Halo 工作中|Halo is working/i',
+    '.message-working',
     { state: 'hidden', timeout }
   ).catch(() => {
     // Indicator might have already disappeared

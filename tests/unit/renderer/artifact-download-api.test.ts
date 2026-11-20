@@ -40,7 +40,7 @@ function installPage(baseURI: string, window: Record<string, unknown>, reply: { 
   setGlobal('localStorage', { getItem: () => 'tok' })
   setGlobal('fetch', async (url: string, init: { method?: string; headers?: Record<string, string>; body?: string }) => {
     page.requests.push({ url, method: init.method, authorization: init.headers?.Authorization, body: init.body && JSON.parse(init.body) })
-    return { status: reply.status, ok: reply.status < 400, json: async () => reply.body }
+    return Response.json(reply.body, { status: reply.status })
   })
   setGlobal('document', {
     baseURI,

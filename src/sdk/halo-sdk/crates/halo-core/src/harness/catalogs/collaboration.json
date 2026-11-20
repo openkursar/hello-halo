@@ -390,10 +390,36 @@
     ]
   },
   "collaboration.arguments.unexpected": {
-    "text": "Unexpected argument: {key}.",
-    "slots": [
-      "key"
-    ]
+    "text": "Unsupported argument: {key}.",
+    "slots": ["key"]
+  },
+  "collaboration.arguments.spawn_refused": {
+    "text": "No collaborator was created. {reason} Accepted arguments: {accepted}.",
+    "slots": ["reason", "accepted"]
+  },
+  "collaboration.arguments.record_refused": {
+    "text": "Nothing was recorded. {reason} Accepted arguments: {accepted}.",
+    "slots": ["reason", "accepted"]
+  },
+  "collaboration.arguments.spawn_with_recovery": {
+    "text": "{refusal} {recovery}",
+    "slots": ["refusal", "recovery"]
+  },
+  "collaboration.arguments.unlisted": {
+    "text": "other unsupported keys",
+    "slots": []
+  },
+  "collaboration.model_selection.use_profile_reference": {
+    "text": "To choose a model, call list_model_profiles and pass the returned profile reference as model_profile.",
+    "slots": []
+  },
+  "collaboration.model_selection.unavailable_in_conversation": {
+    "text": "Model selection is not available in this conversation.",
+    "slots": []
+  },
+  "collaboration.model_selection.unfiltered_directory": {
+    "text": "This is the full model directory; no filter was applied.",
+    "slots": []
   },
   "collaboration.arguments.non_empty_string": {
     "text": "{key} must be a non-empty string.",

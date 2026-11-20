@@ -6,7 +6,7 @@
     ]
   },
   "context.todos.stale": {
-    "text": "Todo reminder — unchanged for {count} steps:\n{list}\nUpdate it only if it no longer reflects your progress; otherwise continue.",
+    "text": "Todo reminder — unchanged for {count} steps:\n{list}\nIf the list no longer reflects your progress, you can update it. Otherwise, you can ignore this reminder.",
     "slots": [
       "count",
       "list"

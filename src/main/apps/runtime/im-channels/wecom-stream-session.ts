@@ -31,9 +31,11 @@ import type { WsFrameHeaders } from '@wecom/aibot-node-sdk'
 import type {
   ProgressEvent,
   StreamingHandle,
+  WorkProgressEvent,
 } from '../../../../shared/types/inbound-message'
 import { ensureUtf8WithReport } from './wecom-content-utf8'
 import { messageHead, sendAsMessages, type MessageLimit } from './message-parts'
+import { formatLongProgress, mergeLongProgress, WecomLongProgress, type LongProgressUpdate } from './wecom-long-progress'
 
 // ============================================
 // Public constants (kept aligned with WeCom protocol limits)
@@ -55,8 +57,8 @@ const STREAM_SAFETY_MARGIN_MS = 30 * 1000
 /** Throttle interval for progress pushes after stream→push transition. */
 const STREAM_PROGRESS_PUSH_INTERVAL_MS = 2 * 60 * 1000
 /** Chinese user-facing notice appended when we transition to push mode. */
-const STREAM_TRANSITION_NOTICE =
-  '\n\n---\n_任务仍在进行中，后续进度会以新消息推送（企微协议限制单条流式消息最长 10 分钟）_'
+const STREAM_TRANSITION_NOTICE = '_我还在处理，有新进展会发在这里。_'
+const LONG_REPLY_STOP_NOTICE = '任务已停止。'
 /**
  * Chinese user-facing notice closing a stream whose answer outgrew one
  * message: the stream shows its beginning, the whole answer follows in parts.
@@ -263,6 +265,17 @@ export class WecomStreamSession implements StreamingHandle {
   private mode: 'stream' | 'push' = 'stream'
   /** True when the stream channel is no longer usable (broken / expired). */
   private streamChannelBroken = false
+  private readonly longProgress = new WecomLongProgress()
+  private longReply = false
+  private lifetimeTimer?: ReturnType<typeof setTimeout>
+  private longDelivery?: Promise<void>
+  private speechSeenBeforeCutoff = 0
+  private acknowledgedAnswerLength = 0
+  private cutoffSpeechPrefix = ''
+  private draft = ''
+  private streamedNarration = ''
+  private unsentProgress?: LongProgressUpdate
+  private disposed = false
 
   // Push-mode progress throttle
   private lastProgressPushAt = 0
@@ -290,6 +303,8 @@ export class WecomStreamSession implements StreamingHandle {
   constructor(init: WecomStreamSessionInit) {
     this.init = init
     this.startedAt = Date.now()
+    this.lifetimeTimer = setTimeout(() => { void this.beginLongReply() }, STREAM_LIFETIME_MS - STREAM_SAFETY_MARGIN_MS)
+    this.lifetimeTimer.unref()
     this.logger('info', 'stream_open', {
       trace: this.init.trace,
       streamId: this.init.streamId,
@@ -323,6 +338,11 @@ export class WecomStreamSession implements StreamingHandle {
 
   async update(event: ProgressEvent): Promise<void> {
     if (this.finished) return
+    const cutoff = !this.longReply && this.isApproachingLifetimeCutoff() ? this.beginLongReply() : undefined
+    if (this.longReply) {
+      if (cutoff) await cutoff
+      return
+    }
 
     if (event.type === 'text_delta') {
       // Accumulate raw. Cross-chunk surrogate pairs (e.g. 4-byte emoji split
@@ -343,29 +363,87 @@ export class WecomStreamSession implements StreamingHandle {
     }
 
     if (this.mode === 'stream' && !this.streamChannelBroken) {
-      if (this.isApproachingLifetimeCutoff()) {
-        // Proactively transition to push mode just before the server-side cutoff.
-        await this.transitionToPushMode('approaching 10-minute server cutoff', STREAM_TRANSITION_NOTICE)
-      } else {
-        const frame = this.buildContent()
-        if (frame.complete) {
-          await this.sendStreamFrame(false, frame.content)
-          return
+      const frame = this.buildContent()
+      if (frame.complete) {
+        const length = this.answerText.length
+        if (await this.sendStreamFrame(false, frame.content) === 'sent') {
+          this.acknowledgedAnswerLength = Math.max(this.acknowledgedAnswerLength, length)
         }
-        // A frame past one message is rejected and leaves the stream stuck
-        // mid-answer; close it on what fits instead.
-        await this.transitionToPushMode('answer longer than one message', STREAM_LONG_ANSWER_NOTICE)
+        return
       }
-      // Fall through — push-mode progress logic below
+      await this.transitionToPushMode('answer longer than one message', STREAM_LONG_ANSWER_NOTICE)
     }
 
-    // Push mode (or stream broken): throttled progress as discrete pushes
-    await this.maybePushProgress()
+    if (!this.longReply && !this.finished) await this.maybePushProgress()
+  }
+
+  async updateWork(event: WorkProgressEvent): Promise<void> {
+    if (this.finished) return
+    if (!this.longReply && this.isApproachingLifetimeCutoff()) void this.beginLongReply()
+    const now = Date.now()
+    if (event.type === 'speech_delta') {
+      this.draft += event.text
+      return
+    }
+    if (event.type === 'speech') {
+      if (!this.longReply) {
+        this.speechSeenBeforeCutoff = this.answerText.length
+        this.draft = ''
+        return
+      }
+      // Some engines deliver the streamed tool start before repeating the text in the aggregate.
+      if (this.streamedNarration && this.streamedNarration.trim() === event.text.trim()) {
+        this.streamedNarration = ''
+        return
+      }
+      this.streamedNarration = ''
+      this.draft = ''
+      this.keepSpeech(event.text, now)
+      return
+    }
+    if (event.type === 'operation_started') {
+      if (!this.longReply) {
+        this.speechSeenBeforeCutoff = this.answerText.length
+        this.draft = ''
+      } else if (this.draft) {
+        this.streamedNarration = this.cutoffSpeechPrefix + this.draft
+        this.keepSpeech(this.streamedNarration, now)
+        this.draft = ''
+      }
+    }
+    const update = this.longProgress.observe(event, now, this.longDelivery !== undefined)
+    if (update) await this.queueLongProgress(update)
+  }
+
+  stopLongReply(): Promise<boolean> | undefined {
+    if (!this.longReply || this.finished) return undefined
+    const written = [this.longProgress.wordsSoFar(), this.draft].filter(part => part.trim()).join('\n\n')
+    return this.finish(written ? `${written}\n\n${LONG_REPLY_STOP_NOTICE}` : LONG_REPLY_STOP_NOTICE).then(
+      () => this.finalPushSent,
+      error => {
+        this.logger('error', 'stream_stop_delivery_failed', { trace: this.init.trace, streamId: this.init.streamId, error: String(error) })
+        return false
+      },
+    )
   }
 
   async finish(finalText: string): Promise<void> {
     if (this.finished) return
     this.finished = true
+    clearTimeout(this.lifetimeTimer)
+
+    if (this.longReply) {
+      await this.longDelivery
+      const update = mergeLongProgress(this.unsentProgress, this.longProgress.take(finalText))
+      this.unsentProgress = undefined
+      try {
+        this.finalPushSent = await this.sendLongMessage(update)
+      } finally {
+        this.init.onDispose?.()
+        this.logTerminalSummary(this.finalPushSent ? 'push' : 'push_failed')
+      }
+      return
+    }
 
     // UTF-8 cleanse the authoritative final text once (do not mix with deltas).
     const sanitized = ensureUtf8WithReport(finalText)
@@ -423,7 +501,9 @@ export class WecomStreamSession implements StreamingHandle {
   /** Abort without delivering. For teardown only; prefer markStreamBroken() for WS bounces. */
   dispose(): void {
     if (this.finished) return
+    this.disposed = true
     this.finished = true
+    clearTimeout(this.lifetimeTimer)
     this.init.onDispose?.()
     this.logTerminalSummary('disposed')
   }
@@ -457,6 +537,81 @@ export class WecomStreamSession implements StreamingHandle {
 
   private isStreamExpired(): boolean {
     return Date.now() - this.startedAt >= STREAM_LIFETIME_MS
+  }
+
+  private keepSpeech(text: string, now: number): void {
+    const prefix = this.cutoffSpeechPrefix
+    this.cutoffSpeechPrefix = ''
+    const fresh = prefix && text.startsWith(prefix) ? text.slice(prefix.length) : text
+    this.longProgress.observe({ type: 'speech', text: fresh }, now, false)
+  }
+
+  private beginLongReply(): Promise<void> | undefined {
+    if (this.finished || this.longReply) return this.longDelivery
+    this.longReply = true
+    clearTimeout(this.lifetimeTimer)
+    this.longProgress.start(Date.now())
+    // Do not suppress unfinished text based on a frame that has not been acknowledged.
+    const answerLimit = this.acknowledgedAnswerLength
+    const closing = !this.streamChannelBroken && this.mode === 'stream' && !this.isStreamExpired()
+      ? this.buildContent(`\n\n---\n${STREAM_TRANSITION_NOTICE}`, answerLimit)
+      : undefined
+    this.cutoffSpeechPrefix = this.answerText.slice(this.speechSeenBeforeCutoff, answerLimit)
+    const visible = this.cutoffSpeechPrefix
+    this.draft = visible && this.draft.startsWith(visible) ? this.draft.slice(visible.length) : this.draft
+    this.logger('info', 'stream_lifetime_cutoff', {
+      trace: this.init.trace, streamId: this.init.streamId, elapsedMs: Date.now() - this.startedAt,
+    })
+    return this.enqueueLongDelivery(async () => {
+      if (closing && !this.streamChannelBroken && !this.isStreamExpired()) {
+        this.mode = 'push'
+        const result = await this.callFinishFrame(closing.content)
+        if (this.disposed) return
+        if (result === 'sent') {
+          this.longProgress.visible(Date.now())
+          return
+        }
+        this.markStreamBroken(`lifetime finish frame result=${result}`)
+      }
+      const ok = await this.pushText(STREAM_TRANSITION_NOTICE)
+      if (ok) this.longProgress.visible(Date.now())
+      this.logger(ok ? 'info' : 'warn', 'stream_transition_notice_pushed', {
+        trace: this.init.trace, streamId: this.init.streamId, ok,
+      })
+    })
+  }
+
+  private queueLongProgress(update: LongProgressUpdate): Promise<void> {
+    return this.enqueueLongDelivery(async () => {
+      const pending = mergeLongProgress(this.unsentProgress, update)
+      this.unsentProgress = pending
+      if (await this.sendLongMessage(pending)) {
+        this.unsentProgress = undefined
+        this.progressPushesSent += 1
+        this.longProgress.visible(Date.now())
+      } else {
+        this.logger('warn', 'stream_long_progress_not_delivered', {
+          trace: this.init.trace, streamId: this.init.streamId, hasText: Boolean(update.text),
+        })
+      }
+    })
+  }
+
+  private enqueueLongDelivery(send: () => Promise<void>): Promise<void> {
+    const previous = this.longDelivery
+    const delivery = (previous ?? Promise.resolve()).then(() => {
+      if (!this.disposed) return send()
+    }).catch(error => {
+      this.logger('error', 'stream_long_delivery_failed', { trace: this.init.trace, streamId: this.init.streamId, error: String(error) })
+    }).finally(() => {
+      if (this.longDelivery === delivery) this.longDelivery = undefined
+    })
+    this.longDelivery = delivery
+    return delivery
+  }
+
+  private sendLongMessage(update: LongProgressUpdate): Promise<boolean> {
+    return this.pushText(ensureUtf8WithReport(formatLongProgress(update)).text)
   }
 
   private async transitionToPushMode(reason: string, notice: string): Promise<void> {
@@ -522,8 +677,8 @@ export class WecomStreamSession implements StreamingHandle {
    * lines give way first, and only an answer too long on its own is cut to
    * its beginning. `complete` says whether the whole answer is in.
    */
-  private buildContent(notice = ''): { content: string; complete: boolean } {
-    const answer = this.sanitizeAnswerForOutput()
+  private buildContent(notice = '', answerLimit?: number): { content: string; complete: boolean } {
+    const answer = this.sanitizeAnswerForOutput().slice(0, answerLimit)
     let think = this.progressLines.length > 0
       ? `<think>\n${this.progressLines.join('\n')}\n</think>\n\n`
       : ''
@@ -723,7 +878,11 @@ export class WecomStreamSession implements StreamingHandle {
    * is delivered instead of being rejected as oversized (#225).
    */
   private async pushFinalAnswer(): Promise<boolean> {
-    return sendAsMessages(this.sanitizeAnswerForOutput(), WECOM_MESSAGE_LIMIT, (part) =>
+    return this.pushText(this.sanitizeAnswerForOutput())
+  }
+
+  private pushText(text: string): Promise<boolean> {
+    return sendAsMessages(text, WECOM_MESSAGE_LIMIT, (part) =>
       this.init.transport.queuePush(
         this.init.chatId,
         part,

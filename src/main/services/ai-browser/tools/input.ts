@@ -1,10 +1,14 @@
 /**
- * Input Tools (5 tools)
+ * Input Tools (5 tools, plus browser_fill_secret in server mode)
  *
  * User interaction simulation: click, fill, hover, key press, file upload.
  *
  * browser_click — Click or drag-and-drop (absorbs browser_drag via dragTo param).
  * browser_fill — Single field or batch form fill (absorbs browser_fill_form via elements param).
+ * browser_fill_secret — Fill fields with text the user types; the value never reaches the model.
+ *   Server mode only: a server's pages are watched from a remote client, where the
+ *   user cannot type into the page itself. On the desktop the user types into the
+ *   visible browser, so the tool list stays as it was.
  * browser_hover — Hover to reveal menus/tooltips.
  * browser_press_key — Keyboard keys and shortcuts.
  * browser_upload_file — File upload (single or multi-file).
@@ -17,7 +21,8 @@ import fs from 'node:fs'
 import { z } from 'zod'
 import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
-import { textResult, withTimeout, fillFormElement, TOOL_TIMEOUT } from './helpers'
+import { isServerMode } from '../../../foundation/runtime-mode'
+import { textResult, withTimeout, fillFormElement, fillSecretFields, TOOL_TIMEOUT } from './helpers'
 
 export function buildInputTools(ctx: BrowserContext) {
 
@@ -176,6 +181,44 @@ If filling doesn't work (e.g., custom dropdowns that aren't real <select> elemen
   }
 )
 
+const browser_fill_secret = tool(
+  'browser_fill_secret',
+  `Fill fields with text the user types in themselves — a password, a PIN, a one-time code, an authenticator token.
+
+Use this instead of browser_fill whenever the value is a credential you were not already given. Never ask the user to type a credential into the chat: anything said there is kept in the transcript, and you would be handling it yourself.
+
+Halo prompts the user, showing the site's origin and the fields you named. This call does not take or return their text. Fill non-secret fields first. Halo only submits when the typed values match the requested fields. Afterward check the result without reading any credential back from the page.
+
+If the user declines, stop and ask them how they want to proceed. Do not retry and do not ask them for the value.`,
+  {
+    uids: z.array(z.string().max(80)).min(1).max(12).refine(uids => new Set(uids).size === uids.length).describe(
+      'The uids of the fields the user should type into, from the latest browser_snapshot. A code split across single-character boxes takes one uid per box, in order.'
+    ),
+    purpose: z.string().max(250).describe(
+      'One short sentence telling the user what the page is asking for, e.g. "the 6-digit code from your authenticator app". Shown to them as your words.'
+    ),
+    submit_uid: z.string().optional().describe(
+      'The uid of the button that submits the form. Omit to press Enter in the last filled field.'
+    )
+  },
+  async (args, extra) => {
+    try {
+      const { signal } = (extra ?? {}) as { signal?: AbortSignal }
+      const status = await fillSecretFields(ctx, args.uids, args.purpose, args.submit_uid, signal)
+      switch (status) {
+        case 'declined': return textResult('The user declined. Nothing was typed. Ask how to proceed without asking for the value.', true)
+        case 'expired': return textResult('The prompt ended before the form could be filled. Ask the user before trying again.', true)
+        case 'moved': return textResult('The page changed. Nothing was typed. Take a fresh browser snapshot.', true)
+        case 'unconfirmed': return textResult('The fields did not match what the user typed. Halo did not submit the form. Let the user check the page.', true)
+        case 'submitted': return textResult('Halo submitted the form. Check the result without reading the credential.')
+      }
+    } catch {
+      console.warn('[AIBrowser] Could not complete credential entry', { viewId: ctx.getActiveViewId() })
+      return textResult('Halo could not finish entering the credential. Check with the user before submitting or trying again.', true)
+    }
+  }
+)
+
 const browser_hover = tool(
   'browser_hover',
   `Move the mouse over an element without clicking. Use this to:
@@ -294,6 +337,7 @@ All files must exist on the local filesystem. After uploading, take a browser_sn
 return [
   browser_click,
   browser_fill,
+  ...(isServerMode() ? [browser_fill_secret] : []),
   browser_hover,
   browser_press_key,
   browser_upload_file

@@ -600,7 +600,8 @@ class AISourceManager {
    */
   addSource(source: AISource): AISourcesConfig {
     if (source.authType !== 'api-key') throw new Error('Managed accounts must be added through their login flow')
-    return this.appendSource(source)
+    const { managedBy: _clientMarker, ...editable } = source
+    return this.appendSource(editable)
   }
 
   private appendSource(source: AISource): AISourcesConfig {
@@ -674,6 +675,8 @@ class AISourceManager {
     const metadata = { ...updates }
     delete metadata.id
     delete metadata.createdAt
+    delete metadata.managedBy
+    if (source.managedBy === 'server-env') delete metadata.provider
     delete metadata.authType
     // Written only by catalog refreshes and sign-ins; a client's copy may be stale.
     delete metadata.withdrawnModels

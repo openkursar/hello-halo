@@ -69,6 +69,35 @@ describe('neutral history serialization', () => {
     expect(envelope(result.text).records[0].imageAttachments).toMatchObject([{ id: 'i', mediaType: 'image/png' }])
   })
 
+  it('names where a step\'s saved images are, so the next engine can open them, and never carries image data', () => {
+    const record = message('shot', 'Took a screenshot', 'assistant')
+    const saved = '/space/.halo/apps/a/runs/chat.images/0123456789abcdef.png'
+    record.thoughts = [
+      { id: 'snap', type: 'tool_use', content: '', toolName: 'browser_screenshot', toolInput: {}, timestamp: record.timestamp,
+        toolResult: { output: JSON.stringify([{ type: 'text', text: 'Screenshot captured' }, { type: 'image_file', path: saved, media_type: 'image/png', bytes: 2048 }]), isError: false, timestamp: record.timestamp } },
+      { id: 'lone', type: 'tool_result', content: 'Tool execution succeeded', timestamp: record.timestamp,
+        toolOutput: JSON.stringify([{ type: 'image_file', path: saved.replace('0123456789abcdef', 'fedcba9876543210'), media_type: 'image/png', bytes: 10 }]) },
+    ]
+    const result = serializeEngineHandoff({ messages: [record], targetEngine: 'codex' })
+    expect(envelope(result.text).records[0].pastToolResults).toMatchObject([
+      { id: 'snap', output: 'Screenshot captured', savedImages: [saved] },
+      { id: 'lone', output: '', savedImages: [saved.replace('0123456789abcdef', 'fedcba9876543210')] },
+    ])
+    expect(result.text).not.toContain('image_file')
+    expect(result.truncated).toBe(false)
+  })
+
+  it('hands over an output kept from before images were saved as files exactly as before', () => {
+    const record = message('old', 'Looked', 'assistant')
+    const inline = JSON.stringify([{ type: 'text', text: 'Shot' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(6000) } }])
+    record.thoughts = [{ id: 't', type: 'tool_use', content: '', toolName: 'Read', toolInput: {}, timestamp: record.timestamp, toolResult: { output: inline, isError: false, timestamp: record.timestamp } }]
+    const result = serializeEngineHandoff({ messages: [record], targetEngine: 'codex', transcriptPath: '/history.json' })
+    const [step] = envelope(result.text).records[0].pastToolResults
+    expect(step.savedImages).toBeUndefined()
+    expect(inline.startsWith(step.output)).toBe(true)
+    expect(result.truncated).toBe(true)
+  })
+
   it('prepends history as user text while preserving image blocks and the original input', () => {
     const image = { type: 'image', source: { data: 'base64' } }
     const original = { type: 'user', message: { role: 'user', content: [image, { type: 'text', text: 'Current request' }] } }

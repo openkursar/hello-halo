@@ -1,60 +1,32 @@
-/**
- * useDataContent - Load activity entry data from inline content or file path
- *
- * When an activity entry has `dataPath`, reads the file via the artifact API
- * and returns its content. Falls back to inline `data` string if no path or
- * if the file read fails. Supports both Electron (IPC) and remote (HTTP) modes.
- *
- * Usage:
- *   const renderedData = useDataContent(entry.content)
- *   // renderedData is the markdown string to render, or undefined
- */
-
 import { useState, useEffect } from 'react'
 import { api } from '../api'
 import type { ActivityEntryContent } from '../../shared/apps/app-types'
 
-/**
- * Resolve the renderable markdown content from an activity entry.
- *
- * Priority: dataPath (file) > data (inline string) > undefined
- *
- * @param content - The activity entry content
- * @returns The markdown string to render, or undefined if no content
- */
-export function useDataContent(content: ActivityEntryContent): string | undefined {
-  const inlineData = typeof content.data === 'string' ? content.data : undefined
-  const [fileContent, setFileContent] = useState<string | null>(null)
-  const [loadFailed, setLoadFailed] = useState(false)
+export function useDataContent(content: ActivityEntryContent): { text?: string; unreadable: boolean } {
+  const path = content.dataPath
+  const inline = typeof content.data === 'string' && content.data ? content.data : undefined
+  const [file, setFile] = useState<{ path: string; text?: string } | null>(null)
 
   useEffect(() => {
-    if (!content.dataPath) return
-
+    if (!path) return
     let cancelled = false
-    setLoadFailed(false)
-
-    api.readArtifactContent(content.dataPath)
-      .then((res: any) => {
-        if (cancelled) return
-        if (res?.success && res.data?.content) {
-          setFileContent(res.data.content)
-        } else {
-          console.warn('[useDataContent] Unexpected response shape:', res)
-          setLoadFailed(true)
-        }
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        console.warn('[useDataContent] Failed to read file:', content.dataPath, err)
-        setLoadFailed(true)
-      })
-
+    void api.readArtifactContent(path).then(result => {
+      if (cancelled) return
+      const data = result.data as { content?: unknown; encoding?: string } | undefined
+      if (result.success && typeof data?.content === 'string' && data.encoding !== 'base64') {
+        setFile({ path, text: data.content })
+      } else {
+        console.warn('[Activity] Report preview unavailable:', result.error ?? 'No text preview')
+        setFile({ path })
+      }
+    }).catch(error => {
+      if (cancelled) return
+      console.warn('[Activity] Report preview failed:', error)
+      setFile({ path })
+    })
     return () => { cancelled = true }
-  }, [content.dataPath])
+  }, [path])
 
-  // File content takes priority; fall back to inline data on failure or absence
-  if (content.dataPath && !loadFailed && fileContent !== null) {
-    return fileContent
-  }
-  return inlineData
+  if (file && file.path === path) return { text: file.text ?? inline, unreadable: file.text === undefined && !inline }
+  return { text: inline, unreadable: false }
 }

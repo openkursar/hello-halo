@@ -41,6 +41,8 @@ vi.mock('../../../../src/main/services/browser-view.service', () => ({
       destroyedListeners.add(listener)
       return () => destroyedListeners.delete(listener)
     },
+    onViewStateChanged: () => () => {},
+    onUserInput: () => () => {},
   },
 }))
 
@@ -54,6 +56,7 @@ vi.mock('../../../../src/main/services/ai-browser/events', () => ({
   emitBrowserActiveView: () => {},
   emitBrowserViewGone: () => {},
   emitBrowserConversationReleased: () => {},
+  emitBrowserOperating: () => {},
   onBrowserActiveView: () => () => {},
   onBrowserViewGone: () => () => {},
   onBrowserConversationReleased: () => () => {},

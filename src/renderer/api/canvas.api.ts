@@ -1,8 +1,9 @@
 /**
  * canvasApi — Content Canvas slice of the unified api object.
  */
-import { isElectron } from './_shared'
+import { httpRequest, isElectron, onEvent } from './_shared'
 import type { ApiResponse } from './_shared'
+import type { CanvasShowReply, CanvasShowRequest } from '../../shared/types/canvas-show'
 
 export const canvasApi = {
   /**
@@ -16,5 +17,15 @@ export const canvasApi = {
 
   closeHtmlPreview: async (host: string): Promise<void> => {
     if (isElectron()) await window.halo.closeHtmlPreview(host)
+  },
+
+  /** The AI asks to bring its page, a terminal or a file in front of the user. */
+  onCanvasShowRequest: (callback: (request: CanvasShowRequest) => void) =>
+    onEvent('canvas:show-request', callback as (data: unknown) => void),
+
+  /** This client's answer to a show request: switched to it, or only kept its tab. */
+  replyCanvasShow: async (reply: CanvasShowReply): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.replyCanvasShow(reply)
+    return httpRequest('POST', '/api/canvas/show-reply', { ...reply })
   },
 }

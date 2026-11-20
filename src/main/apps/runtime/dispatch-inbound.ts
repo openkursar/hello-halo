@@ -357,7 +357,6 @@ const supplementGate = createTurnGate<SupplementEntry[]>({
       .finally(release)
   },
 }, {
-  describeJob: entries => `IM messages=${entries.length}`,
   onDiscard: (entries, reason) => {
     for (const entry of entries) {
       try { entry.reply.streaming?.dispose?.() } catch (error) {
@@ -871,8 +870,11 @@ export async function dispatchInboundMessage(
       try {
         // Reaches a message still on its way to the engine as well as a turn
         // already running: both read as busy above, so both must be stoppable.
+        const stream = getImStreamHandle(conversationId)
+        const delivery = stream?.stopLongReply?.()
+        if (delivery) clearImStreamHandle(conversationId)
         await abortAppChatTurn(conversationId, 'user')
-        await reply.send('Generation stopped.')
+        if (!(await delivery)) await reply.send('Generation stopped.')
       } catch (err) {
         console.error(`${LOG_TAG} Failed to stop generation: session=${conversationId}`, err)
         await reply.send('Failed to stop generation.').catch(() => {})
@@ -1246,6 +1248,14 @@ export async function dispatchInboundMessage(
           }
         : undefined,
 
+      onWorkProgress: reply.streaming?.updateWork
+        ? event => {
+            reply.streaming!.updateWork!(event).catch((error: Error) => {
+              console.error(`${LOG_TAG} Work update failed: channel=${reply.channel}, chatId=${reply.chatId}`, error)
+            })
+          }
+        : undefined,
+
       // Use streaming.finish when available, else fall back to one-shot send
       onReply: (finalContent: string, ending?: AppChatTurnEnding) => {
         settleProcessingNotice()
@@ -1301,6 +1311,8 @@ export async function dispatchInboundMessage(
     }
   } finally {
     settleProcessingNotice()
+    // A turn that only asked an out-of-band question can end without a normal text reply.
+    if (reply.streaming?.updateWork) reply.streaming.dispose?.()
     turnStart.end()
   }
 }

@@ -152,6 +152,13 @@ export type ProgressEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'status'; text: string }
 
+/** Completed speech blocks and tool lifecycle, independent of token-level streaming. */
+export type WorkProgressEvent =
+  | { type: 'speech'; text: string }
+  | { type: 'speech_delta'; text: string }
+  | { type: 'operation_started'; id: string; tool: string }
+  | { type: 'operation_finished'; id: string; success: boolean }
+
 // ============================================
 // StreamingHandle
 // ============================================
@@ -176,6 +183,12 @@ export interface StreamingHandle {
    * After this call, no more update() calls should be made.
    */
   finish(finalText: string): Promise<void>
+
+  /** Optional completed-work feed, separate from rendering live progress. */
+  updateWork?(event: WorkProgressEvent): Promise<void>
+
+  /** Start closing a long reply, if applicable. Resolves whether its stop notice was delivered. */
+  stopLongReply?(): Promise<boolean> | undefined
 
   /** Abandon the stream without sending. Releases internal state. Safe to call multiple times. */
   dispose?(): void

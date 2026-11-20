@@ -16,7 +16,7 @@ import { taskTime } from './time'
 import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, undeliveredParties, type SharedTaskDecision } from './model'
 import { UndeliveredNote } from './UndeliveredNote'
 
-export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, working = false, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation, taskCompleted = false, homepageConversation = false, readonly = false, authorName, liveReply, onOpenMember, revealActivity, onActivityRevealed }: {
+export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, working = false, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation, taskCompleted = false, homepageConversation = false, readonly = false, authorName, liveReply, onOpenMember, revealActivity, onActivityRevealed, endingShownBelow }: {
   messages: Message[]; activities: TeamActivity[]; epochId: string | null; appId?: string; detail: TeamDetail; showEmpty: boolean; onActivity: (id?: string) => void
   /** The member is running a turn here, drawn by `liveReply`, so the conversation is not empty. */
   working?: boolean
@@ -33,6 +33,8 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
   /** Switches to the other party of a collaboration message, to read it where they received or sent it. */
   onOpenMember?: (appId: string, activityId: string) => void
   revealActivity?: string | null; onActivityRevealed?: () => void
+  /** The reply whose ending the room's interruption notice already states. */
+  endingShownBelow?: string
 }) {
   const { t } = useTranslation()
   const hasHumanConversation = conversationMessages(messages).some(message => message.role === 'user')
@@ -222,7 +224,7 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
           items={row.dispatches.map(activity => ({ id: activity.id, to: name(activity.targetAppId), onOpen: openParty(activity, 'targetAppId'), at: taskTime(activity.createdAt) ?? 0, content: (activity.body || activity.subject).trim() }))}
           footer={partyLinks(row.dispatches, 'targetAppId')} reveal={revealFor(row.dispatches)}
         /> : undefined
-        return <MessageRow key={row.id} message={row.message} openersLine={openersLine} afterReply={dispatchLine} hideBrowserLiveView hideTerminalOpen senderName={homepageConversation && appId ? name(appId) : undefined} authorName={authorName} injectionMessages={carried?.injections} arrivals={carried?.arrivals} afterThoughts={requests.length ? requests.map(decisionCard) : undefined} actionsOnHover={messageId !== latestReplyId} />
+        return <MessageRow key={row.id} message={row.message} openersLine={openersLine} afterReply={dispatchLine} hideBrowserLiveView hideTerminalOpen senderName={homepageConversation && appId ? name(appId) : undefined} authorName={authorName} injectionMessages={carried?.injections} arrivals={carried?.arrivals} afterThoughts={requests.length ? requests.map(decisionCard) : undefined} actionsOnHover={messageId !== latestReplyId} endingShownBelow={messageId === endingShownBelow} />
       }
       const updates = row.activities
       const latest = updates[updates.length - 1]

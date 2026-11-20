@@ -1,5 +1,6 @@
 import { api } from '../../api'
 import type { Message } from '../../types'
+import { readReplyEnding } from '../../../shared/reply-ending'
 
 type HistoryResult = Awaited<ReturnType<typeof api.teamChatMessages>>
 type HistorySource = { readers: number; messages: Message[] | null; cursor: number; dirty: boolean; pending?: Promise<HistoryResult> }
@@ -68,12 +69,15 @@ const SEQ_WIDTH = String(Number.MAX_SAFE_INTEGER).length
  * a row takes one derived from its seq: the same on every read, and never an id
  * the owner itself assigns, padded so ids compare as text in seq order. Their
  * time comes as epoch-ms `ts`; surfaces that interleave them with team records
- * read `timestamp`.
+ * read `timestamp`. Of the owner's metadata only how a reply ended crosses, and
+ * only as a value this build knows.
  */
-function withRowId(row: HistoryRow): HistoryRow {
+function withRowId(row: HistoryRow & { ending?: unknown }): HistoryRow {
   if (row.id) return row
+  const { ending: sent, metadata: _metadata, ...rest } = row
+  const ending = readReplyEnding(sent)
   const timestamp = !row.timestamp && typeof row.ts === 'number' && Number.isFinite(row.ts) ? new Date(row.ts).toISOString() : row.timestamp
-  return { ...row, id: `${REMOTE_ROW_ID}${String(row.seq).padStart(SEQ_WIDTH, '0')}`, ...(timestamp ? { timestamp } : {}) }
+  return { ...rest, id: `${REMOTE_ROW_ID}${String(row.seq).padStart(SEQ_WIDTH, '0')}`, ...(timestamp ? { timestamp } : {}), ...(ending ? { metadata: { ending } } : {}) }
 }
 
 const seqOf = (message: Message) => (message as HistoryRow).seq

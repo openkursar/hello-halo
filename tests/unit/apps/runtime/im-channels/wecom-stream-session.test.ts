@@ -337,7 +337,7 @@ describe('WecomStreamSession 10-minute cutoff fallback', () => {
       expect(pushes.length).toBeGreaterThanOrEqual(1)
       // Verify the pushed text is the transition notice (trimmed).
       const noticePush = pushes.find((p) =>
-        (p.args[1] as string).includes('企微协议限制单条流式消息最长 10 分钟'),
+        (p.args[1] as string).includes('我还在处理，有新进展会发在这里。'),
       )
       expect(noticePush).toBeDefined()
       expect(
@@ -346,6 +346,155 @@ describe('WecomStreamSession 10-minute cutoff fallback', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('WecomStreamSession after the WeCom lifetime limit', () => {
+  const minute = 60_000
+  const cutoffMs = 9.5 * minute
+  const pushes = (transport: FakeTransport) => transport.calls.filter(call => call.method === 'queuePush').map(call => call.args[1])
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    return () => vi.useRealTimers()
+  })
+
+  async function operation(session: WecomStreamSession, id: string, tool = 'Read', success = true) {
+    await session.updateWork({ type: 'operation_started', id, tool })
+    await session.updateWork({ type: 'operation_finished', id, success })
+  }
+
+  it('closes a quiet stream once, then sends complete narration with only that stretch of work', async () => {
+    const transport = makeTransport()
+    const session = makeSession(transport, makeLogger().logger)
+    await session.update({ type: 'status', text: '已收到，正在处理…' })
+    await operation(session, 'before')
+    await vi.advanceTimersByTimeAsync(cutoffMs)
+    expect(transport.calls.filter(call => call.method === 'replyStreamFinish').map(call => call.args[2])).toEqual([
+      expect.stringContaining('我还在处理，有新进展会发在这里。'),
+    ])
+    await operation(session, 'read')
+    await operation(session, 'command', 'Bash')
+    await session.update({ type: 'tool_result', tool: '', summary: '/private/result', success: true })
+    await session.update({ type: 'text_delta', text: '已确认' })
+    expect(pushes(transport)).toEqual([])
+    await session.updateWork({ type: 'speech', text: '已确认报文超限。' })
+    await operation(session, 'search', 'Grep')
+    expect(pushes(transport)).toEqual(['_读取了 1 个文件，运行了 1 条命令_\n\n已确认报文超限。'])
+    await session.updateWork({ type: 'speech', text: '发送前拦截。' })
+    await session.finish('发送前拦截。')
+    expect(pushes(transport)).toEqual([
+      '_读取了 1 个文件，运行了 1 条命令_\n\n已确认报文超限。',
+      '_搜索了 1 次_\n\n发送前拦截。',
+    ])
+  })
+
+  it('uses elapsed time and unique completed operations together, with no ticking or second standalone update', async () => {
+    const transport = makeTransport()
+    const session = makeSession(transport, makeLogger().logger)
+    await vi.advanceTimersByTimeAsync(cutoffMs)
+    for (let i = 0; i < 20; i++) await operation(session, `first-${i}`)
+    await vi.advanceTimersByTimeAsync(15 * minute)
+    await session.updateWork({ type: 'operation_finished', id: 'first-19', success: true })
+    await operation(session, 'failed', 'Read', false)
+    expect(pushes(transport)).toEqual([])
+    await operation(session, 'more', 'Bash')
+    expect(pushes(transport)).toEqual(['_读取了 20 个文件，运行了 1 条命令_'])
+    await vi.advanceTimersByTimeAsync(16 * minute)
+    for (let i = 0; i < 20; i++) await operation(session, `second-${i}`, 'Bash')
+    expect(pushes(transport)).toHaveLength(1)
+    await session.finish('排查结束。')
+    expect(pushes(transport)).toEqual(['_读取了 20 个文件，运行了 1 条命令_', '_运行了 20 条命令_\n\n排查结束。'])
+  })
+
+  it('keeps an in-flight call across cutoff and sends a final result even without any narration', async () => {
+    const transport = makeTransport()
+    const session = makeSession(transport, makeLogger().logger)
+    await session.updateWork({ type: 'operation_started', id: 'first', tool: 'Bash' })
+    await vi.advanceTimersByTimeAsync(cutoffMs)
+    await session.updateWork({ type: 'operation_finished', id: 'first', success: true })
+    expect(pushes(transport)).toEqual([])
+    await session.finish('没有进入下游。')
+    expect(pushes(transport)).toEqual(['_运行了 1 条命令_\n\n没有进入下游。'])
+  })
+
+  it('does not resend words already shown when a narrated paragraph straddles cutoff', async () => {
+    const transport = makeTransport()
+    const session = makeSession(transport, makeLogger().logger)
+    await session.update({ type: 'text_delta', text: '我已定位问题，' })
+    await vi.advanceTimersByTimeAsync(cutoffMs)
+    await session.updateWork({ type: 'speech_delta', text: '接下来确认触发条件。' })
+    await session.updateWork({ type: 'speech', text: '我已定位问题，接下来确认触发条件。' })
+    await operation(session, 'read')
+    expect(pushes(transport)).toEqual(['接下来确认触发条件。'])
+    await session.finish('已确认。')
+  })
+
+  it('preserves pending words on stop and never sends another ending', async () => {
+    const transport = makeTransport()
+    const session = makeSession(transport, makeLogger().logger)
+    await vi.advanceTimersByTimeAsync(cutoffMs)
+    await operation(session, 'read')
+    await session.updateWork({ type: 'speech_delta', text: '已经读完配置。' })
+    const stopped = session.stopLongReply()
+    await session.finish('late answer')
+    expect(await stopped).toBe(true)
+    expect(pushes(transport)).toEqual(['_读取了 1 个文件_\n\n已经读完配置。\n\n任务已停止。'])
+  })
+
+  it('does not reopen a disposed stream when its closing frame fails late', async () => {
+    let respond!: (result: 'failed') => void
+    const transport = makeTransport({ replyStreamFinish: () => new Promise(resolve => { respond = resolve }) })
+    const session = makeSession(transport, makeLogger().logger)
+    await vi.advanceTimersByTimeAsync(cutoffMs)
+    session.dispose()
+    respond('failed')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(pushes(transport)).toEqual([])
+  })
+
+  it('recognizes stream-only narration and does not replay the matching aggregate or call result', async () => {
+    const transport = makeTransport()
+    const session = makeSession(transport, makeLogger().logger)
+    await vi.advanceTimersByTimeAsync(cutoffMs)
+    await operation(session, 'read')
+    await session.updateWork({ type: 'speech_delta', text: '已确认超限，' })
+    await session.updateWork({ type: 'speech_delta', text: '我再核对拦截点。' })
+    await session.updateWork({ type: 'operation_started', id: 'command', tool: 'Bash' })
+    await session.updateWork({ type: 'speech', text: '已确认超限，我再核对拦截点。' })
+    await operation(session, 'command', 'Bash')
+    await operation(session, 'command', 'Bash')
+    await session.finish('拦截点已确认。')
+    expect(pushes(transport)).toEqual([
+      '_读取了 1 个文件_\n\n已确认超限，我再核对拦截点。',
+      '_运行了 1 条命令_\n\n拦截点已确认。',
+    ])
+  })
+
+  it('carries an undelivered narration and its operation summary into the final reply', async () => {
+    const transport = makeTransport({ nextPush: false })
+    const session = makeSession(transport, makeLogger().logger)
+    await vi.advanceTimersByTimeAsync(cutoffMs)
+    await operation(session, 'read')
+    await session.updateWork({ type: 'speech', text: '正在确认拦截点。' })
+    await operation(session, 'command', 'Bash')
+    transport.nextPush = true
+    await session.finish('拦截点已确认。')
+    expect(pushes(transport)).toEqual([
+      '_读取了 1 个文件_\n\n正在确认拦截点。',
+      '_读取了 1 个文件，运行了 1 条命令_\n\n正在确认拦截点。\n\n拦截点已确认。',
+    ])
+  })
+
+  it('does not leave a reminder timer after a short reply or disposal', async () => {
+    const transport = makeTransport()
+    const session = makeSession(transport, makeLogger().logger)
+    await session.finish('短回复。')
+    const abandoned = makeSession(transport, makeLogger().logger)
+    abandoned.dispose()
+    await vi.advanceTimersByTimeAsync(30 * minute)
+    expect(transport.calls.map(call => call.method)).toEqual(['replyStreamFinish'])
   })
 })
 

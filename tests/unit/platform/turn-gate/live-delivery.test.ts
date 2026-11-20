@@ -81,18 +81,22 @@ describe('permission-aware delivery', () => {
     expect(f.live).toEqual([])
   })
 
+  // Dispatch outcomes and the retry recheck run in the native runtime: these
+  // tests wait on real time, bounded by a few recheck intervals.
   it('retains queued messages when starting their batch fails', async () => {
+    vi.useRealTimers()
     const f = fixture()
     await f.gate.deliver('chat', job('one', 'external'))
     await f.gate.deliver('chat', job('two', 'external'))
     f.hooks.dispatch = vi.fn().mockRejectedValueOnce(new Error('temporary spawn failure')).mockImplementation(async (_key, message) => { f.starts.push(message); f.busy(true) })
     f.busy(false)
     f.gate.drain('chat')
-    await vi.advanceTimersByTimeAsync(100)
+    await vi.waitFor(() => expect(f.starts).toHaveLength(1))
     expect(f.starts[0].messages).toEqual(['one', 'two'])
   })
 
   it('settles permanently refused queued work without retrying a deleted target', async () => {
+    vi.useRealTimers()
     let busy = true
     const dispatch = vi.fn().mockRejectedValue(new Error('target deleted'))
     const discarded = vi.fn()
@@ -102,9 +106,9 @@ describe('permission-aware delivery', () => {
     await gate.deliver('chat', job('message', 'owner'))
     busy = false
     gate.drain('chat')
-    await vi.advanceTimersByTimeAsync(500)
+    await vi.waitFor(() => expect(discarded).toHaveBeenCalledWith(job('message', 'owner'), 'target deleted'))
+    await new Promise((resolve) => setTimeout(resolve, 300))
     expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(discarded).toHaveBeenCalledWith(job('message', 'owner'), 'target deleted')
     expect(gate.hasBuffered('chat')).toBe(false)
   })
 
@@ -163,6 +167,7 @@ describe('permission-aware delivery', () => {
   })
 
   it('retains input when authority revalidation fails, instead of starting stale owner work', async () => {
+    vi.useRealTimers()
     const f = fixture()
     f.identity('external')
     let fail = false
@@ -174,7 +179,7 @@ describe('permission-aware delivery', () => {
     expect(f.starts).toEqual([])
     expect(f.gate.bufferedCount('chat')).toBe(1)
     fail = false
-    await vi.advanceTimersByTimeAsync(100)
+    await vi.waitFor(() => expect(f.starts).toHaveLength(1))
     expect(f.starts[0].messages).toEqual(['message'])
   })
 
@@ -225,27 +230,6 @@ describe('permission-aware delivery', () => {
     expect(gate.isOccupied('chat')).toBe(true)
     expect(await gate.deliver('chat', job('third', 'owner'))).toBe('buffered')
     expect(dispatch).toHaveBeenCalledTimes(2)
-  })
-
-  it('retains bounded identifiers in explicitly enabled traces without message bodies', async () => {
-    let busy = true
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    try {
-      const gate = createTurnGate<Job>({
-        isBusy: () => busy, getJobIdentity: entry => entry.identity,
-        dispatch: async () => {}, mergeJobs: entries => ({ ...entries[0], messages: entries.flatMap(entry => entry.messages) }),
-      }, { describeJob: entry => `messageId=${entry.key}`, trace: line => console.log(line) })
-      for (const key of ['id-one', 'id-two', 'id-three', 'id-four']) await gate.deliver('chat', job('private message body', 'owner', key))
-      log.mockClear()
-      busy = false
-      gate.drain('chat')
-      const line = String(log.mock.calls[0][0])
-      expect(line).toContain('messageId=id-one,messageId=id-two,messageId=id-three,+1')
-      expect(line).not.toContain('id-four')
-      expect(line).not.toContain('private message body')
-    } finally {
-      log.mockRestore()
-    }
   })
 
   it('never reorders a message across an exclusive callback' , async () => {

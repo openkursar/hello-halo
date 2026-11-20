@@ -45,6 +45,15 @@
  *
  * A prompt containing `mock-content:<preset>` gets that preset regardless of
  * MOCK_CONTENT, so one mock (the one run-perf starts) serves every scenario.
+ *
+ * Long work (S18): a prompt naming `mock-plan:<absolute path of a JSON plan>`
+ * makes the mock drive one long turn from that plan — `batch` tool calls per
+ * response (`calls` in order, each `{ name, arguments }`), a short sentence
+ * before each batch, then `final` as the answer. Progress is kept per plan, so
+ * a request after the engine compacted its context (which may drop the
+ * prompt) continues the plan the mock last served. A summarisation request
+ * (context compaction) is answered with a summary that keeps the plan marker.
+ * `GET /__longwork?plan=<path>` reports progress and when the answer was sent.
  *   MOCK_INTERVAL_MS    default 20     (ms between each token)
  *   MOCK_MODEL          default "mock-sse-v1" (echoed back if request omits model)
  *
@@ -57,6 +66,7 @@
  *   HALO_TEST_MODEL=mock-sse-v1                 # must match MOCK_MODEL if you override it
  */
 import http from 'node:http'
+import { readFileSync } from 'node:fs'
 
 const PORT = Number(process.env.MOCK_PORT || 8791)
 const TOKEN_COUNT = Number(process.env.MOCK_TOKEN_COUNT || 2000)
@@ -241,18 +251,87 @@ function contentFor(body) {
   return asked ?? CONTENT
 }
 
-function readBody(req) {
+function readRaw(req) {
   return new Promise((resolve) => {
-    let raw = ''
-    req.on('data', (c) => { raw += c })
-    req.on('end', () => {
-      try {
-        resolve(JSON.parse(raw))
-      } catch {
-        resolve({})
-      }
-    })
+    const chunks = []
+    req.on('data', (c) => { chunks.push(c) })
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
   })
+}
+
+function parseBody(raw) {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Long work (S18)
+// ---------------------------------------------------------------------------
+
+const PLAN_MARKER = /mock-plan:([^\s"\\]+)/
+/** Plan path -> progress. */
+const longWork = new Map()
+let lastPlanPath = null
+
+function longWorkFor(raw, body) {
+  const match = PLAN_MARKER.exec(raw)
+  const path = match ? match[1] : (body.tools?.length ? lastPlanPath : null)
+  if (!path) return null
+  let entry = longWork.get(path)
+  if (!entry) {
+    let plan
+    try {
+      plan = JSON.parse(readFileSync(path, 'utf8'))
+    } catch (error) {
+      console.error(`[mock-sse] long-work plan unreadable: ${path}: ${error.message}`)
+      return null
+    }
+    entry = { path, plan, next: 0, requests: 0, compactions: 0, batches: 0, startedAt: Date.now(), finalSentAt: null, maxRequestBytes: 0 }
+    longWork.set(path, entry)
+  }
+  lastPlanPath = path
+  return entry
+}
+
+function chunkOf(model, delta, finish = null, usage) {
+  return { id: 'mock-cmpl-1', object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, delta, finish_reason: finish }], ...(usage ? { usage } : {}) }
+}
+
+function serveLongWork(raw, body, res, entry) {
+  const model = body.model || DEFAULT_MODEL
+  entry.requests++
+  entry.maxRequestBytes = Math.max(entry.maxRequestBytes, raw.length)
+  res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+  res.socket?.setNoDelay(true)
+  // Small, constant usage: the plan, not reported context size, decides the turn's length.
+  const usage = { prompt_tokens: 2000, completion_tokens: 50, total_tokens: 2050 }
+  if (raw.includes('Write a factual task handover')) {
+    entry.compactions++
+    sseChunk(res, chunkOf(model, { role: 'assistant', content: `Work in progress on the long task (mock-content:longwork mock-plan:${entry.path}); ${entry.next} of ${entry.plan.calls.length} steps are done.` }))
+    sseChunk(res, chunkOf(model, {}, 'stop', usage))
+    res.end('data: [DONE]\n\n')
+    return
+  }
+  const calls = entry.plan.calls.slice(entry.next, entry.next + (entry.plan.batch || 10))
+  if (calls.length === 0) {
+    entry.finalSentAt = Date.now()
+    sseChunk(res, chunkOf(model, { role: 'assistant', content: entry.plan.final }))
+    sseChunk(res, chunkOf(model, {}, 'stop', usage))
+    res.end('data: [DONE]\n\n')
+    return
+  }
+  const first = entry.next
+  entry.next += calls.length
+  entry.batches++
+  sseChunk(res, chunkOf(model, { role: 'assistant', content: `Working on steps ${first + 1}–${entry.next}.` }))
+  calls.forEach((call, index) => {
+    sseChunk(res, chunkOf(model, { tool_calls: [{ index, id: `lw-${first + index + 1}`, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] }))
+  })
+  sseChunk(res, chunkOf(model, {}, 'tool_calls', usage))
+  res.end('data: [DONE]\n\n')
 }
 
 function sseChunk(res, obj) {
@@ -260,7 +339,13 @@ function sseChunk(res, obj) {
 }
 
 async function handleChatCompletions(req, res) {
-  const body = await readBody(req)
+  const raw = await readRaw(req)
+  const body = parseBody(raw)
+  const work = longWorkFor(raw, body)
+  if (work && body.stream !== false) {
+    serveLongWork(raw, body, res, work)
+    return
+  }
   const model = body.model || DEFAULT_MODEL
   const stream = body.stream !== false // default true, matches how the SDK calls it
   const content = contentFor(body)
@@ -350,6 +435,13 @@ async function handleChatCompletions(req, res) {
 const server = http.createServer((req, res) => {
   if (req.method === 'POST') {
     handleChatCompletions(req, res)
+    return
+  }
+  if (req.method === 'GET' && req.url?.startsWith('/__longwork')) {
+    const plan = new URL(req.url, 'http://mock').searchParams.get('plan')
+    const entry = plan ? longWork.get(plan) : null
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(entry ? { next: entry.next, total: entry.plan.calls.length, requests: entry.requests, batches: entry.batches, compactions: entry.compactions, startedAt: entry.startedAt, finalSentAt: entry.finalSentAt, maxRequestBytes: entry.maxRequestBytes } : null))
     return
   }
   res.writeHead(404).end()

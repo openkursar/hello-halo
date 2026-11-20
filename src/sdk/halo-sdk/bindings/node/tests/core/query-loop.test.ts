@@ -1026,7 +1026,7 @@ describe('queryLoop — end-of-turn checks', () => {
     const text = lastRequestText(requests);
     expect(text).toContain('1 of 2 todo items are unfinished');
     expect(text).toContain('ship the fix');
-    expect(text).toContain('This is a check, not an instruction to continue');
+    expect(text).toContain('If you stopped on purpose, you can ignore this reminder. No response needed.');
     const result = msgs.find((m) => m.type === 'result') as Record<string, unknown>;
     expect(result?.is_error).toBe(false);
   });

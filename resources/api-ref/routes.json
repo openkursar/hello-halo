@@ -362,6 +362,18 @@
   },
   {
     "method": "GET",
+    "path": "/api/browser/credential-requests"
+  },
+  {
+    "method": "POST",
+    "path": "/api/browser/credential-requests/submit"
+  },
+  {
+    "method": "POST",
+    "path": "/api/browser/credential-requests/decline"
+  },
+  {
+    "method": "GET",
     "path": "/api/spaces/:spaceId/artifacts",
     "group": "workspace"
   },
@@ -649,6 +661,10 @@
     "method": "GET",
     "path": "/api/system/version",
     "group": "settings"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/runtime"
   },
   {
     "method": "POST",
@@ -1189,6 +1205,11 @@
   },
   {
     "method": "GET",
+    "path": "/api/store/app-detail",
+    "group": "store"
+  },
+  {
+    "method": "GET",
     "path": "/api/store/apps/:slug",
     "group": "store"
   },
@@ -1347,6 +1368,10 @@
     "method": "PUT",
     "path": "/api/tlon/:kbId",
     "group": "knowledge-base"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tlon/:kbId/guest-read"
   },
   {
     "method": "DELETE",
@@ -1583,5 +1608,13 @@
     "method": "POST",
     "path": "/api/skills/delete-legacy",
     "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/canvas/show-reply"
+  },
+  {
+    "method": "GET",
+    "path": "/api/ai-browser/live-pages"
   }
 ]

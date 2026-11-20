@@ -108,6 +108,13 @@ describe('managed account configuration writes', () => {
     expect(incoming.aiSources.sources).toEqual([live])
   })
 
+  it('keeps the deployment account authoritative and ignores client claims to that role', () => {
+    const deployment = { id: 'deployment', authType: 'api-key', managedBy: 'server-env', apiKey: 'deployed' }
+    const incoming = { aiSources: { version: 2, currentId: 'other', sources: [{ id: 'other', authType: 'api-key', managedBy: 'server-env' }] } }
+    preserveManagedSources(incoming, { aiSources: { version: 2, currentId: deployment.id, sources: [deployment] } })
+    expect(incoming.aiSources.sources).toEqual([{ id: 'other', authType: 'api-key' }, deployment])
+  })
+
   it('retains newly added accounts and cannot resurrect removed accounts from stale snapshots', () => {
     const incoming = { aiSources: { version: 2, currentId: 'removed', sources: [{ ...live, id: 'removed' }] } }
     preserveManagedSources(incoming, { aiSources: { version: 2, currentId: 'a', sources: [live] } })

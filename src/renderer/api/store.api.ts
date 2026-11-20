@@ -43,7 +43,7 @@ export const storeApi = {
     if (isElectron()) {
       return window.halo.storeGetAppDetail(slug)
     }
-    return httpRequest('GET', `/api/store/apps/${slug}`)
+    return httpRequest('GET', `/api/store/app-detail?slug=${encodeURIComponent(slug)}`)
   },
 
   storeGetAppDocument: async (slug: string): Promise<ApiResponse<{ content: string | null }>> => {
@@ -62,7 +62,7 @@ export const storeApi = {
     if (isElectron()) {
       return window.halo.storeInstall({ slug, spaceId, userConfig }, onProgress)
     }
-    return httpRequest('POST', `/api/store/apps/${slug}/install`, { spaceId, userConfig })
+    return httpRequest('POST', '/api/store/install', { slug, spaceId, userConfig })
   },
 
   storeRefresh: async (): Promise<ApiResponse> => {

@@ -1,13 +1,15 @@
 /**
  * runtime-mode unit tests.
  *
- * Covers isServerMode flag parsing and getServerPort precedence
- * (PORT over HALO_SERVER_PORT) with fallback to 8080 for invalid input.
+ * Covers isServerMode flag parsing, getServerPort precedence
+ * (PORT over HALO_SERVER_PORT) with fallback to 8080 for invalid input,
+ * and the server-mode gate on getInstanceId.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
+import { hostname } from 'os'
 
-import { isServerMode, getServerPort } from '../../../src/main/foundation/runtime-mode'
+import { isServerMode, getServerPort, getInstanceId } from '../../../src/main/foundation/runtime-mode'
 
 describe('runtime-mode', () => {
   beforeEach(() => {
@@ -61,6 +63,17 @@ describe('runtime-mode', () => {
     it('defaults to 8080 for a negative value', () => {
       process.env.PORT = '-5'
       expect(getServerPort()).toBe(8080)
+    })
+  })
+
+  describe('getInstanceId', () => {
+    it('returns the container hostname in server mode', () => {
+      process.env.HALO_SERVER_MODE = '1'
+      expect(getInstanceId()).toBe(hostname())
+    })
+
+    it('returns undefined on the desktop so the machine name is never reported', () => {
+      expect(getInstanceId()).toBeUndefined()
     })
   })
 })

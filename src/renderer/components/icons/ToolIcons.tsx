@@ -90,6 +90,7 @@ export const toolIconMap: Record<string, LucideIcon> = {
 
   // Agent
   Task: Zap,
+  Agent: Zap,
 
   // Notebook
   NotebookEdit: FileCode,

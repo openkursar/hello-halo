@@ -16,6 +16,7 @@ references:
   - tests/e2e/specs/chat.spec.ts
   - tests/e2e/specs/acceptance-chat-recovery.spec.ts
   - tests/e2e/specs/acceptance-chat-slash-text.spec.ts
+  - tests/e2e/specs/acceptance-manual-compact.spec.ts
   - src/main/services/agent/opening-context.ts
 promises:
   persist:
@@ -272,3 +273,23 @@ scenarios:
     notes:
       en: Native SDK command and host input unit checks exist; the complete application journey remains unexecuted until this planned binding runs.
       zh: 已有原生 SDK 命令与宿主输入单元检查；完整应用流程仍需执行此计划中的绑定，不能由单元结果替代。
+
+  - id: chat.messages.manual-compact-mixed-history
+    title:
+      en: Compact reopened conversation history when the current model rejects earlier reasoning
+      zh: 重开对话后，当前模型拒收旧推理时仍能手动压缩
+    verifies: [slash-command, persist]
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - A reopened isolated conversation has enough saved history, a latest constraint, and an unsigned reasoning block representing a previous provider.
+    steps:
+      - Send "/compact retain the verified facts" from the composer, then restart the app and ask about the retained fact in that same conversation.
+    expected:
+      - A model endpoint that rejects the unsigned block receives one corrected summary request, still containing the evidence, latest constraint, and instructions. The slash command is never sent as ordinary work.
+      - One summary checkpoint is appended without rewriting the original record. The original chat stays readable, and after restart the next request uses the summary and the latest constraint without that rejected block.
+    notes: The real app resumes a seeded SDK journal and uses a local Anthropic-compatible endpoint. This isolates history compatibility without requiring live credentials or testing model selection UI.

@@ -1,0 +1,225 @@
+version: 1
+id: chat.work-history
+module: chat
+title:
+  en: Read a reply's work in the order that helps
+  zh: 按有用的顺序阅读回复的工作经过
+story:
+  en: I read the answer first, look back at what the AI said along the way with one click, and check any operation's evidence when I want it.
+  zh: 我先读答案；想回看 AI 中途说过的话只需点一次；想核对证据时再查看具体操作。
+basis: documented
+references:
+  - src/renderer/components/chat/work-history/DESIGN.md
+  - src/renderer/components/chat/work-history/WorkHistory.tsx
+  - src/renderer/components/chat/work-history/OperationGroup.tsx
+  - src/renderer/components/chat/work-history/view-memory.ts
+  - src/renderer/components/chat/process-line.ts
+  - src/main/apps/runtime/session-transcript.ts
+  - src/renderer/components/team/session-history.ts
+  - src/renderer/components/chat/StreamingSection.tsx
+  - src/renderer/components/chat/team-collab/TeamCollabPanel.tsx
+  - src/renderer/components/chat/ReplyEndingNote.tsx
+  - src/main/services/agent/reply-ending.ts
+  - tests/e2e/specs/acceptance-work-history.spec.ts
+  - tests/e2e/specs/team-collab.spec.ts
+promises:
+  answer-first:
+    en: A finished reply's answer is in view, with its work folded to one line above it that says how long it took. A reply with nothing but its answer has no such line.
+    zh: 完成的回复直接显示答案，上方只有一行折叠的工作经过及用时；只有答案的回复不显示这一行。
+  timeline:
+    en: Opening the work shows what the AI said along the way and, between those words, each stretch of operations as one line that sums it up ("Ran 5 commands and read 1 file"). Short groups open inline; long groups open in a limited-height area at the latest steps, with earlier steps available on request. Compactions and sub-agent tasks keep lines of their own.
+    zh: 展开工作经过后，按顺序显示 AI 中途说过的话；两段话之间的操作合为一行摘要（如“运行了 5 条命令和读取了 1 个文件”）。短组直接展开；长组在限高区域内展开，从最近步骤看起，更早的按需显示。上下文压缩与子智能体任务各占一行。
+  live-words:
+    en: While the reply runs, its latest words stay in the reply's own place in the body color, whether the work is folded or open, and are not repeated inside the work; the folded line says what it is doing, or that it is replying. Work left open stays open, with what was opened inside it, when the reply finishes.
+    zh: 回复运行中，最近的文字始终留在回复原位、正文颜色，工作经过展开或收起都一样，且不在工作经过里重复；折叠行说明它正在做什么，或正在回复。回复结束时，展开着的工作经过及其中点开的内容保持展开。
+  operation-detail:
+    en: One click on an operation shows Halo's existing result view for it, and the operation's line keeps its shape while it is open. Lines end at a fixed length; an error a tool reported only tints that tool's icon, and nothing in the work calls it unsuccessful.
+    zh: 点一条操作即显示 Halo 现有的结果视图，展开时这一行保持原样不变形。各行按固定长度截断；工具报告的错误只让该工具的图标变淡琥珀色，工作经过中不出现“未成功”之类的说法。
+  plan:
+    en: The task plan is in view whenever the work is open, whatever the operations switch says; while the reply runs, the folded line names the task in progress and the plan's progress.
+    zh: 工作经过展开时任务计划始终可见，不受操作开关影响；运行中收起时显示正在做的任务及进度。
+  ended-short:
+    en: A reply that was stopped, cut off or reached its step limit says so under its words, also after the app restarts, so they read as progress rather than a final answer; right after a stop, the chat's own notice with its Continue action speaks for it instead.
+    zh: 被停止、意外中断或达到步数上限的回复，在文字下方注明这一点，应用重启后依然如此，使这些文字读作进展而不是最终答复；刚停止时由聊天原有的提示（含“继续”）代为说明。
+  team-summary:
+    en: A conversation's team takes one line at the end of the chat — its name, how many members and how many are working — and opens the full team view; the chat does not list the members.
+    zh: 对话的团队在聊天底部只占一行：团队名称、成员数和工作中人数，并可打开完整团队视图；聊天中不列出成员。
+scenarios:
+  - id: chat.work-history.finished
+    title:
+      en: Read a finished reply's answer, words and operations
+      zh: 阅读完成回复的答案、发言与操作
+    verifies:
+      - answer-first
+      - timeline
+      - operation-detail
+      - plan
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    variants:
+      viewport: ['1280', '390']
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A space conversation on the Halo SDK engine, with only its model endpoint scripted. The reply says a sentence, runs a command, writes a three-item plan, says a second sentence, reads six files, completes the plan and answers.
+        zh: 空间对话使用 Halo SDK 引擎，只替换模型端点。回复先说一句话、运行一条命令、写三项计划，再说第二句话、读取六个文件、完成计划并给出答案。
+    steps:
+      - en: After the reply finishes, read it, open its work, open the command, then the line of reads and one read, and close that line again.
+        zh: 回复结束后阅读它，展开工作经过，点开命令，再点开读取那一行及其中一条读取，然后收起那一行。
+    expected:
+      - en: The answer shows once with a folded work line above it; opened, the command's line sits between the two sentences and the six reads are one line after the second, with the plan below and no step of the reads drawn; one click on the command or a read shows its existing result, and the command's line keeps its height; closing the reads keeps the sentences and the plan; nothing scrolls sideways.
+        zh: 答案只出现一次，上方是折叠的工作经过；展开后命令那一行位于两句话之间，六次读取在第二句话后合为一行，任务计划在下方，读取的各步尚未画出；点一次命令或读取即显示现有结果，命令那一行高度不变；收起读取后发言和计划仍在；页面不横向滚动。
+  - id: chat.work-history.long-tool-group
+    title:
+      en: Review a long tool group without losing the reply
+      zh: 长工具组在原地滚动，不挤走回复
+    verifies: [timeline, operation-detail]
+    platforms: *a1
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    variants:
+      viewport: ['1280', '390']
+    preconditions:
+      - en: A saved reply has a group of sixty operations with results.
+        zh: 一条已保存的回复含有一组带结果的六十步操作。
+    steps:
+      - en: Open the group, inspect its latest result, show the earlier steps, and scroll past the top of the list.
+        zh: 展开操作组，查看最近结果，显示更早的步骤，然后滚过列表顶部。
+    expected:
+      - en: The group opens at the latest steps in at most half the viewport. Earlier steps appear on request without closing the opened result, and scrolling past the edge returns to the conversation.
+        zh: 列表从最近的步骤打开，高度不超过视口一半。按需显示更早步骤时结果不收起，滚到边缘继续滚可回到外层对话。
+  - id: chat.work-history.running
+    title:
+      en: Follow a running reply without reading its words twice
+      zh: 跟随运行中的回复，同一句话不读两遍
+    verifies:
+      - live-words
+      - plan
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A space conversation on the Halo SDK engine, with only its model endpoint scripted. The reply says a sentence, runs a command and writes a plan with its second item in progress, then streams a second sentence and is held open.
+        zh: 空间对话使用 Halo SDK 引擎，只替换模型端点。回复先说一句话、运行命令、写出第二项进行中的计划，然后输出第二句话并保持运行。
+    steps:
+      - en: While the reply runs, read the folded line, open the work, fold it again, open it again, then let the reply finish.
+        zh: 回复运行中查看折叠行，展开工作经过，再收起，再次展开，然后让回复结束。
+    expected:
+      - en: Folded, the line names the task in progress with "Tasks 1/3" and the latest sentence is in view; opened, the first sentence shows in the work and the latest stays once, in the reply's own bubble below, with the plan in view; folded again, the latest sentence stays; opened again and left open, the finished reply keeps its work open with the first sentence in view, the latest sentence being its answer.
+        zh: 收起时显示正在做的任务和“任务 1/3”，最近一句话可见；展开后第一句话出现在工作经过中，最近一句只出现一次、仍在下方回复原位，任务计划可见；再收起最近一句仍可见；再次展开并保持展开，回复结束后工作经过仍展开、第一句话可见，最近一句成为答案。
+    notes:
+      en: Covers the space conversation on the default engine. Digital-human chat and team views draw the same component but are not exercised here.
+      zh: 覆盖默认引擎下的空间对话。数字人对话与团队视图使用同一组件，此处未单独验证。
+  - id: chat.work-history.stopped
+    title:
+      en: A stopped reply still reads as progress after a restart
+      zh: 停止的回复在重启后仍读作进展
+    verifies:
+      - ended-short
+      - plan
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A space conversation on the Halo SDK engine, with only its model endpoint scripted. The reply says a sentence, runs a command, writes a plan with its second item in progress, then streams a second sentence and is held open.
+        zh: 空间对话使用 Halo SDK 引擎，只替换模型端点。回复先说一句话、运行命令、写出第二项进行中的计划，然后输出第二句话并保持运行。
+    steps:
+      - en: Open the running work and the command's result, stop the reply, read the chat, restart the application, reopen the conversation, open the reply's work and the command.
+        zh: 展开运行中的工作经过及命令结果，停止回复，查看聊天，重启应用，重新打开对话，展开该回复的工作经过和命令。
+    expected:
+      - en: Right after the stop the chat's notice says it was stopped and the reply adds no second note, its work and the command stay open with the same result; after the restart the notice is gone and the reply shows its last sentence followed by "Stopped. Above is the progress so far."; its work keeps the first sentence, the same command result and the plan, with the last sentence shown once.
+        zh: 刚停止时聊天提示已停止，回复本身不重复说明，工作经过和命令保持展开、结果相同；重启后提示消失，回复显示最后一句话及“已停止。以上是目前的进展。”；展开工作经过仍有第一句话、相同的命令结果和任务计划，最后一句只出现一次。
+    notes:
+      en: Covers the space conversation. A digital human's stopped reply is covered across an office by chat.work-history.office-stopped; automation runs state it on the run instead.
+      zh: 覆盖空间对话。数字人回复停止的情况由 chat.work-history.office-stopped 跨办公室覆盖；自动化运行改在运行记录上说明。
+  - id: chat.work-history.person-stopped
+    title:
+      en: A digital human stopped mid-sentence keeps what it had said
+      zh: 数字人在半句话时停止，已说的内容仍保留
+    verifies:
+      - ended-short
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A digital human with one earlier exchange in its chat, on the Halo SDK engine with only its model endpoint scripted. Its reply streams half a sentence and is held open.
+        zh: 一个聊天中已有一轮对话的数字人，使用 Halo SDK 引擎，只替换模型端点。它的回复输出半句话后保持运行。
+    steps:
+      - en: Ask it for a plan, stop it while the half sentence is shown, restart the application and reopen the chat.
+        zh: 向它提出请求，在半句话显示时停止，重启应用并重新打开该聊天。
+    expected:
+      - en: After the restart the reply shows the half sentence followed by "Stopped.", and the earlier exchange is still there once.
+        zh: 重启后回复显示那半句话及“已停止。”，之前那一轮对话仍在且只出现一次。
+  - id: chat.work-history.office-stopped
+    title:
+      en: A teammate's stopped reply reads the same on every computer in the office
+      zh: 队友停止的回复在办公室每台电脑上读起来一样
+    verifies:
+      - ended-short
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: Three isolated Halo nodes on one machine form an office over a real link (the host, the member's owner and an observer), each on the Halo SDK engine with only its model endpoint scripted. The owner's member starts a sentence and is held open before finishing it.
+        zh: 同一台电脑上三个隔离的 Halo 节点通过真实连接组成办公室（主节点、成员所属节点、旁观节点），均使用 Halo SDK 引擎，只替换模型端点。所属节点上的成员说出半句话后保持未完成。
+    steps:
+      - en: From the host, ask the member for the plan; while it is held, stop it from the host; then read the member's conversation on all three nodes.
+        zh: 在主节点向该成员提出请求；保持运行时由主节点停止；然后在三个节点上读取该成员的对话。
+    expected:
+      - en: Every node reads one reply holding the words it had shown, recorded as stopped; the other nodes receive only that ending, none of the owner's other metadata.
+        zh: 每个节点都读到同一条回复，内容为已显示的文字，并记为已停止；其他节点只收到这一结束原因，不带所属节点的其他元数据。
+    notes:
+      en: Separate processes on one machine joined by the office link; not two physical machines.
+      zh: 同一台电脑上的独立进程通过办公室连接组成，不是两台物理电脑。
+  - id: chat.work-history.team-summary
+    title:
+      en: See the conversation's team in one line
+      zh: 一行看到对话的团队
+    verifies:
+      - team-summary
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    variants:
+      viewport: ['1280', '390']
+    preconditions:
+      - en: A seeded profile holds a real collaboration bound to a space conversation.
+        zh: 预置配置中有一个绑定到空间对话的真实协作。
+    steps:
+      - en: Open the conversation, read the team line, then choose View team.
+        zh: 打开对话，查看团队行，然后点击“查看团队”。
+    expected:
+      - en: One line names the team and its member and working counts without listing members, fits the width, and opens the team's task room.
+        zh: 一行显示团队名称、成员数和工作中人数，不列出成员，不超出宽度，并能打开团队的任务房间。

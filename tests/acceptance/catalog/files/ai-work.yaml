@@ -1,0 +1,389 @@
+version: 1
+id: files.ai-work
+module: files
+title:
+  en: See the AI's work as ordinary canvas tabs
+  zh: AI 的终端和网页就是画布标签
+story:
+  en: The terminals and pages the AI works in are tabs of my canvas like mine, added without interrupting me, marked while the AI operates them, ended only when I close them, and brought in front of me only when it matters.
+  zh: AI 用的终端和网页和我的一样是画布标签：添加时不打断我，AI 操作时有标记，只有我关闭时才结束，只在必要时转到我面前。
+basis: documented
+references:
+  - src/renderer/services/ai-work-tabs.ts
+  - src/renderer/services/ai-work-close.ts
+  - src/renderer/components/canvas/CanvasCloseGuard.tsx
+  - src/renderer/components/canvas/AIWorkMarks.tsx
+  - src/main/services/canvas-show/sdk-mcp-server.ts
+  - src/main/services/ai-terminal/DESIGN.md
+  - src/main/services/ai-browser/DESIGN.md
+  - src/renderer/components/canvas/DESIGN.md
+  - tests/e2e/specs/acceptance-ai-work-canvas.spec.ts
+  - tests/e2e/specs/acceptance-ai-work-file.spec.ts
+  - tests/e2e/specs/acceptance-ai-work-pages.spec.ts
+  - tests/e2e/specs/acceptance-ai-work-remote.spec.ts
+promises:
+  quiet:
+    en: The AI's terminal or page becomes a tab of its space without opening the canvas, switching the shown tab or adding anything above the composer.
+    zh: AI 的终端或网页成为所属空间的标签，不弹出画布、不切换当前标签，输入框上方不新增任何东西。
+  marked:
+    en: An AI tab shows whether the AI is operating it, the same way for terminals and pages, steadily from its first action until about ten seconds after its last, for any conversation.
+    zh: AI 的标签显示 AI 是否正在操作，终端与网页一致，从第一次操作起持续到最后一次操作后约十秒，对任何对话都成立。
+  close:
+    en: Closing an AI tab asks once what it ends and then really ends it. Closing several closes the user's own and keeps the AI's work without asking; only when the AI's work is all that is closing does it ask once whether to end all of it.
+    zh: 关闭 AI 的标签先问一次会结束什么，然后真正结束。批量关闭只关用户自己的，AI 在用的不问、直接保留；只有要关的全是 AI 在用的，才问一次是否全部结束。
+  no-orphans:
+    en: No terminal or page the AI is still running exists without a tab.
+    zh: 不存在仍在运行却没有标签的 AI 终端或网页。
+  limits:
+    en: The AI's tabs never push the user's own tabs out of the canvas limits.
+    zh: AI 的标签不会把用户自己的标签挤出画布上限。
+  reach:
+    en: The same handle brings collapsed tabs back on desktop and phone widths, counting the AI's tabs.
+    zh: 桌面和手机宽度都有同一个把手找回已收起的标签，数量包含 AI 的标签。
+  show:
+    en: The AI can bring its page, a terminal or a file in front of the user only when the user looks at that conversation and is not typing, and is told plainly what happened otherwise.
+    zh: AI 只能在用户正看着该对话且未在输入时把它的网页、终端或文件转到用户面前，否则被如实告知结果。
+  told:
+    en: After a person types in an AI terminal, the AI's next result there says so, without what was typed.
+    zh: 有人在 AI 的终端里输入后，AI 下一次在那里的结果会说明，且不含输入内容。
+  idle-cost:
+    en: The canvas does not repeatedly poll for AI tabs when idle. A late or reconnecting client reads the current work once.
+    zh: 画布空闲时不轮询 AI 标签。客户端进入或重连时同步一次当前工作。
+scenarios:
+  - id: files.ai-work.quiet-add
+    title:
+      en: The AI opens a terminal while I keep working
+      zh: 我继续工作时 AI 开了一个终端
+    verifies:
+      - quiet
+      - reach
+    platforms: &terminal_platforms
+      - darwin
+      - win32
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: &terminal_requirements
+      - halo-sdk
+      - terminal-shell
+    notes: &scripted_terminal
+      en: A real application with a scripted model endpoint drives the production terminal tools; terminals, tabs and dialogs are the application's own.
+      zh: 真实应用配合脚本模型端点驱动生产终端工具；终端、标签和对话框均为应用本身。
+    preconditions:
+      - en: A conversation with a goal; the user's own terminal is the shown tab, then the canvas is collapsed.
+        zh: 有目标的对话；用户自己的终端是当前标签，随后收起画布。
+    steps:
+      - en: Let the AI create a terminal, then expand the canvas; let it create another while the canvas is open.
+        zh: 让 AI 创建终端，再展开画布；画布展开时让它再建一个。
+    expected:
+      - en: Only the goal bar is above the composer; the canvas stays collapsed and its handle counts the new tab; the shown tab never changes and the AI's tabs sit at the end with their mark.
+        zh: 输入框上方只有目标条；画布保持收起，把手数字包含新标签；当前标签始终不变，AI 的标签在末尾并带标记。
+  - id: files.ai-work.operating
+    title:
+      en: See when the AI is operating, and when it stopped
+      zh: 看到 AI 何时在操作、何时停下
+    verifies:
+      - marked
+    platforms: *terminal_platforms
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: *terminal_requirements
+    notes: *scripted_terminal
+    preconditions:
+      - en: The AI is in a long terminal call.
+        zh: AI 正在进行一次较长的终端调用。
+    steps:
+      - en: Watch the collapsed handle, the tab's dot and its status line during the call and after it ends.
+        zh: 在调用期间和结束后观察收起的把手、标签小点及顶部状态行。
+    expected:
+      - en: All three say the AI is operating during the call, and still about ten seconds after it, then the line says idle and the dots stop.
+        zh: 调用期间三处都显示正在操作，结束后约十秒仍保持，然后状态行显示空闲、小点停止。
+  - id: files.ai-work.close-canvas
+    title:
+      en: Close the canvas while the AI's terminals still run
+      zh: AI 的终端仍在运行时关闭画布
+    verifies:
+      - close
+      - no-orphans
+    platforms: *terminal_platforms
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: *terminal_requirements
+    notes: *scripted_terminal
+    preconditions:
+      - en: Three of the user's own terminals and two the AI created are open.
+        zh: 打开了三个用户自己的终端和两个 AI 创建的终端。
+    steps:
+      - en: Close the canvas; expand it, close the canvas again, cancel the question, then close it once more and end everything.
+        zh: 关闭画布；展开后再次关闭画布并取消询问，再关闭一次并全部结束。
+    expected:
+      - en: The first close asks nothing; it ends the user's terminals, keeps the AI's two, collapses the canvas and the handle shows 2. With only the AI's tabs left, closing asks once and lists them, with only cancel and end all; cancelling changes nothing; ending all ends them and the handle disappears.
+        zh: 第一次关闭不询问：结束用户的终端、保留 AI 的两个、收起画布且把手显示 2。只剩 AI 的标签时，关闭会询问一次并列出它们，只有取消和全部结束；取消不改变任何东西；全部结束后都结束、把手消失。
+  - id: files.ai-work.no-orphans
+    title:
+      en: Close others, switch spaces and delete a space with the AI's terminals
+      zh: AI 的终端存在时关闭其他、切换空间与删除空间
+    verifies:
+      - no-orphans
+      - close
+    platforms: *terminal_platforms
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: *terminal_requirements
+    notes:
+      en: '"Close others" is delivered as the canvas tab action the native context menu sends; the native menu itself is not clicked.'
+      zh: 「关闭其他」以原生右键菜单发出的画布标签动作送达，未点击原生菜单本身。
+    preconditions:
+      - en: The AI created terminals in a workspace.
+        zh: AI 在一个空间里创建了终端。
+    steps:
+      - en: Close the others of the user's tab; switch to another space and back; delete the space.
+        zh: 对用户的标签关闭其他；切换到另一个空间再回来；删除空间。
+    expected:
+      - en: Every running AI terminal has a tab after each step until the space is deleted, which ends them.
+        zh: 每一步之后每个运行中的 AI 终端都有标签，直到删除空间时它们被结束。
+  - id: files.ai-work.narrow
+    title:
+      en: Get back to collapsed tabs on a phone-width window
+      zh: 手机宽度下找回已收起的标签
+    verifies:
+      - reach
+    platforms: *terminal_platforms
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: *terminal_requirements
+    notes: *scripted_terminal
+    steps:
+      - en: At 390px width, let the AI create a terminal, then use the handle.
+        zh: 在 390px 宽度下让 AI 创建终端，再使用把手。
+    expected:
+      - en: The handle shows the count and opens the canvas on the AI's tab.
+        zh: 把手显示数量并打开画布到 AI 的标签。
+  - id: files.ai-work.told
+    title:
+      en: The AI hears that I typed in its terminal
+      zh: AI 得知我在它的终端里输入过
+    verifies:
+      - told
+    platforms: *terminal_platforms
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: *terminal_requirements
+    notes: *scripted_terminal
+    steps:
+      - en: Type a secret-looking word into the AI's terminal, let the AI act there twice, then once more without typing.
+        zh: 在 AI 的终端里输入一个像密码的词，让 AI 在那里操作两次，再不输入地操作一次。
+    expected:
+      - en: Only the first result after the typing carries the note, and no note contains what was typed.
+        zh: 只有输入后的第一次结果带提示，且提示不含输入内容。
+  - id: files.ai-work.show-terminal
+    title:
+      en: The AI brings a terminal in front of me
+      zh: AI 把终端转到我面前
+    verifies:
+      - show
+    platforms: *terminal_platforms
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: *terminal_requirements
+    notes: *scripted_terminal
+    steps:
+      - en: With the conversation on screen, let the AI show its terminal twice in one reply; then, while I type in the composer, let it show it again; then let another conversation's AI show its terminal.
+        zh: 对话在屏幕上时让 AI 在一次回复里两次展示它的终端；我在输入框打字时再让它展示；然后让另一个对话的 AI 展示它的终端。
+    expected:
+      - en: The canvas opens on the terminal once and the second call reports it was already brought forward; while typing the screen stays and the AI is told it was added, not switched; another conversation's request only adds a tab.
+        zh: 画布打开到该终端一次，第二次调用告知已展示过；打字时屏幕不动且 AI 被告知已添加未切换；另一个对话的请求只多一个标签。
+  - id: files.ai-work.close-page
+    title:
+      en: Close a page the AI opened
+      zh: 关闭 AI 打开的网页
+    verifies:
+      - close
+      - marked
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: A real space conversation opens local pages with production browser tools; "operating" comes from the main process, not from the chat card.
+      zh: 真实空间对话用生产浏览器工具打开本地网页；「正在操作」来自主进程，而非聊天卡片。
+    steps:
+      - en: Close the AI's page tab while the AI just worked on it and cancel; after it turned idle close it again and confirm.
+        zh: AI 刚操作完时关闭其网页标签并取消；转为空闲后再次关闭并确认。
+    expected:
+      - en: Each close asks with wording that follows whether the AI is operating; cancelling keeps the page and its state; confirming ends the page and its tab.
+        zh: 每次关闭都会询问，措辞随 AI 是否在操作而不同；取消保留页面及状态；确认后页面和标签都结束。
+  - id: files.ai-work.show-page
+    title:
+      en: The AI brings its page in front of me to sign in
+      zh: AI 把需要登录的网页转到我面前
+    verifies:
+      - show
+      - quiet
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: The scripted model calls canvas_show after opening a local page; the user's action on the page is a real click.
+      zh: 脚本模型打开本地网页后调用 canvas_show；用户在网页上的操作是真实点击。
+    steps:
+      - en: Let the AI open a page quietly, then show it; act on the page; let the AI continue.
+        zh: 让 AI 安静地打开网页，再展示它；在网页上操作；让 AI 继续。
+    expected:
+      - en: The page becomes a tab without opening the canvas; showing it opens the canvas on it; the AI reads the user's action on the same page.
+        zh: 网页成为标签而画布不弹出；展示后画布打开到该页；AI 读到用户在同一页面上的操作。
+  - id: files.ai-work.remote-reconnect
+    title:
+      en: Recover the AI's work after joining or reconnecting remotely
+      zh: 远程进入或重连后找回 AI 的工作
+    verifies: [marked, no-orphans, show]
+    platforms: [darwin, win32]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk, terminal-shell, chromium-browser]
+    steps:
+      - en: Join from a remote web client while the AI is operating a terminal and has a page open.
+        zh: AI 正在操作终端并开有网页时，从远程客户端进入。
+      - en: Open the live page, ask the AI to show its page, then disconnect the remote client. Let the AI close that page, open another and end the terminal.
+        zh: 打开实时网页，请 AI 展示该页，然后断开远程连接。让 AI 关闭旧页、打开新页并结束终端。
+    expected:
+      - en: The late client shows live terminal activity and the AI's actual browser page. It acknowledges the page as shown only when it can display the live frame.
+        zh: 晚到的客户端能看到终端活动及 AI 正在使用的网页。只有显示实时画面后，才确认网页已展示。
+      - en: Reconnecting removes the old page and terminal activity and adds the new page without reopening the remote client.
+        zh: 不用重开远程客户端，重连后旧网页与终端活动标记消失，新网页出现。
+  - id: files.ai-work.show-file-at-limit
+    title:
+      en: See the requested report when the canvas is already full
+      zh: 画布满了也能看到请求展示的报告
+    verifies: [show]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - en: Fill the canvas with ordinary file tabs, then ask the AI to show a different report in the conversation on screen.
+        zh: 打开足够多的普通文件标签，再在当前对话请 AI 展示另一份报告。
+    expected:
+      - en: The actual report is visible and the ordinary tab limit still holds; the AI is told it was shown only then.
+        zh: 能看到报告正文，普通标签仍遵守上限；只有此时 AI 才收到已展示。
+  - id: files.ai-work.show-document
+    title:
+      en: Distinguish a readable report from a failed preview
+      zh: 区分看得见的报告和预览失败
+    verifies: [show]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - en: Ask the AI to show a damaged Word file, then ask it to show a readable report.
+        zh: 请 AI 展示一份损坏的 Word 文件，再请它展示可读的报告。
+    expected:
+      - en: The damaged file opens a tab with an error but the AI is not told it was shown. The readable report is shown when its actual content appears.
+        zh: 损坏文件打开标签并提示错误，但不会告诉 AI 已展示；可读报告必须在正文出现后才算已展示。
+  - id: files.ai-work.adopted-page-cleanup
+    title:
+      en: Keep an adopted page until I remove its workspace
+      zh: 接手的网页保留到我删除所属空间
+    verifies: [no-orphans]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - en: Leave a workspace with an AI page, then release the conversation that opened it and remove the workspace without returning to it.
+        zh: 离开有 AI 网页的空间，结束打开该页的对话，再不返回地删除空间。
+    expected:
+      - en: Releasing the conversation preserves the original webpage. Removing the workspace destroys that same live page.
+        zh: 对话结束时原网页仍在；删除空间才真正结束同一个网页。
+  - id: files.ai-work.limits
+    title:
+      en: Keep my tabs when the AI opens more at the limit
+      zh: 我的标签到上限时 AI 再开也不挤掉
+    verifies:
+      - limits
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    notes:
+      en: Pinned by unit tests of the canvas budget and lifecycle (tests/unit/renderer/canvas/canvas-ai-work.test.ts) with thirty user tabs and ten AI tabs; no application journey yet.
+      zh: 由画布预算与生命周期单元测试（30 个用户标签 + 10 个 AI 标签）固定；尚无应用旅程。
+    steps:
+      - en: With the user's tabs at the limit, let the AI open three more.
+        zh: 用户标签已达上限时让 AI 再开三个。
+    expected:
+      - en: None of the user's tabs is closed.
+        zh: 用户的标签一个也不被关闭。
+  - id: files.ai-work.idle-cost
+    title:
+      en: Do not poll while the canvas is idle
+      zh: 画布空闲时不轮询
+    verifies:
+      - idle-cost
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: manual
+    mode: none
+    automation: manual
+    reason:
+      en: Startup work, timers and polling are established by code review and a profile comparison, not by a pass/fail journey.
+      zh: 启动工作、定时器和轮询通过代码审查与性能对比确认，不是通过/失败型旅程。
+    steps:
+      - en: Compare startup and idle activity with and without the change while no AI tab exists.
+        zh: 没有 AI 标签时对比改动前后的启动与空闲活动。
+    expected:
+      - en: No periodic polling for tab membership. A current snapshot is read at attachment or authenticated reconnection.
+        zh: 不周期轮询标签清单；客户端进入或认证重连时读取一次当前清单。

@@ -225,7 +225,7 @@ export default defineConfig({
       name: 'perf',
       testDir: './perf/specs',
       testMatch: '**/*.spec.ts',
-      testIgnore: ['**/s9-*.spec.ts', '**/leak-*.spec.ts'],
+      testIgnore: ['**/s9-*.spec.ts', '**/s18-*.spec.ts', '**/leak-*.spec.ts'],
       // Perf scenarios launch the app themselves, stream real API replies
       // (S2+), and some intentionally wait out a load timeout up to 90s
       // (S5 csv extreme) before a 60s idle-CPU sample — give real headroom
@@ -247,6 +247,18 @@ export default defineConfig({
       testDir: './perf/specs',
       testMatch: /s(4|5|10)-.*\.spec\.ts$/,
       timeout: 240000,
+      use: {
+        actionTimeout: 30000
+      }
+    },
+    {
+      // Opt-in. One reply of 1,000 or 5,000 steps (LONG_WORK_STEPS) driven by
+      // the mock's plan mode: the before/after baseline of long work, minutes
+      // per arm, so it stays out of `perf`.
+      name: 'perf-long-work',
+      testDir: './perf/specs',
+      testMatch: '**/s18-*.spec.ts',
+      timeout: 3_600_000,
       use: {
         actionTimeout: 30000
       }

@@ -16,7 +16,7 @@
  * - Copy support: Easy clipboard access
  */
 
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
 import type { ToolResultViewerProps } from './types'
 import { detectContentType, getLanguageForTool } from './detection'
 import { CodeResultViewer } from './CodeResultViewer'
@@ -25,7 +25,9 @@ import { FileListViewer } from './FileListViewer'
 import { MarkdownResultViewer } from './MarkdownResultViewer'
 import { JsonResultViewer } from './JsonResultViewer'
 import { PlainTextViewer } from './PlainTextViewer'
+import { ToolResultImages } from './ToolResultImages'
 import { useTranslation } from '../../../i18n'
+import { readToolOutputImages } from '../../../../shared/tool-result-images'
 
 export const ToolResultViewer = memo(function ToolResultViewer({
   toolName,
@@ -34,6 +36,11 @@ export const ToolResultViewer = memo(function ToolResultViewer({
   isError
 }: ToolResultViewerProps) {
   const { t } = useTranslation()
+  const imageParts = useMemo(() => (output ? readToolOutputImages(output) : null), [output])
+
+  if (imageParts) {
+    return <ToolResultImages parts={imageParts} toolInput={toolInput} isError={isError} />
+  }
 
   // Handle empty output
   if (!output || output.trim() === '') {

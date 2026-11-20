@@ -92,6 +92,9 @@ test('another conversation receives one attributed message at its next tool boun
     expect(requests.filter(item => item.side === 'target')).toHaveLength(1)
 
     await openInteropConversation(window, target.title)
+    // A running reply's work is folded to what it is doing; what it received is part of that work.
+    const work = window.getByRole('button', { name: /^Executing / })
+    if (await work.getAttribute('aria-expanded') !== 'true') await work.click()
     await expect(window.getByText(`From @${sender.title}:`, { exact: true })).toBeVisible()
     await expect(window.getByText(summary, { exact: true })).toBeVisible()
     gate.release()
@@ -109,7 +112,9 @@ test('another conversation receives one attributed message at its next tool boun
     const deliveries = stored.messages.filter(message => message.content === note)
     expect(deliveries).toHaveLength(1)
     expect(deliveries[0]).toMatchObject({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: sender.id, fromConversationTitle: sender.title, summary, inputMode: 'live' } })
-    await window.getByRole('button', { name: /^Already thought/ }).click()
+    // Opened while the reply ran, the work stays open once it is saved.
+    const saved = window.getByRole('button', { name: /^Work process/ })
+    await expect(saved).toHaveAttribute('aria-expanded', 'true')
     const received = window.locator(`[data-message-id="${deliveries[0].id}"]`).first()
     await expect(received).toContainText(`From @${sender.title}:`)
     await expect(received).toContainText(summary)
@@ -181,6 +186,9 @@ for (const recipient of ['visible', 'cached-background', 'unopened'] as const) {
       expect(delivery).toMatchObject({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: sender.id, fromConversationTitle: sender.title, summary } })
       const card = window.locator(`[data-message-id="${delivery.id}"]`)
       await expect(card).toHaveCount(1)
+      await expect(card.getByRole('button').first()).toHaveAttribute('aria-expanded', /^(true|false)$/)
+      await expect(card.locator('.border')).toHaveCount(0)
+      await expect(card).not.toContainText(/\bago\b/)
       await expect.poll(async () => {
         const state = await window.evaluate(id => (window as unknown as { halo: HaloAPI }).halo.getSessionState(id), target.id)
         return (state.data as { isActive?: boolean })?.isActive

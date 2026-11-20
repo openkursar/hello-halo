@@ -6,6 +6,7 @@
 
 import { nativeImage } from 'electron'
 import type { BrowserContext } from '../context'
+import { requestCredential } from '../credential-broker'
 import { checkFill, type FillCheck } from '../fill-check'
 
 // ============================================
@@ -129,4 +130,68 @@ export async function fillFormElement(
   }
 
   return checkFill(value, await ctx.fillElement(uid, value))
+}
+
+function webOrigin(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : null
+  } catch {
+    return null
+  }
+}
+
+export async function fillSecretFields(
+  ctx: BrowserContext,
+  uids: string[],
+  purpose: string,
+  submitUid: string | undefined,
+  signal?: AbortSignal,
+): Promise<'submitted' | 'declined' | 'expired' | 'moved' | 'unconfirmed'> {
+  const viewId = ctx.getActiveViewId()
+  const contents = ctx.getWebContents()
+  const snapshot = ctx.getLastSnapshot()
+  if (!viewId || !contents || !snapshot || !ctx.isWatchable(viewId) || !ctx.conversationId) {
+    throw new Error('Open a page the user can see and take a fresh browser snapshot first')
+  }
+  const url = contents.getURL()
+  const origin = webOrigin(url)
+  if (!origin || snapshot.url !== url) throw new Error('Take a fresh snapshot of the form first')
+  const fields = uids.map(uid => {
+    const element = ctx.getElementByUid(uid)
+    if (!element) throw new Error('A requested field is no longer available')
+    return { uid, label: (element.name || element.description || element.role).slice(0, 200) }
+  })
+  if (submitUid && !ctx.getElementByUid(submitUid)) throw new Error('The submit button is no longer available')
+
+  const page = new AbortController()
+  const abort = () => page.abort()
+  let submitting = false
+  const onNavigation = (_event: Electron.Event, _url: string, _inPlace: boolean, isMainFrame: boolean) => {
+    if (isMainFrame && !submitting) abort()
+  }
+  contents.on('did-start-navigation', onNavigation)
+  contents.once('destroyed', abort)
+  signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
+  try {
+    const outcome = await requestCredential({
+      conversationId: ctx.conversationId,
+      spaceId: ctx.spaceId,
+      viewId,
+      origin,
+      title: snapshot.title?.slice(0, 200) ?? null,
+      fields,
+      purpose,
+    }, page.signal)
+    if (page.signal.aborted) return signal?.aborted ? 'expired' : 'moved'
+    if (outcome.status !== 'provided') return outcome.status
+    if (ctx.getActiveViewId() !== viewId || contents.getURL() !== url || ctx.getLastSnapshot() !== snapshot) return 'moved'
+    const submitted = await ctx.submitUserText(snapshot, outcome.values, submitUid, page.signal, () => { submitting = true })
+    return submitted ? 'submitted' : 'unconfirmed'
+  } finally {
+    contents.off('did-start-navigation', onNavigation)
+    contents.off('destroyed', abort)
+    signal?.removeEventListener('abort', abort)
+  }
 }

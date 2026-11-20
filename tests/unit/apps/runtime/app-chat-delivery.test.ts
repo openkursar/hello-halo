@@ -110,7 +110,8 @@ describe('digital-human message admission', () => {
     const admitted = vi.fn()
     let completed = false
     const sent = delivery.send(request('collaborator report', { onAdmitted: admitted })).then(() => { completed = true })
-    await vi.advanceTimersByTimeAsync(0)
+    // The native gate settles admission on a later event-loop turn.
+    await vi.waitFor(() => expect(admitted).toHaveBeenCalled())
     expect(admitted).toHaveBeenCalledOnce()
     expect(admitted).toHaveBeenCalledWith('mid_turn')
     expect(completed).toBe(false)
@@ -127,8 +128,8 @@ describe('digital-human message admission', () => {
     const delivery = createAppChatDelivery(run)
     const admitted = vi.fn()
     const sent = delivery.send(request('guest report', { imPermission: guest, onAdmitted: admitted }))
-    await vi.advanceTimersByTimeAsync(0)
-    expect(admitted).toHaveBeenCalledWith('buffered')
+    // The native gate settles admission on a later event-loop turn.
+    await vi.waitFor(() => expect(admitted).toHaveBeenCalledWith('buffered'))
     expect(run).not.toHaveBeenCalled()
     await idle()
     await sent
@@ -391,8 +392,11 @@ describe('deferred notice authority and delivery lifetime', () => {
     let finish!: () => void
     const run = vi.fn((_request: AppChatRequest) => new Promise<void>(resolve => { finish = resolve; env.busy = true }))
     const delivery = createAppChatDelivery(run)
-    const first = delivery.send(request('running'))
-    await Promise.resolve()
+    const started = vi.fn()
+    const first = delivery.send(request('running', { onAdmitted: started }))
+    // The native gate acknowledges a started dispatch on a later event-loop turn;
+    // until then a discard still treats it as pending.
+    await vi.waitFor(() => expect(started).toHaveBeenCalledWith('dispatched'))
     const second = delivery.send(request('pending'))
     const rejected = expect(second).rejects.toThrow('shut down')
     delivery.dispose()

@@ -62,6 +62,17 @@ describe('Codex Responses compatibility', () => {
       expect(init.headers.Authorization).toBe('Bearer selected-key')
     } finally { proxyFetch.mockReset() }
   })
+  it.each(['authorization', 'Authorization'])('sends a provider %s as the only credential header', async name => {
+    proxyFetch.mockReset().mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'fixture response' } }), { status: 400 }))
+    try {
+      await handleResponsesRequest({ model: 'm', input: 'test' }, {
+        url: 'https://selected.example/v1/chat/completions', key: 'account-key', model: 'm',
+        headers: { [name]: 'Bearer provider' },
+      }, { status: vi.fn().mockReturnThis(), json: vi.fn() } as any)
+      const sent = proxyFetch.mock.calls[0][1].headers as Record<string, string>
+      expect(Object.entries(sent).filter(([key]) => key.toLowerCase() === 'authorization')).toEqual([[name, 'Bearer provider']])
+    } finally { proxyFetch.mockReset() }
+  })
   it('restores native Responses tool namespaces across split SSE chunks while preserving opaque events', async () => {
     const item = { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'mcp__halo_team__collab_start', arguments: '{"message":"你好"}' }
     const shell = { type: 'function_call', id: 'fc_2', call_id: 'call_2', name: 'functions__exec_command', arguments: '{"cmd":"echo hello"}' }

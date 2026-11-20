@@ -20,7 +20,7 @@ describe('IM binding confirmation transport', () => {
     vi.stubGlobal('document', { baseURI: 'http://127.0.0.1:12345/' })
     vi.stubGlobal('localStorage', { getItem: () => 'test-token' })
     setServerUrl('http://127.0.0.1:12345')
-    const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ success: true }) })
+    const request = vi.fn().mockResolvedValue(Response.json({ success: true }))
     vi.stubGlobal('fetch', request)
     await expect(imApi.imChannelsSetInstanceApp('bot-1', 'support', expectedAppId)).resolves.toEqual({ success: true })
     const [url, options] = request.mock.calls[0]
@@ -47,7 +47,7 @@ describe('IM bot settings write transport', () => {
     vi.stubGlobal('document', { baseURI: 'http://127.0.0.1:12345/' })
     vi.stubGlobal('localStorage', { getItem: () => 'test-token' })
     setServerUrl('http://127.0.0.1:12345')
-    const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ success: true, data: [] }) })
+    const request = vi.fn().mockResolvedValue(Response.json({ success: true, data: [] }))
     vi.stubGlobal('fetch', request)
     await expect(call()).resolves.toEqual({ success: true, data: [] })
     const [url, options] = request.mock.calls[0]

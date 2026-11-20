@@ -3,7 +3,7 @@
  * Data-driven navigation items for the settings page
  */
 
-import { Brain, Palette, Settings, Globe, Info, Bell, Store, Code, Heart } from 'lucide-react'
+import { Brain, Palette, Settings, Globe, Info, Bell, Store, Code, Heart, Network } from 'lucide-react'
 import type { SettingsNavItem } from './types'
 
 /**
@@ -37,19 +37,25 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     id: 'system',
     labelKey: 'System',
     icon: Settings,
-    desktopOnly: true
+    audience: 'desktop'
   },
   {
     id: 'advanced',
     labelKey: 'Advanced',
     icon: Code,
-    desktopOnly: true
+    audience: 'node'
   },
   {
     id: 'remote',
     labelKey: 'Remote Access',
     icon: Globe,
-    desktopOnly: true
+    audience: 'desktop'
+  },
+  {
+    id: 'federation',
+    labelKey: 'Federation Gateway',
+    icon: Network,
+    audience: 'headless'
   },
   {
     id: 'recommend',
@@ -66,7 +72,13 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
 /**
  * Get filtered navigation items based on mode
  * @param isRemoteMode - Whether running in remote/web mode
+ * @param serverBackend - Whether the remote backend is a headless server
  */
-export function getFilteredNavItems(isRemoteMode: boolean): SettingsNavItem[] {
-  return SETTINGS_NAV_ITEMS.filter(item => !item.desktopOnly || !isRemoteMode)
+export function getFilteredNavItems(isRemoteMode: boolean, serverBackend = false): SettingsNavItem[] {
+  return SETTINGS_NAV_ITEMS.filter(({ audience }) => {
+    if (audience === 'desktop') return !isRemoteMode
+    if (audience === 'headless') return isRemoteMode && serverBackend
+    if (audience === 'node') return !isRemoteMode || serverBackend
+    return true
+  })
 }

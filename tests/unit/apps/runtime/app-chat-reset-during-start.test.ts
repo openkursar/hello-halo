@@ -299,6 +299,7 @@ vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({
   createRemindersMcpServer: () => ({ _isMcpServer: true, name: 'halo-reminders' }),
 }))
+vi.mock('../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer: () => ({}) }))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
   createReportToolServer: () => ({ _isMcpServer: true, name: 'halo-report' }),
 }))
@@ -318,6 +319,7 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   loadChatSessionId: vi.fn(() => undefined),
   saveChatSessionId: vi.fn(),
   deleteChatSessionId: vi.fn(),
+  deleteTranscriptImages: vi.fn(),
   copySessionJsonl: vi.fn(),
   readSessionMessages: () => [],
 }))
@@ -328,6 +330,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   onApiConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
   onNetworkConfigChange: vi.fn(),
+  onAiSourcesConfigChange: vi.fn(),
 }))
 vi.mock('../../../../src/main/services/space.service', () => ({
   getSpace: () => ({ id: 'space-1', path: '/tmp/halo-test/space' }),

@@ -526,6 +526,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       runId,
       sessionKey,
       notificationLevel: app.userOverrides.notificationLevel,
+      workDir,
       plansDir,
       canComplete: () => agentExecution.canComplete(),
       onReported: () => { reportedAt = agentExecution.inputRevision },
@@ -603,7 +604,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         'ocr': createOcrMcpServer(),              // built-in: on-device image OCR
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
         ...(usesTerminal
-          ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId: app.spaceId!, workDir }) }
+          ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId: app.spaceId!, workDir, conversationId: runSender }) }
           : {}),
         ...(usesHaloApi ? { 'halo-api-ref': createApiRefMcpServer() } : {}),
         // Acts under the run's own sender key: what it sends is a one-way notice,
@@ -772,6 +773,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       onSessionId: persistEngineSession,
       reportSaved: () => reportedAt === agentExecution.inputRevision,
       onSent: () => { if (!opensWithSlashCommand(initialMessage)) workspaceNotice.delivered() },
+      spaceId: app.spaceId ?? undefined,
     }
     let streamResult = await processStream(
       formatReferencesBlock(followupReferences, workDir)

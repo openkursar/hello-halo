@@ -40,6 +40,12 @@ export function registerTlonRoutes(app: Express): void {
     res.json(tlonController.updateKB(req.params.kbId, req.body))
   })
 
+  // PUT /api/tlon/:kbId/guest-read — owner only (internal): may guests of a
+  // bound digital human read this knowledge base's text
+  app.put('/api/tlon/:kbId/guest-read', (req: Request, res: Response) => {
+    res.json(tlonController.setGuestRead(req.params.kbId, req.body?.allow))
+  })
+
   // DELETE /api/tlon/:kbId — delete a knowledge base and its data
   app.delete('/api/tlon/:kbId', async (req: Request, res: Response) => {
     res.json(await tlonController.deleteKB(req.params.kbId))
@@ -95,9 +101,10 @@ export function registerTlonRoutes(app: Express): void {
     res.json(tlonController.addLinkedDir(req.params.kbId, { path, label: label || path }))
   })
 
-  // DELETE /api/tlon/:kbId/linked-dirs/:linkId — unlink a directory
+  // DELETE /api/tlon/:kbId/linked-dirs/:linkId[?forget=true] — unlink a directory
   app.delete('/api/tlon/:kbId/linked-dirs/:linkId', (req: Request, res: Response) => {
-    res.json(tlonController.removeLinkedDir(req.params.kbId, req.params.linkId))
+    const forget = req.query.forget === 'true'
+    res.json(tlonController.removeLinkedDir(req.params.kbId, req.params.linkId, { forget }))
   })
 
   // POST /api/tlon/:kbId/linked-dirs/:linkId/retry — look for an unavailable directory again

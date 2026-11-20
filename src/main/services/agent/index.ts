@@ -78,6 +78,8 @@ export type { LiveInputOptions } from './live-turn'
 // Stream processor (shared core for main agent + app chat)
 export { processStream } from './stream-processor'
 export type { ProcessStreamParams, StreamCallbacks, StreamResult } from './stream-processor'
+// A reply that ended before its answer was done, as its record keeps it
+export { replyEndingOf } from './reply-ending'
 
 // Generation control
 export {

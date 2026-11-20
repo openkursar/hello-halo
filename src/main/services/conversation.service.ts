@@ -884,6 +884,12 @@ function imageFilesDir(conversationsDir: string, conversationId: string): string
   return join(conversationsDir, `${conversationId}.images`)
 }
 
+/** The folder beside a conversation that holds its saved images; removed with the conversation. */
+export function getConversationImagesDir(spaceId: string, conversationId: string): string {
+  if (conversationId.includes('..') || /[\\/]/.test(conversationId)) throw new Error('Invalid conversation id')
+  return imageFilesDir(getConversationsDir(spaceId), conversationId)
+}
+
 /**
  * The conversation as the desktop renderer receives it: each inline base64
  * image is written once beside the conversation (`<id>.images/`) and sent as a

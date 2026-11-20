@@ -29,6 +29,7 @@ import { serveRendererAssets } from './renderer-assets'
 import { getTeamStore } from '../apps/team'
 import { getLocalIdentity } from './identity/index'
 import { getMainWindow as getMainWindowFromService } from '../foundation/window.service'
+import { isServerMode } from '../foundation/runtime-mode'
 
 // Vite dev server URL. Pinned to 127.0.0.1, not 'localhost': electron.vite.config.ts
 // binds Vite to 127.0.0.1 only (see its comment), but Node 17+ on macOS resolves
@@ -44,6 +45,7 @@ const VITE_DEV_PORT = Number(VITE_DEV_URL.port)
 let httpServer: Server | null = null
 let expressApp: Express | null = null
 let serverPort: number = 0
+let disposeMcpProxy: (() => void) | null = null
 
 // Default port
 const DEFAULT_PORT = 3847
@@ -117,7 +119,7 @@ function attachWebhookIngress(app: Express): void {
   })
 }
 
-async function isPortAvailable(port: number): Promise<boolean> {
+async function isPortAvailable(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const tester = createNetServer()
     tester.once('error', () => {
@@ -126,15 +128,15 @@ async function isPortAvailable(port: number): Promise<boolean> {
     tester.once('listening', () => {
       tester.close(() => resolve(true))
     })
-    tester.listen(port, '0.0.0.0')
+    tester.listen(port, host)
   })
 }
 
-async function findAvailablePort(startPort: number): Promise<number> {
+async function findAvailablePort(startPort: number, host: string): Promise<number> {
   for (let i = 0; i < MAX_PORT_SEARCH_ATTEMPTS; i++) {
     const portToTry = startPort + i
     // eslint-disable-next-line no-await-in-loop
-    const available = await isPortAvailable(portToTry)
+    const available = await isPortAvailable(portToTry, host)
     if (available) {
       if (i > 0) {
         console.warn(`[HTTP] Port ${startPort} is in use, falling back to ${portToTry}`)
@@ -146,6 +148,8 @@ async function findAvailablePort(startPort: number): Promise<number> {
 }
 
 function cleanupServerOnError(): void {
+  disposeMcpProxy?.()
+  disposeMcpProxy = null
   shutdownWebSocket()
   if (httpServer) {
     try {
@@ -176,7 +180,9 @@ export async function startHttpServer(
   port: number = DEFAULT_PORT,
   existingToken?: string
 ): Promise<{ port: number; token: string }> {
-  const listenPort = await findAvailablePort(port)
+  const host = process.env.HALO_E2E_TEST === '1' && isServerMode() ? '127.0.0.1' : '0.0.0.0'
+  const useViteProxy = is.dev && Boolean(process.env.ELECTRON_RENDERER_URL)
+  const listenPort = await findAvailablePort(port, host)
   // The routes reach almost every service; loaded here, they stay out of
   // what the main process loads before its window opens.
   const { registerApiRoutes } = await import('./routes')
@@ -184,6 +190,22 @@ export async function startHttpServer(
   // Create Express app
   expressApp = express()
 
+  // MCP ingress is a server deployment feature. A desktop sharing Remote Access
+  // must not open a forwarding path just because the variable is set in its
+  // environment.
+  if (process.env.HALO_MCP_PROXY_CONFIG && !isServerMode()) {
+    console.warn('[HTTP] HALO_MCP_PROXY_CONFIG is ignored outside server mode')
+  } else if (process.env.HALO_MCP_PROXY_CONFIG) {
+    try {
+      const { loadMcpProxyConfig, attachMcpProxy } = await import('./mcp-proxy')
+      const config = loadMcpProxyConfig()
+      if (config) disposeMcpProxy = attachMcpProxy(expressApp, config)
+    } catch {
+      console.error('[HTTP] MCP proxy configuration rejected; refusing to expose a misconfigured ingress')
+      cleanupServerOnError()
+      throw new Error('MCP proxy configuration rejected')
+    }
+  }
   attachWebhookIngress(expressApp)
 
   // Middleware
@@ -251,9 +273,13 @@ export async function startHttpServer(
 
   // Register API routes
   registerApiRoutes(expressApp)
+  expressApp.use('/api', (req: Request, res: Response) => {
+    console.warn(`[HTTP] Unmatched API request: ${req.method} ${req.baseUrl}${req.path}`)
+    res.status(404).json({ success: false, code: 'API_NOT_FOUND', error: 'API endpoint not found' })
+  })
 
   // Serve static files (frontend)
-  if (is.dev) {
+  if (useViteProxy) {
     // In development, proxy to Vite dev server
     expressApp.use('/{*path}', (req, res) => {
       // Check if authenticated (has valid token in query or localStorage check via cookie)
@@ -349,7 +375,7 @@ export async function startHttpServer(
   initWebSocket(httpServer)
 
   // In dev mode, proxy Vite HMR WebSocket connections
-  if (is.dev) {
+  if (useViteProxy) {
     httpServer.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url || '/', `http://${req.headers.host}`)
 
@@ -423,7 +449,7 @@ export async function startHttpServer(
 
   // Start listening
   return new Promise((resolve, reject) => {
-    httpServer!.listen(listenPort, '0.0.0.0', () => {
+    httpServer!.listen(listenPort, host, () => {
       serverPort = listenPort
       console.log(`[HTTP] Server started on port ${listenPort}`)
       // Never log the access token itself — the remote-access PIN must not
@@ -450,6 +476,8 @@ export async function startHttpServer(
  * Stop the HTTP server
  */
 export function stopHttpServer(): void {
+  disposeMcpProxy?.()
+  disposeMcpProxy = null
   if (httpServer) {
     shutdownWebSocket()
     httpServer.close()

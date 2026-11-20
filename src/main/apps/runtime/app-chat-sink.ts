@@ -31,7 +31,7 @@ import type { StreamResult } from '../../services/agent/stream-processor'
 import type { TurnSink } from '../../services/agent/turn-sink'
 import type { ImageAttachment } from '../../services/agent/types'
 import type { EngineId } from '../../../shared/types/engine'
-import type { ProgressEvent } from '../../../shared/types/inbound-message'
+import type { ProgressEvent, WorkProgressEvent } from '../../../shared/types/inbound-message'
 import type { TranscriptMessage, TranscriptProvenance } from '../../../shared/types/transcript'
 import { CONTINUITY_NOTICE_TEXT, roleForTranscriptSource } from '../../../shared/transcript'
 import { randomUUID } from 'crypto'
@@ -42,12 +42,13 @@ import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/ty
 import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
 import { ReplyTextAccumulator } from './reply-accumulator'
-import { ProgressEventParser } from './progress-formatter'
+import { ProgressEventParser, readWorkProgress } from './progress-formatter'
 import { TurnCutPoint } from './escalation-cut'
 import { openSessionWriter, saveChatSessionId, saveChatEngineBinding, type ChatEngineBinding, type ChatEngineState, type RecordedPush, type SessionWriter } from './session-store'
 import { AppChatTurnInterrupted, turnEndingOf, type AppChatTurnEnding } from './turn-ending'
 import { imTurnReply } from './im-error-reply'
 import { stopGeneration } from '../../services/agent/control'
+import { replyEndingOf } from '../../services/agent/reply-ending'
 import { listResidentSessions, hasPendingSessionInput } from '../../services/agent'
 
 // ============================================
@@ -64,6 +65,7 @@ export type PrepareAppChatInput = (text: string, images?: ImageAttachment[]) => 
 /** Per-round callbacks supplied by whoever sent the message. */
 export interface AppChatRoundHooks {
   onProgress?(event: ProgressEvent): void
+  onWorkProgress?(event: WorkProgressEvent): void
   /**
    * The turn's answer. `ending` says it stopped short (the step limit, or cut
    * off) — then `finalContent` is what was written, possibly nothing.
@@ -460,6 +462,15 @@ class AppChatSink implements TurnSink {
       }
     }
 
+    const onWork = this.current?.hooks.onWorkProgress
+      ?? (this.liveRounds.length ? this.liveRounds.find(round => round.hooks.onWorkProgress)?.hooks.onWorkProgress : undefined)
+    if (onWork) {
+      try {
+        for (const event of readWorkProgress(sdkMessage)) onWork(event)
+      } catch (error) {
+        console.error(`[AppChat][${this.appId}] Work progress callback failed: conversation=${this.conversationId}`, error)
+      }
+    }
     this.cutTurnIfItAskedUser(sdkMessage)
   }
 
@@ -491,6 +502,9 @@ class AppChatSink implements TurnSink {
 
   private completeTurn(result: StreamResult): void {
     this.persistSessionId(result)
+    const replyEnding = replyEndingOf(result)
+    // Text streamed but cut off reaches no complete block line; the ending keeps what the reply had shown.
+    if (replyEnding) this.getWriter()?.writeEvent({ type: 'reply_ending', ending: replyEnding, ...(result.hasMeaningfulContent ? { content: result.finalContent } : {}) })
 
     // Raw aggregates define delivery independently of the live UI's streaming state.
     const accumulated = this.turn.accumulator.getReply()

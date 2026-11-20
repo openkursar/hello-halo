@@ -390,7 +390,6 @@ const turnGate: TurnGate<DeliveryJob> = createTurnGate<DeliveryJob>(
     onDiscard: (job, reason) => { for (const item of jobsOf(job)) tellWaitingSender(item, new Error(reason)) },
     // A turn opened only by records the transcript already holds would show its opener twice.
     canOpenTurn: (job) => jobsOf(job).some((item) => !item.inputRecorded),
-    describeJob: (job) => `${job.fromConversationId}->${job.toConversationId}`,
   }
 )
 

@@ -4,9 +4,8 @@
  * Interactive pty terminal that the AI controls via MCP tools and the user can
  * see and take over. Registered as an on-demand toolset (see agent/toolsets).
  *
- * Platform note: Linux is intentionally excluded at the packaging layer
- * (node-pty prebuilds omitted). isTerminalAvailable() gates the whole feature
- * so it never appears in the capability index / menu on unsupported platforms.
+ * Platform note: isTerminalAvailable() gates the whole feature so it never
+ * appears in the capability index / menu where no node-pty prebuild is packaged.
  */
 
 export { createTerminalMcpServer } from './sdk-mcp-server'
@@ -21,6 +20,7 @@ export {
   terminalInput,
   terminalResize,
   killTerminal,
+  endSpaceTerminals,
   getTerminalReplay,
   createTerminalForUser,
   terminalViewerAttach,

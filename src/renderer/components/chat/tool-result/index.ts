@@ -17,6 +17,7 @@ export { FileListViewer } from './FileListViewer'
 export { MarkdownResultViewer } from './MarkdownResultViewer'
 export { JsonResultViewer } from './JsonResultViewer'
 export { PlainTextViewer } from './PlainTextViewer'
+export { ToolResultImages } from './ToolResultImages'
 
 // Types
 export type { ToolResultViewerProps, ViewerBaseProps, ToolResultContentType } from './types'

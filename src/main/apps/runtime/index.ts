@@ -35,7 +35,7 @@ import type { DatabaseManager } from '../../platform/store'
 import { getAppManager, type AppManagerService } from '../manager'
 import { previewAppSpaceChange, changeAppDefaultSpace, retainAppEnvironments, repairLegacyAppWorkspaces } from './space-change'
 import { previewWorkspaceDeletion, deleteWorkspacePreservingPeople } from './workspace-deletion'
-import { readSessionMessages } from './session-store'
+import { readSessionMessages, readSessionUpdate } from './session-store'
 import { RunProcessClearedError } from './errors'
 import { buildAppCapabilityInventory } from './capability-inventory'
 import { buildPeopleDirectory, directoryExcludedIds } from './people-directory'
@@ -624,13 +624,22 @@ export async function removeWorkspacePreservingPeople(spaceId: string, remove: (
   return deleteWorkspacePreservingPeople(spaceChangeDependencies(), spaceId, remove)
 }
 
-export function readAppRunMessages(appId: string, runId: string) {
+function runTranscriptSpacePath(appId: string, runId: string): string {
   const run = activityStoreRef?.getRun(runId)
   if (!run || run.appId !== appId) throw new Error('Execution is unavailable for this digital human')
   if (run.transcriptClearedAt) throw new RunProcessClearedError(runId)
   const spacePath = run.environment?.spacePath
   if (!spacePath) throw new Error('The original execution environment is unavailable')
-  return readSessionMessages(spacePath, appId, runId)
+  return spacePath
+}
+
+export function readAppRunMessages(appId: string, runId: string) {
+  return readSessionMessages(runTranscriptSpacePath(appId, runId), appId, runId)
+}
+
+/** The run's transcript, or what changed since `since` (an earlier update's cursor; empty for the whole). */
+export function readAppRunUpdate(appId: string, runId: string, since: string) {
+  return readSessionUpdate(runTranscriptSpacePath(appId, runId), appId, runId, since)
 }
 
 /**

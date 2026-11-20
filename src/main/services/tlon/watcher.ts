@@ -21,11 +21,13 @@ import { watcherBackend } from '../../../shared/watcher-backend'
 import type { LinkedDirectory } from '../../../shared/types/tlon'
 import { getKBRawDir } from './paths'
 import { listKBs, getKB, checkLinkedDirAvailable } from './service'
-import { enqueueFiles, processQueue, rebuildIndexMd, collectCandidatesRetiringRemoved } from './ingest'
+import { enqueueFiles, processQueue, rebuildIndexMd, collectCandidatesRetiringRemoved, hasPendingCommit } from './ingest'
 
 interface WatchHandle {
   key: string
   subscription: AsyncSubscription
+  /** The real directory subscribed to (symlinks resolved). */
+  resolved: string
 }
 
 // Keyed by `${kbId}:raw` and `${kbId}:linked:${linkId}`.
@@ -33,8 +35,8 @@ const handles = new Map<string, WatchHandle>()
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const DEBOUNCE_MS = 500
 
-/** Re-scan a KB for changed files and process them (debounced per KB). */
-function scheduleScan(kbId: string): void {
+/** Re-scan a KB for changed files and process them (debounced per KB; a later call replaces the pending one). */
+function scheduleScan(kbId: string, delayMs = DEBOUNCE_MS): void {
   const existing = debounceTimers.get(kbId)
   if (existing) clearTimeout(existing)
   const timer = setTimeout(() => {
@@ -42,12 +44,13 @@ function scheduleScan(kbId: string): void {
     const kb = getKB(kbId)
     if (!kb || kb.status !== 'active') return
     const candidates = collectCandidatesRetiringRemoved(kbId)
-    if (candidates.length === 0) return
+    // A pending forget or a folder version change commits a batch on its own.
+    if (candidates.length === 0 && !hasPendingCommit(kbId)) return
     enqueueFiles(kbId, candidates, { automatic: true })
     processQueue(kbId).catch(err =>
       console.error(`[Tlon] processQueue failed for ${kbId}:`, err)
     )
-  }, DEBOUNCE_MS)
+  }, delayMs)
   timer.unref?.()
   debounceTimers.set(kbId, timer)
 }
@@ -69,6 +72,8 @@ async function subscribe(key: string, dir: string, kbId: string): Promise<void> 
     return
   }
   try {
+    // A symlinked folder is watched at the target it has now; `resolved` lets
+    // refreshLinkedWatches notice when the link is re-pointed.
     const subscription = await parcelWatcher.subscribe(dir, (err) => {
       if (err) {
         console.error(`[Tlon] Watcher error for ${key}:`, err)
@@ -83,7 +88,7 @@ async function subscribe(key: string, dir: string, kbId: string): Promise<void> 
       // scan, whose walk prunes them by name.
       ignore: CPP_LEVEL_IGNORE_DIRS.map(d => join(dir, d)),
     })
-    handles.set(key, { key, subscription })
+    handles.set(key, { key, subscription, resolved })
     console.log(`[Tlon] Watching ${key}: ${dir}`)
   } catch (error) {
     console.error(`[Tlon] Failed to watch ${dir}:`, error)
@@ -151,6 +156,36 @@ export async function startLinkedDirWatch(kbId: string, linked: LinkedDirectory)
 
 export async function stopLinkedDirWatch(kbId: string, linked: LinkedDirectory): Promise<void> {
   await unsubscribe(`${kbId}:linked:${linked.id}`)
+}
+
+/**
+ * Re-aim watches whose folder now resolves elsewhere: a folder published by
+ * switching a symlink leaves the old subscription on the previous target,
+ * which never reports another change. Run before a requested full ingest.
+ */
+export async function refreshLinkedWatches(kbId: string): Promise<void> {
+  const kb = getKB(kbId)
+  if (!kb || kb.status !== 'active') return
+  for (const linked of kb.linkedDirs) {
+    if (!checkLinkedDirAvailable(kbId, linked.id)) continue
+    const key = `${kbId}:linked:${linked.id}`
+    let resolved: string
+    try {
+      resolved = realpathSync(linked.path)
+    } catch {
+      continue
+    }
+    const handle = handles.get(key)
+    if (handle && handle.resolved === resolved) continue
+    if (handle) console.log(`[Tlon] Watched folder moved, re-watching ${key}`)
+    await unsubscribe(key)
+    await subscribe(key, linked.path, kbId)
+  }
+}
+
+/** Scan a KB again (its source rules changed, or a forget waits); a later scan request replaces this one. */
+export function rescanKB(kbId: string, delayMs?: number): void {
+  scheduleScan(kbId, delayMs)
 }
 
 // ============================================================================

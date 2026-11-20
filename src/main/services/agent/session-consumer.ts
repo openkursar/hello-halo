@@ -75,6 +75,8 @@ export interface ConsumerContext {
   contextWindow?: number
   /** Surface-specific persistence + delivery for each consumed turn */
   sink: TurnSink
+  /** Where the display copy saves tool-result images (see ProcessStreamParams) */
+  toolImagesDir?: () => string
 }
 
 /**
@@ -88,6 +90,7 @@ interface ConsumerState {
   /** Source-resolved context window for token-usage display (see ProcessStreamParams) */
   contextWindow?: number
   sink: TurnSink
+  toolImagesDir?: () => string
   /** AbortController for the consumer loop itself (not per-turn) */
   consumerAbort: AbortController
   /** True when consumer is inside for-await (processing a turn) */
@@ -128,6 +131,7 @@ export function startConsumer(
     displayModel: context.displayModel,
     contextWindow: context.contextWindow,
     sink: context.sink,
+    toolImagesDir: context.toolImagesDir,
     consumerAbort: new AbortController(),
     processingTurn: false,
     currentSessionState: null,
@@ -255,12 +259,14 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
         abortController: turnAbort,
         sessionSignal: state.consumerAbort.signal,
         t0: turnStartTime,
+        ...(state.toolImagesDir ? { toolImagesDir: state.toolImagesDir } : {}),
         callbacks: {
           onSnapshotReady: readSnapshot => { state.readTurnSnapshot = readSnapshot },
           onRawMessage: (m) => {
             noteSessionMcpStatus(conversationId, v2Session, m)
             sink.onRawMessage?.(m)
           },
+          acceptsQuietEnd: () => sink.acceptsQuietEnd?.() === true,
           onTurnInit: () => {
             receivedAnyEvent = true
             state.turnStartedAt = turnStartTime

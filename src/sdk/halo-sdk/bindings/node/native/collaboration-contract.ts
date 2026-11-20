@@ -31,6 +31,10 @@ export function parseCollaborationInput<K extends CollaborationToolName>(name: K
   return value('parseInput', { name, input, ...(options.modelSelection ? { modelSelection: options.modelSelection } : {}) });
 }
 
+function parseCollaborationArguments(name: CollaborationToolName, input: unknown, options: CollaborationServerOptions, hasModelDirectory: boolean): { input: unknown; notice: string | null } {
+  return value('parseArguments', { name, input, hasModelDirectory, ...(options.modelSelection ? { modelSelection: options.modelSelection } : {}) });
+}
+
 export function modelSelectionGuidance(capability: ModelSelectionCapability): string {
   return value('modelSelectionGuidance', capability);
 }
@@ -66,6 +70,7 @@ export function createCollaborationServer(operations: CollaborationOperations, o
     ? [...COLLABORATION_TOOL_NAMES, 'list_model_profiles']
     : COLLABORATION_TOOL_NAMES;
   const registered = new Map(names.flatMap(name => operations[name] ? [[name, operations[name]] as const] : []));
+  const hasModelDirectory = registered.has('list_model_profiles');
   return {
     type: 'sdk', name: 'halo-team',
     instance: {
@@ -75,7 +80,7 @@ export function createCollaborationServer(operations: CollaborationOperations, o
         const operation = registered.get(name as CollaborationToolName);
         if (!operation) return undefined;
         let parsed;
-        try { parsed = parseCollaborationInput(name as CollaborationToolName, input, contract); }
+        try { parsed = parseCollaborationArguments(name as CollaborationToolName, input, contract, hasModelDirectory); }
         catch (error) {
           console.warn(`[Collaboration] Arguments rejected: tool=${name}`);
           return collaborationText(error instanceof Error ? error.message : value<string>('feedback', { kind: 'invalid' }), true);
@@ -84,7 +89,11 @@ export function createCollaborationServer(operations: CollaborationOperations, o
           console.warn(`[Collaboration] Cancelled before execution: tool=${name}`);
           return collaborationText(value<string>('feedback', { kind: 'cancelled' }), true);
         }
-        try { return await operation(parsed as never, context); }
+        try {
+          const result = await operation(parsed.input as never, context);
+          if (!parsed.notice || result?.isError || !Array.isArray(result?.content) || !result.content.length) return result;
+          return { ...result, content: [...result.content, { type: 'text', text: parsed.notice }] };
+        }
         catch (error) {
           if (error instanceof CollaborationRefusal) return collaborationText(error.message, true);
           if (error instanceof Error && 'code' in error && error.code === 'MODEL_SELECTION') {

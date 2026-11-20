@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildSystemPrompt } from '../../../../src/main/services/agent/system-prompt'
 
 const engines = ['anthropic', 'halo', 'codex', 'dsh'] as const
@@ -32,5 +32,22 @@ describe('shared Halo product layer', () => {
     expect(prompt).not.toContain('Halo Digital Humans:')
     expect(prompt).not.toContain('App Instructions')
     expect(prompt).toContain("You are Halo, the AI assistant in Halo's chat.")
+  })
+})
+
+describe('file placement rule', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  it('is absent on the desktop, where the user can open any local path', () => {
+    vi.stubEnv('HALO_SERVER_MODE', '')
+    expect(buildSystemPrompt(baseCtx)).not.toContain('# Files')
+  })
+
+  it('tells a server agent on every engine to keep user files under the working directory', () => {
+    vi.stubEnv('HALO_SERVER_MODE', '1')
+    const prompts = engines.map(engineId => buildSystemPrompt({ ...baseCtx, engineId, ownIdentity: 'app-instructions' }))
+    expect(new Set(prompts).size).toBe(1)
+    expect(prompts[0]).toContain('Files you create for the user must go under the working directory')
+    expect(prompts[0].length).toBeLessThan(1400)
   })
 })

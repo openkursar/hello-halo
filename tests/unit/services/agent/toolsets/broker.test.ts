@@ -15,6 +15,8 @@ const config = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
 const openSets = vi.hoisted(() => new Map<string, Set<string>>())
 const metaCalls = vi.hoisted(() => ({ n: 0 }))
 
+const createCanvasMcpServer = vi.hoisted(() => (scope: unknown) => ({ name: 'canvas', scope }))
+vi.mock('../../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer }))
 vi.mock('../../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(() => config.value),
   saveConfig: vi.fn()
@@ -116,6 +118,14 @@ describe('buildMcpServerRecord — fresh instances per build', () => {
     const a = buildMcpServerRecord(scope)
     const b = buildMcpServerRecord({ ...scope, conversationId: 'conv-2' })
     expect(b['web-search']).not.toBe(a['web-search'])
+  })
+})
+
+describe('buildMcpServerRecord — bringing work in front of the user', () => {
+  it('gives every space conversation its own canvas server, scoped to it', () => {
+    const record = buildMcpServerRecord(scope)
+    expect(record.canvas).toEqual({ name: 'canvas', scope: { spaceId: scope.spaceId, conversationId: scope.conversationId, workDir: scope.workDir } })
+    expect(buildMcpServerRecord(scope).canvas).not.toBe(record.canvas)
   })
 })
 

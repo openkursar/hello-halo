@@ -36,6 +36,7 @@ function columnLetter(index: number): string {
 const tableComponents: TableComponents<string[]> = {
   Table: ({ style, children }) => (
     <table
+      data-canvas-content-ready="true"
       style={{ ...style, tableLayout: 'fixed' }}
       className="w-full border-collapse text-sm"
     >
@@ -223,7 +224,7 @@ export default function XlsxViewer({ tab, onScrollChange }: XlsxViewerProps) {
       {/* Table */}
       <div className="flex-1 min-h-0">
         {sheet.rows.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-muted-foreground">
+          <div className="flex items-center justify-center h-full text-muted-foreground" data-canvas-content-ready="true">
             <p>{t('Empty sheet')}</p>
           </div>
         ) : (

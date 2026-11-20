@@ -148,6 +148,31 @@ describe('parseCatalogModelOption', () => {
     expect(parseCatalogModelOption({ id: 'x', name: 42 })?.name).toBe('x')
   })
 
+  it('reads display_name / displayName when name is absent', () => {
+    expect(parseCatalogModelOption({ id: 'x', display_name: 'Gemini 3.8 Flash' })?.name)
+      .toBe('Gemini 3.8 Flash')
+    expect(parseCatalogModelOption({ id: 'x', displayName: 'Fancy X' })?.name)
+      .toBe('Fancy X')
+    expect(parseCatalogModelOption({ id: 'x', name: 'Fancy X', display_name: 'Ignored' })?.name)
+      .toBe('Fancy X')
+    expect(parseCatalogModelOption({ id: 'x', display_name: '   ' })?.name).toBe('x')
+  })
+
+  it('reads image input from the nested modalities.input shape', () => {
+    expect(parseCatalogModelOption({
+      id: 'x',
+      modalities: { input: ['text', 'image'], output: ['text'] }
+    })).toEqual({ id: 'x', name: 'x', supportsVision: true })
+  })
+
+  it('still omits supportsVision when modalities.input has no image token', () => {
+    const result = parseCatalogModelOption({
+      id: 'x',
+      modalities: { input: ['text'] }
+    })
+    expect(result).not.toHaveProperty('supportsVision')
+  })
+
   it('trims the id and rejects entries without a usable one', () => {
     expect(parseCatalogModelOption({ id: '  x  ' })?.id).toBe('x')
     expect(parseCatalogModelOption({ id: '   ' })).toBeUndefined()

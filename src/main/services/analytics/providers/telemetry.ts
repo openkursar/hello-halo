@@ -279,7 +279,7 @@ export class TelemetryProvider extends BaseProvider {
     // No background timer is started here. Flushes are scheduled on-demand
     // from `track()` via a debounce window, and cleared on flush/destroy —
     // when the queue is idle, no timers exist at all.
-    this.log(`ready (endpoint=${this.endpoint})`)
+    this.log('ready')
   }
 
   async track(event: AnalyticsEvent, context: UserContext): Promise<void> {
@@ -373,8 +373,8 @@ export class TelemetryProvider extends BaseProvider {
       if (response.ok) {
         this.log(`flushed ${batch.length} event(s)`)
       } else {
-        const errorText = await response.text().catch(() => '')
-        this.log(`flush failed (${response.status}): ${errorText.slice(0, 200)}`)
+        await response.body?.cancel()
+        this.log(`flush failed (${response.status})`)
       }
     })
   }

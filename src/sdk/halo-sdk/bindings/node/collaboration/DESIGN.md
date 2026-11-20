@@ -43,7 +43,15 @@ callbacks are bound to a trusted caller and work scope. Model arguments cannot
 choose a team, permission identity or model source. Only supplied operations
 are exposed; hiding a tool never replaces authorization inside a host callback.
 The returned server uses the existing in-process, worker and external-engine
-MCP bridges without registering another transport.
+MCP bridges without registering another transport. Tool schemas describe only
+supported arguments. Reading, messaging and stopping calls discard undeclared
+keys without changing their receipts. Tools that create collaborators, tasks,
+task updates or findings refuse undeclared keys before running and list the
+accepted arguments, because a dropped key could leave a record other than the
+one the caller wrote. `spawn_agent` alone ignores `summary`, `description` and
+`title`, since its prompt is the whole assignment. A raw `model` argument
+directs callers to the model profile tool when available. Required arguments,
+known values and authorization checks still apply.
 
 Creating a collaborator is asynchronous, with isolated context and optional
 workspace isolation. An ordinary message can continue existing work. There are
@@ -60,7 +68,7 @@ Hosts register model selection through the second argument of
 `createCollaborationServer(operations, { modelSelection: { policy, policyRevision } })`.
 Only registered endpoints expose the optional `spawn_agent.model_profile` and
 `reasoning_effort` fields and the supplied `list_model_profiles` operation. Existing
-one-argument calls retain their tool declarations, parser and guidance.
+one-argument calls retain their tool declarations, capability gating and guidance.
 `modelSelectionGuidance` returns the explicit capability's Harness guidance.
 Hosts that carry over the direct parent's reasoning even when the model changes
 can set `modelSelection.reasoningPolicy: 'inherit'`. The spawn schema omits
@@ -69,7 +77,10 @@ The host adapts the parent's reasoning to the selected target; planning,
 finalization, and restore keep their existing contracts. This option is specific
 to the engine-independent collaboration server; standalone model selection is unchanged.
 The directory tool takes no arguments. It lists all configured entries, including
-unavailable ones. The internal projection is bounded by the validated catalog size.
+unavailable ones. Successful calls carrying `query`, `limit` or `cursor` clarify
+that the listing is complete and unfiltered. The standalone JSON result carries
+this as a field; host results retain their own format with a separate text block.
+The internal projection is bounded by the validated catalog size.
 The runtime or host enforces the tool result limit after formatting and refuses
 oversized results instead of returning a partial list.
 

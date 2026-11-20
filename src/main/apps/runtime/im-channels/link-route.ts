@@ -41,7 +41,7 @@ function settingsFrom(network: Partial<NetworkConfigPayload> | undefined): Route
   const imUseProxy = network?.imUseProxy !== false
   return {
     imUseProxy,
-    key: JSON.stringify([imUseProxy, network?.proxy?.trim() || '', network?.noProxy?.trim() || '']),
+    key: JSON.stringify([imUseProxy, network?.proxy?.trim() || '', network?.noProxy?.trim() || '', network?.proxyOnly ?? null]),
   }
 }
 

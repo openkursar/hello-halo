@@ -1389,7 +1389,7 @@ impl CollaborationRuntime {
     ) -> Result<Value> {
         let capability = self.executor.model_selection_capability();
         let input = match tool_contract::parse_input_with_model_selection(name, &input, capability.as_ref()) {
-            Ok(input) => input,
+            Ok(parsed) => parsed.input,
             Err(error) => {
                 tracing::warn!("[Collaboration] Arguments rejected: tool={name}");
                 return Ok(tool_contract::text(error.render_for(&harness), true));

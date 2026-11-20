@@ -211,11 +211,17 @@ not imply filesystem fsync or transactional atomicity with external tool effects
 A standalone `/compact [instructions]` is intercepted before user input enters
 model history. A single text-only input envelope is equivalent to a string;
 multimodal, batched and in-flight additions retain their ordinary input semantics.
-The session command owner invokes the same summary, usage, discovery reconciliation
-and strict checkpoint path as automatic compaction. It uses `manual` hook and
-boundary triggers and reports maintenance usage without starting a work-model
-turn. A failed summary or checkpoint retains live history; a committed checkpoint
-is installed even when cancellation arrived during its write. Cancellation keeps
+Manual and automatic compaction use the same request assembly, summary, usage,
+discovery reconciliation and strict checkpoint path. The manual command uses
+`manual` hook and boundary triggers and reports maintenance usage without starting
+a work-model turn. It repairs images in the summary input, and a confirmed request
+rejection can retry the affected summary without unsigned thinking blocks, or
+with notices replacing rejected images. Signed reasoning and tool exchanges are
+kept intact. Each repair is attempted at most once per command, without rerunning
+the hooks or modifying live history. A repaired summary is budgeted against the
+request that actually goes out. A failed summary or checkpoint retains live
+history; a committed checkpoint is installed even when cancellation arrived
+during its write. Cancellation keeps
 the session available for the next input. No safe reduction is reported as an
 unchanged context, without a successful compact boundary.
 

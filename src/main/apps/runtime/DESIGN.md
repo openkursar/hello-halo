@@ -255,6 +255,8 @@ serving that digital human or fronting its team:
 `tool()` + `createSdkMcpServer()`, same pattern as
 `services/ai-browser/sdk-mcp-server.ts`. Memory uses native file tools, not an MCP server.
 
+A server report may link an existing readable file inside the turn's working directory. Team turns also apply their live file-export restrictions before saving a report. A denied or missing file leaves the report unsaved; the tool never copies host files into a workspace. The desktop retains its local file links.
+
 **Rationale**:
 - Consistent with existing Halo patterns for injecting custom tools.
 - SDK MCP servers are first-class citizens in V2 sessions.
@@ -402,7 +404,10 @@ from the app runtime status — `running` + `runningRunId === runId`, broadcast 
 `app:status_changed`) it **polls** `app:get-session` every 2s so new blocks/steps
 appear incrementally; on live→idle it does one final reload. The poll exists only
 while the view is open AND the run is live, so unwatched and finished runs incur
-zero cost.
+zero cost. Each read after the first passes the previous answer's cursor
+(`since`) and receives only what changed (`readSessionUpdate`, §2.18): a long
+run's earlier steps are neither transferred nor re-rendered again. Without
+`since` the route answers with the whole message list, as before.
 
 **Mid-run injection**: while a run is live it registers an `ActiveRunHandle` in
 `active-runs.ts` (keyed by `runId`, holding its execution's session handle + JSONL
@@ -1179,6 +1184,45 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   still works but is uncached and logged once.
 - **Codec** (`session-transcript.ts`): the event → message conversion is pure
   and lives apart from the file I/O and the cache in `session-store.ts`.
+- **Reading only what changed.** A conversion asked to `track` records, for
+  every message and thought, the line of the last event that changed it (a
+  thought also changes when it stops being the reply text and joins the
+  process). The cache keeps those lines only once a reader has asked
+  `readSessionUpdate(…, since)`, which answers a reader holding an earlier read
+  with the messages from the first one changed and, in each, only the changed
+  thoughts placed by index (`shared/transcript-update.ts`, applied by
+  `applyTranscriptUpdate`); a cursor names the history it belongs to, so a
+  rewritten or re-parsed file answers whole. A file above 32 MB is converted
+  from the remembered turn start at or before the cursor (below), so a watcher
+  of a long run receives what the run added there too. Equality with a whole
+  read is held by randomized tests over every cut of generated logs, on both
+  sides of the 32 MB limit.
+- **Reading from a message on.** At a native turn's start (`system` init) and
+  after a stopped turn's `turn_snapshot` the conversion state is small
+  (`TranscriptSeed`: thought id count, the provenance replies inherit, an open
+  turn, stopped inputs), and nothing before can change except a stop marking a
+  person's earlier input (`input_outcome`). A `result` is not such a boundary:
+  what follows a turn's result may still revise its reply. `readSessionMessagesFrom(…, from)`
+  equals `readSessionMessages(…).slice(from)`; for a file above 32 MB it
+  remembers the newest boundaries it saw (a file that shrank or changed before
+  one forgets them) and parses only from the last one at or before `from`, never
+  the whole file again. An incremental read whose events mark an input recorded
+  before its starting boundary answers whole. The federation serializer reads a
+  member's tail this way; the same equality tests cover every boundary.
+- **Tool images.** A tool result's images are written to `<runId>.images/`
+  beside the transcript and referenced from the line
+  (`services/agent/tool-result-images.ts`). The writer derives the folder from
+  its own file; the chat entry hands the same folder (`transcriptImagesDir`) to
+  the live stream, so the step on screen and the line name one file. The
+  folder goes with its transcript: `deleteRunTranscript` (run retention)
+  removes it, clearing a chat removes it (and fails like the transcript's own
+  clear when it cannot), `copySessionJsonl` gives the copy its own names for the
+  files (hard links; a copy where links are unavailable), and app data
+  relocation moves it with the `runs/` folder. References are read
+  relative to the transcript's current folder, so a copy shows its own files
+  and a moved record still finds them. The codec keeps a result with
+  references as its blocks' JSON so the step shows the image. Older lines with
+  inline images read as before (text only).
 - **Provenance.** A user-side record may carry `_source`
   (`injection` | `cross-conversation` | `cross-conversation-notice` |
   `team-message`) and `_metadata` (the flat fields space conversations persist:
@@ -1189,6 +1233,23 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   Writers use `SessionWriter.writeTrigger(content, images, teamOrigin, provenance)`
   / `TurnSink.writeUserMessage(...)`, and write the text to *show*, not the
   framed text the model received.
+- **Reply endings.** When a turn ends before its answer was done (stopped,
+  cut off, or at the step limit — `services/agent` `replyEndingOf`, the same
+  decision as the end-of-turn notice), the chat sink appends a `reply_ending`
+  line and the reader sets `metadata.ending` on that turn's last reply, so the
+  chat still says so after a reload. The line also carries the text the reply
+  had shown (`content`): text cut off mid-block never reaches a complete
+  `assistant` line, so the reader makes those words the reply's (a reply
+  started for them when the turn wrote none; earlier saved words stay among
+  its steps). The line ends the native turn, so a later turn that fails before
+  it starts cannot take this reply as its own draft. A turn that showed and
+  wrote nothing marks nothing; a failure stays the reply's `error`. Automation
+  runs keep this on the run's own status instead. Office viewers receive the
+  ending with the member's serialized transcript (`ending`, the only metadata
+  that crosses), and accept only the values they know. Known limit: when a
+  large transcript is read a page at a time and a person's addition lies
+  between a reply and its `reply_ending` line exactly at the page boundary,
+  the earlier page shows that reply without its ending.
 - **Pushes.** A `push` line (§2.14a) reads as an assistant message with
   `source: 'push'`, `metadata.pushVia`, and the sender when it is not the chat's
   own digital human (`pushedByAppId` / `pushedByName`). Its writer never puts one among a
@@ -2343,6 +2404,15 @@ checks, file guards, execution and audit records.
   - the folder of each skill the turn may load is readable, read only, whatever
     the reading switches say: a skill reads its own instructions and references
     as it runs, and a global skill lives outside the workspace.
+  - the extracted text of a bound knowledge base is readable the same way, read
+    only, but only when its owner turned on "Let guests read its documents"
+    (`allowGuestRead`, off by default, set through the internal
+    `PUT /api/tlon/:kbId/guest-read`, which the model cannot call); without it
+    the grant adds no read access; the prompt may still include names and
+    short excerpts. The file grant is captured at the start of a restricted
+    turn. Changes affect subsequent turns, not work already in progress or
+    content already delivered. A borrowed turn does
+    not carry this digital human's grant: it reads what its lender could.
   - a file tool (Write, Edit, MultiEdit, NotebookEdit) never writes what an
     engine, or git that it runs, reads as settings, hooks or standing
     instructions, granted Write or not, memory included: `.claude/`,

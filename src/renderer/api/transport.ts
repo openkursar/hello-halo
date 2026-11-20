@@ -54,14 +54,30 @@ let _activeServerUrl: string | null = null
 
 /** Temporary server URL set during the ServerConnect flow (before store persistence) */
 let _pendingServerUrl: string | null = null
+const serverUrlListeners = new Set<() => void>()
+
+export function onServerUrlChange(listener: () => void): () => void {
+  serverUrlListeners.add(listener)
+  return () => { serverUrlListeners.delete(listener) }
+}
+
+function notifyServerUrlChange(previous: string | null): void {
+  if (previous !== getServerUrl()) serverUrlListeners.forEach(listener => listener())
+}
 
 /**
  * Called by server.store whenever the active server changes.
  * This is the ONLY way transport learns about the active server URL.
  */
 export function setActiveServerUrl(url: string | null): void {
-  _activeServerUrl = url
-  console.log(`[Transport] Active server URL: ${url ?? 'none'}`)
+  // Strip trailing slashes the same way setServerUrl does. A stored URL like
+  // "http://host:3456/" would otherwise build the socket path "//ws", which the
+  // server's exact `path: '/ws'` match rejects; HTTP tolerates the duplicate
+  // slash, so only the WebSocket fails.
+  const previous = getServerUrl()
+  _activeServerUrl = url ? url.replace(/\/+$/, '') : null
+  notifyServerUrlChange(previous)
+  console.log(`[Transport] Active server URL: ${_activeServerUrl ?? 'none'}`)
 }
 
 /**
@@ -71,7 +87,9 @@ export function setActiveServerUrl(url: string | null): void {
 export function setServerUrl(url: string): void {
   const normalized = url.replace(/\/+$/, '')
   console.log(`[Transport] Pending server URL: ${normalized}`)
+  const previous = getServerUrl()
   _pendingServerUrl = normalized
+  notifyServerUrlChange(previous)
 }
 
 /**
@@ -93,12 +111,14 @@ export function restoreServerUrl(): string | null {
 /** Clear pending server URL (e.g. when cancelling connect flow). */
 export function clearServerUrl(): void {
   console.log('[Transport] Pending server URL cleared')
-  _pendingServerUrl = null
+  clearPendingServerUrl()
 }
 
 /** Clear pending URL after it has been persisted to the store. */
 export function clearPendingServerUrl(): void {
+  const previous = getServerUrl()
   _pendingServerUrl = null
+  notifyServerUrlChange(previous)
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +197,6 @@ export async function httpRequest<T>(
   }
 
   const url = `${baseUrl}${path}`
-  console.log(`[HTTP] ${method} ${path} - token: ${token ? 'present' : 'missing'}`)
 
   try {
     const response = await fetch(url, {
@@ -191,7 +210,9 @@ export async function httpRequest<T>(
 
     // Handle 401 - token expired or invalid
     if (response.status === 401) {
-      console.warn(`[HTTP] ${method} ${path} - 401 Unauthorized`)
+      console.warn(`[HTTP] ${method} ${path.split('?')[0]} - 401 Unauthorized`)
+      // A request from the last connection cannot sign out the current one.
+      if (baseUrl !== getRemoteServerUrl() || token !== getAuthToken()) return { success: false, error: 'Unauthorized' }
       clearAuthToken()
 
       if (isCapacitor()) {
@@ -221,8 +242,18 @@ export async function httpRequest<T>(
       }
     }
 
+    // A proxy or SPA fallback can answer an API path with HTML. Parsing that as
+    // JSON throws a SyntaxError that says nothing about the cause.
+    const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? ''
+    if (contentType !== 'application/json' && !/^application\/[^\s/;]+\+json$/.test(contentType)) {
+      console.warn(`[HTTP] ${method} ${path.split('?')[0]} - expected JSON, received ${contentType || 'no content type'} (HTTP ${response.status})`)
+      return {
+        success: false,
+        error: i18n.t('The server returned a non-JSON response (HTTP {{status}}). Check the server deployment and reverse proxy configuration.', { status: response.status }),
+      }
+    }
+
     const data = await response.json()
-    console.log(`[HTTP] ${method} ${path} - status: ${response.status}, success: ${data.success}`)
 
     if (!response.ok) {
       console.warn(`[HTTP] ${method} ${path} - error:`, data.error)
@@ -256,6 +287,33 @@ const _subscribedConversations = new Set<string>()
 export type WsConnectionState = 'connected' | 'disconnected' | 'connecting'
 
 const wsStateListeners = new Set<(state: WsConnectionState) => void>()
+let wsBrowserLive = false
+let wsBrowserCredentials = false
+let authenticatedSocket: WebSocket | null = null
+const wsAuthenticatedListeners = new Set<(isCurrent: () => boolean) => void>()
+
+export function supportsBrowserLive(): boolean {
+  return wsBrowserLive
+}
+
+export function supportsBrowserCredentials(): boolean {
+  return wsBrowserCredentials
+}
+
+/** Recover missed data only when the new socket can already receive live events. */
+export function onWsAuthenticated(callback: (isCurrent: () => boolean) => void): () => void {
+  wsAuthenticatedListeners.add(callback)
+  if (authenticatedSocket && wsConnection === authenticatedSocket) notifyWsAuthenticated(authenticatedSocket, callback)
+  return () => { wsAuthenticatedListeners.delete(callback) }
+}
+
+function notifyWsAuthenticated(socket: WebSocket, callback: (isCurrent: () => boolean) => void): void {
+  try {
+    callback(() => socket === wsConnection && socket === authenticatedSocket)
+  } catch (error) {
+    console.warn('[WS] Authenticated connection listener failed', error)
+  }
+}
 
 /** Subscribe to WebSocket connection state changes */
 export function onWsStateChange(cb: (state: WsConnectionState) => void): () => void {
@@ -270,9 +328,8 @@ function emitWsState(state: WsConnectionState) {
 }
 
 export function connectWebSocket(): void {
-  // Works in both remote-browser and Capacitor modes
   if (isElectron()) return
-  if (wsConnection?.readyState === WebSocket.OPEN) return
+  if (wsConnection && wsConnection.readyState <= WebSocket.OPEN) return
 
   const token = getAuthToken()
   if (!token) {
@@ -288,63 +345,62 @@ export function connectWebSocket(): void {
 
   const wsUrl = `${baseUrl.replace(/^http/, 'ws')}/ws`
   console.log(`[WS] Connecting to: ${wsUrl} (attempt: ${wsReconnectAttempt})`)
+  wsBrowserLive = false
+  wsBrowserCredentials = false
+  const connection = new WebSocket(wsUrl)
+  wsConnection = connection
   emitWsState('connecting')
 
-  wsConnection = new WebSocket(wsUrl)
-
-  wsConnection.onopen = () => {
-    console.log('[WS] Connected')
-    wsReconnectAttempt = 0 // reset backoff on success
-    emitWsState('connected')
-    // Authenticate
-    wsConnection?.send(JSON.stringify({ type: 'auth', payload: { token } }))
+  connection.onopen = () => {
+    if (wsConnection === connection) connection.send(JSON.stringify({ type: 'auth', payload: { token } }))
   }
 
-  wsConnection.onmessage = (event) => {
+  connection.onmessage = (event) => {
+    if (wsConnection !== connection) return
     try {
       const message = JSON.parse(event.data)
 
       if (message.type === 'auth:success') {
         console.log('[WS] Authenticated')
-
-        // Re-subscribe to all previously subscribed conversations after reconnect
-        if (_subscribedConversations.size > 0) {
-          console.log(`[WS] Re-subscribing to ${_subscribedConversations.size} conversation(s)`)
-          for (const convId of _subscribedConversations) {
-            wsConnection?.send(JSON.stringify({ type: 'subscribe', payload: { conversationId: convId } }))
-          }
+        wsReconnectAttempt = 0
+        wsBrowserLive = message.payload?.browserLive === true
+        // Older servers advertised both capabilities through browserLive.
+        wsBrowserCredentials = wsBrowserLive && (message.payload?.browserCredentials ?? true) === true
+        for (const convId of _subscribedConversations) {
+          connection.send(JSON.stringify({ type: 'subscribe', payload: { conversationId: convId } }))
+        }
+        emitWsState('connected')
+        if (authenticatedSocket !== connection) {
+          authenticatedSocket = connection
+          for (const listener of wsAuthenticatedListeners) notifyWsAuthenticated(connection, listener)
         }
 
-        // Start foreground service to keep WebSocket alive in background (Capacitor only)
         if (isCapacitor()) {
           import('./foreground-service').then(({ startForegroundService }) => {
-            startForegroundService('Halo', 'Connected to desktop')
+            if (wsConnection === connection) startForegroundService('Halo', 'Connected to desktop')
           }).catch(() => { /* plugin not available */ })
         }
-
         return
       }
 
       if (message.type === 'event') {
-        // Dispatch to registered listeners
         const listeners = wsEventListeners.get(message.channel)
-        if (listeners) {
-          for (const callback of listeners) {
-            callback(message.data)
-          }
-        }
+        if (listeners) for (const callback of listeners) callback(message.data)
       }
     } catch (error) {
       console.error('[WS] Failed to parse message:', error)
     }
   }
 
-  wsConnection.onclose = () => {
+  connection.onclose = () => {
+    if (authenticatedSocket === connection) authenticatedSocket = null
+    if (wsConnection !== connection) return
     console.log('[WS] Disconnected')
     wsConnection = null
+    wsBrowserLive = false
+    wsBrowserCredentials = false
     emitWsState('disconnected')
 
-    // Exponential backoff reconnection
     if (!isElectron() && getAuthToken()) {
       wsReconnectAttempt++
       const delay = Math.min(
@@ -356,8 +412,8 @@ export function connectWebSocket(): void {
     }
   }
 
-  wsConnection.onerror = (error) => {
-    console.error('[WS] Error:', error)
+  connection.onerror = (error) => {
+    if (wsConnection === connection) console.error('[WS] Error:', error)
   }
 }
 
@@ -370,11 +426,11 @@ export function disconnectWebSocket(): void {
     wsReconnectTimer = null
   }
 
-  if (wsConnection) {
-    wsConnection.close()
-    wsConnection = null
-  }
-
+  const connection = wsConnection
+  wsConnection = null
+  wsBrowserLive = false
+  wsBrowserCredentials = false
+  connection?.close()
   emitWsState('disconnected')
 
   // Stop foreground service when intentionally disconnecting (Capacitor only)
@@ -489,9 +545,12 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'browser:tab-opened': 'onBrowserTabOpened',
       'browser:zoom-changed': 'onBrowserZoomChanged',
       'canvas:tab-action': 'onCanvasTabAction',
+      'canvas:show-request': 'onCanvasShowRequest',
       'ai-browser:active-view-changed': 'onAIBrowserActiveViewChanged',
+      'ai-browser:page-opened': 'onAIBrowserPageOpened',
       'ai-browser:view-gone': 'onAIBrowserViewGone',
       'ai-browser:conversation-released': 'onAIBrowserConversationReleased',
+      'ai-browser:operating': 'onAIBrowserOperating',
       'artifact:tree-update': 'onArtifactTreeUpdate',
       'artifact:changed-batch': 'onArtifactChangedBatch',
       'perf:snapshot': 'onPerfSnapshot',

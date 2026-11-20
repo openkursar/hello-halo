@@ -10,7 +10,7 @@
  */
 
 import { useState } from 'react'
-import { CheckCircle2, SkipForward, XCircle, Bell, FileOutput, Clock, ChevronRight, Play, FileText, FolderOpen } from 'lucide-react'
+import { CheckCircle2, SkipForward, XCircle, Bell, FileOutput, Clock, ChevronRight, Play } from 'lucide-react'
 import type { ActivityEntry } from '../../../shared/apps/app-types'
 import { ActivitySource } from './ActivitySource'
 import { EscalationCard } from './EscalationCard'
@@ -21,8 +21,8 @@ import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useDataContent } from '../../hooks/useDataContent'
+import { DataPathPanel } from './DataPathPanel'
 import { useTranslation } from '../../i18n'
-import { api } from '../../api'
 
 interface ActivityEntryCardProps {
   entry: ActivityEntry
@@ -122,7 +122,7 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
   const { content } = entry
   const durationMs = content.durationMs
   const canViewProcess = hasSessionLink(entry)
-  const resolvedData = useDataContent(content)
+  const { text: resolvedData, unreadable: dataUnreadable } = useDataContent(content)
 
   const canResume =
     entry.type === 'run_error' && content.resumeAvailable === true
@@ -207,24 +207,11 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
 
             {/* Detailed data: file-sourced (dataPath) or inline */}
             {content.dataPath ? (
-              <div className="rounded-md border border-border overflow-hidden">
-                <button
-                  onClick={() => api.showArtifactInFolder(content.dataPath!)}
-                  title={content.dataPath}
-                  className="w-full flex items-center gap-1.5 px-2.5 py-1.5
-                    bg-secondary/60 hover:bg-secondary text-muted-foreground
-                    text-[11px] font-mono transition-colors group border-b border-border"
-                >
-                  <FileText className="w-3 h-3 flex-shrink-0" />
-                  <span className="truncate">{content.dataPath.split('/').pop()}</span>
-                  <FolderOpen className="w-3 h-3 flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
-                </button>
-                {resolvedData && (
-                  <div className="p-3">
-                    <MarkdownRenderer content={resolvedData} className="text-sm" />
-                  </div>
-                )}
-              </div>
+              <DataPathPanel
+                dataPath={content.dataPath}
+                text={resolvedData}
+                unreadable={dataUnreadable}
+              />
             ) : (
               <>
                 {resolvedData && (

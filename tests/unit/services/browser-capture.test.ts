@@ -39,6 +39,15 @@ describe('browser frame capture', () => {
     expect(contents.capturePage).toHaveBeenCalledTimes(2)
   })
 
+  it('retries the viz error a never-shown guest reports before its first commit', async () => {
+    const contents = new CaptureContents()
+    contents.capturePage.mockRejectedValueOnce(new Error('UnknownVizError'))
+    const request = captureBrowserPage(contents as never, undefined, 100)
+    await vi.advanceTimersByTimeAsync(25)
+    expect(await request).toBe(painted)
+    expect(contents.capturePage).toHaveBeenCalledTimes(2)
+  })
+
   it('rejects permanent native errors without retrying or retaining a deadline', async () => {
     const contents = new CaptureContents()
     contents.capturePage.mockRejectedValueOnce(new Error('Renderer process lost'))

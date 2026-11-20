@@ -54,7 +54,7 @@ import type { AppChatInjectRequest, EscalationAnswerPayload } from '../../../sha
 import { isImageAttachmentInput } from '../../../shared/types/image-attachment'
 import { resolveHttpImChat, buildImSessionKey } from '../../../shared/apps/im-keys'
 import { parseTurnReferences, toAppChatRequest } from '../../controllers/chat-turn-input'
-import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow, listAppReminders, cancelAppReminder, countClearableChats, clearAllChats } from '../../apps/runtime'
+import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, readAppRunUpdate, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow, listAppReminders, cancelAppReminder, countClearableChats, clearAllChats } from '../../apps/runtime'
 
 async function respondOperation(res: Response, name: string, operation: () => unknown | Promise<unknown>): Promise<void> {
   try {
@@ -772,6 +772,11 @@ export function registerAppsRoutes(app: Express): void {
         return
       }
 
+      // `since` asks for only what changed after an earlier read (empty: everything, with a cursor).
+      if (typeof req.query.since === 'string') {
+        res.json({ success: true, data: readAppRunUpdate(appId, runId, req.query.since) })
+        return
+      }
       const messages = readAppRunMessages(appId, runId)
       res.json({ success: true, data: messages })
     } catch (error) {
@@ -1310,7 +1315,8 @@ export function registerAppsRoutes(app: Express): void {
         if (!target) return
         conversationId = target.conversationId
       }
-      const state = getAppChatSessionState(appId, conversationId)
+      const since = typeof req.query.since === 'string' ? req.query.since : undefined
+      const state = getAppChatSessionState(appId, conversationId, since)
       res.json({ success: true, data: state })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

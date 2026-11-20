@@ -612,6 +612,11 @@ export interface TurnFileAccess {
   attachedFiles: string[]
   /** Folders of the skills granted to this turn, readable only */
   skillFolders?: string[]
+  /**
+   * Extracted-text folders of the knowledge bases bound to this digital human
+   * whose owner allowed guest reading, readable only
+   */
+  knowledgeFolders?: string[]
   /** Where a granted file tool may reach */
   workspaceRoots: string[]
   /** Folders inside the workspace that stay closed except for memory */

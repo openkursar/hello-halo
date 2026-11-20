@@ -35,6 +35,7 @@ import { isServerMode } from '../foundation/runtime-mode'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
 import { registerAIBrowserHandlers, cleanupAIBrowserHandlers } from '../ipc/ai-browser'
+import { registerCanvasShowHandlers, cleanupCanvasShowHandlers } from '../ipc/canvas-show'
 import { cleanupAIBrowser } from '../services/ai-browser'
 import { cleanupAITerminal } from '../services/ai-terminal'
 import { cleanupTerminalHandlers } from '../ipc/terminal'
@@ -561,15 +562,16 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
       // pull/replicate only the tail. Carries the thoughts/tool trace so a remote
       // viewer's backfill shows the same thinking the live relay did.
       const serializeTeamTranscript = (teamId: string, appId: string, epochId: string, sinceSeq?: number) => {
-        const messages = readTeamMemberMessages(appId, teamId, epochId)
         const start = typeof sinceSeq === 'number' && sinceSeq > 0 ? sinceSeq - 1 : 0
-        return messages.slice(start).map((m, i) => ({
+        const messages = start > 0 ? readTeamMemberMessages(appId, teamId, epochId, start) : readTeamMemberMessages(appId, teamId, epochId)
+        return messages.map((m, i) => ({
           seq: start + i + 1,
           role: m.role,
           content: m.content,
           ...(m.thoughts ? { thoughts: m.thoughts } : {}),
           ...(m.thoughtsSummary ? { thoughtsSummary: m.thoughtsSummary } : {}),
           ...(m.timestamp ? { ts: Date.parse(m.timestamp) || undefined } : {}),
+          ...(m.metadata?.ending ? { ending: m.metadata.ending } : {}),
         }))
       }
 
@@ -1506,7 +1508,10 @@ export function initializeExtendedServices(): void {
   const start = performance.now()
   console.log('[Bootstrap] Extended services starting...')
 
-  console.log(`[Startup] proxy env_http=${process.env.HTTP_PROXY || ''} env_https=${process.env.HTTPS_PROXY || ''} env_no_proxy=${process.env.NO_PROXY || ''} app_proxy=${getConfig().network?.proxy || ''}`)
+  console.log('[Startup] Proxy configuration present:', {
+    http: Boolean(process.env.HTTP_PROXY || process.env.http_proxy), https: Boolean(process.env.HTTPS_PROXY || process.env.https_proxy),
+    bypass: Boolean(process.env.NO_PROXY || process.env.no_proxy), app: Boolean(getConfig().network?.proxy),
+  })
 
   // Get main window for services that still need it directly
   const mainWindow = getMainWindow()
@@ -1614,6 +1619,9 @@ export function initializeExtendedServices(): void {
   // (called on demand). Only the view-lifecycle event forwarding is wired here so
   // the renderer can reveal the AI's live view. See ai-browser/DESIGN.md.
   registerAIBrowserHandlers()
+
+  // canvas_show: forwards the AI's request to every client and gathers their answers.
+  registerCanvasShowHandlers()
 
   // Search: Global search functionality
   initializeSearchHandlers()
@@ -1845,6 +1853,7 @@ export async function cleanupExtendedServices(): Promise<void> {
     // up by their owners: app-chat.ts / execute.ts) and unsubscribe event forwarding
     cleanupAIBrowserHandlers()
     cleanupAIBrowser()
+    cleanupCanvasShowHandlers()
 
     // AI Terminal: Unsubscribe event forwarding, then kill all pty sessions
     cleanupTerminalHandlers()

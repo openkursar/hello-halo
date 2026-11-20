@@ -13,6 +13,10 @@
  * Because the run emits no renderer events, the ~99% of runs nobody watches cost
  * the renderer nothing, and the poll only runs while this view is open.
  *
+ * - Each read after the first asks only for what changed since the previous
+ *   one (`shared/transcript-update.ts`): a long run's earlier steps are not
+ *   transferred and re-rendered again every poll. Reads never overlap; one the
+ *   held transcript cannot take is followed by a whole read.
  * - Live detection is authoritative from the app runtime status (running +
  *   runningRunId === runId), broadcast via app:status_changed.
  * - While live, the input box sends a supplement via app:inject-run; the AI
@@ -34,6 +38,7 @@ import { InputArea } from '../chat/InputArea'
 import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
 import type { ContentReference } from '../../../shared/types/content-reference'
+import { applyTranscriptUpdate, type TranscriptUpdate } from '../../../shared/transcript-update'
 import { addRunTokenUsage, type RunTokenUsage } from '../../../shared/apps/app-types'
 import { runTokenBreakdown, runTokenTotal } from './run-tokens'
 
@@ -93,16 +98,50 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
     }
   }
 
+  // What the last read returned (without the optimistic echo) and where it ended.
+  const heldRef = useRef<{ key: string; messages: Message[]; cursor?: string }>({ key: '', messages: [] })
+  const readingRef = useRef<{ key: string; again: boolean } | null>(null)
+
+  // The whole run on the first read; afterwards only what changed since the last one.
+  const readTranscript = useCallback(async (): Promise<{ success: boolean; messages?: Message[]; code?: string; error?: unknown }> => {
+    const key = `${appId}:${runId}`
+    if (heldRef.current.key !== key) heldRef.current = { key, messages: [] }
+    const held = heldRef.current
+    const res = await api.appGetSession(appId, runId, held.cursor ?? '')
+    if (!res.success || !res.data) return { success: false, code: res.code, error: res.error }
+    if (heldRef.current !== held) return { success: false }
+    if (Array.isArray(res.data)) {
+      heldRef.current = { key, messages: res.data as Message[] }
+      return { success: true, messages: heldRef.current.messages }
+    }
+    const update = res.data as TranscriptUpdate
+    const messages = applyTranscriptUpdate(held.messages, update)
+    if (!messages) {
+      console.warn('[SessionDetailView] Transcript update did not fit the held run; reading it whole')
+      heldRef.current = { key, messages: [] }
+      return readTranscript()
+    }
+    heldRef.current = { key, messages, cursor: update.cursor || undefined }
+    return { success: true, messages }
+  }, [appId, runId])
+
   // ── Load persisted run messages from JSONL ──
   const loadSession = useCallback(async (showSpinner = true) => {
+    const key = `${appId}:${runId}`
+    if (readingRef.current?.key === key) {
+      readingRef.current.again = true
+      return
+    }
+    readingRef.current = { key, again: false }
     if (showSpinner) {
       setLoadState('loading')
       setErrorMsg(null)
     }
     try {
-      const res = await api.appGetSession(appId, runId)
-      if (res.success && res.data) {
-        const msgs = (res.data as Message[]) ?? []
+      const res = await readTranscript()
+      if (heldRef.current.key !== key) return
+      if (res.success && res.messages) {
+        const msgs = res.messages
         setMessages(msgs)
         setLoadState(prev => (msgs.length > 0 ? 'loaded' : (prev === 'loading' ? 'empty' : prev)))
       } else if (res.code === 'RUN_PROCESS_CLEARED') {
@@ -116,12 +155,20 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
         setErrorMsg(String(err))
         setLoadState('error')
       }
+    } finally {
+      const reading = readingRef.current
+      if (reading?.key === key) {
+        readingRef.current = null
+        if (reading.again) void loadSession(false)
+      }
     }
-  }, [appId, runId])
+  }, [appId, runId, readTranscript])
 
   // ── Initial load on run change ──
   useEffect(() => {
     setSendRefused(false)
+    heldRef.current = { key: `${appId}:${runId}`, messages: [] }
+    readingRef.current = null
     loadSession(true)
   }, [appId, runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -290,7 +337,7 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
             hideBrowserLiveView
             hideTerminalOpen
             defaultThoughtsExpanded
-            defaultThoughtsMaximized
+            showOperations
             onAtBottomStateChange={handleAtBottomStateChange}
             footerExtra={footerExtra}
           />

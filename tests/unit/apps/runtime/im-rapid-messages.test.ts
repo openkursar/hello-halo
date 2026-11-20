@@ -237,6 +237,7 @@ vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({
   createRemindersMcpServer: () => ({ _isMcpServer: true, name: 'halo-reminders' }),
 }))
+vi.mock('../../../../src/main/services/canvas-show', () => ({ createCanvasMcpServer: () => ({}) }))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
   createReportToolServer: () => ({ _isMcpServer: true, name: 'halo-report' }),
 }))
@@ -296,6 +297,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   onApiConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
   onNetworkConfigChange: vi.fn(),
+  onAiSourcesConfigChange: vi.fn(),
 }))
 vi.mock('../../../../src/main/services/space.service', () => ({
   getSpace: () => ({ id: 'space-1', path: '/tmp/halo-test/space' }),
@@ -736,6 +738,23 @@ describe('a relay action whose listener is still starting', () => {
     expect(engine.state.answered).toHaveLength(1)
     expect(engine.state.answered[0][0]).toContain('华东吧')
     expect(engine.state.answered[0][1]).toContain('按刚才说的继续')
+  })
+
+  it.each([true, false])('acknowledges /stop itself only if the long reply was not delivered (%s)', async delivered => {
+    channel.config = { ...channel.config, streaming: true }
+    const first = directReply()
+    const stopLongReply = vi.fn(async () => delivered)
+    first.streaming = { update: vi.fn(async () => {}), finish: vi.fn(async () => {}), stopLongReply }
+    const control = directReply()
+    const dispatch = dispatchInboundMessage(directMessage('华东吧'), first, 'app-1', 'inst-1')
+    await vi.waitFor(() => expect(relays.preparing).toBe(true))
+
+    await dispatchInboundMessage(directMessage('/stop'), control, 'app-1', 'inst-1')
+    expect(stopLongReply).toHaveBeenCalledOnce()
+    expect(control.sent).toEqual(delivered ? [] : ['Generation stopped.'])
+    relays.release()
+    await dispatch
+    expect(first.streaming.finish).not.toHaveBeenCalled()
   })
 
   it.each([

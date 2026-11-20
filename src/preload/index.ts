@@ -18,11 +18,14 @@ import type { AgentInjectRequest, AgentInjectResult, AgentSendRequest } from '..
 import type { Thought, TranscriptPage } from '../shared/types/transcript'
 import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } from '../shared/types/artifact'
 import type { MemoryPressureEvent } from '../shared/types/memory-pressure'
-import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
+import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserOperating, AIBrowserPageOpened, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
+import type { CanvasShowReply, CanvasShowRequest } from '../shared/types/canvas-show'
+import type { TerminalSnapshotEntry } from '../shared/types/terminal'
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import type { SpaceDetailsRequestOptions } from '../shared/types/space'
 import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
 import type { PickedLocalEntry } from '../shared/attached-paths'
+import type { KBOptions as TlonKBOptions } from '../shared/types/tlon'
 import type { ProxyRouteInfo } from '../shared/rpc/contracts/system.contract'
 import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../shared/types/im-channel'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
@@ -259,7 +262,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   setGoal: (data: { spaceId: string; conversationId: string; goal: GoalInput | null }) => Promise<IpcResponse>
 
   // Terminal (derived from terminalRpc contract)
-  listTerminals: () => Promise<IpcResponse>
+  listTerminals: () => Promise<IpcResponse<TerminalSnapshotEntry[]>>
   createTerminal: (data: { spaceId: string; shell?: string; cwd?: string; title?: string }) => Promise<IpcResponse>
   terminalInput: (data: { sessionId: string; data: string }) => Promise<IpcResponse>
   terminalResize: (data: { sessionId: string; cols: number; rows: number }) => Promise<IpcResponse>
@@ -293,11 +296,12 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   onToolsetsRequested: (callback: (data: unknown) => void) => () => void
 
   // Tlon (knowledge base)
-  tlonCreate: (input: { name: string; icon?: string; description?: string; linkedDirs?: Array<{ path: string; label: string }> }) => Promise<IpcResponse>
+  tlonCreate: (input: { name: string; icon?: string; description?: string; linkedDirs?: Array<{ path: string; label: string }>; options?: TlonKBOptions }) => Promise<IpcResponse>
   tlonList: () => Promise<IpcResponse>
   tlonListForSpace: (spaceId: string) => Promise<IpcResponse>
   tlonGet: (kbId: string) => Promise<IpcResponse>
-  tlonUpdate: (kbId: string, updates: { name?: string; icon?: string; description?: string; status?: string }) => Promise<IpcResponse>
+  tlonUpdate: (kbId: string, updates: { name?: string; icon?: string; description?: string; status?: string; options?: TlonKBOptions | null }) => Promise<IpcResponse>
+  tlonSetGuestRead: (kbId: string, allow: boolean) => Promise<IpcResponse>
   tlonDelete: (kbId: string) => Promise<IpcResponse>
   tlonSetDefault: (kbId: string | null) => Promise<IpcResponse>
   tlonBindSpace: (kbId: string, spaceId: string) => Promise<IpcResponse>
@@ -305,7 +309,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   tlonBindApp: (kbId: string, appId: string) => Promise<IpcResponse>
   tlonUnbindApp: (kbId: string, appId: string) => Promise<IpcResponse>
   tlonAddLinkedDir: (kbId: string, dir: { path: string; label: string }) => Promise<IpcResponse>
-  tlonRemoveLinkedDir: (kbId: string, linkId: string) => Promise<IpcResponse>
+  tlonRemoveLinkedDir: (kbId: string, linkId: string, options?: { forget?: boolean }) => Promise<IpcResponse>
   tlonRetryLinkedDir: (kbId: string, linkId: string) => Promise<IpcResponse>
   tlonAddFiles: (kbId: string, filePaths: string[]) => Promise<IpcResponse>
   tlonListRaw: (kbId: string) => Promise<IpcResponse>
@@ -465,12 +469,17 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
     tabIndex?: number
     tabPath?: string
   }) => void) => () => void
+  // The AI asks to bring something in front of the user; this client answers what it did
+  onCanvasShowRequest: (callback: (data: CanvasShowRequest) => void) => () => void
+  replyCanvasShow: (reply: CanvasShowReply) => Promise<IpcResponse>
 
   // AI Browser
   onAIBrowserActiveViewChanged: (callback: (data: AIBrowserActiveView) => void) => () => void
+  onAIBrowserPageOpened: (callback: (data: AIBrowserPageOpened) => void) => () => void
   onAIBrowserViewGone: (callback: (data: AIBrowserViewGone) => void) => () => void
   listAIBrowserLivePages: () => Promise<IpcResponse<AIBrowserLivePage[]>>
   onAIBrowserConversationReleased: (callback: (data: AIBrowserConversationReleased) => void) => () => void
+  onAIBrowserOperating: (callback: (data: AIBrowserOperating) => void) => () => void
   stopAIBrowserPage: (viewId: string, conversationId: string) => Promise<IpcResponse<AIBrowserStopResult>>
 
   // Performance Monitoring (Developer Tools)
@@ -605,7 +614,8 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   appStartRun: (appId: string) => Promise<IpcResponse<import('../shared/apps/app-types').AppRunStartInfo>>
   appGetState: (appId: string) => Promise<IpcResponse>
   appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number; teamId?: string; epochId?: string } }) => Promise<IpcResponse>
-  appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>
+  /** `since` (a cursor from an earlier update, or '' for everything) returns a `TranscriptUpdate` instead of the message list. */
+  appGetSession: (input: { appId: string; runId: string; since?: string }) => Promise<IpcResponse>
   appRespondEscalation: (input: { appId: string; escalationId: string; response: EscalationResponse }) => Promise<IpcResponse>
   appGetRuns: (input: { appId: string; options?: { limit?: number; offset?: number } }) => Promise<IpcResponse<import('../shared/apps/app-types').AutomationRunWithSummary[]>>
   appGetRunStats: (input: { appId: string; window?: number }) => Promise<IpcResponse<import('../shared/apps/app-types').RunStats>>
@@ -668,7 +678,8 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   // Paged read, newest page first; messages carry thoughts:null (see appChatMessageThoughts)
   appChatTranscript: (input: { appId: string; spaceId: string; conversationId?: string; before?: string; limit?: number; through?: string }) => Promise<IpcResponse<import('../shared/apps/app-types').AppChatTranscriptPage>>
   appChatMessageThoughts: (input: { appId: string; spaceId: string; conversationId?: string; messageId: string }) => Promise<IpcResponse<Thought[]>>
-  appChatSessionState: (appId: string, conversationId?: string) => Promise<IpcResponse>
+  /** `since` (a `thoughtsRevision` from an earlier read, or '' at first) returns only the thoughts changed since. */
+  appChatSessionState: (appId: string, conversationId?: string, since?: string) => Promise<IpcResponse>
   appChatClear: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
   appChatRestart: (appId: string) => Promise<IpcResponse<{ sessionsClosed: number }>>
   appChatsClearable: (appId: string) => Promise<IpcResponse<{ total: number; im: number; teamIm: number }>>
@@ -1073,12 +1084,16 @@ const api: HaloAPI = {
   // Canvas Tab Menu (native Electron menu)
   showCanvasTabContextMenu: (options) => ipcRenderer.invoke('canvas:show-tab-context-menu', options),
   onCanvasTabAction: (callback) => createEventListener('canvas:tab-action', callback),
+  onCanvasShowRequest: (callback) => createEventListener('canvas:show-request', callback),
+  replyCanvasShow: (reply) => ipcRenderer.invoke('canvas:show-reply', reply),
 
   // AI Browser - active view change / view gone notifications from main process
   onAIBrowserActiveViewChanged: (callback) => createEventListener('ai-browser:active-view-changed', callback),
+  onAIBrowserPageOpened: (callback) => createEventListener('ai-browser:page-opened', callback),
   onAIBrowserViewGone: (callback) => createEventListener('ai-browser:view-gone', callback),
   listAIBrowserLivePages: () => ipcRenderer.invoke('ai-browser:list-live-pages'),
   onAIBrowserConversationReleased: (callback) => createEventListener('ai-browser:conversation-released', callback),
+  onAIBrowserOperating: (callback) => createEventListener('ai-browser:operating', callback),
   stopAIBrowserPage: (viewId, conversationId) => ipcRenderer.invoke('ai-browser:stop-page', { viewId, conversationId }),
 
   // Performance Monitoring (Developer Tools)

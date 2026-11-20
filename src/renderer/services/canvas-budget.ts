@@ -5,7 +5,9 @@
  *
  * Never touched: the active tab, tabs with unsaved edits, terminals (a close
  * would end or prompt about a live pty) and browser views the AI attached
- * (their session outlives the tab).
+ * (their session outlives the tab). The AI's own tabs do not count toward the
+ * limits either: they are never closed here, so counting them would only push
+ * the user's tabs out.
  */
 
 import type { TabState } from './canvas-lifecycle'
@@ -30,6 +32,10 @@ export function tabContentBytes(tab: TabState): number {
   return (tab.content?.length ?? 0) * 2 + (tab.bytes?.byteLength ?? 0)
 }
 
+export function canEvictTab(tab: TabState): boolean {
+  return !tab.aiWork && !tab.isDirty && tab.type !== 'terminal' && tab.browserViewOwned !== false
+}
+
 export function planCanvasBudget(
   tabs: readonly TabState[],
   activeTabId: string | null,
@@ -37,15 +43,16 @@ export function planCanvasBudget(
   limits: CanvasBudgetLimits
 ): CanvasBudgetPlan {
   const byRecency = (a: TabState, b: TabState) => (lastActivated.get(a.id) ?? 0) - (lastActivated.get(b.id) ?? 0)
-  const hidden = tabs.filter(tab => tab.id !== activeTabId && !tab.isDirty).sort(byRecency)
+  const counted = tabs.filter(tab => !tab.aiWork)
+  const hidden = counted.filter(tab => tab.id !== activeTabId && !tab.isDirty).sort(byRecency)
 
-  const closable = hidden.filter(tab => tab.type !== 'terminal' && tab.browserViewOwned !== false)
-  const close = closable.slice(0, Math.max(0, tabs.length - limits.maxOpenTabs)).map(tab => tab.id)
+  const closable = hidden.filter(canEvictTab)
+  const close = closable.slice(0, Math.max(0, counted.length - limits.maxOpenTabs)).map(tab => tab.id)
   const closing = new Set(close)
   const remaining = hidden.filter(tab => !closing.has(tab.id))
 
-  const activeTab = tabs.find(tab => tab.id === activeTabId)
-  const liveViews = tabs.filter(tab => tab.browserViewId && !closing.has(tab.id)).length
+  const activeTab = counted.find(tab => tab.id === activeTabId)
+  const liveViews = counted.filter(tab => tab.browserViewId && !closing.has(tab.id)).length
   const releasable = remaining.filter(tab => tab.browserViewId && tab.browserViewOwned)
   const excessViews = liveViews - Math.max(limits.maxLiveBrowserViews, activeTab?.browserViewId ? 1 : 0)
   const releaseView = releasable.slice(0, Math.max(0, excessViews)).map(tab => tab.id)

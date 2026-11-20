@@ -374,6 +374,7 @@ describe('testMcpConnections environment', () => {
     expect(sdk.buildSdkEnv).toHaveBeenCalledWith({
       anthropicApiKey: 'encoded-a', anthropicBaseUrl: 'http://127.0.0.1:3457', delegatedRoutingHeader: undefined,
       capabilities: credentials.capabilities, sourceId: 'account-a',
+      mcpServers: { srv: { type: 'stdio', command: 'test-mcp' } },
     })
     const options = vi.mocked(query).mock.calls[0][0].options
     expect(options.engineId).toBe('anthropic')

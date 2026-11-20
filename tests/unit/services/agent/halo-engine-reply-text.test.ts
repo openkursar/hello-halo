@@ -118,7 +118,9 @@ it('places text before Goal during streaming and after reopening, without repeat
     sessionState, spaceId: 'space-1', conversationId: 'conv-1', messageContent: '1+3', displayModel: 'm',
     abortController: sessionState.abortController, t0: Date.now(), callbacks: {},
   } as unknown as Parameters<typeof processStream>[0])
-  expect(result.finalContent).toBe(ANSWER)
+  // Goal is bookkeeping, so the text on either side of it reads as one reply.
+  const reply = `${intermediate}\n\n${ANSWER}`
+  expect(result.finalContent).toBe(reply)
   expect(track.mock.calls.filter(([event]) => event === 'llm.invocation')).toEqual([
     ['llm.invocation', expect.objectContaining({ inputTokens: 12, outputTokens: 20 })],
     ['llm.invocation', expect.objectContaining({ inputTokens: 12, outputTokens: 20 })],
@@ -130,7 +132,7 @@ it('places text before Goal during streaming and after reopening, without repeat
     .map((frame, index) => ({ ...frame, _ts: new Date(1_700_000_000_000 + index).toISOString() }) as StoredEvent)
   const replies = convertEventsToMessages(stored).filter(message => message.role === 'assistant')
   expect(replies).toHaveLength(1)
-  expect(replies[0].content).toBe(ANSWER)
+  expect(replies[0].content).toBe(reply)
   expect(replies[0].thoughts?.filter(thought => ['text', 'tool_use'].includes(thought.type))
-    .map(thought => thought.type)).toEqual(['text', 'tool_use'])
+    .map(thought => thought.type)).toEqual(['tool_use'])
 })

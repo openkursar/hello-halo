@@ -4,6 +4,7 @@
  */
 import { httpRequest, isElectron, onEvent } from './_shared'
 import type { ApiResponse } from './_shared'
+import type { KBOptions } from '../../shared/types/tlon'
 
 export const tlonApi = {
   tlon: {
@@ -12,6 +13,7 @@ export const tlonApi = {
       icon?: string
       description?: string
       linkedDirs?: Array<{ path: string; label: string }>
+      options?: KBOptions
     }): Promise<ApiResponse> => {
       if (isElectron()) return window.halo.tlonCreate(input)
       return httpRequest('POST', '/api/tlon', input)
@@ -29,10 +31,14 @@ export const tlonApi = {
       return httpRequest('GET', `/api/tlon/${kbId}`)
     },
     update: async (kbId: string, updates: {
-      name?: string; icon?: string; description?: string; status?: string
+      name?: string; icon?: string; description?: string; status?: string; options?: KBOptions | null
     }): Promise<ApiResponse> => {
       if (isElectron()) return window.halo.tlonUpdate(kbId, updates)
       return httpRequest('PUT', `/api/tlon/${kbId}`, updates)
+    },
+    setGuestRead: async (kbId: string, allow: boolean): Promise<ApiResponse> => {
+      if (isElectron()) return window.halo.tlonSetGuestRead(kbId, allow)
+      return httpRequest('PUT', `/api/tlon/${kbId}/guest-read`, { allow })
     },
     delete: async (kbId: string): Promise<ApiResponse> => {
       if (isElectron()) return window.halo.tlonDelete(kbId)
@@ -62,9 +68,9 @@ export const tlonApi = {
       if (isElectron()) return window.halo.tlonAddLinkedDir(kbId, dir)
       return httpRequest('POST', `/api/tlon/${kbId}/linked-dirs`, dir)
     },
-    removeLinkedDir: async (kbId: string, linkId: string): Promise<ApiResponse> => {
-      if (isElectron()) return window.halo.tlonRemoveLinkedDir(kbId, linkId)
-      return httpRequest('DELETE', `/api/tlon/${kbId}/linked-dirs/${linkId}`)
+    removeLinkedDir: async (kbId: string, linkId: string, options?: { forget?: boolean }): Promise<ApiResponse> => {
+      if (isElectron()) return window.halo.tlonRemoveLinkedDir(kbId, linkId, options)
+      return httpRequest('DELETE', `/api/tlon/${kbId}/linked-dirs/${linkId}${options?.forget ? '?forget=true' : ''}`)
     },
     retryLinkedDir: async (kbId: string, linkId: string): Promise<ApiResponse> => {
       if (isElectron()) return window.halo.tlonRetryLinkedDir(kbId, linkId)

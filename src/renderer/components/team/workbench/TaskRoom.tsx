@@ -114,9 +114,9 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
     setRevealActivity({ appId: targetAppId, activityId })
     onSelectMember(target)
   }
-  const timeline = (messages: import('../../../types').Message[], liveThoughts: import('../../../types').Thought[] = []) => <>
+  const timeline = (messages: import('../../../types').Message[], liveThoughts: import('../../../types').Thought[] = [], endingShownBelow?: string) => <>
     <TaskConversation liveReply={homepageConversation ? senderShown => execution(messages, senderShown) : undefined}
-      onOpenMember={homepageConversation ? openMember : undefined} revealActivity={revealActivity?.appId === appId ? revealActivity.activityId : null} onActivityRevealed={clearReveal} homepageConversation={homepageConversation} authorName={authorName} readonly={blocked || !!returnToMain || !!viewOnly || !!task?.readonly || !appId || !ids.includes(appId)} messages={messages} activities={boardState.activities} epochId={epochId} appId={appId ?? undefined} detail={detail} showEmpty={!!appId && !!epochId && !boardState.failed && !!boardState.board} working={busy || generating} onActivity={onActivity}
+      onOpenMember={homepageConversation ? openMember : undefined} revealActivity={revealActivity?.appId === appId ? revealActivity.activityId : null} onActivityRevealed={clearReveal} homepageConversation={homepageConversation} authorName={authorName} endingShownBelow={endingShownBelow} readonly={blocked || !!returnToMain || !!viewOnly || !!task?.readonly || !appId || !ids.includes(appId)} messages={messages} activities={boardState.activities} epochId={epochId} appId={appId ?? undefined} detail={detail} showEmpty={!!appId && !!epochId && !boardState.failed && !!boardState.board} working={busy || generating} onActivity={onActivity}
       taskCompleted={!!task?.completed} emptyActions={emptyActions} onHumanConversation={rememberConversation} focusDecision={focusedDecision} onDecisionFocused={() => setFocusedDecision(null)} decisions={decisions.filter(entry => (entry.appId === appId || !ids.includes(entry.appId)) && !decisionHasReceipt(entry, liveThoughts))} onAnswered={entry => { decisionHistory.answered(entry); refresh() }} />
     {!homepageConversation && execution(messages)}
   </>

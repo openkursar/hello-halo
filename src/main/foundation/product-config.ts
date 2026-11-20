@@ -92,6 +92,27 @@ export interface BrowserPolicy {
 }
 
 /**
+ * Network routing defaults (enterprise/custom builds only).
+ *
+ * For a deployment on a split network: an intranet reached directly and a
+ * few public services reachable only through an egress proxy.
+ */
+export interface NetworkPolicy {
+  /**
+   * Server-side routing for Halo requests (subject to account proxy requirements).
+   * Children receive NO_PROXY entries for known endpoints; Chromium uses its own
+   * settings. This is not an egress restriction. config.json can override the list.
+   */
+  proxyOnly?: string[]
+  /**
+   * Send WeCom bot QR-code sign-in through the IM route (the proxy unless IM
+   * is set to connect directly). Off by default: the sign-in connects
+   * directly, as WeCom's own CLI does.
+   */
+  imScanViaProxy?: boolean
+}
+
+/**
  * Per-registry override entry in product.json.
  *
  * Allows enterprise/custom builds to override specific built-in registry
@@ -246,6 +267,8 @@ export interface ProductConfig {
   updateConfig?: UpdateConfig
   /** Browser network access policy (optional, unrestricted when omitted) */
   browserPolicy?: BrowserPolicy
+  /** Network routing defaults (optional; the proxy covers every host when omitted) */
+  networkPolicy?: NetworkPolicy
   /**
    * Announcement feed URL (optional; omitted/empty disables the feature).
    *
@@ -676,6 +699,11 @@ export function getOfficialContentBaseUrl(): string {
  */
 export function getNotifyChannelsConfig(): NotifyChannelsProductConfig | undefined {
   return loadProductConfig().notifyChannels
+}
+
+/** Network routing defaults from product.json; undefined when not configured. */
+export function getNetworkPolicy(): NetworkPolicy | undefined {
+  return loadProductConfig().networkPolicy
 }
 
 /**

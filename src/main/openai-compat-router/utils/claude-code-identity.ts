@@ -74,6 +74,54 @@ function buildCcVersion(firstUserMessageText: string): string {
   return `${CLAUDE_CODE_VERSION}.${computeAttributionFingerprint(firstUserMessageText, CLAUDE_CODE_VERSION)}`
 }
 
+/**
+ * The line the Claude Code CLI opens its system prompt with. Which wording it
+ * writes depends on how it was launched, so the match is the shape, not a list.
+ */
+const CLAUDE_CODE_IDENTITY_LINE = /^You are (?:Claude Code|a Claude agent)\b[^\n]{0,200}?\./
+
+function stripIdentityLine(text: string): string | null {
+  if (!text.startsWith('You are ')) return null
+  const match = CLAUDE_CODE_IDENTITY_LINE.exec(text)
+  return match ? text.slice(match[0].length).trimStart() : null
+}
+
+/**
+ * Remove that opening line from the first system message of an OpenAI-format
+ * request, in place; a message left empty is dropped. For upstreams whose
+ * prompts carry no engine identity.
+ *
+ * Returns whether the body changed.
+ */
+export function stripClaudeCodeIdentity(body: Record<string, unknown>): boolean {
+  const messages = body.messages
+  if (!Array.isArray(messages)) return false
+  const system = messages[0] as { role?: unknown; content?: unknown } | undefined
+  if (system?.role !== 'system') return false
+
+  const { content } = system
+  if (typeof content === 'string') {
+    const rest = stripIdentityLine(content)
+    if (rest === null) return false
+    if (rest) system.content = rest
+    else messages.shift()
+    return true
+  }
+
+  if (!Array.isArray(content)) return false
+  for (let i = 0; i < content.length; i++) {
+    const part = content[i] as { type?: unknown; text?: unknown } | null
+    if (part?.type !== 'text' || typeof part.text !== 'string') continue
+    const rest = stripIdentityLine(part.text)
+    if (rest === null) continue
+    if (rest) part.text = rest
+    else content.splice(i, 1)
+    if (content.length === 0) messages.shift()
+    return true
+  }
+  return false
+}
+
 /** The whole attribution line, for callers that own the system prompt. */
 export function buildAttributionLine(firstUserMessageText: string): string {
   return `${ATTRIBUTION_PREFIX} cc_version=${buildCcVersion(firstUserMessageText)}; cc_entrypoint=cli; cch=00000;`

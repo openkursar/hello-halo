@@ -14,7 +14,7 @@
  * derived from file content (see convertEventsToMessages).
  */
 
-import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync, fstatSync, statSync, copyFileSync, readSync, rmSync, renameSync } from 'fs'
+import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync, fstatSync, statSync, copyFileSync, linkSync, readdirSync, readSync, rmSync, renameSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
@@ -32,16 +32,22 @@ import type {
   TranscriptProvenance,
 } from '../../../shared/types/transcript'
 import { pageTranscript, withThoughtsUnloaded } from '../../../shared/transcript'
+import type { TranscriptUpdate, TranscriptUpdateMessage } from '../../../shared/transcript-update'
 import { createStampedLru } from '../../platform/file-cache'
-import { convertEventsToTranscript, type ConvertedTranscript, type StoredEvent } from './session-transcript'
+import { convertEventsToTranscript, type ConvertedTranscript, type ConvertOptions, type StoredEvent, type TranscriptChanges, type TranscriptCheckpoint, type TranscriptSeed } from './session-transcript'
 import { LineIndex, scanJsonlLines, withFileDescriptor } from './session-file-reader'
+import { withToolResultImageFiles } from '../../services/agent/tool-result-images'
 
 // ============================================
 // Writer
 // ============================================
 
 export interface SessionWriter {
-  /** Append a raw SDK stream event */
+  /**
+   * Append a raw SDK stream event. Images in its tool results are stored as
+   * files beside the transcript (`transcriptImagesDir`) and referenced from the
+   * line; the event itself is not changed.
+   */
   writeEvent(event: Record<string, unknown>): void
   /**
    * Write the initial trigger message (before stream starts). Images are
@@ -101,6 +107,28 @@ function getSessionFilePath(spacePath: string, appId: string, runId: string): st
 }
 
 /**
+ * The folder beside a transcript that holds the images its tool results
+ * returned. It belongs to the transcript: deleted, cleared and copied with it.
+ */
+function imagesDirOf(transcriptPath: string): string {
+  return transcriptPath.replace(/\.jsonl$/, '.images')
+}
+
+/**
+ * Where a transcript's tool-result images are saved. The chat entry hands the
+ * same folder to the live stream, so the step on screen and the stored line
+ * refer to one file.
+ */
+export function transcriptImagesDir(spacePath: string, appId: string, runId: string): string {
+  return imagesDirOf(getSessionFilePath(spacePath, appId, runId))
+}
+
+/** Remove a transcript's saved images, when its record is emptied. Throws when they could not all be removed. */
+export function deleteTranscriptImages(spacePath: string, appId: string, runId: string): void {
+  rmSync(transcriptImagesDir(spacePath, appId, runId), { recursive: true, force: true })
+}
+
+/**
  * Create a session writer that appends events to a JSONL file.
  * Automatically creates the runs directory if missing.
  */
@@ -110,6 +138,7 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
     mkdirSync(dir, { recursive: true })
   }
   const filePath = getSessionFilePath(spacePath, appId, runId)
+  const imagesDir = imagesDirOf(filePath)
 
   function appendLine(event: StoredEvent): boolean {
     try {
@@ -123,7 +152,7 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
 
   return {
     writeEvent(event: Record<string, unknown>): void {
-      appendLine({ _ts: new Date().toISOString(), ...event } as StoredEvent)
+      appendLine({ _ts: new Date().toISOString(), ...withToolResultImageFiles(event, imagesDir) } as StoredEvent)
     },
 
     writeTrigger(content, images, teamOrigin, provenance, references) {
@@ -180,6 +209,14 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
 interface ParsedSession {
   messages: TranscriptMessage[]
   openTurnFrom?: string
+  /** When each message and thought last changed (see `readSessionUpdate`). */
+  changes?: TranscriptChanges
+  /**
+   * Identity of the history this parse continues. A parse that starts over
+   * (the file was rewritten, or the cache dropped it) gets a new one, so a
+   * reader's cursor from before never applies to it.
+   */
+  lineage: string
   ino: number
   /** Bytes consumed, through the last complete line. */
   endByte: number
@@ -256,14 +293,18 @@ function parseRange(fd: number, filePath: string, start: number, end: number, st
   return { events, lines, trailingEvent, endByte: scan.endByte, nextLine: scan.nextLine }
 }
 
-function toTranscript(events: StoredEvent[], lines: number[], trailing: { event: StoredEvent; line: number } | null): ConvertedTranscript {
+function toTranscript(events: StoredEvent[], lines: number[], trailing: { event: StoredEvent; line: number } | null, options?: ConvertOptions): ConvertedTranscript {
   return trailing
-    ? convertEventsToTranscript([...events, trailing.event], [...lines, trailing.line])
-    : convertEventsToTranscript(events, lines)
+    ? convertEventsToTranscript([...events, trailing.event], [...lines, trailing.line], options)
+    : convertEventsToTranscript(events, lines, options)
 }
 
-/** Parse a whole file, continuing from `previous` when the file only grew since. */
-function parseSessionFile(filePath: string, previous?: ParsedSession): ParsedSession | null {
+/**
+ * Parse a whole file, continuing from `previous` when the file only grew since.
+ * `track` keeps change lines (see `readSessionUpdate`); only readers that ask
+ * what changed pay for them.
+ */
+function parseSessionFile(filePath: string, previous: ParsedSession | undefined, track: boolean): ParsedSession | null {
   try {
     return withFileDescriptor(filePath, (fd) => {
       const { size, ino } = fstatSync(fd)
@@ -274,8 +315,12 @@ function parseSessionFile(filePath: string, previous?: ParsedSession): ParsedSes
       const parsed = parseRange(fd, filePath, resume?.endByte ?? 0, size, resume?.nextLine ?? 1)
       const events = resume ? resume.events.concat(parsed.events) : parsed.events
       const lines = resume ? resume.lines.concat(parsed.lines) : parsed.lines
+      const { messages, openTurnFrom, changes } = toTranscript(events, lines, parsed.trailingEvent, { track, imagesDir: imagesDirOf(filePath) })
       return {
-        ...toTranscript(events, lines, parsed.trailingEvent),
+        messages,
+        ...(openTurnFrom ? { openTurnFrom } : {}),
+        ...(changes ? { changes } : {}),
+        lineage: resume?.lineage ?? randomUUID().slice(0, 8),
         ino,
         endByte: parsed.endByte,
         nextLine: parsed.nextLine,
@@ -299,8 +344,13 @@ function sessionFileSize(filePath: string): number | null {
   }
 }
 
-function loadParsedSession(filePath: string): ParsedSession | null {
-  return parsedSessions.get(filePath, (previous) => parseSessionFile(filePath, previous))
+/** The cached parse; with `track`, one that keeps change lines, which it then keeps while cached. */
+function loadParsedSession(filePath: string, track = false): ParsedSession | null {
+  const parsed = parsedSessions.get(filePath, (previous) => parseSessionFile(filePath, previous, track || Boolean(previous?.changes)))
+  if (!parsed || !track || parsed.changes) return parsed
+  // Converted again from the events already held; the bytes are not read again.
+  parsedSessions.delete(filePath)
+  return parsedSessions.get(filePath, () => parseSessionFile(filePath, parsed, true))
 }
 
 function lineIndexPath(filePath: string): string {
@@ -333,7 +383,7 @@ function readWindow(
       const { byte: start, line } = index.lineStartingAtOrAfter(fd, rawStart)
       const parsed = parseRange(fd, filePath, start, end, line)
       const trailing = end >= index.indexedBytes ? parsed.trailingEvent : null
-      const { messages, openTurnFrom } = toTranscript(parsed.events, parsed.lines, trailing)
+      const { messages, openTurnFrom } = toTranscript(parsed.events, parsed.lines, trailing, { imagesDir: imagesDirOf(filePath) })
       if (chosen.startsAtMessage) {
         if (messages.length >= 2 || end >= fileSize) return { messages, truncated: start > 0, end }
         span *= 2
@@ -395,6 +445,215 @@ export function readSessionMessages(
   }
   const messages = loadParsedSession(filePath)?.messages ?? []
   return options.limit !== undefined ? messages.slice(-options.limit) : [...messages]
+}
+
+/**
+ * Where a large file's tail can be converted on its own: a native-turn
+ * boundary (`TranscriptCheckpoint`) placed in the file. Valid while the bytes
+ * before it are unchanged (`probe`), i.e. the file was only appended to.
+ */
+interface TailCheckpoint {
+  byte: number
+  line: number
+  probe: string
+  messageCount: number
+  lastMessageId?: string
+  seed: TranscriptSeed
+}
+
+/**
+ * The newest boundaries of large files, per file; a reader asks for a tail
+ * starting at or after one of them. `lineage` names the history they belong
+ * to: a rewritten file starts a new one, so a reader's cursor from before
+ * never applies to it.
+ */
+interface KnownTail {
+  ino: number
+  /** File size at the last read; a smaller file was rewritten. */
+  size: number
+  lineage: string
+  checkpoints: TailCheckpoint[]
+}
+
+const tailCheckpoints = new Map<string, KnownTail>()
+const TAIL_FILES = 16
+const CHECKPOINTS_PER_FILE = 8
+
+/** The file's remembered boundaries, while it has only been appended to since; otherwise they are forgotten. */
+function knownTail(filePath: string, fd: number, ino: number, size: number): KnownTail | undefined {
+  const known = tailCheckpoints.get(filePath)
+  if (!known) return undefined
+  if (known.ino !== ino || size < known.size || known.checkpoints.some(cp => cp.byte > size || readProbe(fd, cp.byte) !== cp.probe)) {
+    tailCheckpoints.delete(filePath)
+    return undefined
+  }
+  return known
+}
+
+function rememberCheckpoints(
+  filePath: string,
+  fd: number,
+  known: KnownTail | undefined,
+  ino: number,
+  base: { messageCount: number; lastMessageId?: string },
+  converted: TranscriptCheckpoint[],
+  lines: readonly number[],
+  completeEvents: number,
+): KnownTail {
+  const usable = converted.filter(cp => cp.eventIndex <= completeEvents).slice(-CHECKPOINTS_PER_FILE)
+  const placed: TailCheckpoint[] = []
+  if (usable.length > 0) {
+    const index = LineIndex.open(lineIndexPath(filePath), fd)
+    for (const cp of usable) {
+      const line = lines[cp.eventIndex - 1] + 1
+      const byte = index.offsetOfLine(fd, line)
+      if (byte === null) continue
+      const lastMessageId = cp.messageCount > 0 ? cp.lastMessageId : base.lastMessageId
+      placed.push({
+        byte, line, probe: readProbe(fd, byte), messageCount: base.messageCount + cp.messageCount,
+        ...(lastMessageId ? { lastMessageId } : {}), seed: cp.seed,
+      })
+    }
+  }
+  const kept = known ? known.checkpoints.filter(cp => !placed.length || cp.byte < placed[0].byte) : []
+  const entry: KnownTail = { ino, size: fstatSync(fd).size, lineage: known?.lineage ?? randomUUID().slice(0, 8), checkpoints: [...kept, ...placed].slice(-CHECKPOINTS_PER_FILE) }
+  tailCheckpoints.delete(filePath)
+  tailCheckpoints.set(filePath, entry)
+  while (tailCheckpoints.size > TAIL_FILES) tailCheckpoints.delete(tailCheckpoints.keys().next().value as string)
+  return entry
+}
+
+/**
+ * Convert a large file from `start` (a remembered boundary) or from its
+ * beginning, remembering the newest boundaries it passes. The cursor names
+ * the history and the first line not yet complete.
+ */
+function convertLargeFrom(
+  filePath: string,
+  fd: number,
+  ino: number,
+  size: number,
+  known: KnownTail | undefined,
+  start: TailCheckpoint | undefined,
+  track: boolean,
+) {
+  const parsed = parseRange(fd, filePath, start?.byte ?? 0, size, start?.line ?? 1)
+  const events = parsed.trailingEvent ? [...parsed.events, parsed.trailingEvent.event] : parsed.events
+  const lines = parsed.trailingEvent ? [...parsed.lines, parsed.trailingEvent.line] : parsed.lines
+  const converted = convertEventsToTranscript(events, lines, {
+    track, checkpoints: { latest: CHECKPOINTS_PER_FILE + 1 }, imagesDir: imagesDirOf(filePath), ...(start ? { seed: start.seed } : {}),
+  })
+  const entry = rememberCheckpoints(filePath, fd, known, ino, { messageCount: start?.messageCount ?? 0, lastMessageId: start?.lastMessageId }, converted.checkpoints ?? [], lines, parsed.events.length)
+  return { converted, base: start?.messageCount ?? 0, cursor: `${entry.lineage}:${parsed.nextLine}` }
+}
+
+/**
+ * The transcript from its `from`-th message (0-based) on — exactly
+ * `readSessionMessages(…).slice(from)`. A large file is not read whole when
+ * the last read left a turn boundary at or before that message: only the
+ * bytes from that boundary on are parsed and converted.
+ */
+export function readSessionMessagesFrom(spacePath: string, appId: string, runId: string, from: number): TranscriptMessage[] {
+  if (!(from > 0)) return readSessionMessages(spacePath, appId, runId)
+  const filePath = getSessionFilePath(spacePath, appId, runId)
+  const size = sessionFileSize(filePath)
+  if (size === null) return []
+  if (size <= FULL_PARSE_MAX_BYTES) {
+    // Under the limit now, so it was rewritten since it was large: its boundaries no longer apply.
+    tailCheckpoints.delete(filePath)
+    return (loadParsedSession(filePath)?.messages ?? []).slice(from)
+  }
+  try {
+    return withFileDescriptor(filePath, (fd) => {
+      const { ino } = fstatSync(fd)
+      const known = knownTail(filePath, fd, ino, size)
+      const start = known?.checkpoints.filter(cp => cp.messageCount <= from).at(-1)
+      const { converted, base } = convertLargeFrom(filePath, fd, ino, size, known, start, false)
+      return converted.messages.slice(from - base)
+    })
+  } catch (error) {
+    reportUnreadable(filePath, error)
+    return []
+  }
+}
+
+/**
+ * The whole transcript as `readSessionMessages` returns it, or — given the
+ * `cursor` of an earlier read of this file — only what changed since then
+ * (`shared/transcript-update.ts`). A watcher of a live run receives the steps
+ * the run added, not the run again. An unknown cursor answers with the whole
+ * transcript. A large file (read uncached) is converted from the remembered
+ * turn start at or before the cursor; it answers whole when there is none, or
+ * when a stop marked a message from before that start.
+ */
+export function readSessionUpdate(
+  spacePath: string,
+  appId: string,
+  runId: string,
+  since?: string
+): TranscriptUpdate {
+  const filePath = getSessionFilePath(spacePath, appId, runId)
+  const size = sessionFileSize(filePath)
+  if (size === null) return { cursor: '', messages: [] }
+  if (size > FULL_PARSE_MAX_BYTES) return readLargeSessionUpdate(filePath, size, since)
+  tailCheckpoints.delete(filePath)
+  const parsed = loadParsedSession(filePath, true)
+  if (!parsed) return { cursor: '', messages: [] }
+  const cursor = `${parsed.lineage}:${parsed.nextLine}`
+  const sinceLine = cursorLine(since, parsed.lineage)
+  if (sinceLine === null || !parsed.changes) return { cursor, messages: [...parsed.messages] }
+  return { cursor, ...changedSince(parsed.messages, parsed.changes, sinceLine) }
+}
+
+function readLargeSessionUpdate(filePath: string, size: number, since: string | undefined): TranscriptUpdate {
+  try {
+    return withFileDescriptor(filePath, (fd) => {
+      const { ino } = fstatSync(fd)
+      const known = knownTail(filePath, fd, ino, size)
+      const sinceLine = known ? cursorLine(since, known.lineage) : null
+      const start = sinceLine !== null ? known!.checkpoints.filter(cp => cp.line <= sinceLine).at(-1) : undefined
+      if (start && sinceLine !== null) {
+        const tail = convertLargeFrom(filePath, fd, ino, size, known, start, true)
+        const { changes, marksBeforeStart, messages } = tail.converted
+        if (changes && !marksBeforeStart?.some(line => line >= sinceLine)) {
+          const update = changedSince(messages, changes, sinceLine)
+          const keep = tail.base + (update.keep ?? 0)
+          const keepThrough = update.keepThrough ?? start.lastMessageId
+          return { cursor: tail.cursor, keep, ...(keep > 0 && keepThrough ? { keepThrough } : {}), messages: update.messages }
+        }
+      }
+      const whole = convertLargeFrom(filePath, fd, ino, size, knownTail(filePath, fd, ino, size), undefined, false)
+      return { cursor: whole.cursor, messages: whole.converted.messages }
+    })
+  } catch (error) {
+    reportUnreadable(filePath, error)
+    return { cursor: '', messages: [] }
+  }
+}
+
+function cursorLine(cursor: string | undefined, lineage: string): number | null {
+  const match = cursor ? /^([^:]+):(\d+)$/.exec(cursor) : null
+  return match && match[1] === lineage ? Number(match[2]) : null
+}
+
+/** Everything changed by the events from `line` on: the messages from the first one changed, with only their changed thoughts. */
+function changedSince(messages: TranscriptMessage[], changes: TranscriptChanges, line: number): Omit<TranscriptUpdate, 'cursor'> {
+  let keep = messages.findIndex(message => changes.lineOf(message) >= line)
+  if (keep < 0) keep = messages.length
+  const tail = messages.slice(keep).map((message): TranscriptUpdateMessage => {
+    const thoughts = message.thoughts
+    if (!thoughts?.length) return message
+    const at: number[] = []
+    const sent: Thought[] = []
+    thoughts.forEach((thought, index) => {
+      if (changes.lineOf(thought) < line) return
+      at.push(index)
+      sent.push(thought)
+    })
+    if (sent.length === thoughts.length) return message
+    return { ...message, thoughts: sent, thoughtPatch: { total: thoughts.length, at } }
+  })
+  return { keep, ...(keep > 0 ? { keepThrough: messages[keep - 1].id } : {}), messages: tail }
 }
 
 /**
@@ -468,14 +727,16 @@ export function readSessionMessageThoughts(
 }
 
 /**
- * Delete a run's transcript and its line index. Only that run's files: the
- * same folder holds the person's chat transcripts.
+ * Delete a run's transcript, its line index and its saved images. Only that
+ * run's files: the same folder holds the person's chat transcripts.
  */
 export function deleteRunTranscript(spacePath: string, appId: string, runId: string): void {
   const filePath = getSessionFilePath(spacePath, appId, runId)
   rmSync(filePath, { force: true })
   rmSync(lineIndexPath(filePath), { force: true })
+  rmSync(imagesDirOf(filePath), { recursive: true, force: true })
   parsedSessions.delete(filePath)
+  tailCheckpoints.delete(filePath)
   deleteChatSessionId(spacePath, appId, runId)
 }
 
@@ -514,9 +775,11 @@ export function resolveTranscriptPath(
  * Used when forking a session into a new native client session so the forked
  * window shows the full prior history immediately. Copies the raw JSONL bytes
  * verbatim (no re-serialization) — the display messages are reconstructed on
- * read via convertEventsToMessages. No-op (returns false) when the source file
+ * read via convertEventsToMessages. Its saved images are copied too; the copy
+ * reads them from its own folder. No-op (returns false) when the source file
  * is absent or the copy fails; the caller treats an empty transcript as a
- * fresh window, which is an acceptable degradation.
+ * fresh window, which is an acceptable degradation. Images that cannot be
+ * copied leave the copy showing those steps as a line naming the image.
  *
  * @returns true if the transcript was copied, false otherwise
  */
@@ -533,10 +796,39 @@ export function copySessionJsonl(
     const dir = getRunsDir(spacePath, appId)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     copyFileSync(fromPath, toPath)
-    return true
   } catch (err) {
     console.error(`[SessionStore] Failed to copy transcript ${fromRunId} → ${toRunId}:`, err)
     return false
+  }
+  const fromImages = imagesDirOf(fromPath)
+  if (existsSync(fromImages)) {
+    try {
+      shareSavedImages(fromImages, imagesDirOf(toPath))
+    } catch (err) {
+      console.warn(`[SessionStore] Saved images of ${fromRunId} were not copied to ${toRunId}:`, err)
+    }
+  }
+  return true
+}
+
+const SAVED_IMAGE_FILE_NAME = /^[0-9a-f]{16}\.(png|jpg|gif|webp)$/
+
+/**
+ * Give a copied transcript its own names for the saved images. A saved image
+ * never changes once written, so a hard link serves (no bytes copied, however
+ * many images); a filesystem without links gets a copy.
+ */
+function shareSavedImages(from: string, to: string): void {
+  mkdirSync(to, { recursive: true })
+  for (const name of readdirSync(from)) {
+    if (!SAVED_IMAGE_FILE_NAME.test(name)) continue
+    const target = join(to, name)
+    if (existsSync(target)) continue
+    try {
+      linkSync(join(from, name), target)
+    } catch {
+      copyFileSync(join(from, name), target)
+    }
   }
 }
 
@@ -831,7 +1123,7 @@ export function readChatHandoffHistory(
         event.type === 'user' && event._isTrigger && typeof event._inputId === 'string' && excludedIds.has(event._inputId)
           ? [`session-msg-${positions[index]}`] : []))
       // Keep decoder boundaries and tool-result grouping intact; omit only the matching visible input records.
-      const converted = convertEventsToTranscript(events, positions).messages.filter(message => !excludedRecords.has(message.id))
+      const converted = convertEventsToTranscript(events, positions, { imagesDir: imagesDirOf(filePath) }).messages.filter(message => !excludedRecords.has(message.id))
       truncated ||= converted.length > limit
       const messages = converted.slice(-limit).map(message => ({
         ...message,

@@ -1,3 +1,5 @@
+pub(crate) mod request_assembly;
+
 use super::{
     cost::CostTracker, hooks, loop_budget::LoopBudget, loop_owner::LoopExecution,
     streaming::Accumulator, tool_execution::Execution, tool_scheduler::ToolScheduler,
@@ -198,27 +200,16 @@ pub(crate) async fn turn(
             }
             None => (execution_definitions.iter().map(|tool|tool.definition.clone()).collect(),execution_definitions.iter().map(SelectedTool::catalog_entry).collect()),
         };
-        let system = system_prompt(options, &context.environment, &definitions, &eager,&context.harness)?;
-        let effort=super::effort::resolve(options);
-        let thinking=super::token_budget::effective_thinking(&effort.thinking,budget.max_output_tokens());
-        budget.configure_output(thinking.clone(), allowance.lock().unwrap().limit);
-        let mut injected=Vec::new();let mut user_context=context.memory.user_context_with_harness(options,&context.harness).await;
-        if !user_context.is_null(){user_context["isMeta"]=json!(true);injected.push(user_context);}
-        if let Some(skills)=&context.skill_context{let mut skills=skills.clone();skills["isMeta"]=json!(true);injected.push(skills);}
-        let repaired_images=super::image_input::repair_empty(messages,&context.harness);
-        let relabeled=super::image_media_type::correct(messages);
-        if repaired_images+relabeled>0{budget.reset();context.compaction.reset();if repaired_images>0{tracing::warn!(session_id=%session.session_id,count=repaired_images,"Replaced empty recorded image blocks with explicit unavailable notices");}if relabeled>0{tracing::warn!(count=relabeled,"Relabeled images whose declared type did not match their content");}session.owner.history_replaced(messages).await?;session.owner.context_state(model,None,None).await?;}
-        let combined:Vec<_>=injected.iter().chain(messages.iter()).cloned().collect();
-        let mut projected=super::tool_context::history::project(&super::messages::repair_with_harness(&combined,&context.harness).0);
-        context.image_input.project(model,provider.capabilities["imageInput"]!=false,&mut projected,&context.harness,&session.session_id);
-        if provider.capabilities["caching"]==true{projected=super::messages::cache_breakpoint(projected);}
-        let mut request = json!({"model":model,"messages":projected,"systemPrompt":system,"tools":definitions,"maxTokens":budget.max_output_tokens(),"thinking":thinking,"stream":true,
-            "providerOptions":{"fallbackModelAvailable":!recovery.used_fallback&&crate::js::truthy(&options["fallbackModel"])}});
-        if thinking.is_null() { request.as_object_mut().unwrap().remove("thinking"); }
-        if crate::js::truthy(&options["effort"]){request["providerOptions"]["effort"]=options["effort"].clone();}else if options["nativeResolvedConfig"]!=true{request["providerOptions"]["effort"]=json!("high");}
-        if let Some(temperature)=effort.temperature{request["temperature"]=json!(temperature);}
-        if let Some(reasoning)=effort.reasoning{request["providerOptions"]["reasoning_effort"]=json!(reasoning);}
-        if crate::js::truthy(&options["taskBudget"]){request["providerOptions"]["taskBudget"]=options["taskBudget"].clone();}
+        let output_limit = allowance.lock().unwrap().limit;
+        let request_assembly::Assembled { mut request, injected, thinking } = request_assembly::assemble(
+            session, options, context, &provider.capabilities, request_assembly::History::Live(messages), budget,
+            request_assembly::Inputs {
+                definitions: &definitions,
+                eager: &eager,
+                output_limit,
+                fallback_available: !recovery.used_fallback && crate::js::truthy(&options["fallbackModel"]),
+            },
+        ).await?;
         let estimate = budget.estimate_request(&request);
         if let Some(state)=discovery { let mut fixed=request.clone();fixed["messages"]=json!(injected);state.lock().unwrap().set_recovery_budget(((budget.available_input_tokens()-budget.estimate_request(&fixed)-1024.0)/1.2).max(0.0)); }
         let history_tokens=budget.estimate_request(&json!({"messages":messages}));

@@ -17,7 +17,56 @@
  * produces "⚙️ ls -la /tmp". Same applies to thinking text.
  */
 
-import type { ProgressEvent } from '../../../shared/types/inbound-message'
+import type { ProgressEvent, WorkProgressEvent } from '../../../shared/types/inbound-message'
+
+interface WorkBlock {
+  type?: string
+  text?: string
+  id?: string
+  name?: string
+  tool_use_id?: string
+  is_error?: boolean
+}
+
+/** Aggregate messages preserve block order and match parallel results by call ID. */
+export function* readWorkProgress(raw: unknown): Iterable<WorkProgressEvent> {
+  const message = raw as {
+    type?: string
+    parent_tool_use_id?: string | null
+    isReplay?: boolean
+    error?: unknown
+    event?: { type?: string; content_block?: WorkBlock; delta?: WorkBlock }
+    message?: { content?: WorkBlock[] }
+  } | null
+  if (!message || message.parent_tool_use_id || message.isReplay || message.error) return
+  if (message.type === 'stream_event') {
+    const event = message.event
+    const block = event?.content_block
+    if (event?.type === 'content_block_start' && block?.type === 'tool_use' &&
+      typeof block.id === 'string' && typeof block.name === 'string') {
+      yield { type: 'operation_started', id: block.id, tool: block.name }
+    }
+    if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') {
+      yield { type: 'speech_delta', text: event.delta.text }
+    }
+    return
+  }
+  if (message.type !== 'assistant' && message.type !== 'user') return
+  const blocks = message.message?.content
+  if (!Array.isArray(blocks)) return
+
+  for (const block of blocks) {
+    if (message.type === 'assistant') {
+      if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+        yield { type: 'speech', text: block.text }
+      } else if (block?.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+        yield { type: 'operation_started', id: block.id, tool: block.name }
+      }
+    } else if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+      yield { type: 'operation_finished', id: block.tool_use_id, success: block.is_error !== true }
+    }
+  }
+}
 
 // ============================================
 // Tool Summary Helpers

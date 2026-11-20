@@ -253,7 +253,7 @@ describe('public model selection contract', () => {
   it.each([
     { policy: 'inherit' }, { policy: 'task' },
     { policy: 'inherit', reasoningPolicy: 'inherit' }, { policy: 'task', reasoningPolicy: 'inherit' },
-  ] as const)('exposes an empty directory tool input under %j', async modelSelection => {
+  ] as const)('exposes an empty directory tool input under %j and reports only unapplied filtering or pagination', async modelSelection => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const list = vi.fn(async () => collaborationText('catalog'));
@@ -261,11 +261,20 @@ describe('public model selection contract', () => {
       const [tool] = server.instance.listTools();
       expect(tool.inputSchema).toEqual({ type: 'object', properties: {}, required: [], additionalProperties: false });
       for (const input of obsoleteDirectoryInputs) {
-        expect((await server.instance.callTool('list_model_profiles', input))?.isError).toBe(true);
+        const result = await server.instance.callTool('list_model_profiles', input);
+        expect(result?.isError).toBeUndefined();
+        expect(result?.content).toEqual([
+          { type: 'text', text: 'catalog' },
+          { type: 'text', text: 'This is the full model directory; no filter was applied.' },
+        ]);
+        expect(list).toHaveBeenLastCalledWith({}, {});
       }
-      expect(list).not.toHaveBeenCalled();
+      expect(list).toHaveBeenCalledTimes(obsoleteDirectoryInputs.length);
       expect(await server.instance.callTool('list_model_profiles', {})).toEqual(collaborationText('catalog'));
-      expect(list).toHaveBeenCalledWith({}, {});
+      expect(await server.instance.callTool('list_model_profiles', { summary: 'Find a model' })).toEqual(collaborationText('catalog'));
+      expect(list).toHaveBeenLastCalledWith({}, {});
+      list.mockResolvedValueOnce(collaborationText('No profiles were listed.', true));
+      expect(await server.instance.callTool('list_model_profiles', { query: 'Small' })).toEqual(collaborationText('No profiles were listed.', true));
     } finally { warn.mockRestore(); }
   });
 
@@ -291,6 +300,9 @@ describe('public model selection contract', () => {
       const rejected = await server.instance.callTool('spawn_agent', { ...input, reasoning_effort: 'high' });
       expect(rejected?.isError).toBe(true);
       expect(rejected?.content[0].text).toContain('reasoning_effort');
+      expect(rejected?.content[0].text).toContain('Accepted arguments: prompt, name, cwd, isolation, model_profile.');
+      const rawModel = await server.instance.callTool('spawn_agent', { prompt: 'work', model: 'review-model' });
+      expect(rawModel).toEqual(collaborationText('No collaborator was created. Unsupported argument: model. Accepted arguments: prompt, name, cwd, isolation, model_profile. To choose a model, call list_model_profiles and pass the returned profile reference as model_profile.', true));
       expect(spawn).not.toHaveBeenCalled();
       expect(await server.instance.callTool('list_model_profiles', {})).toEqual(collaborationText('model_profile: p1'));
       expect(await server.instance.callTool('spawn_agent', input)).toEqual(collaborationText('accepted'));

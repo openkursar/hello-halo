@@ -11,7 +11,8 @@
 import { activeSessions, v2Sessions, closeV2Session, getConsumerHandle, getRunningConsumerIds } from './session-manager'
 import { getActivePendingQuestion, type RecoverablePendingQuestion } from './permission-handler'
 import { withdrawUnreadLiveInput } from './live-turn'
-import type { StopReason, Thought } from './types'
+import type { SessionState, StopReason, Thought } from './types'
+import { readLiveThoughts, type LiveThoughtsRead } from './live-thought-changes'
 import type { ApiRetryState } from '../../../shared/types/api-retry'
 import { snapshotApiRetry } from './api-retry'
 import { Emitter, type Event } from '../../platform/event'
@@ -211,19 +212,31 @@ export function getActiveSessions(): string[] {
  *
  * This is used by remote clients to recover the current state when they
  * reconnect or refresh the page during an active generation.
+ *
+ * `since` is for a reader polling a running turn: the thoughts revision it got
+ * last time (or '' at first); the answer then carries only the thoughts changed
+ * since, placed by `thoughtsDelta` (see live-thought-changes.ts).
  */
-export function getSessionState(conversationId: string): {
+export function getSessionState(conversationId: string, options: { since?: string } = {}): {
   isActive: boolean
   thoughts: Thought[]
   spaceId?: string
   pendingQuestion?: RecoverablePendingQuestion
   /** The retry the engine is waiting on, with the wait left as of now. */
   apiRetry?: ApiRetryState
+  /** With `since`: pass back on the next read. */
+  thoughtsRevision?: string
+  /** With `since`: present when `thoughts` holds only the changed ones. */
+  thoughtsDelta?: LiveThoughtsRead['thoughtsDelta']
 } {
   // A pending question lets reconnecting clients rebuild the question card, and
   // marks the session active on its own: the turn is blocked on the answer even
   // when the activity trackers below report nothing.
   const pendingQuestion = getActivePendingQuestion(conversationId) ?? undefined
+
+  const readThoughts = (sessionState: SessionState) => options.since === undefined
+    ? { thoughts: [...sessionState.thoughts] }
+    : readLiveThoughts(conversationId, sessionState, options.since)
 
   // Check consumer model first (chat conversations)
   const consumer = getConsumerHandle(conversationId)
@@ -232,7 +245,7 @@ export function getSessionState(conversationId: string): {
     if (sessionState) {
       return {
         isActive: true,
-        thoughts: [...sessionState.thoughts],
+        ...readThoughts(sessionState),
         spaceId: sessionState.spaceId,
         pendingQuestion,
         ...(sessionState.apiRetry ? { apiRetry: snapshotApiRetry(sessionState.apiRetry) } : {})
@@ -249,7 +262,7 @@ export function getSessionState(conversationId: string): {
   }
   return {
     isActive: true,
-    thoughts: [...session.thoughts],
+    ...readThoughts(session),
     spaceId: session.spaceId,
     pendingQuestion,
     ...(session.apiRetry ? { apiRetry: snapshotApiRetry(session.apiRetry) } : {})

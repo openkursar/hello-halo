@@ -175,14 +175,15 @@ export function mountBrowserHost(container: HTMLElement, bridge: BrowserHostBrid
   }
 }
 
+export function presentedBrowserPage(id: string): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>('webview[data-browser-page-id][aria-hidden="false"]')]
+    .find(element => element.dataset.browserPageId === id)
+}
+
 /** Returns focus only to a currently presented guest. */
 export function focusBrowserPage(id: string): boolean {
   if (!document.hasFocus()) return false
-  for (const element of document.querySelectorAll<HTMLElement>('webview[data-browser-page-id]')) {
-    if (element.dataset.browserPageId === id && element.getAttribute('aria-hidden') === 'false') {
-      element.focus()
-      return true
-    }
-  }
-  return false
+  const element = presentedBrowserPage(id)
+  element?.focus()
+  return !!element
 }

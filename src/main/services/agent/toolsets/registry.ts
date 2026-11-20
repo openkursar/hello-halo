@@ -75,6 +75,7 @@ registerToolset({
   isAvailable: isTerminalAvailable,
   createServer: (scope: ToolsetScope) =>
     createTerminalMcpServer(getGlobalTerminalContext(scope.workDir), {
+      conversationId: scope.conversationId,
       spaceId: scope.spaceId,
       workDir: scope.workDir
     })

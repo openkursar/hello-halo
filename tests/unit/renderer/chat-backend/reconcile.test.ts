@@ -15,6 +15,7 @@ import {
 } from '../../../../src/renderer/stores/chat/backend/reconcile'
 import { messageRowKey, messageRowKeys } from '../../../../src/renderer/utils/message-row-key'
 import { windowAfterKeysChange } from '../../../../src/renderer/components/chat/transcript/useHistoryWindow'
+import { nextTranscriptRows } from '../../../../src/renderer/components/chat/transcript/transcript-rows'
 
 function msg(id: string, role: Message['role'], content: string, extra: Partial<Message> = {}): Message {
   return { id, role, content, timestamp: `2026-09-01T10:00:${id.replace(/\D/g, '').padStart(2, '0')}.000Z`, ...extra }
@@ -61,6 +62,21 @@ describe('reconcileTranscript', () => {
     const pending = createPendingUserMessage('not on disk yet', undefined)
     const { messages } = reconcileTranscript([msg('session-msg-1', 'user', 'old'), pending], [msg('session-msg-1', 'user', 'old')], { dropUnconfirmed: false })
     expect(messages.map(m => m.id)).toEqual(['session-msg-1', pending.id])
+  })
+
+  it('shows a sent message once when the running turn is read back with what main recorded on it', () => {
+    const pending = createPendingUserMessage('restart the machine', undefined, {})
+    const fresh = [
+      msg('session-msg-1', 'user', 'restart the machine', { metadata: { reasoning: { thinkingEnabled: true } } }),
+      msg('session-msg-2', 'assistant', ''),
+    ]
+
+    const { messages } = reconcileTranscript([pending], fresh, { dropUnconfirmed: false })
+
+    expect(messages.map(m => m.id)).toEqual(['session-msg-1', 'session-msg-2'])
+    expect(messageRowKey(messages[0])).toBe(pending.id)
+    // The unfinished reply stays last, so the transcript keeps it hidden while it streams.
+    expect(nextTranscriptRows(null, messages, true).messages.map(m => m.id)).toEqual(['session-msg-1'])
   })
 
   it('drops an unconfirmed pending message once the turn is over', () => {

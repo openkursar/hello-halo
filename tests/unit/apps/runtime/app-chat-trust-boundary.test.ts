@@ -141,6 +141,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   onApiConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
   onNetworkConfigChange: vi.fn(),
+  onAiSourcesConfigChange: vi.fn(),
 }))
 // getSpace returns null so both guards' allow-path skips disk I/O entirely.
 vi.mock('../../../../src/main/services/space.service', () => ({

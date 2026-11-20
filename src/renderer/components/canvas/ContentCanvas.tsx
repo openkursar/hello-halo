@@ -125,6 +125,12 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
     if (activeTabId) revertTabContent(activeTabId)
   }, [activeTabId, revertTabContent])
 
+  // A no-change save skips onSaveComplete, so the exit is reported separately.
+  // Only markdown uses isEditMode to switch back to the preview viewer.
+  const handleExitEditMode = useCallback(() => {
+    if (activeTabId && activeTab?.type === 'markdown') setEditMode(activeTabId, false)
+  }, [activeTabId, activeTab?.type, setEditMode])
+
   const handleResolveDiskConflict = useCallback((keep: 'disk' | 'mine') => {
     if (activeTabId) resolveDiskConflict(activeTabId, keep)
   }, [activeTabId, resolveDiskConflict])
@@ -147,7 +153,7 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
       {/* Content area - bg-background matches the active tab (see canvas-tabs.css
           .canvas-tab.active) for visual continuity, and the prototype's own
           `.canvas{background:var(--bg)}`. */}
-      <div className="flex-1 min-h-0 overflow-hidden bg-background">
+      <div className="flex-1 min-h-0 overflow-hidden bg-background" data-canvas-tab-content={activeTabId ?? undefined}>
         {activeTab ? (
           // One viewer instance per tab: switching tabs remounts, so no
           // editor history, edit mode or per-document UI state carries over.
@@ -158,6 +164,7 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
             onContentChange={handleContentChange}
             onSaveComplete={handleSaveComplete}
             onRevert={handleRevert}
+            onExitEditMode={handleExitEditMode}
             onResolveDiskConflict={handleResolveDiskConflict}
             onEditRequest={handleEditRequest}
           />

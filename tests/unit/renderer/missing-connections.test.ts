@@ -26,7 +26,7 @@ vi.mock('../../../src/renderer/stores/apps-page.store', () => {
   useAppsPageStore.getState = () => state
   return { useAppsPageStore }
 })
-vi.mock('../../../src/renderer/hooks/useDataContent', () => ({ useDataContent: () => undefined }))
+vi.mock('../../../src/renderer/hooks/useDataContent', () => ({ useDataContent: () => ({ unreadable: false }) }))
 vi.mock('../../../src/renderer/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => content }))
 vi.mock('../../../src/renderer/components/apps/ActivitySource', () => ({ ActivitySource: () => null }))
 vi.mock('../../../src/renderer/components/apps/EscalationCard', () => ({ EscalationCard: () => null }))

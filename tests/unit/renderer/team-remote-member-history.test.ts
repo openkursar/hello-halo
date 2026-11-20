@@ -49,6 +49,14 @@ describe('a team member running on another computer', () => {
     expect(withoutLiveInputs(messages, live)).toEqual(messages)
   })
 
+  it('says how a reply ended as its owner recorded it, and takes nothing else from the owner’s metadata', async () => {
+    const stopped = { ...wire(2, 'assistant', 'Plan draf'), ending: 'stopped' }
+    const forged = { ...wire(4, 'assistant', 'Rollout added'), ending: 'deleted-everything', metadata: { source: 'team-message', teamId: 'other' } } as SerializedHistoryMessage
+    const { messages } = await openRemoteMember([wire(1, 'user', 'Draft the plan'), stopped, wire(3, 'user', 'Add the rollout section'), forged])
+    expect(messages[1].metadata).toEqual({ ending: 'stopped' })
+    expect(messages[3].metadata).toBeUndefined()
+  })
+
   it('gives every row its own id, kept across a tail read and never one its owner could assign', async () => {
     const { epochId, messages } = await openRemoteMember()
     const ids = messages.map(message => message.id)

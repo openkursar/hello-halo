@@ -7,17 +7,15 @@ afterEach(() => {
 });
 
 describe('shared collaboration admission', () => {
-  it('starts no timer or engine for an unused gate and does not format success traces by default', async () => {
+  it('starts no timer or engine for an unused gate and logs nothing on success', async () => {
     vi.useFakeTimers();
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const describeJob = vi.fn(() => { throw new Error('must not format unused traces'); });
     const dispatch = vi.fn(async () => {});
-    const gate = createTurnGate({ isBusy: () => false, dispatch }, { describeJob });
+    const gate = createTurnGate({ isBusy: () => false, dispatch });
     expect(vi.getTimerCount()).toBe(0);
     expect(dispatch).not.toHaveBeenCalled();
     await gate.deliver('first', { body: 'private context' });
     gate.release('first');
-    expect(describeJob).not.toHaveBeenCalled();
     expect(log).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });

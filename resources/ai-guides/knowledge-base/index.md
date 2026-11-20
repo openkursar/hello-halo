@@ -56,6 +56,11 @@ UI path: **Knowledge Base** (知识库) in the left navigation → a knowledge b
   (applies to new conversations)" (在此工作区中始终启用（适用于新对话）).
 - **Digital humans** use the bases checked in their own settings (Knowledge section); at install
   they are seeded with their space's bases plus the default one (`seedAppKnowledgeBases`).
+  For guests of a digital human (people chatting through a connected chat app, or other
+  restricted turns), binding may show document names and short excerpts. To grant read-only
+  access to the extracted full text, the owner turns on **Let guests read its documents** in
+  the base's Settings tab. It is off by default. Changes apply to new turns; they do not
+  interrupt work already in progress or recall text from earlier replies.
 - **Direct Q&A:** the Chat tab's **Ask this knowledge base** (向这个知识库提问) answers from that
   one base only.
 - **Paused bases are not used.** Turning **Keep learning** off sets the base to Paused (已暂停),

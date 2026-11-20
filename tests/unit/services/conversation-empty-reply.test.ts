@@ -172,3 +172,83 @@ describe('removeEmptyReplyPlaceholder', () => {
     expect(preview(conversation.id)).toBe('Plan the launch')
   })
 })
+
+describe('a reply that ended before its answer was done', () => {
+  it('keeps how it ended, so a later read can still say so', () => {
+    const stopped = startTurn('Check the hand-off')
+    stopped.sink.onTurnComplete?.(streamResult({ finalContent: 'Checking the edges first.', hasMeaningfulContent: true, stopReason: 'user' }))
+    expect(messages(stopped.id).at(-1)?.metadata).toMatchObject({ ending: 'stopped' })
+
+    const limited = startTurn('Keep going')
+    limited.sink.onTurnComplete?.(streamResult({ finalContent: 'Part one.', hasMeaningfulContent: true, wasAborted: false, reachedMaxTurns: true }))
+    expect(messages(limited.id).at(-1)?.metadata).toMatchObject({ ending: 'step-limit' })
+  })
+
+  it('marks nothing on a reply that finished, or one kept because of a failure', () => {
+    const done = startTurn('Answer me')
+    done.sink.onTurnComplete?.(streamResult({ finalContent: 'Done.', hasMeaningfulContent: true, wasAborted: false, isInterrupted: false }))
+    expect(messages(done.id).at(-1)?.metadata?.ending).toBeUndefined()
+
+    const failed = startTurn('Run it')
+    failed.sink.onTurnError?.(new Error('Provider refused'), true, streamResult({ finalContent: 'Partial', hasMeaningfulContent: true }))
+    expect(messages(failed.id).at(-1)).toMatchObject({ error: 'Provider refused' })
+    expect(messages(failed.id).at(-1)?.metadata?.ending).toBeUndefined()
+  })
+})
+
+describe('a turn no person asked for that ends without a word', () => {
+  type Record = Parameters<typeof addMessage>[2]
+  const fromConversation: Record = { role: 'system', content: 'Starting a long batch. No reply needed.', source: 'cross-conversation' }
+  const fromTeammate: Record = { role: 'system', content: 'The review is done.', source: 'team-message' }
+  const blank = (): Thought => ({ ...marker('text'), content: ' ' })
+
+  /** An answered exchange, the records that open the next turn, then that turn's reply placeholder. */
+  function startUnaskedTurn(...records: Record[]) {
+    const conversation = createConversation(SPACE)
+    addMessage(SPACE, conversation.id, { role: 'user', content: 'Merge the release' })
+    addMessage(SPACE, conversation.id, { role: 'assistant', content: 'Merged.', toolCalls: [] })
+    for (const record of records) addMessage(SPACE, conversation.id, record)
+    const sink = createConversationSink(SPACE, conversation.id)
+    sink.onTurnStart?.()
+    return { id: conversation.id, sink }
+  }
+
+  const quietEnd = (thoughts: Thought[] = [marker('system'), blank(), marker('result')]) =>
+    streamResult({ finalContent: ' ', thoughts, isInterrupted: false, wasAborted: false, endedQuietly: true })
+
+  it('may end quietly when only other conversations or teammates wrote since the last reply', () => {
+    expect(startUnaskedTurn(fromConversation).sink.acceptsQuietEnd?.()).toBe(true)
+    expect(startUnaskedTurn(fromConversation, fromTeammate).sink.acceptsQuietEnd?.()).toBe(true)
+  })
+
+  it('may not when a person wrote since the last reply or while the turn ran', () => {
+    expect(startUnaskedTurn({ role: 'user', content: 'Anything new?' }).sink.acceptsQuietEnd?.()).toBe(false)
+    expect(startUnaskedTurn({ role: 'user', content: 'Merge it too' }, fromConversation).sink.acceptsQuietEnd?.()).toBe(false)
+
+    const typedDuring = startUnaskedTurn(fromConversation)
+    addMessage(SPACE, typedDuring.id, { role: 'user', content: 'Also check the logs', source: 'injection' })
+    expect(typedDuring.sink.acceptsQuietEnd?.()).toBe(false)
+
+    expect(startTurn('Summarize the report').sink.acceptsQuietEnd?.()).toBe(false)
+  })
+
+  it('leaves no blank reply, and keeps the work of a turn that did some', () => {
+    const quiet = startUnaskedTurn(fromConversation)
+    quiet.sink.onTurnComplete(quietEnd())
+    expect(messages(quiet.id).map(m => [m.role, m.content])).toEqual([
+      ['user', 'Merge the release'], ['assistant', 'Merged.'], ['system', 'Starting a long batch. No reply needed.'],
+    ])
+
+    const worked = startUnaskedTurn(fromTeammate)
+    worked.sink.onTurnComplete(quietEnd([marker('system'), { ...marker('tool_use'), toolName: 'Bash' }, blank(), marker('result')]))
+    expect(messages(worked.id).at(-1)).toMatchObject({ role: 'assistant', content: '' })
+    expect(messages(worked.id).at(-1)?.error).toBeUndefined()
+    expect(messages(worked.id).at(-1)?.thoughtsSummary?.types).toMatchObject({ tool_use: 1 })
+  })
+
+  it('keeps the reply of an empty answer a person asked for, where its error is shown', () => {
+    const asked = startTurn('Summarize the batch')
+    asked.sink.onTurnComplete(streamResult({ finalContent: ' ', thoughts: [marker('system'), blank(), marker('result')], isInterrupted: false, wasAborted: false }))
+    expect(messages(asked.id).at(-1)).toMatchObject({ role: 'assistant', content: '' })
+  })
+})

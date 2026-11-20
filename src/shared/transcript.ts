@@ -106,10 +106,12 @@ export function pageTranscript(
 export function summarizeThoughts(thoughts: readonly Thought[]): ThoughtsSummary {
   const types: ThoughtsSummary['types'] = {}
   const skillNotices: NonNullable<ThoughtsSummary['skillNotices']> = []
+  let compactions = 0
   for (const t of thoughts) {
     types[t.type] = (types[t.type] || 0) + 1
     // One entry per notice, in order: each explicit command in a turn has its own feedback.
     if (t.type === 'system' && t.skillNotice) skillNotices.push(t.skillNotice)
+    if (t.type === 'system' && t.compaction) compactions++
   }
   let duration: number | undefined
   if (thoughts.length >= 2) {
@@ -117,7 +119,7 @@ export function summarizeThoughts(thoughts: readonly Thought[]): ThoughtsSummary
     const last = new Date(thoughts[thoughts.length - 1].timestamp).getTime()
     duration = (last - first) / 1000
   }
-  return { count: thoughts.length, types, duration, ...(skillNotices.length ? { skillNotices } : {}) }
+  return { count: thoughts.length, types, duration, ...(skillNotices.length ? { skillNotices } : {}), ...(compactions ? { compactions } : {}) }
 }
 
 /**
@@ -155,7 +157,8 @@ export function tailStartWithinBudget<T>(
 /**
  * Match an accepted input to its persisted twin without relying on a provisional
  * id. The reply anchor and the outcome are learned after the input is announced,
- * so they never tell two inputs apart.
+ * and the reasoning setting is added by whoever records it, so they never tell
+ * two inputs apart.
  */
 export function sameTranscriptInput(left: TranscriptMessage, right: TranscriptMessage): boolean {
   return left.role === right.role && left.source === right.source
@@ -164,9 +167,11 @@ export function sameTranscriptInput(left: TranscriptMessage, right: TranscriptMe
     && sameInputMetadata(left.metadata, right.metadata)
 }
 
+const RECORDED_ONLY_METADATA = new Set(['inputReplyId', 'inputOutcome', 'reasoning'])
+
 function sameInputMetadata(left: TranscriptMessage['metadata'], right: TranscriptMessage['metadata']): boolean {
   const comparable = (metadata: TranscriptMessage['metadata']) => Object.entries(metadata ?? {})
-    .filter(([key, value]) => value !== undefined && key !== 'inputReplyId' && key !== 'inputOutcome')
+    .filter(([key, value]) => value !== undefined && !RECORDED_ONLY_METADATA.has(key))
   const leftEntries = comparable(left)
   const rightEntries = comparable(right)
   if (leftEntries.length !== rightEntries.length) return false

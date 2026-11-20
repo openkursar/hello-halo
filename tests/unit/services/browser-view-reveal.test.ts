@@ -158,6 +158,20 @@ describe('browser manager and persistent carrier', () => {
     expect(manager.getState('same-id')).toMatchObject({ title: 'New Tab', url: 'https://example.com/replacement' })
   })
 
+  it('stays loading through the attachment page finishing after the real navigation started', async () => {
+    await manager.create('page', 'https://example.com')
+    const guest = guests.get('page')!
+    guest.emit('did-start-navigation', {}, 'https://example.com/', false, true)
+    guest.emit('did-finish-load')
+    // Reporting done here let callers read the page before its title arrived.
+    expect(manager.getState('page')).toMatchObject({ isLoading: true, title: 'New Tab' })
+
+    guest.emit('page-title-updated', {}, 'Example Domain')
+    guest.emit('did-finish-load')
+    guest.emit('did-stop-loading')
+    expect(manager.getState('page')).toMatchObject({ isLoading: false, title: 'Example Domain' })
+  })
+
   it('does not register a guest that attaches after its browser was closed', async () => {
     let resolve!: (guest: FakeGuest) => void
     host.create.mockImplementationOnce(() => new Promise<FakeGuest>(accept => { resolve = accept }))
@@ -220,7 +234,7 @@ describe('website tabs', () => {
   it.each([true, false])('inherits ownership and device mode without watching, hidden=%s', async offscreen => {
     const main = new FakeWindow()
     manager.initialize(main as never)
-    const owner = { isActive: () => true, reserve: vi.fn(), ready: vi.fn(), release: vi.fn() }
+    const owner = { isActive: () => true, reserve: vi.fn(), ready: vi.fn(), childOpened: vi.fn(() => false), release: vi.fn() }
     await manager.create('owned-opener', 'https://example.com', { offscreen, deviceMode: 'h5', owner })
     const options = popups.configure.mock.calls[0][1] as PopupOptions
     expect(options.canOpenTab()).toBe(true)
@@ -243,7 +257,7 @@ describe('website tabs', () => {
     let finish!: (guest: FakeGuest) => void
     host.create.mockImplementationOnce(() => new Promise<FakeGuest>(resolve => { finish = resolve }))
     let active = true
-    const owner = { isActive: () => active, reserve: vi.fn(), ready: vi.fn(), release: vi.fn() }
+    const owner = { isActive: () => active, reserve: vi.fn(), ready: vi.fn(), childOpened: vi.fn(() => false), release: vi.fn() }
     const opening = manager.create('reserved', 'https://example.com', { owner })
     const rejected = expect(opening).rejects.toThrow(/closed|released/)
     expect(owner.reserve).toHaveBeenCalledWith('reserved', false)

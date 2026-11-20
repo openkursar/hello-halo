@@ -85,7 +85,7 @@
     "slots": []
   },
   "context.goal.open_check": {
-    "text": "You ended your turn with work still open: {parts}.\nThis is a check, not an instruction to continue. If you stopped on purpose — the user asked you to stop here, you're waiting for their input, you're blocked, or the remaining items no longer apply — say so in a sentence and update the goal or todo if they are out of date. If you stopped unintentionally, pick up where you left off.",
+    "text": "You ended your turn with work still open: {parts}.\nIf you stopped on purpose, you can ignore this reminder. No response needed.",
     "slots": [
       "parts"
     ]

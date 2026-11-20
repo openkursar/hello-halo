@@ -70,7 +70,8 @@ async function fetchUpstream(
       }
     }
     headers['Content-Type'] = 'application/json'
-    if (!headers['Authorization']) {
+    // Under any case: fetch would send both spellings as one comma-joined value.
+    if (!Object.keys(headers).some(key => key.toLowerCase() === 'authorization')) {
       headers['Authorization'] = `Bearer ${apiKey}`
     }
 

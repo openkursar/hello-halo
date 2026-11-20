@@ -35,8 +35,10 @@ import {
   registerWebContentsForDownload,
   unregisterWebContentsForDownload
 } from './download-handler'
-import { emitBrowserActiveView, emitBrowserViewGone, emitBrowserConversationReleased } from './events'
+import { abandonCredentialRequestsForConversation, abandonCredentialRequestsForView } from './credential-broker'
+import { emitBrowserActiveView, emitBrowserPageOpened, emitBrowserViewGone, emitBrowserConversationReleased, emitBrowserOperating } from './events'
 import { CROSS_ORIGIN_FRAME_REFUSED, FOCUS_REFUSED, READ_FILLED_VALUE, SELECT_IF_FOCUSED } from './fill-check'
+import { createActivityHold } from '../../../shared/ai-operating'
 import type { AIBrowserLivePage, AIBrowserStopResult } from '../../../shared/types/ai-browser'
 import { sanitizeFilename, resolveUniquePath } from '../../foundation/file-naming'
 import { isEngineControlFileName } from '../../../shared/engine-control-files'
@@ -74,6 +76,8 @@ const automationOwnedViewIds = new Set<string>()
  * navigation that fails instead of opening a fresh one.
  */
 const liveContexts = new Set<BrowserContext>()
+// Releasing a conversation transfers its open pages, not their workspace.
+const releasedPageSpaces = new Map<string, string>()
 
 /**
  * Pages a context with a UI had to open in the hidden host because the main
@@ -92,9 +96,11 @@ const backgroundOnlyViewIds = new Set<string>()
 export function notifyViewDestroyed(viewId: string, webContentsId?: number): void {
   if (webContentsId !== undefined) unregisterWebContentsForDownload(webContentsId)
   automationOwnedViewIds.delete(viewId)
+  const wasReleased = releasedPageSpaces.delete(viewId)
   const reservedContexts = new Set([...liveContexts].filter(ctx => ctx.hasReservedView(viewId)))
   const wasAnnounced = !backgroundOnlyViewIds.delete(viewId) && reservedContexts.size === 0
-  let announce = false
+  abandonCredentialRequestsForView(viewId)
+  let announce = wasReleased
   for (const ctx of liveContexts) {
     const held = ctx.handleViewDestroyed(viewId)
     if (held && ctx.hasUi && wasAnnounced && !reservedContexts.has(ctx)) announce = true
@@ -109,6 +115,14 @@ export function notifyViewDestroyed(viewId: string, webContentsId?: number): voi
 // teardown, a context ending) funnels through the manager, so reconciling here
 // is what keeps a long-lived context from pointing at a dead page.
 browserViewManager.onViewDestroyed(notifyViewDestroyed)
+browserViewManager.onViewStateChanged(viewId => {
+  for (const ctx of liveContexts) ctx.handleViewStateChanged(viewId)
+})
+browserViewManager.onUserInput(viewId => {
+  for (const ctx of liveContexts) ctx.handleUserInput(viewId)
+})
+
+const USER_INPUT_NOTICE = 'Note: the user operated this page themselves (clicked, typed or scrolled) since your previous browser action. Earlier snapshots and element UIDs may be stale; take a fresh browser_snapshot before acting on the page, and do not undo what the user did.'
 
 /**
  * Every page held by a context that has a UI — the one it acts on and every
@@ -118,7 +132,21 @@ browserViewManager.onViewDestroyed(notifyViewDestroyed)
 export function listLivePages(): AIBrowserLivePage[] {
   const pages: AIBrowserLivePage[] = []
   for (const ctx of liveContexts) pages.push(...ctx.describeLivePages())
+  for (const [viewId, spaceId] of releasedPageSpaces) {
+    const state = browserViewManager.getState(viewId)
+    if (state) pages.push({
+      viewId, spaceId, conversationId: null, owned: false, active: false, released: true,
+      url: state.url || null, title: state.title || null,
+    })
+  }
   return pages
+}
+
+export function isLiveConversationPage(viewId: string): boolean {
+  for (const ctx of liveContexts) {
+    if (ctx.conversationId && ctx.isWatchable(viewId) && (ctx.ownsView(viewId) || ctx.getActiveViewId() === viewId)) return true
+  }
+  return false
 }
 
 /**
@@ -146,8 +174,45 @@ export function stopLivePage(viewId: string, conversationId: string): AIBrowserS
     }
   }
   browserViewManager.destroy(viewId)
-  console.log(`[BrowserContext] Page stopped from the tray: ${viewId} (conversation=${conversationId})`)
+  console.log(`[BrowserContext] Page stopped by the user: ${viewId} (conversation=${conversationId})`)
   return { stopped: true }
+}
+
+/**
+ * Whether each conversation's AI is operating its browser, by conversation:
+ * from the first tool call until a while after the last (shared/ai-operating.ts).
+ * Only contexts someone can watch report it.
+ */
+const operatingConversations = createActivityHold<string>((conversationId, operating) => {
+  emitBrowserOperating({ conversationId, operating })
+})
+
+/** The page a conversation's AI acts on, when someone could be shown it. */
+export function conversationPage(conversationId: string): AIBrowserLivePage | null {
+  for (const ctx of liveContexts) {
+    if (ctx.conversationId !== conversationId) continue
+    const page = ctx.describeLivePages().find(candidate => candidate.active)
+    if (page) return page
+  }
+  return null
+}
+
+/** Pages the conversations of a space opened, so they can end with the space. */
+export function listSpacePageIds(spaceId: string): string[] {
+  const ids = new Set<string>()
+  for (const [viewId, ownerSpaceId] of releasedPageSpaces) {
+    if (ownerSpaceId === spaceId) ids.add(viewId)
+  }
+  for (const ctx of liveContexts) {
+    if (ctx.spaceId === spaceId) ctx.collectOwnedViewIds(ids)
+  }
+  return [...ids]
+}
+
+/** Ends pages nobody can reach any more (their space was removed). */
+export function closeBrowserPages(viewIds: readonly string[]): void {
+  for (const viewId of viewIds) browserViewManager.destroy(viewId)
+  if (viewIds.length > 0) console.log(`[BrowserContext] Closed ${viewIds.length} page(s) of a removed space`)
 }
 
 // Default timeout for CDP commands (ms)
@@ -238,7 +303,18 @@ export class BrowserContext implements BrowserContextInterface {
   workDir: string | undefined = undefined
 
   private activeViewId: string | null = null
+  /** Identity of the last active-view announcement, so a state change that alters nothing visible stays silent. */
+  private announcedView: string | null = null
   private lastSnapshot: AccessibilitySnapshot | null = null
+  private userInputPending = false
+
+  /**
+   * Fields the user typed into through the credential broker, whose values are
+   * withheld from every later snapshot. Scoped to the document they were filled
+   * in: a backendNodeId is meaningless once the page has navigated, and the next
+   * document would reuse the number for an unrelated field.
+   */
+  private redactedValues: { viewId: string; url: string; nodeIds: Set<number> } | null = null
 
   // Network monitoring state
   private networkRequests: Map<string, NetworkRequest> = new Map()
@@ -287,6 +363,21 @@ export class BrowserContext implements BrowserContextInterface {
       if (this.released) throw new Error('Browser context was released')
       this.reservedViewIds.delete(viewId)
       this.trackView(viewId)
+    },
+    childOpened: (viewId, openerViewId) => {
+      if (!this.conversationId || !this.spaceId || !this.isWatchable(viewId)) return false
+      const state = browserViewManager.getState(viewId)
+      if (!state) return false
+      emitBrowserPageOpened({
+        conversationId: this.conversationId,
+        spaceId: this.spaceId,
+        viewId,
+        openerViewId,
+        owned: true,
+        url: state.url || null,
+        title: state.title || null,
+      })
+      return true
     },
     release: viewId => {
       this.reservedViewIds.delete(viewId)
@@ -347,6 +438,10 @@ export class BrowserContext implements BrowserContextInterface {
     return this.ownedViewIds.has(viewId)
   }
 
+  collectOwnedViewIds(ids: Set<string>): void {
+    for (const viewId of this.ownedViewIds) ids.add(viewId)
+  }
+
   hasReservedView(viewId: string): boolean {
     return this.reservedViewIds.has(viewId)
   }
@@ -359,15 +454,26 @@ export class BrowserContext implements BrowserContextInterface {
     return false
   }
 
+  /** A tool call on this context's browser started or ended; see `operatingConversations`. */
+  beginToolCall(): void {
+    if (this._hasUi && this.conversationId) operatingConversations.begin(this.conversationId)
+  }
+
+  endToolCall(): void {
+    if (this._hasUi && this.conversationId) operatingConversations.end(this.conversationId)
+  }
+
   /** The pages this context holds (owned plus active) that a UI could reveal. */
   describeLivePages(): AIBrowserLivePage[] {
     if (!this.hasUi) return []
     const ids = new Set(this.ownedViewIds)
     if (this.activeViewId) ids.add(this.activeViewId)
+    const operating = !!this.conversationId && operatingConversations.isActive(this.conversationId)
     const pages: AIBrowserLivePage[] = []
     for (const viewId of ids) {
       const state = browserViewManager.getState(viewId)
       if (!state || !this.isWatchable(viewId)) continue
+      const active = viewId === this.activeViewId
       pages.push({
         conversationId: this.conversationId,
         spaceId: this.spaceId,
@@ -375,7 +481,8 @@ export class BrowserContext implements BrowserContextInterface {
         owned: this.ownedViewIds.has(viewId),
         url: state.url || null,
         title: state.title || null,
-        active: viewId === this.activeViewId,
+        active,
+        operating: active && operating,
       })
     }
     return pages
@@ -465,6 +572,7 @@ export class BrowserContext implements BrowserContextInterface {
     if (this.activeViewId && this.activeViewId !== viewId) {
       this.lastSnapshot = null
       this.snapshotContents = null
+      this.userInputPending = false
       this.disableMonitoring()
     }
 
@@ -485,14 +593,44 @@ export class BrowserContext implements BrowserContextInterface {
   private notifyActiveViewChange(viewId: string): void {
     if (!this.isWatchable(viewId)) return
     const state = browserViewManager.getState(viewId)
+    const url = state?.url || null
+    const title = state?.title || null
+    this.announcedView = `${viewId}\n${url}\n${title}`
     emitBrowserActiveView({
       conversationId: this.conversationId,
       spaceId: this.spaceId,
       viewId,
       owned: this.ownedViewIds.has(viewId),
-      url: state?.url || null,
-      title: state?.title || null,
+      url,
+      title,
     })
+  }
+
+  /**
+   * The page this context acts on loaded or navigated. It was announced when
+   * selected, usually still titled "New Tab", so clients learn its real title
+   * and address only from a fresh announcement.
+   */
+  handleViewStateChanged(viewId: string): void {
+    if (!this.hasUi || this.activeViewId !== viewId) return
+    const state = browserViewManager.getState(viewId)
+    if (`${viewId}\n${state?.url || null}\n${state?.title || null}` === this.announcedView) return
+    this.notifyActiveViewChange(viewId)
+  }
+
+  /** A person operated a page from outside its window; only the page this context acts on matters. */
+  handleUserInput(viewId: string): void {
+    if (this.activeViewId !== viewId) return
+    this.userInputPending = true
+    this.lastSnapshot = null
+    this.snapshotContents = null
+  }
+
+  /** Tells the AI, once, that the page changed under it since it last looked. */
+  takeUserInputNotice(): string | null {
+    if (!this.userInputPending) return null
+    this.userInputPending = false
+    return USER_INPUT_NOTICE
   }
 
   /**
@@ -675,7 +813,7 @@ export class BrowserContext implements BrowserContextInterface {
     const onNavigation = (_event: Electron.Event, _url: string, _inPlace: boolean, isMainFrame: boolean) => { if (isMainFrame) navigated = true }
     webContents.on('did-start-navigation', onNavigation)
     try {
-      const snapshot = await createAccessibilitySnapshot(webContents, this.sendSnapshotCommand, verbose)
+      const snapshot = await createAccessibilitySnapshot(webContents, this.sendSnapshotCommand, verbose, this.currentRedactions(webContents))
       if (navigated || this.released || webContents.isDestroyed()) throw new Error('Browser page changed while taking its snapshot')
       if (this.activeViewId && browserViewManager.getWebContents(this.activeViewId) === webContents) {
         this.lastSnapshot = snapshot
@@ -1178,7 +1316,7 @@ export class BrowserContext implements BrowserContextInterface {
     if (!this.pageOperations && this.released) this.pageTarget.disable()
   }
 
-  private async withPageFrames<T>(operation: () => Promise<T>, timeoutMs = CDP_TIMEOUT): Promise<T> {
+  private async withPageFrames<T>(operation: () => Promise<T>, timeoutMs = CDP_TIMEOUT, signal?: AbortSignal): Promise<T> {
     const contents = this.getWebContents()
     if (!contents || this.released) throw new Error('No active browser view')
     const inherited = this.pageTarget.getStore()
@@ -1193,6 +1331,9 @@ export class BrowserContext implements BrowserContextInterface {
       deadline: inherited?.deadline ?? Date.now() + timeoutMs,
       signal: controller.signal,
     }
+    const cancel = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', cancel, { once: true })
+    if (signal?.aborted) cancel()
     this.pageOperations++
     this.operationCancellations.set(controller, target)
     try {
@@ -1205,6 +1346,7 @@ export class BrowserContext implements BrowserContextInterface {
         beforeRelease: () => target.input?.release() ?? Promise.resolve(),
       })
     } finally {
+      signal?.removeEventListener('abort', cancel)
       controller.abort(new Error('Browser operation finished'))
       void target.input?.dispose()
       this.operationCancellations.delete(controller)
@@ -1219,7 +1361,7 @@ export class BrowserContext implements BrowserContextInterface {
     return this.withPageFrames(() => this.clickElementWithFrames(uid, options))
   }
 
-  private async clickElementWithFrames(uid: string, options?: { dblClick?: boolean }): Promise<void> {
+  private async clickElementWithFrames(uid: string, options?: { dblClick?: boolean; beforeClick?: () => void }): Promise<void> {
     const element = this.getElementByUid(uid)
     if (!element) {
       throw new Error(`Element not found: ${uid}`)
@@ -1243,6 +1385,7 @@ export class BrowserContext implements BrowserContextInterface {
     const x = box.x + box.width / 2
     const y = box.y + box.height / 2
 
+    options?.beforeClick?.()
     // Perform click using CDP
     if (options?.dblClick) {
       // Double-click requires two full click cycles.
@@ -1316,6 +1459,57 @@ export class BrowserContext implements BrowserContextInterface {
    */
   async fillElement(uid: string, value: string): Promise<FieldReadBack> {
     return this.withPageFrames(() => this.fillElementWithFrames(uid, value))
+  }
+
+  async submitUserText(
+    snapshot: AccessibilitySnapshot,
+    values: ReadonlyMap<string, string>,
+    submitUid: string | undefined,
+    signal: AbortSignal,
+    beginSubmission: () => void,
+  ): Promise<boolean> {
+    return this.withPageFrames(async () => {
+      if (this.getLastSnapshot() !== snapshot || this.pageTarget.getStore()?.snapshot !== snapshot) {
+        throw new Error('The page no longer has the original form')
+      }
+      for (const [uid, value] of values) {
+        const element = this.getElementByUid(uid)
+        if (!element) throw new Error('The credential field is no longer available')
+        this.redactValue(element.backendNodeId)
+        const filled = await this.fillElementWithFrames(uid, value)
+        if (filled.kind === 'unreadable' || filled.value !== value) return false
+      }
+      if (this.getLastSnapshot() !== snapshot) return false
+      const markSubmitted = () => {
+        if (this.getLastSnapshot() !== snapshot) throw new Error('The original form changed before submission')
+        beginSubmission()
+      }
+      if (submitUid) await this.clickElementWithFrames(submitUid, { beforeClick: markSubmitted })
+      else {
+        markSubmitted()
+        await this.pressKeyWithFrames('Enter')
+      }
+      return true
+    }, 30_000, signal)
+  }
+
+  private redactValue(backendNodeId: number): void {
+    const webContents = this.getWebContents()
+    if (!webContents || !this.activeViewId) return
+    const url = webContents.getURL()
+    if (this.redactedValues?.viewId !== this.activeViewId || this.redactedValues.url !== url) {
+      this.redactedValues = { viewId: this.activeViewId, url, nodeIds: new Set() }
+    }
+    this.redactedValues.nodeIds.add(backendNodeId)
+  }
+
+  private currentRedactions(webContents: Electron.WebContents): ReadonlySet<number> | undefined {
+    if (!this.redactedValues) return undefined
+    if (this.redactedValues.viewId !== this.activeViewId || this.redactedValues.url !== webContents.getURL()) {
+      this.redactedValues = null
+      return undefined
+    }
+    return this.redactedValues.nodeIds
   }
 
   private async fillElementWithFrames(uid: string, value: string): Promise<FieldReadBack> {
@@ -2220,7 +2414,10 @@ export class BrowserContext implements BrowserContextInterface {
     // WebContents, so a tab left registered to a released context keeps sending
     // the USER's own downloads to the AI's download folder — silently, on a tab
     // that outlives the conversation and looks like any other.
-    for (const viewId of new Set([...this.ownedViewIds, ...this.reservedViewIds])) {
+    for (const viewId of this.ownedViewIds) {
+      if (this.spaceId && this.isWatchable(viewId) && !this.reservedViewIds.has(viewId) && browserViewManager.getState(viewId)) {
+        releasedPageSpaces.set(viewId, this.spaceId)
+      }
       browserViewManager.releaseOwner(viewId, this.pageOwner)
       const wc = browserViewManager.getWebContents(viewId)
       if (wc && !wc.isDestroyed()) {
@@ -2258,6 +2455,8 @@ export class BrowserContext implements BrowserContextInterface {
    * conversation's page as "in use".
    */
   private announceReleased(): void {
+    // Not gated on hasUi: an offscreen context's prompt reached the user too.
+    abandonCredentialRequestsForConversation(this.conversationId)
     if (!this.hasUi || !this.conversationId) return
     emitBrowserConversationReleased({ conversationId: this.conversationId })
   }

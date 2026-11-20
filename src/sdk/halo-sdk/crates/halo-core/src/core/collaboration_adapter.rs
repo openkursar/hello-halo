@@ -5,6 +5,7 @@ use crate::{
         self,
         journal::FileScopeStore,
         store::{add_member, MemoryStore, ScopeStore},
+        tool_contract::ParsedInput,
         workspaces::{
             open_member_workspace, release_member_workspace, remap_denied_roots, MemberWorkspace,
         },
@@ -569,7 +570,7 @@ impl SdkCollaboration {
         }
         Ok(options)
     }
-    async fn query_models(&self, caller: &str, input: &Value, cancel: &CancellationToken) -> Result<Value> {
+    async fn query_models(&self, caller: &str, input: &Value, notice: Option<&str>, cancel: &CancellationToken) -> Result<Value> {
         let catalog = self.catalog(cancel).await?;
         let options = self.parent_options(caller)?;
         let runtime = self.runtime_view.lock().unwrap().upgrade().ok_or_else(Error::cancelled)?;
@@ -577,7 +578,10 @@ impl SdkCollaboration {
         let identity = member.as_ref().map(|member|&member["modelSelection"]).filter(|snapshot|snapshot.is_object()).unwrap_or(&self.settings["modelSelection"]["parentBinding"]);
         let parent = json!({"bindingId":identity["bindingId"],"restoreRef":identity["restoreRef"],"model":options["model"],"reasoning":effective_reasoning(&options)});
         let revision = self.model_policy_revision.lock().unwrap().clone().unwrap();
-        let result = catalog.query(&json!({"parent":parent,"policyRevision":revision,"input":input}))?;
+        let mut result = catalog.query(&json!({"parent":parent,"policyRevision":revision,"input":input}))?;
+        if let Some(notice) = notice {
+            result["notice"] = notice.into();
+        }
         let text = serde_json::to_string(&result)?;
         let limit = collaboration::model_selection::limits()["resultBytes"].as_u64().unwrap() as usize;
         if text.len() > limit {
@@ -1620,8 +1624,8 @@ impl SdkCollaboration {
     ) -> Result<Value> {
         let name = name.strip_prefix(PREFIX).unwrap_or(name);
         let capability = self.model_capability();
-        let input = match collaboration::tool_contract::parse_input_with_model_selection(name, &input, capability.as_ref()) {
-            Ok(input) => input,
+        let ParsedInput { input, unfiltered_directory } = match collaboration::tool_contract::parse_input_with_model_selection(name, &input, capability.as_ref()) {
+            Ok(parsed) => parsed,
             Err(error) => {
                 tracing::warn!(tool = name, "Collaboration arguments rejected");
                 return Ok(collaboration::tool_contract::text(
@@ -1642,7 +1646,8 @@ impl SdkCollaboration {
                 return Err(Error::cancelled());
             }
             if name == "list_model_profiles" {
-                return self.query_models(&runtime.coordinator_id, &input, cancel).await;
+                let notice = unfiltered_directory.then(|| harness.text(TextId::CollaborationModelSelectionUnfilteredDirectory));
+                return self.query_models(&runtime.coordinator_id, &input, notice, cancel).await;
             }
             runtime
                 .call_with_harness(
@@ -1655,11 +1660,11 @@ impl SdkCollaboration {
                 .await
         }
         .await;
-        match result {
-            Ok(value) => Ok(value),
+        let result = match result {
+            Ok(value) => value,
             Err(error) => {
                 tracing::warn!(tool=name,code=%error.code,"Collaboration operation failed");
-                Ok(collaboration::tool_contract::text(
+                collaboration::tool_contract::text(
                     if collaboration::is_refusal(&error) {
                         error.render_for(&harness)
                     } else {
@@ -1668,9 +1673,10 @@ impl SdkCollaboration {
                             .into()
                     },
                     true,
-                ))
+                )
             }
-        }
+        };
+        Ok(result)
     }
     pub async fn flush(&self) -> Result<()> {
         let runtime = self.runtime.lock().await.clone();
@@ -1863,20 +1869,22 @@ impl CollaborationTools for MemberTools {
         let runtime = owner.ensure().await?;
         let name = name.strip_prefix(PREFIX).unwrap_or(name);
         let capability = owner.model_capability();
-        let input = collaboration::tool_contract::parse_input_with_model_selection(name, &input, capability.as_ref())?;
-        if name == "list_model_profiles" {
-            return owner.query_models(&self.caller, &input, cancel).await.map(tool_result);
-        }
-        runtime
-            .call_with_harness(
-                &self.caller,
-                name.strip_prefix(PREFIX).unwrap_or(name),
-                input,
-                cancel,
-                harness,
-            )
-            .await
-            .map(tool_result)
+        let ParsedInput { input, unfiltered_directory } = collaboration::tool_contract::parse_input_with_model_selection(name, &input, capability.as_ref())?;
+        let result = if name == "list_model_profiles" {
+            let notice = unfiltered_directory.then(|| harness.text(TextId::CollaborationModelSelectionUnfilteredDirectory));
+            owner.query_models(&self.caller, &input, notice, cancel).await?
+        } else {
+            runtime
+                .call_with_harness(
+                    &self.caller,
+                    name.strip_prefix(PREFIX).unwrap_or(name),
+                    input,
+                    cancel,
+                    harness,
+                )
+                .await?
+        };
+        Ok(tool_result(result))
     }
 }
 #[async_trait]

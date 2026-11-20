@@ -147,6 +147,11 @@ function makeHooks(options: MakeHooksOptions = {}) {
   return { hooks, wakes, midTurnDeliveries, busy, unreachable }
 }
 
+/** The native bus wakes the target of a waiting send on a later event-loop turn. */
+async function wokenCount(wakes: readonly unknown[], count: number): Promise<void> {
+  await vi.waitFor(() => expect(wakes).toHaveLength(count))
+}
+
 // ============================================
 // Setup
 // ============================================
@@ -429,8 +434,7 @@ describe('MessageBus', () => {
         wait: true,
       })
 
-      // Let the microtask deliver + register the waiter.
-      await Promise.resolve()
+      await wokenCount(wakes, 1)
       const wake = wakes[0]
       expect(wake.trigger.wait).toBe(true)
 
@@ -476,7 +480,7 @@ describe('MessageBus', () => {
       const bus = createMessageBus({ store, hooks })
 
       const pending = bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: TESTER_APP, to: 'lead', message: 'q', wait: true })
-      await Promise.resolve()
+      await wokenCount(wakes, 1)
       bus.completeTurn({ sessionKey: wakes[0].sessionKey, trigger: wakes[0].trigger, outcome: { kind: 'error', message: 'boom' } })
 
       const result = receipt(await pending)
@@ -492,7 +496,7 @@ describe('MessageBus', () => {
       const bus = createMessageBus({ store, hooks })
 
       const pending = bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: TESTER_APP, to: 'lead', message: 'q', wait: true })
-      await Promise.resolve()
+      await wokenCount(wakes, 1)
       bus.completeTurn({
         sessionKey: wakes[0].sessionKey,
         trigger: wakes[0].trigger,
@@ -514,7 +518,7 @@ describe('MessageBus', () => {
       const bus = createMessageBus({ store, hooks })
 
       const pending = bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: TESTER_APP, to: 'lead', message: 'q', wait: true })
-      await Promise.resolve()
+      await wokenCount(wakes, 1)
       bus.completeTurn({
         sessionKey: wakes[0].sessionKey,
         trigger: wakes[0].trigger,
@@ -917,7 +921,7 @@ describe('MessageBus', () => {
       const pending = bus.send({
         teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: null, to: 'lead', message: 'are you there?', wait: true,
       })
-      await Promise.resolve()
+      await wokenCount(wakes, 1)
 
       const wake = wakes[0]
       bus.completeTurn({
@@ -1140,58 +1144,46 @@ describe('MessageBus', () => {
       expect(wakes[0].envelope.body).toBe('retry')
     })
 
+    // The bus's backstop is a fixed 3 s timer in the native runtime, which fake
+    // timers cannot advance; these two run on real time.
     it('the buffered-mail recheck backstop drains without any turn-end signal', async () => {
       // Covers the race where the target goes idle between the busy probe and
       // the buffer push: no turn end will ever fire for that mail.
-      vi.useFakeTimers()
-      try {
-        seedTeam(store, 'free')
-        const { hooks, wakes, busy } = makeHooks()
-        const bus = createMessageBus({ store, hooks })
+      seedTeam(store, 'free')
+      const { hooks, wakes, busy } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
 
-        busy.add(LEAD_KEY)
-        await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'raced', wait: false })
-        expect(wakes).toHaveLength(0)
+      busy.add(LEAD_KEY)
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'raced', wait: false })
+      expect(wakes).toHaveLength(0)
 
-        busy.delete(LEAD_KEY) // went idle with no drain signal
-        await vi.advanceTimersByTimeAsync(3100)
-        expect(wakes).toHaveLength(1)
-        expect(wakes[0].envelope.body).toBe('raced')
-      } finally {
-        vi.useRealTimers()
-      }
-    })
+      busy.delete(LEAD_KEY) // went idle with no drain signal
+      await vi.waitFor(() => expect(wakes).toHaveLength(1), { timeout: 4500, interval: 50 })
+      expect(wakes[0].envelope.body).toBe('raced')
+    }, 10_000)
 
     it('the recheck keeps re-arming while the target stays busy', async () => {
       // A turn can hang for minutes: a single recheck spent on a still-busy
       // target strands the mail until that turn ends.
-      vi.useFakeTimers()
-      try {
-        seedTeam(store, 'free')
-        const { hooks, wakes, busy } = makeHooks()
-        const bus = createMessageBus({ store, hooks })
+      seedTeam(store, 'free')
+      const { hooks, wakes, busy } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
 
-        busy.add(LEAD_KEY)
-        await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'held', wait: false })
+      busy.add(LEAD_KEY)
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'held', wait: false })
 
-        await vi.advanceTimersByTimeAsync(10_000) // several rechecks, all busy
-        expect(wakes).toHaveLength(0)
+      await new Promise((resolve) => setTimeout(resolve, 3500)) // one recheck spent on a busy target
+      expect(wakes).toHaveLength(0)
 
-        busy.delete(LEAD_KEY)
-        await vi.advanceTimersByTimeAsync(3100)
-        expect(wakes).toHaveLength(1)
-        expect(wakes[0].envelope.body).toBe('held')
+      busy.delete(LEAD_KEY)
+      await vi.waitFor(() => expect(wakes).toHaveLength(1), { timeout: 4500, interval: 50 })
+      expect(wakes[0].envelope.body).toBe('held')
 
-        // Drained mailbox → no recheck left. The drained wake now holds the
-        // slot, so its reservation watchdog is the one timer still armed; the
-        // turn ending is what clears it.
-        bus.completeTurn({ sessionKey: LEAD_KEY, trigger: wakes[0].trigger, outcome: { kind: 'result', content: '' } })
-        await vi.advanceTimersByTimeAsync(10_000)
-        expect(vi.getTimerCount()).toBe(0)
-      } finally {
-        vi.useRealTimers()
-      }
-    })
+      // Drained mailbox: the turn ending frees the slot and leaves nothing to deliver.
+      bus.completeTurn({ sessionKey: LEAD_KEY, trigger: wakes[0].trigger, outcome: { kind: 'result', content: '' } })
+      expect(bus.isSessionOccupied(LEAD_KEY)).toBe(false)
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(false)
+    }, 15_000)
   })
 
   // ===========================================================================
@@ -1402,9 +1394,9 @@ describe('MessageBus', () => {
       const { hooks, wakes } = makeHooks()
       const bus = createMessageBus({ store, hooks })
       const personal = bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: null, to: 'researcher', message: 'my own words', wait: true })
-      await Promise.resolve()
+      await wokenCount(wakes, 1)
       const fromLead = bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'tester', message: 'waiting answer', wait: true })
-      await Promise.resolve()
+      await wokenCount(wakes, 2)
       expect(wakes.map((wake) => wake.envelope.body)).toEqual(['my own words', 'waiting answer'])
 
       // The member's person stops it while the lead's wake is still on its way.

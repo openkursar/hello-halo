@@ -143,8 +143,10 @@ describe('a digital human chat whose folder is gone', () => {
     const manager = { getAppWorkDir: () => memory, listEffectiveMcpApps: () => [] }
     const onRecovered = vi.fn()
     const stale = { ...environment('space-a', project), spacePath: join(root, 'deleted-storage'), memoryDir: join(root, 'deleted-memory') }
+    // History at the old storage path is not reachable, so the next turn is told.
     expect(validateExecutionEnvironment(stale, { app, manager, onRecovered })).toEqual({
       spaceId: 'space-a', spacePath: storage, workDir: project, memoryDir: memory, mcpBindings: {},
+      pendingWorkspaceNotice: { kind: 'missing' },
     })
     expect(onRecovered).toHaveBeenCalledTimes(1)
     rmSync(project, { recursive: true })

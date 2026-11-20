@@ -22,6 +22,7 @@ import type { ReactNode } from 'react'
 import { MessageRow } from './MessageRow'
 import { isTeamMessage, type OpenerReveal } from './team-collab'
 import { StreamingSection } from './StreamingSection'
+import { WorkViewMemoryProvider, useTranscriptWorkView } from './work-history/view-memory'
 import { withoutLiveInputs } from '../../utils/live-inputs'
 import type { LiveInput } from '../../types'
 import { useBrowserToolCalls, type BrowserToolCall } from './useBrowserToolCalls'
@@ -95,15 +96,15 @@ export interface MessageListProps {
    */
   onLoadEarlier?: () => void
   /**
-   * Start every message's thought panel expanded. For trace/debug viewers
-   * (automation run detail) where the full execution timeline is the point.
+   * Start every reply's work open. For trace/debug viewers (automation run
+   * detail) where the full execution timeline is the point.
    */
   defaultThoughtsExpanded?: boolean
   /**
-   * Start every message's thought panel in full-height mode. Pairs with
+   * Show every operation of each reply's work from the start. Pairs with
    * defaultThoughtsExpanded for trace viewers.
    */
-  defaultThoughtsMaximized?: boolean
+  showOperations?: boolean
   /**
    * Slot rendered at the end of the footer. The shell stays domain-agnostic — callers
    * inject surface-specific affordances (Continue, live indicator, clear, ...) here.
@@ -236,7 +237,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   allowViewChanges = false,
   onLoadEarlier,
   defaultThoughtsExpanded = false,
-  defaultThoughtsMaximized = false,
+  showOperations = false,
   footerExtra,
 }, ref) {
   const { t } = useTranslation()
@@ -254,12 +255,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     return resolveSpecI18n(app.spec, getCurrentLanguage()).name || appId
   }, [conversationId, apps, t])
 
-  // Track which messages had their thought panel opened by the user.
-  // When loadMessageThoughts updates the store, the component tree switches from
-  // LazyCollapsedThoughtProcess to CollapsedThoughtProcess — this ref ensures the
-  // new CollapsedThoughtProcess mounts with defaultExpanded=true so the panel stays open.
-  const expandedThoughtIds = useRef(new Set<string>())
-
   // Rows, keys, previous costs and injected messages, derived again only from
   // the first message that changed (see transcript/transcript-rows).
   const liveInputs = useChatStore(s => s.sessions.get(conversationId)?.liveInputs ?? EMPTY_LIVE_INPUTS)
@@ -276,6 +271,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     return next
   }, [shownMessages, isGenerating])
   const { messages: displayMessages, keys: rowKeys, previousCosts, injections, arrivals, openers, liveOpeners } = transcript
+  // What the person opened in each reply's work, kept as the running reply becomes its saved row.
+  const latestReplyId = displayMessages.findLast(message => message.role === 'assistant')?.id
+  const workView = useTranscriptWorkView(isGenerating, latestReplyId)
+  // The steps just streamed stand in for the finished reply's while they load, if its work was left open.
+  const streamedThoughts = !isGenerating && latestReplyId && workView.carriedOpen(latestReplyId) && thoughts.length > 0 ? thoughts : undefined
 
   const follower = useStickToBottom({ onAtBottomChange: onAtBottomStateChange, live: isGenerating })
   const history = useHistoryWindow(rowKeys, follower.scroller, { onReachStart: onLoadEarlier })
@@ -327,7 +327,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const thoughtsLoaderRef = useRef(thoughtsLoader)
   thoughtsLoaderRef.current = thoughtsLoader
   const handleLoadThoughts = useCallback((messageId: string) => {
-    expandedThoughtIds.current.add(messageId)
     return thoughtsLoaderRef.current ? thoughtsLoaderRef.current(messageId) : Promise.resolve([])
   }, [])
   const hasThoughtsLoader = !!thoughtsLoader
@@ -340,6 +339,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   // Rows outside the live range are placeholders of their measured height
   // (see transcript/DESIGN.md); the sentinels sit at the live range's edges.
   const { start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef } = history
+  // The notice after a stop says how the latest reply ended, so that reply's own note steps aside meanwhile.
+  const interruptedNoticeShown = !isGenerating && !!error && errorType === 'interrupted'
   const rows = useMemo(() => {
     const out: ReactNode[] = []
     const latestReply = displayMessages.findLastIndex(message => message.role === 'assistant')
@@ -370,9 +371,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           <MessageRow
             message={message}
             previousCost={previousCosts[index]}
-            defaultThoughtsExpanded={defaultThoughtsExpanded || expandedThoughtIds.current.has(message.id)}
-            defaultThoughtsMaximized={defaultThoughtsMaximized}
+            defaultThoughtsExpanded={defaultThoughtsExpanded}
+            showOperations={showOperations}
             onLoadThoughts={hasThoughtsLoader ? handleLoadThoughts : undefined}
+            streamedThoughts={message.id === latestReplyId ? streamedThoughts : undefined}
             hideBrowserLiveView={hideBrowserLiveView}
             hideTerminalOpen={hideTerminalOpen}
             allowViewChanges={allowViewChanges}
@@ -383,13 +385,14 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             actionsOnHover={index !== latestReply}
             className={contentWidthClass}
             senderName={message.role === 'assistant' || isTeamMessage(message) ? senderName : undefined}
+            endingShownBelow={interruptedNoticeShown && index === latestReply}
           />
         </div>
       )
     }
     if (liveStart >= displayMessages.length) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
     return out
-  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, openers, openerReveal, contentWidthClass, senderName])
+  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, showOperations, hasThoughtsLoader, handleLoadThoughts, latestReplyId, streamedThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, openers, openerReveal, contentWidthClass, senderName, interruptedNoticeShown])
 
   // Keep the footer mounted for an active question independently of isGenerating:
   // a recovered question can be paused on the answer with isGenerating false, and
@@ -404,6 +407,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       className="h-full overflow-y-auto overflow-x-hidden focus:outline-none"
     >
       <div ref={follower.contentRef} className={`pt-6 pb-6 ${sidePadClass}`}>
+        <WorkViewMemoryProvider memory={workView}>
         {rows}
 
         <div className={contentWidthClass}>
@@ -464,6 +468,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           {/* Surface-specific footer slot (Continue / live indicator / clear / ...) */}
           {footerExtra}
         </div>
+        </WorkViewMemoryProvider>
       </div>
     </div>
   )

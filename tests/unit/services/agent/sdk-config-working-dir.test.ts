@@ -16,6 +16,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   onApiConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
   onNetworkConfigChange: vi.fn(),
+  onAiSourcesConfigChange: vi.fn(),
   resolveClaudeConfigDir: () => state.configDir,
 }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({

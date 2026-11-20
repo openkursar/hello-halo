@@ -27,7 +27,21 @@ promises:
   watch:
     en: Watched-folder changes can be learned without importing duplicate records.
     zh: 监视目录中的变更可被学习，不重复导入条目。
+  guest-read:
+    en: Only a saved change to guest access grants or withdraws read-only access to extracted documents for new restricted turns. Work already in progress keeps its permissions; names and excerpts can remain visible.
+    zh: 访客全文权限只有保存成功才改变新受限回合的只读范围。在途工作沿用原权限；文档名称和摘要仍可能可见。
 scenarios:
+  - id: knowledge.use.guest-read
+    title: Share extracted text with guests and withdraw that grant
+    verifies: [guest-read]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions: [A digital human has a bound active knowledge base and a chat-only guest.]
+    steps: [Try reading an extracted document before and after enabling guest reading. Turn the setting off during work and start a fresh turn after restart. Repeat with a failed settings save.]
+    expected: [Only work started with a saved grant can read the extracted document. No write permission is added. A failed save is reported rather than confirmed.]
   - id: knowledge.use.attach
     title:
       en: Use selected knowledge in a conversation

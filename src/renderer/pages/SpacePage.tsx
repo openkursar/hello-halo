@@ -31,7 +31,7 @@ import { ChatCapsule } from '../components/layout/ChatCapsule'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
 import { HeaderMoreMenu } from '../components/layout/HeaderMoreMenu'
-import { CanvasTableOpener, CanvasToggleButton, ContentCanvas, TerminalCloseGuard, viewerBringsFileList } from '../components/canvas'
+import { CanvasTableOpener, CanvasToggleButton, ContentCanvas, CanvasCloseGuard, viewerBringsFileList } from '../components/canvas'
 import { GoalCanvasSupport } from '../components/goal'
 import { ReferenceLayer } from '../components/references'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
@@ -364,10 +364,10 @@ export function SpacePage() {
   return (
     <CanvasTableOpener>
       <div className="h-full w-full flex flex-col">
-        {/* Terminal pty close policy — mounted here (not in the canvas) so it stays
-            active for closeAll/space-switch teardown even when the canvas is
-            collapsed. Renders its prompt via a portal; no layout footprint. */}
-        <TerminalCloseGuard />
+        {/* What closing tabs ends — mounted here (not in the canvas) so it holds
+            while the canvas is collapsed. Renders its question via a portal; no
+            layout footprint. */}
+        <CanvasCloseGuard />
         <GoalCanvasSupport />
         {/* Selections in the canvas and the chat become cards in this conversation's composer. */}
         <ReferenceLayer
@@ -437,6 +437,9 @@ export function SpacePage() {
                   <Folder className="w-[17px] h-[17px]" strokeWidth={1.8} />
                 </button>
               </div>
+
+              {/* Mobile: the way back to collapsed tabs, the same handle as the desktop's edge one */}
+              {isMobile && <CanvasToggleButton placement="header" />}
 
               <HeaderMoreMenu />
 

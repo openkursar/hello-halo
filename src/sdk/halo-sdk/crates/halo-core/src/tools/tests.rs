@@ -2695,5 +2695,5 @@ fn the_todo_reminder_lists_every_item_with_its_state() {
     let text = crate::core::goal_reminders::todo_reminder_text_with_harness(&todos, 15, &crate::harness::baseline());
     assert!(text.contains("Todo reminder — unchanged for 15 steps:"));
     assert!(text.contains("[x] write\n[~] test\n[ ] ship"));
-    assert!(text.contains("Update it only if it no longer reflects your progress; otherwise continue."));
+    assert!(text.contains("If the list no longer reflects your progress, you can update it. Otherwise, you can ignore this reminder."));
 }

@@ -115,7 +115,13 @@ test('public native collaboration runtime owns nested admission, live input and 
     assert.equal(reply.delivery, 'mid_turn');
     assert.equal(live.length, 1);
     assert.equal(live[0].envelope.body, 'Keep the evidence file.');
+    const refused = await runtime.serverFor().instance.callTool('team_post_task', { title: 'Verify artifact', assignee: 'reviewer', description: 'Review the evidence' });
+    assert.equal(refused.isError, true);
+    assert.equal(refused.content[0].text, 'Nothing was recorded. Unsupported argument: description. Accepted arguments: title, assignee, parentId.');
+    assert.equal(taskInserts, 0);
     const created = await runtime.serverFor().instance.callTool('team_post_task', { title: 'Verify artifact', assignee: 'reviewer' });
+    assert.notEqual(created.isError, true, JSON.stringify(created));
+    assert.equal(created.content.length, 1);
     const task = JSON.parse(created.content[0].text).taskId;
     const reviewer = store.findMember('reviewer');
     const updated = await runtime.serverFor(reviewer.id).instance.callTool('team_update_task', { taskId: task, status: 'done', resultRef: 'host-evidence.txt' });
