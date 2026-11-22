@@ -83,15 +83,20 @@ export function TaskSteps({ detail, data, progress, stateKey, lastActs, open, on
       record={records.get(step.row.id)!} data={data} open={!!open[key]} onToggle={() => onToggle(key)} onAnswer={decisionId ? () => onAnswer(decisionId) : undefined} onOpenMember={onOpenMember} />
   }
 
-  return <section aria-label={t('Subtasks')}>
+  const counts = [
+    steps.length ? t('Subtasks {{done}}/{{total}}', { done: settled, total: steps.length }) : null,
+    decisions.length ? t('{{count}} confirmations', { count: decisions.length }) : null,
+  ].filter(Boolean).join(' · ')
+
+  return <section aria-label={t('Work process')}>
     <h3 className="mb-2 ml-0.5 text-[13px] font-medium leading-5 tabular-nums text-foreground/85">
       <button onClick={() => onToggle(STEPS_HIDDEN_KEY)} aria-expanded={!hidden} className="inline-flex items-center gap-1 rounded transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-        {t('Subtasks')}
-        {steps.length > 0 && <span className="ml-1 font-normal text-faint-foreground">{settled}/{steps.length}</span>}
+        {t('Work process')}
+        {counts && <span className="ml-1 font-normal text-faint-foreground">{counts}</span>}
         <ChevronRight size={13} aria-hidden="true" className={`text-faint-foreground transition-transform ${hidden ? '' : 'rotate-90'}`} />
       </button>
     </h3>
-    {!hidden && !steps.length && (!data.loaded && !data.failed
+    {!hidden && !steps.length && !decisions.length && (!data.loaded && !data.failed
       ? <p role="status" className="flex items-center gap-2 text-xs text-faint-foreground"><Loader2 size={14} className="animate-spin" />{t('Loading conversation…')}</p>
       : <p className="mb-2 text-[13px] text-faint-foreground">{progress.finished || stateKey === 'idle' ? t('This task was not split into subtasks.') : t('The lead has not split this into subtasks yet.')}</p>)}
     {!hidden && shown.length > 0 && <ol className="pl-3">
@@ -160,7 +165,7 @@ function StepItem({ step, next, at, detail, member, took, latest, record, data, 
   // Trouble says where it stands beside its member; other steps say what they did under the title.
   const summary = trouble ? null : state === 'running' || state === 'stalled' ? note : result ? { text: headline(result, row.title), tone: '' } : null
   const file = state === 'done' || state === 'rejected' ? row.resultRef : null
-  const span = state === 'done' && took !== undefined ? formatSpan(took.ms, t)
+  const span = state === 'done' && took !== undefined ? t('Took {{time}}', { time: formatSpan(took.ms, t) })
     : state === 'running' && at !== null && Date.now() > at ? t('{{time}} so far', { time: formatSpan(Date.now() - at, t) }) : null
   const head = <>
     <span className="min-w-0 flex-1">
@@ -217,9 +222,12 @@ function DecisionItem({ decision, next, detail, open, onToggle, onOpenMember }: 
     <span className="flex h-5 min-w-0 flex-1 items-center text-[12px] text-faint-foreground">
       <MemberTag roster={detail.roster} appId={decision.appId} onOpen={onOpenMember} />
       <span title={question} className="min-w-0 truncate">&nbsp;{askedWhom} <span className="text-subtle-foreground">{question}</span></span>
-      <span className="shrink-0 whitespace-nowrap">&nbsp;· <span className="text-halo-success">{replied}</span> · {t('Waited {{time}}', { time: formatSpan(decision.answeredAt - decision.askedAt, t) })}</span>
+      <span className="shrink-0 whitespace-nowrap">&nbsp;· <span className="text-halo-success">{replied}</span></span>
     </span>
-    <span className="flex h-5 shrink-0 items-center"><ChevronRight size={14} aria-hidden="true" className={`text-faint-foreground transition-transform ${open ? 'rotate-90' : ''}`} /></span>
+    <span className="flex h-5 shrink-0 items-center gap-1.5">
+      <span className="whitespace-nowrap text-xs tabular-nums text-faint-foreground"><AxisTime at={decision.askedAt} /><span className="hidden sm:inline"> · {t('Waited {{time}}', { time: formatSpan(decision.answeredAt - decision.askedAt, t) })}</span></span>
+      <ChevronRight size={14} aria-hidden="true" className={`text-faint-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
+    </span>
   </>
   return <TimelineRow anchor={DECISION_ANCHOR} compact next={next} head={head}
     node={<span role="img" aria-label={t('Decision')} className="-mx-[3px] -mt-[2px] flex h-[15px] w-[15px] items-center justify-center bg-background text-faint-foreground"><MessageCircle size={12} strokeWidth={2} aria-hidden="true" /></span>} opens expanded={open} onToggle={onToggle}>

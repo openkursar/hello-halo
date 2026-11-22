@@ -670,6 +670,14 @@ describe('GET /api/teams/:teamId/outputs', () => {
     expect(listOutputs).toHaveBeenLastCalledWith('X', { offset: 30, limit: 30, producers: undefined })
   })
 
+  it('passes the time and text filters through', async () => {
+    listOutputs.mockReturnValue({ outputs: [], total: 0 })
+    await withServer(buildApp(null), async (base) => {
+      expect((await fetch(`${base}/api/teams/X/outputs?since=1000&q=plan&epochs=e1,e2`)).status).toBe(200)
+    })
+    expect(listOutputs).toHaveBeenLastCalledWith('X', expect.objectContaining({ since: 1000, text: 'plan', textEpochIds: ['e1', 'e2'] }))
+  })
+
   it('narrows a narrow reader to its own files before paging, so the total is its own', async () => {
     listMembersByTeam.mockReturnValue([
       { appId: 'member-self', memberIdentity: 'id-reader', scopeJson: JSON.stringify({ visibility: 'assigned', discoverable: false }) },

@@ -1,21 +1,22 @@
 import { useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
-import { ChevronDown, Loader2 } from 'lucide-react'
+import { Loader2, MinusCircle, Square } from 'lucide-react'
 import type { TeamActivity, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { formatTimeAgo } from '../../../utils/format-time'
+import { markdownPreview } from '../../../utils/markdown-preview'
 import { FileIcon } from '../../icons/ToolIcons'
 import { taskProgress, type TaskProgress } from '../workbench/progress'
 import { progressMemberName } from '../workbench/progress-labels'
 import { subtaskBoard } from '../workbench/subtasks'
-import { activeBriefHead, BriefCard, BriefItem, CompletedMark, FailedBriefItem, FinishedBrief, finishedSummary, NAME, namedMember, useWaitText, WorkingFooter } from '../workbench/task-brief'
+import { activeBriefHead, BriefCard, BriefItem, CompletedMark, FailedBriefItem, FinishedBrief, finishedSummary, HeldFooter, NAME, namedMember, useWaitText, WorkingFooter } from '../workbench/task-brief'
 import { latestActs, newestOutputs, type TaskOutput } from '../workbench/task-record'
 import { formatSpan, taskTime } from '../workbench/time'
 import type { TaskActivityData } from '../workbench/useTaskActivity'
 import { isExchange } from './crew'
 import { DecisionCard, type HeldDecisions } from './DecisionCard'
 import { isLive, isTeamWork, taskState, type TaskStateKey } from './status'
-import { MemberConversationsLink, sourceLabel, stateLabel, taskOrigin, taskSource } from './task-ui'
+import { endedText, MemberConversationsLink, MoreToggle, PILL_SECONDARY, sourceLabel, taskOrigin, taskSource } from './task-ui'
 import { DECISION_ANCHOR, STEPS_HIDDEN_KEY, stepsHidden, TaskSteps } from './TaskSteps'
 import { TeamScene } from './TeamScene'
 
@@ -48,7 +49,7 @@ export function useTaskOverview(detail: TeamDetail, task: TeamConversation, data
  * One task under its title, the same in the team page and in the canvas beside a chat:
  * status, the brief, questions answered in place, who is on it, the steps and what came out.
  */
-export function TaskBody({ detail, task, taskSpaceId, data, overview, held, open, setOpen, onOpenMember, onOpenStepMember = onOpenMember, onOpenAll, onOpenExchange }: {
+export function TaskBody({ detail, task, taskSpaceId, data, overview, held, open, setOpen, onOpenMember, onOpenAll, onOpenExchange, onContinue, onEnd }: {
   detail: TeamDetail
   task: TeamConversation
   taskSpaceId: string | null
@@ -59,11 +60,13 @@ export function TaskBody({ detail, task, taskSpaceId, data, overview, held, open
   setOpen: Dispatch<SetStateAction<Record<string, boolean>>>
   /** A member's work on this task. */
   onOpenMember: (appId: string) => void
-  /** Where a step's assignee leads; defaults to their work. */
-  onOpenStepMember?: (appId: string) => void
   /** Everyone's exchanges. */
   onOpenAll: () => void
   onOpenExchange: (activityId: string) => void
+  /** Where a person writes to pick stopped work up again; absent where that conversation is already open. */
+  onContinue?: () => void
+  /** Closes unfinished work by hand; absent where this person may not. */
+  onEnd?: () => void
 }) {
   const { progress, stateKey, lastActs, outputs } = overview
   const { decisions, answeringId, setAnswering } = held
@@ -84,9 +87,9 @@ export function TaskBody({ detail, task, taskSpaceId, data, overview, held, open
   const scene = isTeamWork(task) && !plainChat && task.kind !== 'im'
 
   return <>
-    <StatusLine detail={detail} task={task} stateKey={stateKey} data={data} onWaits={showDecisions} />
+    <StatusLine detail={detail} task={task} stateKey={stateKey} data={data} onWaits={showDecisions} onEnd={onEnd} />
 
-    <Brief detail={detail} task={task} data={data} progress={progress} stateKey={stateKey} onOpenMember={onOpenMember} />
+    <Brief detail={detail} task={task} data={data} progress={progress} stateKey={stateKey} onOpenMember={onOpenMember} onContinue={onContinue} />
 
     {decisions.length > 0 && <div ref={decisionsRef} className="space-y-2.5">
       {decisions.map(decision => <div key={decision.entryId} data-decision-id={decision.entryId}>
@@ -95,10 +98,10 @@ export function TaskBody({ detail, task, taskSpaceId, data, overview, held, open
       </div>)}
     </div>}
 
-    {scene && <TeamScene detail={detail} epochId={task.epochId} progress={progress} data={data} onOpenMember={onOpenMember} onOpenAll={onOpenAll} onOpenExchange={onOpenExchange} />}
+    {scene && <TeamScene detail={detail} epochId={task.epochId} progress={progress} ended={!!task.endedManually} data={data} onOpenMember={onOpenMember} onOpenAll={onOpenAll} onOpenExchange={onOpenExchange} />}
 
     {!plainChat && <div ref={stepsRef} className={decisions.length && !scene ? SECTION : 'mt-6'}>
-      <TaskSteps detail={detail} data={data} progress={progress} stateKey={stateKey} lastActs={lastActs} open={open} onToggle={key => setOpen(current => ({ ...current, [key]: key === STEPS_HIDDEN_KEY ? !stepsHidden(current, progress.finished) : !current[key] }))} onAnswer={answer} onOpenMember={onOpenStepMember} />
+      <TaskSteps detail={detail} data={data} progress={progress} stateKey={stateKey} lastActs={lastActs} open={open} onToggle={key => setOpen(current => ({ ...current, [key]: key === STEPS_HIDDEN_KEY ? !stepsHidden(current, progress.finished) : !current[key] }))} onAnswer={answer} onOpenMember={onOpenMember} />
     </div>}
 
     <Outputs data={data} outputs={outputs} />
@@ -117,30 +120,36 @@ function taskSpan(task: TeamConversation, finished: boolean, data: TaskActivityD
 
 /**
  * Where the work came from, and how long it has been going or took, with how much
- * of a finished task's time went on waiting for answers; work nobody is on says when
- * it last moved instead.
+ * of a finished task's time went on waiting for answers; work that is not running says
+ * when it last moved instead.
  */
-function StatusLine({ detail, task, stateKey, data, onWaits }: { detail: TeamDetail; task: TeamConversation; stateKey: TaskStateKey; data: TaskActivityData; onWaits: () => void }) {
+function StatusLine({ detail, task, stateKey, data, onWaits, onEnd }: { detail: TeamDetail; task: TeamConversation; stateKey: TaskStateKey; data: TaskActivityData; onWaits: () => void; onEnd?: () => void }) {
   const { t } = useTranslation()
   const finished = stateKey === 'done'
+  const ended = finished && !!task.endedManually
   const span = taskSpan(task, finished, data)
-  const waits = useWaitText(detail.roster, data.activities, finished ? span : null)
+  const waits = useWaitText(detail.roster, data.activities, finished && !ended ? span : null)
   const lastActive = t('Last active {{time}}', { time: formatTimeAgo(task.lastActivityAt, t) })
-  const time = stateKey === 'idle' ? (isTeamWork(task) ? `${stateLabel(stateKey, t)} · ${lastActive}` : lastActive)
+  const time = stateKey === 'idle' ? `${taskState(detail, task).fact.kind === 'stalled' ? t('Stopped partway') : t('Idle')} · ${lastActive}`
+    : ended ? lastActive
+    : stateKey !== 'running' && !finished ? lastActive
     : span === null ? null : finished ? t('Took {{time}}', { time: formatSpan(span, t) }) : t('Running for {{time}}', { time: formatSpan(span, t) })
   return <p className="mt-1 flex min-w-0 items-center gap-1.5 text-[12.5px] text-faint-foreground">
-    {finished && <><CompletedMark /><span className="shrink-0 text-subtle-foreground">{t('Completed')}</span><span aria-hidden="true">·</span></>}
+    {ended ? <><MinusCircle size={14} aria-hidden="true" className="shrink-0" /><span className="shrink-0 text-subtle-foreground">{endedText(task.endedBy, task.endedByMe, t)}</span><span aria-hidden="true">·</span></>
+      : finished && <><CompletedMark /><span className="shrink-0 text-subtle-foreground">{t('Completed')}</span><span aria-hidden="true">·</span></>}
     <span className="min-w-0 truncate">
       {[taskOrigin(detail, task, t) ?? sourceLabel(taskSource(task), t), time].filter(Boolean).join(' · ')}
       {waits && <> · <button onClick={onWaits} className="rounded underline decoration-faint-foreground/50 underline-offset-[3px] transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{waits}</button></>}
     </span>
+    {/* Ending changes the state this line reports, so it is offered here rather than beside the panel's action. */}
+    {onEnd && <><span aria-hidden="true">·</span><button onClick={onEnd} className="inline-flex shrink-0 items-center gap-1 rounded text-subtle-foreground underline-offset-[3px] transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><Square size={9} fill="currentColor" strokeWidth={0} aria-hidden="true" />{t('End task')}</button></>}
   </p>
 }
 
 /** Where the task stands right now; a finished task with nothing beyond its status line has none. */
-function Brief({ detail, task, data, progress, stateKey, onOpenMember }: {
+function Brief({ detail, task, data, progress, stateKey, onOpenMember, onContinue }: {
   detail: TeamDetail; task: TeamConversation; data: TaskActivityData; progress: TaskProgress; stateKey: TaskStateKey
-  onOpenMember: (appId: string) => void
+  onOpenMember: (appId: string) => void; onContinue?: () => void
 }) {
   const { t } = useTranslation()
   const roster = detail.roster
@@ -164,13 +173,53 @@ function Brief({ detail, task, data, progress, stateKey, onOpenMember }: {
   }
   const errors = items.length
   for (const decision of data.pending) items.push(<BriefItem key={decision.entryId} text={who(t('{{name}} is waiting for your answer.', { name: NAME }), decision.appId)} />)
-  const { tone, title } = activeBriefHead(errors > 0, data.pending.length > 0, t)
+  // Only its owner can answer: nothing for this user to do, yet the work is held on it.
+  const pendingIds = new Set(data.pending.map(decision => decision.appId))
+  const held = progress.members
+    .filter(row => row.state === 'waiting' && !row.decisionId && !pendingIds.has(row.appId))
+    .map(row => ({ appId: row.appId, owner: roster.find(member => member.appId === row.appId)?.owner?.trim(), question: openQuestion(data.activities, row.appId) }))
+  // A lone hold, when nothing else needs the user, names its owner and wait in the heading, so its line only says who asked.
+  const single = held.length === 1 && !errors && !data.pending.length ? held[0] : null
+  for (const { appId, owner, question } of held) {
+    const text = single?.owner && question ? t('{{name}} asked:', { name: NAME })
+      : owner ? t('{{name}} is waiting for {{owner}} to confirm.', { name: NAME, owner })
+        : t('{{name}} is waiting for its owner to confirm.', { name: NAME })
+    items.push(<BriefItem key={`owner:${appId}`} text={who(text, appId)} quote={question?.text} />)
+  }
+  const heldTitle = !held.length ? null
+    : !single?.owner ? t('Waiting for someone')
+      : [t('Waiting for {{owner}} to confirm', { owner: single.owner }), single.question && t('Waited {{time}}', { time: formatSpan(Math.max(0, Date.now() - single.question.at), t) })].filter(Boolean).join(' · ')
+  const stalled = !items.length && stateKey === 'idle' && taskState(detail, task).fact.kind === 'stalled'
+  const { tone, title } = activeBriefHead(errors > 0, data.pending.length > 0, stalled ? t('Stopped partway') : heldTitle, t)
   // Work whose member failed or waits is told above; the footer names only work that is moving.
   const working = isLive(stateKey) ? subtaskBoard(data.tasks, progress.members).groups.find(group => group.id === 'working')?.tasks ?? [] : []
+  if (stalled) {
+    const open = data.tasks.filter(row => row.status === 'pending' || row.status === 'in_progress')
+    const text = open.length === 1 ? t('Stopped at “{{step}}”; no one has carried it on since.', { step: open[0].title })
+      : open.length > 1 ? t('{{count}} subtasks left; no one has carried it on since.', { count: open.length })
+        : t('Stopped partway; no one has carried it on since.')
+    items.push(<BriefItem key="stalled" text={text} action={onContinue && <button onClick={onContinue} className={PILL_SECONDARY}>{t('Continue in conversation')}</button>} />)
+  }
   if (!items.length) items.push(<p key="calm">{stateKey === 'idle' ? t('Nothing is running right now.') : t('Going normally, nothing needs you.')}</p>)
-  return <BriefCard tone={tone} title={title} className={card} footer={working.length > 0 && <WorkingFooter working={working} roster={roster} onOpenMember={onOpenMember} />}>
+  const footer = working.length > 0 ? <WorkingFooter working={working} roster={roster} onOpenMember={onOpenMember} />
+    : single && roster.some(member => member.appId === single.appId) && <HeldFooter name={nameOf(single.appId)} onOpen={() => onOpenMember(single.appId)} />
+  return <BriefCard tone={tone} title={title} className={card} footer={footer}>
     {items}
   </BriefCard>
+}
+
+/** Past two lines of the card nobody reads it; the rest is in the member's conversation. */
+const QUESTION_CHARS = 300
+
+/** The member's latest question still without an answer, as plain text, and when it was asked. */
+function openQuestion(activities: readonly TeamActivity[], appId: string): { text: string; at: number } | null {
+  const answered = new Set(activities.filter(row => row.kind === 'decision' && row.status === 'ok' && row.refId).map(row => row.refId))
+  const asked = activities
+    .filter(row => row.kind === 'decision' && row.status === 'escalation' && row.actorAppId === appId && row.refId && !answered.has(row.refId))
+    .sort((a, b) => (taskTime(b.createdAt) ?? 0) - (taskTime(a.createdAt) ?? 0))[0]
+  const text = asked ? markdownPreview(asked.subject.trim() || asked.body?.trim() || '').replace(/\s+/g, ' ').trim() : ''
+  const at = asked ? taskTime(asked.createdAt) : null
+  return !text || at === null ? null : { text: text.length > QUESTION_CHARS ? `${text.slice(0, QUESTION_CHARS)}…` : text, at }
 }
 
 /** Absent while nothing is listed: files written by commands are never listed, so "none" could not be claimed. */
@@ -182,13 +231,12 @@ function Outputs({ data, outputs }: { data: TaskActivityData; outputs: readonly 
     <h3 className="mb-2 ml-0.5 flex items-baseline gap-1.5 text-[13px] font-medium text-foreground/85">
       {t('Outputs')}{outputs.length > 0 && <span className="font-normal tabular-nums text-faint-foreground">{outputs.length}</span>}
     </h3>
-    {outputs.length > 0 && <div className="-mx-2 grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
+    {outputs.length > 0 && <div className="-mx-2 flex flex-col gap-y-0.5">
       {(all ? outputs : outputs.slice(0, OUTPUT_LIMIT)).map(output => <OutputCard key={output.entry.path} output={output} onOpen={() => void data.artifacts.openEntry(output.entry)} />)}
     </div>}
-    {outputs.length > OUTPUT_LIMIT && <button aria-expanded={all} onClick={() => setAll(value => !value)} className="-ml-1.5 mt-1.5 inline-flex items-center gap-0.5 rounded-md px-1.5 py-1 text-[12.5px] text-subtle-foreground hover:bg-secondary/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+    {outputs.length > OUTPUT_LIMIT && <MoreToggle up={all} onClick={() => setAll(value => !value)}>
       {all ? t('Show less') : t('Show {{count}} more', { count: outputs.length - OUTPUT_LIMIT })}
-      <ChevronDown size={13} aria-hidden="true" className={`transition-transform ${all ? 'rotate-180' : ''}`} />
-    </button>}
+    </MoreToggle>}
     {data.artifacts.status === 'loading' && <p role="status" className="mt-1 flex items-center gap-2 text-xs text-faint-foreground"><Loader2 size={14} className="animate-spin" />{t('Loading outputs…')}</p>}
     {data.artifacts.status === 'failed' && <p role="alert" className="mt-1 text-xs text-destructive">{t('Could not load outputs.')} <button className="underline" onClick={data.retry}>{t('Retry')}</button></p>}
   </section>

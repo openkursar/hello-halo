@@ -515,6 +515,64 @@ describe('turn-end report', () => {
   })
 })
 
+describe('a member that answered nobody', () => {
+  const FINAL = 'Done: three salty snacks reviewed.\n\nDetails follow.'
+  const asked = { appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } as const, requestFromAppId: LEAD, finalReply: FINAL, correlationId: 'corr-1' }
+
+  function setup(opts?: { sealed?: boolean }) {
+    const { bus } = makeBus()
+    const recordReply = vi.fn()
+    const report = createTurnReport({ store: makeStore(LOCAL_TEAM, opts), bus, recordReply })
+    return { report, recordReply }
+  }
+
+  it('has its closing text filed as its answer to the asker', () => {
+    const { report, recordReply } = setup()
+    runTurn(report, 'app-writer', [{ kind: 'message', targetAppId: 'app-editor' }], asked)
+
+    expect(recordReply).toHaveBeenCalledTimes(1)
+    expect(recordReply).toHaveBeenCalledWith(expect.objectContaining({
+      teamId: TEAM, epochId: EPOCH, kind: 'reply', actorAppId: 'app-writer', targetAppId: LEAD,
+      subject: 'Done: three salty snacks reviewed.', body: FINAL.trim(), correlationId: 'corr-1', status: 'ok',
+    }))
+  })
+
+  it.each([
+    ['messaged the asker', [{ kind: 'message', targetAppId: LEAD }]],
+    ['shared a finding', [{ kind: 'finding' }]],
+  ])('files nothing for a member that %s', (_label, acts) => {
+    const { report, recordReply } = setup()
+    runTurn(report, 'app-writer', acts, asked)
+    expect(recordReply).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a failed turn', { fate: { kind: 'error', message: 'boom' } }],
+    ['a hand-stopped turn', { fate: { kind: 'stopped' } }],
+    ['an empty closing text', { finalReply: '  ' }],
+    ['a turn nobody asked for', { requestFromAppId: null }],
+    ['a person\u2019s own turn', { triggerKind: 'human_message' }],
+  ] as const)('files nothing for %s', (_label, change) => {
+    const { report, recordReply } = setup()
+    runTurn(report, 'app-writer', [], { ...asked, ...change } as Parameters<TurnReport['noteTurnEnded']>[0])
+    expect(recordReply).not.toHaveBeenCalled()
+  })
+
+  it('files nothing for an unwatched turn, a sealed task or an ending already reported', () => {
+    const { report, recordReply } = setup()
+    endCollaboration(report, asked)
+    expect(recordReply).not.toHaveBeenCalled()
+
+    runTurn(report, 'app-writer', [], { ...asked, correlationId: 'corr-2' })
+    runTurn(report, 'app-writer', [], { ...asked, correlationId: 'corr-2' })
+    expect(recordReply).toHaveBeenCalledTimes(1)
+
+    const sealed = setup({ sealed: true })
+    runTurn(sealed.report, 'app-writer', [], asked)
+    expect(sealed.recordReply).not.toHaveBeenCalled()
+  })
+})
+
 
 describe('turn-end notices to a lead on another machine', () => {
   beforeEach(() => { vi.useFakeTimers() })

@@ -3,9 +3,10 @@ import { executionTurns } from '../../../src/renderer/components/team/workbench/
 import { failureCause, progressSummary, taskProgress } from '../../../src/renderer/components/team/workbench/progress'
 import { failureFix } from '../../../src/renderer/components/team/workbench/progress-labels'
 import { describe, expect, it } from 'vitest'
-import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, filterTaskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions, undeliveredParties, taskParticipants, reportGaps } from '../../../src/renderer/components/team/workbench/model'
+import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, filterTaskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions, taskParticipants, reportGaps } from '../../../src/renderer/components/team/workbench/model'
+import { undeliveredParties } from '../../../src/shared/apps/team-failures'
 import { conversationLabel } from '../../../src/renderer/components/team/run-history'
-import { isTeamWork, liveTaskCount, memberState, sortByState, taskState } from '../../../src/renderer/components/team/detail/status'
+import { isTeamWork, liveTaskCount, memberState, settingsFailure, sortByState, taskState } from '../../../src/renderer/components/team/detail/status'
 import type { TeamConversation, TeamActivity, TeamDetail, RosterMember, BlackboardTask, BlackboardFinding } from '../../../src/shared/apps/team-types'
 import type { ActivityEntry } from '../../../src/shared/apps/app-types'
 const task = (patch: Partial<TeamConversation> = {}): TeamConversation => ({ epochId: 'task', teamId: 'team', kind: 'native', label: 'Task', readonly: false, startedAt: 1, lastActivityAt: 1, ...patch })
@@ -28,13 +29,24 @@ describe('task detail status projection', () => {
     const failing = { ...detail, roster: [member({ status: 'error', busy: [{ epochId: 'task', label: 'Draft', kind: 'conversation' }] })] } as never
     expect(taskState(failing, task({ active: true })).key).toBe('error')
   })
-  it('ignores a failure the same member has since recovered from', () => {
-    const activities = [
-      { id: '1', kind: 'message', actorAppId: 'a', createdAt: 1, epochId: 'task', status: 'error', subject: 'Timed out' },
-      { id: '2', kind: 'message', actorAppId: 'a', createdAt: 2, epochId: 'task', status: 'ok' },
-    ]
-    expect(taskState({ ...detail, activities } as never, task()).key).toBe('idle')
-    expect(taskState({ ...detail, activities: activities.slice(0, 1) } as never, task()).key).toBe('error')
+  it('reports the failure the task list read from the whole record, once nobody is on the task', () => {
+    const failure = { appId: 'a', activityId: 'lost', senderAppId: 'lead' }
+    const withMember = { ...detail, roster: [member()] } as never
+    const state = taskState(withMember, task({ failure }))
+    expect(state.key).toBe('error')
+    expect(state.fact).toEqual({ kind: 'error', memberName: 'Ana', failure })
+    expect(taskState(withMember, task({ failure, active: true })).key).toBe('running')
+  })
+  it('names the member whose model settings the user can change to restart a stopped task', () => {
+    const roster = [member(), member({ appId: 'b', owner: 'Bo', sameMachine: false })]
+    const withMembers = { ...detail, roster } as never
+    const stopped = (appId: string, reason: string, patch: Partial<TeamConversation> = {}) => task({ failure: { appId, activityId: 'x', reason }, ...patch })
+    expect(settingsFailure(withMembers, stopped('a', 'model_not_found'))).toEqual({ member: roster[0], cause: 'model' })
+    expect(settingsFailure(withMembers, stopped('a', 'HTTP 429 rate limit'))?.cause).toBe('quota')
+    expect(settingsFailure(withMembers, stopped('a', 'ECONNRESET'))).toBeNull()
+    expect(settingsFailure(withMembers, stopped('b', 'model_not_found'))).toBeNull()
+    expect(settingsFailure(withMembers, stopped('a', 'model_not_found', { active: true }))).toBeNull()
+    expect(settingsFailure(withMembers, task({ failure: { appId: 'a', activityId: 'x', senderAppId: 'lead' } }))).toBeNull()
   })
   it('does not infer a stuck state from silence', () => {
     expect(taskState(detail, task()).key).toBe('idle')

@@ -65,9 +65,9 @@ export function MemberWork({ detail, task, member, progress, boardState, data, f
   // Outside either view's scroll, so it stays put while reading and switching; the reserved gutter keeps it on the record's column.
   const bar = (byMember: boolean, filter?: ReactNode) => <>
     <PanelBar docked={docked} backTo={title} onBack={onBack} onClose={onClose} />
-    <div className="shrink-0 overflow-hidden [scrollbar-gutter:stable]">
+    <div className="shrink-0 overflow-hidden border-b border-border [scrollbar-gutter:stable]">
       <div className="mx-auto max-w-[calc(var(--chat-reading-width)+3rem)] px-6">
-        <div className="flex items-center border-b border-border">
+        <div className="flex items-center">
           <ViewSwitch byMember={byMember} onAll={onAll} onByMember={onByMember} />
           {filter && <div className="-mr-1.5 ml-auto">{filter}</div>}
         </div>
@@ -93,7 +93,7 @@ export function MemberWork({ detail, task, member, progress, boardState, data, f
   return <div className="flex h-full min-h-0 flex-col">
     {bar(true)}
     <div className="min-h-0 flex-1">
-      <TaskRoom homepageConversation viewOnly={{ header, reason: lockedReason, action }} detail={detail} task={task} selectedAppId={member.appId} boardState={boardState} tasks={conversations}
+      <TaskRoom homepageConversation viewOnly={{ header, reason: lockedReason, action, members: progress.members.map(item => item.appId) }} detail={detail} task={task} selectedAppId={member.appId} boardState={boardState} tasks={conversations}
         onSelectMember={item => onDrill(item.appId)} onCreated={() => {}} onActivity={onActivity} onTask={id => onOpenTask?.(id)} onExecution={setExecution} />
     </div>
   </div>

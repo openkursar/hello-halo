@@ -105,7 +105,7 @@ the same holds for the part of a reply after its last split: arrivals with no
 work of its own beside them are drawn after it until work joins them. Thought durations count only native steps. A teammate's delivery
 that opened a turn (`inputMode: 'turn'`) is that turn's cause, as a person's
 message is: consecutive ones right before the reply they opened are drawn on
-its sender line ("Halo · Received a report from X"), not as rows; while the
+its sender line ("Halo · Received a message from X"), not as rows; while the
 turn runs, those at the transcript's end or before its placeholder are drawn on
 the streaming reply the same way. A team's message with no reply after it (none yet
 and no turn running, or a person's message in between), or that no drawn reply

@@ -30,9 +30,8 @@ describe('task crew', () => {
   it('lists members working, waiting or stopped on the task, and nobody once it is finished', () => {
     const detail = detailOf([busy('a'), busy('b', { status: 'error' }), member('c'), member('d'), member('idle')], {
       pendingEscalations: [{ appId: 'c', epochId: 'e', question: 'Ship?' }] as TeamDetail['pendingEscalations'],
-      activities: [message('d', 'lead', 10, { status: 'error' })],
     })
-    expect(taskCrew(detail, task({ waitingMemberAppIds: [] }))).toEqual([
+    expect(taskCrew(detail, task({ waitingMemberAppIds: [], failure: { appId: 'd', activityId: 'turn' } }))).toEqual([
       { appId: 'a', state: 'working' }, { appId: 'b', state: 'failed' }, { appId: 'c', state: 'waiting' }, { appId: 'd', state: 'failed' },
     ])
     expect(taskCrew(detail, task({ completed: true }))).toEqual([])

@@ -31,6 +31,7 @@ import type {
   TeamCheck,
   TeamActivity,
   TeamToolAudit,
+  TeamOutputFilter,
 } from '../../../shared/apps/team-types'
 import type { TeamParticipants } from './participants'
 import type { CollaborationRequests } from './collaboration-requests'
@@ -287,6 +288,13 @@ export interface NativeTaskScope {
 
 // ── TeamStore Interface ──
 
+export interface SubtaskStats {
+  /** Board subtasks per epoch that has any: how many are done and how many are still open. */
+  subtasks: Map<string, { done: number; open: number }>
+  /** Epochs where the lead messaged another member or heard back from one. */
+  teamwork: Set<string>
+}
+
 /**
  * Persistence contract for the Digital Team data layer.
  *
@@ -437,23 +445,22 @@ export interface TeamStore {
   listActivityByEpochSince(teamId: string, epochId: string, sinceCreatedAt: number): TeamActivity[]
   /** Messages, replies and findings of the given epochs, oldest first: what settles delegated work. */
   listExchangesByEpochs(teamId: string, epochIds: string[]): TeamActivity[]
+  /** Whole records, oldest first and without bodies, of those given epochs that hold any failure. */
+  listActivityOfFailedEpochs(teamId: string, epochIds: string[]): TeamActivity[]
   /** Every act of a team, across epochs — the replication snapshot's source. */
   /** Conversations people started here, and runs a person has since written into. */
   listNativeTaskEpochs(spaceId: string, localAppIds: string[], limit: number, cursor?: { at: number; id: string }, epochIds?: string[], scope?: NativeTaskScope): TeamEpoch[]
   /** `detailed` adds output counts and participants, which only a team's own task list shows. */
-  getConversationStats(teamId: string, ownAppIds: string[], epochIds?: string[], detailed?: boolean): {
+  getConversationStats(teamId: string, ownAppIds: string[], epochIds?: string[], detailed?: boolean): SubtaskStats & {
     involved: Set<string>
     outputCounts: Map<string, number>
     unansweredDecisionMembers: Map<string, string[]>
-    /** Board subtasks per epoch that has any: how many are done and how many are still open. */
-    subtasks: Map<string, { done: number; open: number }>
-    /** Epochs where the lead messaged another member or heard back from one. */
-    teamwork: Set<string>
     /** Members with any trace per epoch: activity either way, board work created or taken, findings. */
     participants: Map<string, string[]>
   }
+  getSubtaskStats(teamId: string, epochIds?: string[]): SubtaskStats
   /** Declared files across the team's runs, newest first; `producers` keeps only those members' declarations. */
-  listOutputRefs(teamId: string, page: { offset: number; limit: number; producers?: string[] }): {
+  listOutputRefs(teamId: string, page: { offset: number; limit: number; producers?: string[] } & TeamOutputFilter): {
     rows: Array<{ epochId: string; appId: string; ref: string; at: number }>
     total: number
   }
@@ -477,7 +484,7 @@ export interface TeamStore {
   pruneToolAudit(olderThan: number): number
 
   // ── team_epochs ───────────────────────────────
-  updateWorkItem(epochId: string, patch: Partial<Pick<import('../../../shared/apps/team-types').TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId'>>): void
+  updateWorkItem(epochId: string, patch: Partial<Pick<import('../../../shared/apps/team-types').TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId' | 'endedBy'>>): void
   purgeJoinedOffice(officeId: string): boolean
   beginDisposal(teamId: string): () => void
   insertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void

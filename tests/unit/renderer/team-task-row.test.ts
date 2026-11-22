@@ -40,11 +40,20 @@ describe('task row', () => {
   })
 
   it('leads with a check once done, a spinner while running and a dot otherwise', () => {
-    expect(row({ completed: true })).toContain('<path d="M3 8.5l3 3 7-7"')
+    expect(row({ completed: true })).toContain('data-done=""')
     expect(row({ active: true })).toContain('animate-spin')
     const idle = row({})
     expect(idle).not.toContain('animate-spin')
     expect(idle).not.toContain('<svg')
+  })
+
+  it('tells work a person ended apart from finished work, and names who ended it', () => {
+    const unknown = row({ completed: true, endedManually: true, summary: 'Half a draft' })
+    expect(unknown).toContain('Ended manually')
+    expect(unknown).not.toContain('Half a draft')
+    expect(unknown).not.toContain('text-halo-success')
+    expect(row({ completed: true, endedManually: true, endedByMe: true })).toContain('Ended by me')
+    expect(row({ completed: true, endedManually: true, endedBy: 'Zhang' })).toContain('Ended by Zhang')
   })
 
   it('does not repeat a summary that already titles the row', () => {

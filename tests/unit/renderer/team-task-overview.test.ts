@@ -39,7 +39,7 @@ function render({ tasks, outputs = [], status = 'ready', finished = true, task =
     detail: { team: { id: 't', name: 'Team', leadAppId: 'lead' }, roster } as unknown as TeamDetail,
     task: { epochId: 'e', label: 'Work', startedAt: 1, kind: 'run', ...task } as TeamConversation,
     taskSpaceId: 's', data, overview, held: { decisions, answeringId: null, setAnswering: vi.fn() }, open, setOpen: vi.fn(),
-    onOpenWork: vi.fn(), onTalkTo, onOpenExchange: vi.fn(), onGo: vi.fn(),
+    onTalkTo, onOpenExchange: vi.fn(), onGo: vi.fn(),
   }))
 }
 
@@ -91,8 +91,19 @@ describe('team task overview', () => {
     expect(html).not.toContain('not the lead')
     const sections = render({ tasks: [subtask('1', 'done')], roster, finals: new Map([['lead', 'Shipped the pricing table.\n\n## Pricing\nx\n\n## Advice\ny']]) })
     expect(sections).toContain('In this summary')
-    expect(sections).toContain('<li class="truncate">Pricing</li><li class="truncate">Advice</li>')
+    expect(sections).toContain('<li class="truncate">Pricing</li><li class="truncate">Advice…</li>')
     expect(render({ tasks: [subtask('1', 'done')], roster, finals: new Map([['lead', 'Got it, thanks']]) })).not.toContain('data-tone')
+  })
+  it('gives work a person ended no result, neither an old closing summary nor the lead\'s last reply', () => {
+    const roster = [{ appId: 'lead', memberName: 'Lin', isLead: true }]
+    const finals = new Map([['lead', 'Halfway through the pricing table, still checking two vendors.']])
+    const ended = { finishedAt: 5, endedManually: true }
+    for (const task of [ended, { ...ended, summary: 'Shipped' }]) {
+      const html = render({ tasks: [subtask('1', 'done'), subtask('2', 'in_progress')], roster, finals, task })
+      expect(html).not.toContain('Lin’s summary')
+      expect(html).not.toContain('Halfway through')
+      expect(html).not.toContain('>Shipped</p>')
+    }
   })
   it('tints a running brief by whether anything needs attention', () => {
     expect(render({ tasks: [subtask('1', 'in_progress')], finished: false })).toContain('data-tone="calm"')
@@ -104,7 +115,7 @@ describe('team task overview', () => {
   })
   it('lays the subtasks out as the same timeline the team page shows', () => {
     const html = render({ tasks: [subtask('1', 'done'), subtask('2', 'in_progress')], finished: false, roster: [{ appId: 'a', memberName: 'Ann' }] })
-    expect(html).toMatch(/Subtasks<span[^>]*>1\/2<\/span>/)
+    expect(html).toMatch(/Work process<span[^>]*>Subtasks 1\/2<\/span>/)
     expect(html).toContain('<ol class="pl-3">')
     expect(html).toContain('View Ann’s work')
   })

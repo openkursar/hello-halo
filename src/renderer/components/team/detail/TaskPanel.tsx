@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import type { TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import type { TeamTaskViewMemory } from '../../../services/canvas-lifecycle'
+import { useConfirmDialog } from '../../../hooks/useConfirmDialog'
 import { useTranslation } from '../../../i18n'
 import { useAppsStore } from '../../../stores/apps.store'
+import { useTeamStore } from '../../../stores/team.store'
 import { openTeamConversation } from '../../../utils/team-conversation-navigation'
 import { KeepTeam } from '../TeamTaskOverview'
 import { orderTaskMembers } from '../workbench/member-rail'
@@ -14,6 +16,7 @@ import { useTaskBoard } from '../workbench/useTaskBoard'
 import { useHeldDecisions } from './DecisionCard'
 import { MemberWork } from './MemberWork'
 import { PanelBar, PanelClose } from './PanelBar'
+import { isTeamWork } from './status'
 import { imChannelName, PANEL_ACTION, taskTitle } from './task-ui'
 import { TaskBody, useTaskOverview } from './TaskBody'
 
@@ -64,8 +67,6 @@ export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memor
     setAll(false)
     setDrill(appId)
   }
-  const byMember = (lastMember.current && detail.roster.some(member => member.appId === lastMember.current) ? lastMember.current : null)
-    ?? orderTaskMembers(detail.roster, owned)[0]?.appId
   const openAll = () => {
     setDrill(null)
     setAll(true)
@@ -97,11 +98,19 @@ export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memor
 
   const overview = useTaskOverview(detail, task, data)
   const { progress } = overview
+  const tookPart = new Set(progress.members.map(row => row.appId))
+  const byMember = (lastMember.current && tookPart.has(lastMember.current) ? lastMember.current : null)
+    ?? orderTaskMembers(detail.roster.filter(member => tookPart.has(member.appId)), owned)[0]?.appId
 
   const openConversation = () => {
     if (!taskSpaceId) return
     openTeamConversation(taskSpaceId, { teamId: detail.team.id, epochId: task.epochId, teamName: detail.team.name, label: task.label, appId: drill && owned.includes(drill) ? drill : undefined })
   }
+  const endTask = useEndTask(detail.team.id, task.epochId, task.createdByMe ? undefined : task.startedBy, overview.stateKey === 'waiting_member')
+  // Team work that is not running, waiting on others included, can be closed by hand, on the team's host only.
+  // A plain chat has nothing to stop, and an IM chat cannot be picked up again after ending: its next message
+  // starts a new session.
+  const canEnd = detail.team.hostNodeId == null && isTeamWork(task) && task.kind !== 'im' && overview.stateKey !== 'done' && overview.stateKey !== 'running'
   const action = task.kind === 'im'
     ? <p className="min-w-0 truncate text-right text-xs text-faint-foreground">{t('Reply in {{channel}}', { channel: imChannelName(task, t) })}</p>
     : <button onClick={openConversation} disabled={!taskSpaceId} className={PANEL_ACTION}>{t('Open conversation')}<span aria-hidden="true">↗</span></button>
@@ -130,6 +139,9 @@ export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memor
         </div>
       </div>}
       <div className={`px-5 pb-12 sm:px-6 ${docked ? 'pt-4' : 'pt-1'}`}>
+        {endTask.failed && <div role="alert" className="mb-3 flex items-start gap-2 rounded-xl bg-destructive/5 p-3 text-xs text-destructive">
+          <AlertCircle size={15} className="shrink-0" /><span className="flex-1">{t('Could not end this task. Try again.')}</span>
+        </div>}
         {data.failed && <div role="alert" className="mb-3 flex items-start gap-2 rounded-xl bg-destructive/5 p-3 text-xs text-destructive">
           <AlertCircle size={15} className="shrink-0" /><span className="flex-1">{t('Could not load conversation history.')}</span>
           <button onClick={data.retry} className="inline-flex shrink-0 items-center gap-1 rounded hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><RefreshCw size={12} />{t('Retry')}</button>
@@ -141,8 +153,38 @@ export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memor
           {docked && <div className="-mr-2 flex shrink-0 items-center gap-1">{action}<PanelClose onClose={onClose} /></div>}
         </div>
         <TaskBody detail={detail} task={task} taskSpaceId={taskSpaceId} data={data} overview={overview} held={held} open={open} setOpen={setOpen}
-          onOpenMember={openMember} onOpenAll={openAll} onOpenExchange={id => showActivity(id, Date.now())} />
+          onOpenMember={openMember} onOpenAll={openAll} onOpenExchange={id => showActivity(id, Date.now())} onContinue={task.kind === 'im' || !taskSpaceId ? undefined : openConversation}
+          onEnd={canEnd ? endTask.end : undefined} />
       </div>
     </div>
+    {endTask.DialogComponent}
   </div>
+}
+
+/** Closes unfinished work for good: members stop, the record stays, and a new message from a person picks it up again. */
+function useEndTask(teamId: string, epochId: string, startedBy: string | undefined, waitingOnOthers: boolean) {
+  const { t } = useTranslation()
+  const ending = useRef(false)
+  const [failed, setFailed] = useState(false)
+  const { showConfirm, DialogComponent } = useConfirmDialog()
+  const end = async () => {
+    if (ending.current) return
+    const message = startedBy
+      ? t('{{name}} started this task and will see that you ended it. Members will stop working on it. Its outputs and record are kept, and sending it a new message picks it up again.', { name: startedBy })
+      : t('Members will stop working on it. Its outputs and record are kept, and sending it a new message picks it up again.')
+    const confirmed = await showConfirm({
+      title: t('End this task?'),
+      message: waitingOnOthers ? `${message} ${t('Confirmations still waiting on someone are withdrawn.')}` : message,
+      confirmLabel: t('End task'),
+      cancelLabel: t('Cancel'),
+      variant: 'danger',
+    })
+    if (!confirmed) return
+    ending.current = true
+    setFailed(false)
+    const ok = await useTeamStore.getState().archiveConversation(teamId, epochId)
+    ending.current = false
+    setFailed(!ok)
+  }
+  return { end: () => void end(), failed, DialogComponent }
 }

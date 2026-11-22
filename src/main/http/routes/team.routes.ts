@@ -604,6 +604,7 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
       if (!service) return
       const offset = Number(req.query.offset)
       const limit = Number(req.query.limit)
+      const since = typeof req.query.since === 'string' ? Number(req.query.since) : NaN
       const producers = visibleProducers(req, req.params.teamId) ?? undefined
       res.json({
         success: true,
@@ -611,6 +612,9 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
           offset: Number.isFinite(offset) ? offset : undefined,
           limit: Number.isFinite(limit) ? limit : undefined,
           producers,
+          since: Number.isFinite(since) ? since : undefined,
+          text: typeof req.query.q === 'string' ? req.query.q : undefined,
+          textEpochIds: typeof req.query.epochs === 'string' ? req.query.epochs.split(',').filter(Boolean) : undefined,
         }),
       })
     } catch (error) {

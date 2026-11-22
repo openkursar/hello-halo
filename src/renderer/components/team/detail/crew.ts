@@ -1,12 +1,12 @@
 import type { RosterMember, TeamActivity, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { taskTime } from '../workbench/time'
-import { openFailure, taskDecisions } from './status'
+import { taskDecisions } from './status'
 
 /**
  * How a member on a task stands: at work, waiting on its owner, stopped by a failure,
- * on an offline computer, or, once the task is finished, having done its part.
+ * on an offline computer, having done its part, or between turns on unfinished work.
  */
-export type CrewState = 'working' | 'waiting' | 'failed' | 'offline' | 'done'
+export type CrewState = 'working' | 'waiting' | 'failed' | 'offline' | 'done' | 'idle'
 
 export interface CrewEntry {
   appId: string
@@ -29,7 +29,7 @@ const FAILURES = new Set(['error', 'timeout', 'undelivered'])
 export function taskCrew(detail: TeamDetail, task: TeamConversation): CrewEntry[] {
   if (task.completed || task.finishedAt !== undefined) return []
   const waiting = new Set([...(task.waitingMemberAppIds ?? []), ...taskDecisions(detail, task.epochId).map(item => item.appId)])
-  const failedAppId = openFailure(detail.activities ?? [], task.epochId)?.actorAppId
+  const failedAppId = task.failure?.appId
   const crew: CrewEntry[] = []
   for (const member of detail.roster) {
     const busy = !!member.busy?.some(row => row.epochId === task.epochId)

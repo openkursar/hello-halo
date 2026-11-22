@@ -9,7 +9,8 @@ import { MarkdownRenderer } from '../../chat/MarkdownRenderer'
 import { TaskTimestamp } from './TaskTimestamp'
 import { taskTime } from './time'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/Popover'
-import { activityLevel, filterTaskActivityRows, taskActivityRows, undeliveredParties, type TaskActivityKind, type TaskActivityRow, type TaskMemberReport } from './model'
+import { undeliveredParties } from '../../../../shared/apps/team-failures'
+import { activityLevel, filterTaskActivityRows, taskActivityRows, type TaskActivityKind, type TaskActivityRow, type TaskMemberReport } from './model'
 import { UndeliveredNote } from './UndeliveredNote'
 
 function recordIds(rows: TaskActivityRow[]): string[] {

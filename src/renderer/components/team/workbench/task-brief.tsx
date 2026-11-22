@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { TFunction } from 'i18next'
-import { ArrowUpRight, Check, ChevronDown, Minus, X } from 'lucide-react'
+import { ArrowUpRight, Check, ChevronDown, ChevronRight, Minus, X } from 'lucide-react'
 import type { BlackboardTask, RosterMember, TeamActivity, TeamConversation } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { markdownDigest, markdownPreview } from '../../../utils/markdown-preview'
@@ -15,10 +15,11 @@ import { formatSpan } from './time'
 /** Stands in for a name inside a translated sentence, so the name can be drawn bold. */
 export const NAME = '\u0001'
 
-export type BriefTone = 'attention' | 'error' | 'calm' | 'done'
+export type BriefTone = 'attention' | 'held' | 'error' | 'calm' | 'done'
 
 const TONE: Record<BriefTone, { title: string; border: string; fill: string; dot?: string }> = {
   attention: { title: 'text-halo-warning', border: 'border-halo-warning/30', fill: 'bg-halo-warning/[0.06]', dot: 'bg-halo-warning' },
+  held: { title: 'text-halo-warning', border: 'border-border-soft', fill: '', dot: 'bg-halo-warning' },
   error: { title: 'text-destructive', border: 'border-halo-error/25', fill: 'bg-halo-error/[0.05]', dot: 'bg-halo-error' },
   calm: { title: 'text-faint-foreground', border: 'border-border-soft', fill: '' },
   done: { title: 'text-faint-foreground', border: 'border-border-soft', fill: '' },
@@ -29,7 +30,7 @@ export function toneSurface(tone: BriefTone): string {
   return `${TONE[tone].border} ${TONE[tone].fill}`
 }
 
-const FOCUS ='focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary'
+const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary'
 
 /**
  * Where the task stands, one bordered card in every state: the heading says what kind
@@ -51,11 +52,13 @@ export function BriefCard({ tone, title, footer, label, className = '', children
   </section>
 }
 
-/** One thing that needs the user, with the way to handle it at the line's end. */
-export function BriefItem({ text, action }: { text: ReactNode; action?: ReactNode }) {
-  return <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 [&:not(:first-child)]:mt-2">
+/** One thing that needs the user, with the way to handle it at the line's end and what was asked under it. */
+export function BriefItem({ text, action, quote }: { text: ReactNode; action?: ReactNode; quote?: string | null }) {
+  return <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 [&:not(:first-child)]:mt-2">
     <p className="min-w-0 flex-1 basis-48 break-words">{text}</p>
     {action && <div className="flex shrink-0 gap-2">{action}</div>}
+    {/* Indented under the name, past the face. */}
+    {quote && <p title={quote} className="line-clamp-2 basis-full pl-6 text-[13px] text-subtle-foreground [overflow-wrap:anywhere]">{quote}</p>}
   </div>
 }
 
@@ -99,9 +102,23 @@ export function WorkingFooter({ working, roster, onOpenMember }: {
     : <span className={line}>{text}</span>
 }
 
-/** Tone and heading for a running task's brief: anything failed or waiting on someone needs attention. */
-export function activeBriefHead(failed: boolean, waiting: boolean, t: TFunction): { tone: BriefTone; title: string } {
+/** The card's footer while one member's question holds the work: the way to that member's work. */
+export function HeldFooter({ name, onOpen }: { name: string; onOpen: () => void }) {
+  const { t } = useTranslation()
+  return <button onClick={onOpen} className={`flex min-w-0 items-center gap-0.5 py-2.5 pl-4 pr-4 text-left text-subtle-foreground transition-colors hover:text-foreground ${FOCUS}`}>
+    <span className="min-w-0 truncate">{t('View {{name}}’s conversation', { name })}</span>
+    <ChevronRight size={13} aria-hidden="true" className="shrink-0" />
+  </button>
+}
+
+/**
+ * Tone and heading for a running task's brief: anything failed or waiting on the user
+ * needs attention; work held on someone else's answer says so in amber, untinted, as
+ * nothing is the user's to do.
+ */
+export function activeBriefHead(failed: boolean, waiting: boolean, held: string | null, t: TFunction): { tone: BriefTone; title: string } {
   if (failed || waiting) return { tone: failed ? 'error' : 'attention', title: t('Needs attention') }
+  if (held) return { tone: 'held', title: held }
   return { tone: 'calm', title: t('Progress') }
 }
 
@@ -116,8 +133,10 @@ const FALLBACK_MIN_CHARS = 16
 /**
  * What a finished task ended with: the summary the lead closed it with, else, when it
  * was read off a settled board instead, the lead's last reply in it if that says more than an acknowledgement.
+ * Work a person ended by hand has no result to show: its last reply was said midway.
  */
 export function finishedSummary(task: TeamConversation, lead: RosterMember | undefined, finals: ReadonlyMap<string, string>): string | undefined {
+  if (task.endedManually) return undefined
   const closing = task.completed || task.finishedAt !== undefined ? task.summary?.trim() : undefined
   if (closing) return closing
   const last = lead ? finals.get(lead.appId) : undefined
@@ -187,10 +206,11 @@ function SummaryCard({ summary, lead, onOpenLead, className, children }: {
         ? <div className="[overflow-wrap:anywhere]"><MarkdownRenderer content={summary} /></div>
         : <>
           {digest.lead && <p ref={ref} className="line-clamp-3 [overflow-wrap:anywhere]">{digest.lead}</p>}
-          {outline.length > 0 && <div className={`rounded-xl border border-border-soft px-3 py-2 ${digest.lead ? 'mt-3' : ''}`}>
+          {outline.length > 0 && <div className={digest.lead ? 'mt-3' : undefined}>
             <p className="text-[11.5px] leading-5 text-faint-foreground">{t('In this summary')}</p>
             <ul className={`text-[13px] leading-6 text-subtle-foreground ${fade ? '[mask-image:linear-gradient(to_bottom,black_45%,transparent)]' : ''}`}>
-              {outline.map((entry, index) => <li key={index} className="truncate">{entry}</li>)}
+              {/* An outline always stands for more than it lists; unfaded, its last entry trails off to say so. */}
+              {outline.map((entry, index) => <li key={index} className="truncate">{entry}{!fade && index === outline.length - 1 ? '…' : ''}</li>)}
             </ul>
           </div>}
         </>}

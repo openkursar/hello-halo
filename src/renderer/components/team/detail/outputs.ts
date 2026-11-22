@@ -4,6 +4,19 @@ export type OutputPeriod =
   | { kind: 'today' | 'yesterday' | 'week' | 'month' }
   | { kind: 'past'; year: number; month: number }
 
+export type OutputRange = 'all' | 'today' | 'week' | 'month'
+
+export const OUTPUT_RANGES: readonly OutputRange[] = ['all', 'today', 'week', 'month']
+
+/** Where a range begins: today, or the last 7 / 30 days counted in whole days including today. */
+export function rangeStart(range: OutputRange, now = Date.now()): number | undefined {
+  if (range === 'all') return undefined
+  const start = new Date(now)
+  start.setHours(0, 0, 0, 0)
+  start.setDate(start.getDate() - (range === 'week' ? 6 : range === 'month' ? 29 : 0))
+  return start.getTime()
+}
+
 export interface OutputGroup {
   key: string
   period: OutputPeriod

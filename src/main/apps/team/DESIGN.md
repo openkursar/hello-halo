@@ -342,7 +342,10 @@ logged), written through on every change.
     `listOutputs` pages the same projection team-wide (one row per epoch and
     ref, at its latest declaration, newest first) for the team page's Outputs
     panel; a narrow reader is filtered to its visible producers in SQL so
-    totals and pages stay consistent.
+    totals and pages stay consistent. Time (`since`) and text filters also
+    apply in SQL after the latest-declaration grouping; text matches the
+    ref's file name and member names, while task titles, derived in the
+    renderer, arrive as `textEpochIds`.
   - The first `spawn_agent` lazily ensures the conversation's scope, then adds
     a participant. The host captures the source model, engine and effective
     permissions; the model supplies only its assignment and optional name or
@@ -474,8 +477,13 @@ Malformed business metadata cannot abort application of an otherwise valid epoch
 replication record.
 
 Resource sealing (`stopped`) preserves the task and can resume its existing
-context. Explicit archival completes the task and ends its execution. Only a
-human request may reopen a completed task; a background wake cannot unarchive it.
+context. Explicit archival completes the task and ends its execution; work that
+had not finished is sealed `ended` (a person closed it unfinished) so the list can
+tell it apart from finished work, and `task_ended_by` keeps the viewer identity
+of who closed it (cleared whenever the task opens again). Only the hosting node
+archives: a joined node refuses, since its seal would never reach the host, and
+office-member credentials cannot reach the archive route. Only a human request
+may reopen a completed task; a background wake cannot unarchive it.
 IM `/clear` uses a distinct terminal `cleared` reason: the next inbound message
 creates a fresh epoch and model context. Looking up a task never wakes it.
 Creating a native task always creates a unique chat key, including when an entry

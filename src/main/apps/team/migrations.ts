@@ -577,5 +577,12 @@ export const migrations: Migration[] = [
           WHERE (lifecycle = 'conversation' AND chat_key GLOB 'native:*') OR (lifecycle = 'run' AND first_human_turn_at IS NOT NULL);
       `)
     }
+  },
+  {
+    version: 28,
+    description: 'Record who ended a task by hand',
+    up(db) {
+      db.exec('ALTER TABLE team_epochs ADD COLUMN task_ended_by TEXT')
+    }
   }
 ]

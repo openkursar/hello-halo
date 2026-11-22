@@ -1,7 +1,7 @@
 import type { TFunction } from 'i18next'
 import type { RosterMember } from '../../../../shared/apps/team-types'
 import { parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
-import { failureCause, isSettingsCause, type FailureCause, type MemberProgress, type ProgressSummary } from './progress'
+import { failureCause, isSettingsCause, ownsModelSettings, type FailureCause, type MemberProgress, type ProgressSummary } from './progress'
 
 export function progressMemberName(roster: readonly RosterMember[], appId: string | null | undefined, t: TFunction) {
   if (appId && parseSpaceCoordinatorAppId(appId)) return t('Main chat')
@@ -40,7 +40,7 @@ export function failureFix(row: MemberProgress, roster: readonly RosterMember[],
   if (!settings && cause !== null) return {}
   const member = roster.find(entry => entry.appId === row.appId)
   if (!member || parseSpaceCoordinatorAppId(row.appId)) return {}
-  if (member.owner == null && member.sameMachine !== false) return settings ? { text: t('Needs you'), changeModel: true } : {}
+  if (ownsModelSettings(member)) return settings ? { text: t('Needs you'), changeModel: true } : {}
   if (member.owner) return { text: settings ? t('{{owner}} needs to change its model settings', { owner: member.owner }) : t('{{owner}} needs to look into it', { owner: member.owner }) }
   return { text: settings ? t('Its owner needs to change its model settings') : t('Its owner needs to look into it') }
 }
@@ -48,7 +48,7 @@ export function failureFix(row: MemberProgress, roster: readonly RosterMember[],
 export function progressSummaryText(summary: ProgressSummary, outputCount: number, t: TFunction) {
   switch (summary.kind) {
     case 'waiting': return t('{{count}} waiting for you', { count: summary.count })
-    case 'failed': return t('{{count}} failed', { count: summary.count })
+    case 'failed': return t('{{count}} ran into a problem', { count: summary.count })
     case 'decision': return t('{{count}} waiting for a decision', { count: summary.count })
     case 'working': return t('{{count}} working', { count: summary.count })
     case 'done': return [t('Completed'), ...(outputCount ? [t('{{count}} outputs', { count: outputCount })] : [])].join(' · ')

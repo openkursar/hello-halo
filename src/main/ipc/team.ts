@@ -20,6 +20,7 @@ import type {
   ProposedMember,
   TeamRunTrigger,
   TeamTriggerInput,
+  TeamOutputFilter,
 } from '../../shared/apps/team-types'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 
@@ -138,8 +139,10 @@ export function registerTeamIpc(): void {
     handle('team:list-artifacts', (s) => s.listArtifacts(teamId))
   )
 
-  ipcMain.handle(TEAM_IPC.listOutputs, async (_e, input: { teamId: string; offset?: number; limit?: number }) =>
-    handle('team:list-outputs', (s) => s.listOutputs(input.teamId, { offset: input.offset, limit: input.limit }))
+  ipcMain.handle(TEAM_IPC.listOutputs, async (_e, input: { teamId: string; offset?: number; limit?: number } & TeamOutputFilter) =>
+    handle('team:list-outputs', (s) => s.listOutputs(input.teamId, {
+      offset: input.offset, limit: input.limit, since: input.since, text: input.text, textEpochIds: input.textEpochIds,
+    }))
   )
 
   // ── team:chat-messages — a member's team-channel chat history for ONE run ──

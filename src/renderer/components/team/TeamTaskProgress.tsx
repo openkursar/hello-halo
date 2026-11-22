@@ -116,14 +116,14 @@ function TaskProgress({ spaceId, task, teamDetail, memory, reveal, onRevealHandl
         {back(() => setExecutionMember(null))}
         <div className="space-y-4"><TaskMemberExecution detail={detail} task={task} member={inspected} homepageConversation /></div>
       </> : section === 'overview' ? <TeamTaskOverview detail={detail} task={task} taskSpaceId={spaceId} data={data} overview={overview} held={held} open={open} setOpen={setOpen}
-        onOpenWork={setExecutionMember} onTalkTo={onTalkTo} onOpenExchange={id => showActivity(id, Date.now())} onGo={setSection} />
+        onTalkTo={onTalkTo} onOpenExchange={id => showActivity(id, Date.now())} onGo={setSection} />
         : <>
           {back(() => setSection('overview'))}
           {section === 'history' && <Page title={t('Collaboration record')} subtitle={t('How the lead split the work and what members handed over')}>
             <TaskCollaborationHistory key={focus?.seq} data={data} detail={detail} task={task} focusActivityId={focus?.activityId} homepageConversation onOpenMember={onTalkTo} />
           </Page>}
           {section === 'members' && <Page title={t('Members')} subtitle={t('{{count}} members', { count: detail.roster.length })}>
-            <MembersPage detail={detail} progress={overview.progress} tasks={data.tasks} lastActs={overview.lastActs} onOpen={onTalkTo} />
+            <TaskMembersPage detail={detail} progress={overview.progress} tasks={data.tasks} lastActs={overview.lastActs} onOpen={onTalkTo} />
           </Page>}
         </>}
     </div>
@@ -141,7 +141,7 @@ function Page({ title, subtitle, children }: { title: string; subtitle?: string;
 type MemberGroup = 'waiting' | 'failed' | 'working' | 'pending' | 'done' | 'idle' | 'absent'
 
 /** Every member of the team, with what each is doing or has done in this task. */
-function MembersPage({ detail, progress, tasks, lastActs, onOpen }: {
+function TaskMembersPage({ detail, progress, tasks, lastActs, onOpen }: {
   detail: TeamDetail; progress: Progress; tasks: readonly BlackboardTask[]; lastActs: ReadonlyMap<string, TeamActivity>; onOpen: (appId: string) => void
 }) {
   const { t } = useTranslation()

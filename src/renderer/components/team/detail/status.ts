@@ -1,4 +1,5 @@
-import type { RosterMember, TeamActivity, TeamConversation, TeamDetail, TeamPendingEscalation } from '../../../../shared/apps/team-types'
+import { parseSpaceCoordinatorAppId, type RosterMember, type TeamConversation, type TeamDetail, type TeamMemberFailure, type TeamPendingEscalation } from '../../../../shared/apps/team-types'
+import { failureCause, isSettingsCause, ownsModelSettings, type FailureCause } from '../workbench/progress'
 
 /** One task-level state shared by every list, card and filter on the team detail page. */
 export type TaskStateKey = 'waiting_user' | 'error' | 'waiting_member' | 'running' | 'idle' | 'done'
@@ -6,10 +7,12 @@ export type TaskStateKey = 'waiting_user' | 'error' | 'waiting_member' | 'runnin
 /** The single fact a task row shows under its title, chosen in the same order as the state. */
 export type TaskFact =
   | { kind: 'decision'; memberName?: string; question?: string }
-  | { kind: 'error'; memberName?: string; subject?: string }
+  | { kind: 'error'; memberName?: string; failure?: TeamMemberFailure }
   | { kind: 'waiting'; memberName?: string; owner?: string }
   | { kind: 'working'; memberName: string; label?: string }
   | { kind: 'summary'; text: string }
+  | { kind: 'ended'; by?: string; byMe?: boolean }
+  | { kind: 'stalled' }
   | { kind: 'none' }
 
 export interface TaskState {
@@ -19,7 +22,6 @@ export interface TaskState {
 }
 
 const PRIORITY: Record<TaskStateKey, number> = { waiting_user: 0, error: 1, waiting_member: 2, running: 3, idle: 4, done: 5 }
-const FAILURES = new Set(['error', 'timeout', 'undelivered'])
 
 /** Decisions on this machine waiting for the user, oldest first. */
 export function taskDecisions(detail: TeamDetail, epochId: string): TeamPendingEscalation[] {
@@ -32,23 +34,18 @@ function state(key: TaskStateKey, fact: TaskFact): TaskState {
   return { key, fact, priority: PRIORITY[key] }
 }
 
-/** A failure counts only while it is the actor's latest act in the task; a later act means it recovered. */
-export function openFailure(activities: readonly TeamActivity[], epochId: string): TeamActivity | null {
-  const latest = new Map<string, TeamActivity>()
-  for (const activity of activities) {
-    if (activity.epochId !== epochId) continue
-    const current = latest.get(activity.actorAppId)
-    if (!current || activity.createdAt >= current.createdAt) latest.set(activity.actorAppId, activity)
-  }
-  let failure: TeamActivity | null = null
-  for (const activity of latest.values()) {
-    if (FAILURES.has(activity.status ?? '') && (!failure || activity.createdAt > failure.createdAt)) failure = activity
-  }
-  return failure
-}
-
 function busyOn(member: RosterMember, epochId: string) {
   return member.busy?.find(row => row.epochId === epochId)
+}
+
+/** A task stopped on a member's model settings that the user can change themselves, and on which member. */
+export function settingsFailure(detail: TeamDetail, task: TeamConversation): { member: RosterMember; cause: FailureCause } | null {
+  const { fact } = taskState(detail, task)
+  const failure = fact.kind === 'error' ? fact.failure : undefined
+  if (!failure || failure.senderAppId !== undefined || parseSpaceCoordinatorAppId(failure.appId)) return null
+  const cause = failureCause(failure)
+  const member = detail.roster.find(entry => entry.appId === failure.appId)
+  return cause && isSettingsCause(cause) && member && ownsModelSettings(member) ? { member, cause } : null
 }
 
 export function taskState(detail: TeamDetail, task: TeamConversation): TaskState {
@@ -56,16 +53,13 @@ export function taskState(detail: TeamDetail, task: TeamConversation): TaskState
   if (decision || task.waitingForMe) return state('waiting_user', { kind: 'decision', memberName: decision?.memberName, question: decision?.question })
 
   const finished = !!task.completed || task.finishedAt !== undefined
-  if (finished) return state('done', task.summary ? { kind: 'summary', text: task.summary } : { kind: 'none' })
+  if (finished) return state('done', task.endedManually ? { kind: 'ended', by: task.endedBy, byMe: task.endedByMe } : task.summary ? { kind: 'summary', text: task.summary } : { kind: 'none' })
 
   const failedMember = detail.roster.find(member => member.status === 'error' && busyOn(member, task.epochId))
   if (failedMember) return state('error', { kind: 'error', memberName: failedMember.memberName })
-  if (!task.active) {
-    const failure = openFailure(detail.activities ?? [], task.epochId)
-    if (failure) {
-      const actor = detail.roster.find(member => member.appId === failure.actorAppId)
-      return state('error', { kind: 'error', memberName: actor?.memberName, subject: failure.subject || undefined })
-    }
+  const failure = task.failure
+  if (failure && !task.active) {
+    return state('error', { kind: 'error', memberName: detail.roster.find(member => member.appId === failure.appId)?.memberName, failure })
   }
 
   const waitingId = task.waitingMemberAppIds?.[0]
@@ -80,7 +74,8 @@ export function taskState(detail: TeamDetail, task: TeamConversation): TaskState
   if (task.active) return state('running', fact)
   const subtasks = task.subtasks
   if (subtasks && subtasks.done > 0 && !subtasks.open) return state('done', fact)
-  return state('idle', fact)
+  // Steps left open with nobody on them say so; without such evidence no one can tell whether the work is finished.
+  return state('idle', subtasks?.open ? { kind: 'stalled' } : fact)
 }
 
 /**
@@ -116,10 +111,10 @@ export function startOfMonth(): number {
   return new Date(date.getFullYear(), date.getMonth(), 1).getTime()
 }
 
-/** Team work finished since the month began, as the list groups it. */
+/** Team work finished since the month began; work a person ended unfinished is not counted. */
 export function doneThisMonth(detail: TeamDetail, tasks: readonly TeamConversation[]): TeamConversation[] {
   const monthStart = startOfMonth()
-  return tasks.filter(task => isTeamWork(task) && taskState(detail, task).key === 'done' && (task.finishedAt ?? task.lastActivityAt) >= monthStart)
+  return tasks.filter(task => isTeamWork(task) && !task.endedManually && taskState(detail, task).key === 'done' && (task.finishedAt ?? task.lastActivityAt) >= monthStart)
 }
 
 /** Tasks most in need of attention first, then most recent. */

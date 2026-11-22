@@ -20,17 +20,6 @@ export function visibleTasks(tasks: TeamConversation[]): TeamConversation[] {
   return tasks.filter(task => task.kind !== 'member').sort((a, b) => compareTaskTimes(a.lastActivityAt, b.lastActivityAt, true) || a.epochId.localeCompare(b.epochId))
 }
 
-/**
- * Sender and intended recipient of a message that did not arrive. A failed
- * fate (`reply`) is filed under the member the message never reached.
- */
-export function undeliveredParties(activity: TeamActivity): { senderAppId: string | null; recipientAppId: string | null } | null {
-  if (activity.status !== 'undelivered') return null
-  return activity.kind === 'reply'
-    ? { senderAppId: activity.targetAppId, recipientAppId: activity.actorAppId }
-    : { senderAppId: activity.actorAppId, recipientAppId: activity.targetAppId }
-}
-
 export function activityLevel(activity: TeamActivity): 'attention' | 'result' | 'process' | 'message' {
   if (['undelivered', 'timeout', 'error', 'escalation'].includes(activity.status ?? '')) return 'attention'
   if (activity.kind === 'message' || activity.kind === 'reply') return 'process'

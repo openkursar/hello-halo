@@ -267,15 +267,16 @@ for it. `openTeamTask(task, title, { reveal })` keeps one tab per team + epoch
 and re-titles it on reuse. The progress (`components/team/TeamTaskProgress.tsx`)
 reads the board itself (`useTaskBoard`), so it does not depend on the chat
 staying mounted. It opens on one overview (`TeamTaskOverview.tsx`) headed by the
-task: the team as one line of context above it (its name, or "Temporary team" with
-the keep action, and who is in it, opening the members page) and the task title as
+task: the team as one line of context above it (its name, which leaves the chat for
+the team under Apps › Teams, or "Temporary team" with the keep action, and who is in
+it, opening the members page) and the task title as
 the page heading, then the same body as the team page's task panel
 (`team/detail/TaskBody`): status line, brief card, decisions answered in place, the
 team scene, the subtask timeline and the outputs after it, wherever the work stands.
 Only the shells differ: the panel has "Open conversation", the canvas the team line.
-A subtask's assignee switches the chat to them in this conversation, as picking them
-in the member selector would; the brief, scene and footer open that member's execution
-here. A temporary team's member opens in place of the chat of the conversation that
+Any member it names (the brief, scene, footer or a subtask's assignee) switches the
+chat to them in this conversation, as picking them in the member selector would,
+rather than opening a second view of their work here. A temporary team's member opens in place of the chat of the conversation that
 leads it (`collab-member-view.store`); on a machine without that conversation it opens
 the member's execution here instead. The collaboration record ("Member conversations")
 and members are subpages one step away.

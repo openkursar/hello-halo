@@ -1,6 +1,6 @@
 /**
  * The sender line of a reply that teammates' deliveries started: "Halo ·
- * Received a report from X ›". The deliveries are the reply's cause, as a
+ * Received a message from X ›". The deliveries are the reply's cause, as a
  * user's message is, so they are drawn on it rather than as cards of their own;
  * expanding shows them in full.
  */
@@ -48,8 +48,8 @@ export function OpenersLine({ senderName, items, footer, reveal }: OpenersLinePr
   const label = members.length === 0
     ? t('Received a team update')
     : members.length === 1
-      ? t('Received a report from {{member}}', { member: members[0] })
-      : t('Received reports from {{member}} and {{count}} more', { member: members[0], count: members.length - 1 })
+      ? t('Received a message from {{member}}', { member: members[0] })
+      : t('Received messages from {{member}} and {{count}} more', { member: members[0], count: members.length - 1 })
 
   return (
     <div className="mb-2">

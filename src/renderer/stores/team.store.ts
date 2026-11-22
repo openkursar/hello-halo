@@ -930,6 +930,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
           // that case refetches below instead of publishing an empty roster,
           // which would read as "this team has no one on this machine".
           localMembers: existing?.localMembers ?? [],
+          roster: existing?.roster ?? [],
           updatedAt: team.updatedAt,
         }
         const teams = existing

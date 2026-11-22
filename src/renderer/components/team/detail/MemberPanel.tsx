@@ -6,12 +6,12 @@ import { TeamMemberSettings } from '../TeamMemberSettings'
 import { MEMBER_FACT_TONE, MemberFace, memberFact, memberOwner } from './member-ui'
 import { PanelBar } from './PanelBar'
 import { memberState, memberTasks } from './status'
-import { PANEL_ACTION, SectionHeading, TaskRow } from './task-ui'
+import { MoreToggle, PANEL_ACTION, SectionHeading, TaskRow } from './task-ui'
 
 const TASK_LIMIT = 5
 
 /** One member: who it is, what it is doing, the tasks it has a hand in, and its place in the team. */
-export function MemberPanel({ detail, member, tasks, taskSpaceId, docked, owned, onOpenTask, onOpenProfile, onBack, onClose }: {
+export function MemberPanel({ detail, member, tasks, taskSpaceId, docked, owned, onOpenTask, onOpenProfile, onClose }: {
   detail: TeamDetail
   member: RosterMember
   tasks: readonly TeamConversation[]
@@ -20,7 +20,6 @@ export function MemberPanel({ detail, member, tasks, taskSpaceId, docked, owned,
   owned: boolean
   onOpenTask: (epochId: string) => void
   onOpenProfile: () => void
-  onBack: () => void
   onClose: () => void
 }) {
   const { t } = useTranslation()
@@ -36,7 +35,7 @@ export function MemberPanel({ detail, member, tasks, taskSpaceId, docked, owned,
   }
 
   return <div className="flex h-full min-h-0 flex-col">
-    <PanelBar docked={docked} backTo={t('Members')} onBack={onBack} onClose={onClose}>
+    <PanelBar docked={docked} onBack={onClose} onClose={onClose}>
       {owned && <button onClick={chat} disabled={!taskSpaceId} className={PANEL_ACTION}>{t('Chat with {{name}}', { name: member.memberName })}<span aria-hidden="true">↗</span></button>}
     </PanelBar>
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -58,15 +57,15 @@ export function MemberPanel({ detail, member, tasks, taskSpaceId, docked, owned,
           {related.length
             ? <>
               {shown.map(task => <TaskRow key={task.epochId} detail={detail} task={task} onOpen={() => onOpenTask(task.epochId)} />)}
-              {related.length > TASK_LIMIT && <button onClick={() => setAllTasks(value => !value)} className="mt-1 text-[12.5px] text-subtle-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+              {related.length > TASK_LIMIT && <MoreToggle up={allTasks} onClick={() => setAllTasks(value => !value)}>
                 {allTasks ? t('Show less') : t('Show {{count}} more', { count: related.length - TASK_LIMIT })}
-              </button>}
+              </MoreToggle>}
             </>
             : <p className="py-2 text-[13px] text-faint-foreground">{t('Not part of any task yet.')}</p>}
         </section>
 
         {settings
-          ? <TeamMemberSettings key={member.appId} detail={detail} member={settings} onBack={onBack} embedded />
+          ? <TeamMemberSettings key={member.appId} detail={detail} member={settings} onBack={onClose} embedded />
           : member.duty?.trim() && <section>
             <SectionHeading title={t('Duty in this team')} />
             <p className="whitespace-pre-wrap break-words rounded-xl bg-secondary/50 px-3.5 py-2.5 text-[13px] leading-relaxed text-foreground">{member.duty}</p>

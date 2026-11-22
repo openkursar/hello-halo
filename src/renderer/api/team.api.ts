@@ -14,6 +14,7 @@ import type {
   TeamTriggerInput,
   TeamArtifactOpenResult,
   TeamOutputPage,
+  TeamOutputFilter,
   TeamRunResult,
   EpochRoster,
 } from '../../shared/apps/team-types'
@@ -59,9 +60,13 @@ export const teamApi = {
     return httpRequest('GET', `/api/teams/${teamId}/artifacts`)
   },
 
-  teamListOutputs: async (teamId: string, offset: number, limit: number): Promise<ApiResponse<TeamOutputPage>> => {
-    if (isElectron()) return window.halo.teamListOutputs({ teamId, offset, limit })
-    return httpRequest('GET', `/api/teams/${teamId}/outputs?offset=${offset}&limit=${limit}`)
+  teamListOutputs: async (teamId: string, offset: number, limit: number, filter: TeamOutputFilter = {}): Promise<ApiResponse<TeamOutputPage>> => {
+    if (isElectron()) return window.halo.teamListOutputs({ teamId, offset, limit, ...filter })
+    const query = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+    if (filter.since !== undefined) query.set('since', String(filter.since))
+    if (filter.text) query.set('q', filter.text)
+    if (filter.text && filter.textEpochIds?.length) query.set('epochs', filter.textEpochIds.join(','))
+    return httpRequest('GET', `/api/teams/${teamId}/outputs?${query}`)
   },
 
   /**

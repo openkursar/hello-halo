@@ -28,9 +28,9 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
   returnToMain?: () => void
   /**
    * Watched from the Teams page, where nothing is sent: the composer stays locked with `reason`
-   * and `action`, and `header` leads the record.
+   * and `action`, `header` leads the record, and `members` (who took part) limits the rail.
    */
-  viewOnly?: { header?: ReactNode; reason?: string; action?: ReactNode }
+  viewOnly?: { header?: ReactNode; reason?: string; action?: ReactNode; members?: readonly string[] }
   detail: TeamDetail; task: TeamConversation | null; selectedAppId: string | null; onSelectMember: (member: RosterMember) => void
   onCreated: (id: string) => void; onActivity: (activityId?: string) => void; boardState: TaskBoardState; decisionTarget?: string; tasks: TeamConversation[]; onTask: (id: string, decisionEntry?: boolean) => void; onExecution: (appId: string) => void
 }) {
@@ -142,10 +142,12 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
   const talkTo = homepageConversation && appId && !ids.includes(appId) && !blocked && !returnToMain && !task?.readonly
     ? detail.roster.find(item => item.appId === detail.team.leadAppId && ids.includes(item.appId)) ?? detail.roster.find(item => ids.includes(item.appId))
     : undefined
+  const tookPart = viewOnly?.members
+  const railRoster = tookPart ? detail.roster.filter(item => item.appId === appId || tookPart.includes(item.appId)) : detail.roster
   const picker = homepageConversation ? <div className="min-w-0 pt-1">
-    <TaskMemberSelector roster={detail.roster} selectedAppId={appId} ownedAppIds={ids} waitingAppIds={waitingAppIds} workingAppIds={workingAppIds} progress={conversationProgress} onActivity={task ? onActivity : undefined} onSelect={onSelectMember}
+    <TaskMemberSelector roster={railRoster} selectedAppId={appId} ownedAppIds={ids} waitingAppIds={waitingAppIds} workingAppIds={workingAppIds} progress={conversationProgress} onActivity={task ? onActivity : undefined} onSelect={onSelectMember}
       onAnswer={id => { const entry = pending.find(item => item.appId === id); if (entry) focusDecision(entry) }}
-      temporary={!!returnToMain} />
+      temporary={!!returnToMain} insideProgress={!!viewOnly} />
   </div> : workbenchPicker
   const viewOnlyReason = viewOnly && (viewOnly.reason ?? t('Viewing only. Continue this conversation on the homepage.'))
   return <section className="flex h-full min-h-0 min-w-0 flex-col" aria-label={homepageConversation ? t('Conversation') : t('Task room')}>

@@ -28,7 +28,7 @@ export interface ConversationProgress {
  * ending in the all-members toggle, then its status, which opens the team progress.
  * `waitingAppIds` / `workingAppIds` describe this conversation only, never a member-wide flag.
  */
-export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waitingAppIds = EMPTY, workingAppIds = EMPTY, progress, onActivity, onSelect, onAnswer, temporary = false }: {
+export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waitingAppIds = EMPTY, workingAppIds = EMPTY, progress, onActivity, onSelect, onAnswer, temporary = false, insideProgress = false }: {
   roster: readonly RosterMember[]
   selectedAppId: string | null
   ownedAppIds: readonly string[]
@@ -44,6 +44,8 @@ export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waiting
    * watched, not talked to, and none is current while that conversation is shown.
    */
   temporary?: boolean
+  /** Shown inside the task's progress, where the status leads back to it rather than opening it. */
+  insideProgress?: boolean
 }) {
   const { t } = useTranslation()
   const root = useRef<HTMLDivElement>(null)
@@ -171,6 +173,8 @@ export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waiting
     </>}
   </>
   const statusLabel = [label, ...(total && counts ? [t('{{done}}/{{total}} tasks done', { done: counts.done, total })] : [])].join(' · ')
+  const statusTip = !insideProgress ? t('View team progress')
+    : summary?.kind === 'failed' ? t('Back to task details to see what went wrong') : t('Back to task details')
 
   return <div ref={root} className="flex min-w-0 items-center gap-2">
     {temporary && <span ref={tag} className="shrink-0 whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">{t('Temporary team')}</span>}
@@ -195,10 +199,7 @@ export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waiting
           <span className="member-rail-name truncate text-[13px] font-semibold text-foreground">{member.memberName}</span>
           {!selected && <span aria-hidden="true" className="member-rail-tip" data-card="">
             <span className="flex items-center gap-2.5">
-              <span className="relative flex shrink-0">
-                <AutomationAvatar name={member.memberName} size={36} />
-                {card.readOnly && <i className="avatar-lock-badge"><Lock strokeWidth={3} /></i>}
-              </span>
+              <span className="flex shrink-0"><AutomationAvatar name={member.memberName} size={36} /></span>
               <span className="min-w-0">
                 <span className="block truncate text-sm font-semibold text-foreground">{member.memberName}</span>
                 {card.kind && <span className="mt-0.5 block truncate text-xs text-subtle-foreground">{card.kind}</span>}
@@ -234,10 +235,10 @@ export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waiting
       {statusBody && <span ref={statusSegment} className="flex shrink-0 items-center">
         <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-border" />
         {onActivity
-          ? <button type="button" aria-label={summary ? `${statusLabel} · ${t('View team progress')}` : t('View team progress')} onClick={() => onActivity()}
+          ? <button type="button" aria-label={summary ? `${statusLabel} · ${statusTip}` : statusTip} onClick={() => onActivity()}
             className={`member-rail-status relative z-[1] flex h-[34px] items-center gap-2 whitespace-nowrap rounded-full pl-2 pr-3 text-[12.5px] transition-colors duration-100 hover:bg-foreground/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${tone} ${attention ? '' : 'hover:text-foreground'}`}>
             {statusBody}
-            <span aria-hidden="true" className="member-rail-tip">{t('View team progress')}</span>
+            <span aria-hidden="true" className="member-rail-tip">{statusTip}</span>
           </button>
           : <span aria-label={statusLabel} className={`flex h-[34px] items-center gap-2 whitespace-nowrap pl-2 pr-3 text-[12.5px] ${tone}`}>{statusBody}</span>}
       </span>}

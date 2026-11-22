@@ -26,13 +26,17 @@ interface WorkbenchFixtureOptions {
   provenanceMessages?: boolean
   collaborationJourney?: boolean
   remoteDecision?: boolean
+  /** Several tasks stopped because own members' models are gone, beside a question and an unrelated stop. */
+  stoppedModels?: { members: string[] }
+  /** A dozen tasks stopped partway with nobody on them, one started by a teammate, beside one that teammate ended; ending one is recorded. */
+  endable?: boolean
   legacyRecovery?: { ownedHere: boolean; ownerName: string | null; repairFailed?: boolean; repairDeferred?: boolean }
 }
 
 /** Deterministic IPC boundary fixture; all rendering and interaction use the built app. */
 export async function openTeamWorkbench(app: ElectronApplication, page: Page, options: WorkbenchFixtureOptions = {}) {
   await waitForHomePage(page)
-  await app.evaluate(({ ipcMain, BrowserWindow }, { ownCount: count = 2, remoteLead, withDecision: decision, historyFailure, readonlyKind, allowCreate, sendFailure, sendFailureDelay = 500, timestampAnomalies, provenanceMessages, collaborationJourney, remoteDecision, legacyRecovery, temporaryParticipants, goalFreeCreation }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { ownCount: count = 2, remoteLead, withDecision: decision, historyFailure, readonlyKind, allowCreate, sendFailure, sendFailureDelay = 500, timestampAnomalies, provenanceMessages, collaborationJourney, remoteDecision, legacyRecovery, temporaryParticipants, goalFreeCreation, stoppedModels, endable }) => {
     const now = Date.now() - 60_000
     const roster = [
       { appId: 'lead', memberName: 'Lead', sameMachine: count > 0 && !remoteLead, isLead: true },
@@ -55,6 +59,23 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
       ...(index === 0 ? { subtasks: { done: 1, open: 1 } } : { teamwork: true }) }))
     if (remoteDecision) Object.assign(tasks[0], { waitingUser: true, waitingForMe: false, waitingMemberAppIds: ['remote'] })
     if (readonlyKind) Object.assign(tasks[0], { kind: readonlyKind, readonly: true, memberAppId: 'lead' })
+    if (stoppedModels) {
+      const stop = (label: string, appId: string, reason: string, index: number) => ({ ...tasks[1], epochId: `stopped-${index}`, workItemId: `stopped-${index}`, label, lastActivityAt: now - index * 60_000,
+        failure: { appId, activityId: `failed-${index}`, reason } })
+      const owners = stoppedModels.members
+      tasks.push(
+        stop('Draft the launch plan', owners[0], 'model_not_found: gpt-4o', 1),
+        stop('Price the competitors', owners[1 % owners.length], 'model_not_found: gpt-4o', 2),
+        stop('Run the regression pass', owners[2 % owners.length], 'model_not_found: gpt-4o', 3),
+        stop('Write the weekly report', 'research', 'Tool crashed while writing output/report.md', 4),
+      )
+    }
+    if (endable) {
+      const stalled = (label: string, index: number, extra: object = {}) => ({ ...tasks[1], epochId: `stalled-${index}`, workItemId: `stalled-${index}`, label, lastActivityAt: now - index * 60_000, subtasks: { done: 1, open: 1 }, ...extra })
+      tasks.push(stalled('Survey partner pricing', 0, { createdByMe: false, startedBy: 'Taylor' }))
+      for (let index = 1; index < 12; index++) tasks.push(stalled(`Stalled draft ${index}`, index))
+      tasks.push(stalled('Archive the old wiki', 12, { createdByMe: false, startedBy: 'Taylor', completed: true, finishedAt: now - 3_600_000, endedManually: true, endedBy: 'Taylor' }))
+    }
     const activities = [
       ...Array.from({ length: 100 }, (_, index) => ({ id: `coord-${index}`, epochId: 'epoch-0', actorAppId: 'research', targetAppId: 'lead', subject: `Research update ${index + 1}`, body: `Evidence from source ${index + 1}. Ready for review.`, kind: 'message', status: 'sent', createdAt: now + index * 100 })),
       { id: 'unrelated', epochId: 'epoch-0', actorAppId: 'remote', targetAppId: 'research', subject: 'Unrelated coordination record', body: 'This must stay out of the Lead conversation.', kind: 'message', status: 'sent', createdAt: now + 11000 },
@@ -101,7 +122,7 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
         return { success: true, data: team }
       })
     }
-    bind('team:list', () => ({ success: true, data: [{ ...team, memberCount: roster.length, hasWaitingUser: false, updatedAt: now, localMembers: roster.filter(member => member.sameMachine) }] }))
+    bind('team:list', () => ({ success: true, data: [{ ...team, memberCount: roster.length, hasWaitingUser: false, updatedAt: now, localMembers: roster.filter(member => member.sameMachine), roster }] }))
     bind('team:get-detail', () => ({ success: true, data: detail }))
     bind('team:list-conversations', () => ({ success: true, data: tasks }))
     bind('team:list-native-tasks', () => ({ success: true, data: {
@@ -165,6 +186,13 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
       notifyTasks()
       return { success: true, data: { epochId } }
     })
+    bind('team:archive-conversation', ({ epochId }) => {
+      const task = tasks.find(item => item.epochId === epochId)
+      if (!task) return { success: false, error: 'Unknown fixture task' }
+      Object.assign(task, { completed: true, finishedAt: Date.now(), endedManually: true, endedByMe: true })
+      notifyTasks()
+      return { success: true }
+    })
     bind('team:rename-conversation', ({ epochId, title }) => {
       const task = tasks.find(item => item.epochId === epochId)
       if (!task) return { success: false, error: 'Unknown fixture task' }
@@ -198,7 +226,7 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
   await page.getByRole('button', { name: /^Teams\b|^团队/ }).click()
   await page.getByRole('button', { name: /Workbench review/ }).click()
   await page.setViewportSize({ width: 1440, height: 1000 })
-  if (options.legacyRecovery) return
+  if (options.legacyRecovery || options.stoppedModels || options.endable) return
   const taskRow = page.getByRole('button', { name: /Product research/ }).first()
   await expect(taskRow).toBeVisible()
   await taskRow.click()

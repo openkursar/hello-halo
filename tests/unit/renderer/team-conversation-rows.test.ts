@@ -60,17 +60,17 @@ afterEach(() => {
 describe('team conversation metadata', () => {
   it('preserves avatar members on status updates and refreshes them once for a membership burst', async () => {
     const members = [{ appId: 'lead', memberName: 'Lead', isLead: true }]
-    env.api.teamList.mockResolvedValue({ success: true, data: [{ id: 't', name: 'Crew', localMembers: members }] })
+    env.api.teamList.mockResolvedValue({ success: true, data: [{ id: 't', name: 'Crew', roster: members }] })
     const runner = mount(() => useTeamConversationRows('s')); await runner.settle()
     env.listeners.forEach(listener => listener({ teamId: 't', team: { id: 't', name: 'Renamed', owningSpaceId: 's' } as any, changed: ['status'] }))
     await runner.settle()
-    expect(runner.result.teams[0].localMembers).toEqual(members)
+    expect(runner.result.teams[0].roster).toEqual(members)
     const updated = [...members, { appId: 'writer', memberName: 'Writer', isLead: false }]
-    env.api.teamList.mockResolvedValue({ success: true, data: [{ id: 't', name: 'Renamed', localMembers: updated }] })
+    env.api.teamList.mockResolvedValue({ success: true, data: [{ id: 't', name: 'Renamed', roster: updated }] })
     for (let i = 0; i < 10; i++) env.listeners.forEach(listener => listener({ teamId: 't', changed: ['members'] }))
     await vi.advanceTimersByTimeAsync(250); await runner.settle()
     expect(env.api.teamList).toHaveBeenCalledTimes(2)
-    expect(runner.result.teams[0].localMembers).toEqual(updated)
+    expect(runner.result.teams[0].roster).toEqual(updated)
     expect(env.api.teamGetDetail).not.toHaveBeenCalled()
   })
   it('resolves persisted pins beyond the first page in batches of 100 and keeps them on refresh', async () => {
@@ -215,19 +215,19 @@ describe('team conversation metadata', () => {
 
 describe('buildTeamRows', () => {
   it('shows every member up to four, then four faces with the last veiled by a count, lead first and shared across grouped and pinned rows', () => {
-    const localMembers = [
+    const roster = [
       { appId: 'writer', memberName: 'Writer', isLead: false },
       { appId: 'lead', memberName: 'Lead', isLead: true },
       { appId: 'analyst', memberName: 'Analyst', isLead: false },
       { appId: 'researcher', memberName: 'Researcher', isLead: false },
       { appId: 'reviewer', memberName: 'Reviewer', isLead: false },
     ]
-    const teams = [{ id: 't', name: 'Crew', localMembers, memberCount: 4, leadAppId: 'lead' }]
+    const teams = [{ id: 't', name: 'Crew', roster }]
     const result = buildTeamRows([task('pin'), task('chat')], teams, ['team:t:pin'], () => true)
     for (const row of [...result.rows, ...result.pinned]) {
       if (row.type === 'team-item') expect(row.avatar).toEqual({ names: ['Lead', 'Writer', 'Analyst', 'Researcher'], overflow: 2 })
     }
-    expect(localMembers.map(member => member.appId)).toEqual(['writer', 'lead', 'analyst', 'researcher', 'reviewer'])
+    expect(roster.map(member => member.appId)).toEqual(['writer', 'lead', 'analyst', 'researcher', 'reviewer'])
   })
   it.each([
     [1, { names: ['Lead'], overflow: 0 }],
@@ -235,13 +235,9 @@ describe('buildTeamRows', () => {
     [4, { names: ['Lead', 'M1', 'M2', 'M3'], overflow: 0 }],
     [5, { names: ['Lead', 'M1', 'M2', 'M3'], overflow: 2 }],
     [120, { names: ['Lead', 'M1', 'M2', 'M3'], overflow: 117 }],
-  ])('sizes the overflow for a team of %i members, counting remote members with no local face', (total, expected) => {
-    const localMembers = ['Lead', 'M1', 'M2', 'M3'].slice(0, Math.min(total, 4)).map((memberName, index) => ({ appId: memberName, memberName, isLead: index === 0 }))
-    expect(teamAvatarFaces({ id: 't', name: 'Crew', localMembers, memberCount: total - 1, leadAppId: 'Lead' })).toEqual(expected)
-  })
-  it('keeps remote members in the overflow count when only some members run locally', () => {
-    const localMembers = [{ appId: 'lead', memberName: 'Lead', isLead: true }]
-    expect(teamAvatarFaces({ id: 't', name: 'Crew', localMembers, memberCount: 2, leadAppId: 'lead' })).toEqual({ names: ['Lead'], overflow: 2 })
+  ])('sizes the overflow for a team of %i members', (total, expected) => {
+    const roster = Array.from({ length: total }, (_, index) => ({ appId: `m${index}`, memberName: index === 0 ? 'Lead' : `M${index}`, isLead: index === 0 }))
+    expect(teamAvatarFaces(roster)).toEqual(expected)
   })
   it('keeps stable group and task keys, empty teams, and pinned tasks outside collapsed groups', () => {
     const tasks = [task('b1', 'b'), task('a1', 'a'), task('a2', 'a'), task('orphan', 'c')]

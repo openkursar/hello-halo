@@ -26,7 +26,7 @@ import { TeamStore } from '../../../../src/main/apps/team/store'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../src/main/apps/team/migrations'
 import { createTeamService } from '../../../../src/main/apps/team/service'
 import type { TeamServiceDeps, PendingEscalationRecord } from '../../../../src/main/apps/team/service'
-import type { Team, TeamMember, TeamEpoch, RosterBusyEntry } from '../../../../src/shared/apps/team-types'
+import type { Team, TeamMember, TeamEpoch, RosterBusyEntry, EpochEndReason } from '../../../../src/shared/apps/team-types'
 import { nativeConversationChatKey, memberChatKey } from '../../../../src/shared/apps/im-keys'
 
 const SPACE = 'space-a'
@@ -72,7 +72,7 @@ function makeRuntime(store: TeamStore, busyByApp: Map<string, RosterBusyEntry[]>
     renameConversationEpoch: (teamId: string, epochId: string, title: string | null) => store.renameEpoch(epochId, title),
     noteEpochTurn: vi.fn(),
     sealEpoch: vi.fn(),
-    sealConversationEpoch: vi.fn(async (teamId: string, epochId: string) => store.endEpoch(epochId, Date.now(), 'stopped', null)),
+    sealConversationEpoch: vi.fn(async (teamId: string, epochId: string, reason: EpochEndReason = 'stopped') => store.endEpoch(epochId, Date.now(), reason, null)),
     requestSeal: vi.fn(),
     captureReport: vi.fn(),
     buildPromptContext: vi.fn(),
@@ -251,6 +251,39 @@ describe('TeamService — conversations + pending escalations', () => {
     expect(subtasks()).toEqual({ done: 0, open: 1 })
   })
 
+  it('names a failure still holding up any unfinished task, not only the current one', async () => {
+    const svc = build()
+    const { epochId: stuck } = await svc.openConversation(TEAM_ID, 'Stuck')
+    await svc.openConversation(TEAM_ID, 'Current')
+    const act = (id: string, patch: Record<string, unknown>) => store.insertActivity({
+      id, teamId: TEAM_ID, epochId: stuck, kind: 'message', actorAppId: LEAD_APP, targetAppId: MEMBER_APP, subject: 'Draft', body: null,
+      refId: null, correlationId: null, status: 'sent', createdAt: 100, ...patch,
+    })
+    const failure = () => svc.listConversations(TEAM_ID).find(c => c.epochId === stuck)?.failure
+    act('lost', { kind: 'reply', actorAppId: MEMBER_APP, targetAppId: LEAD_APP, status: 'undelivered', createdAt: 100 })
+    act('lead-later', { createdAt: 200 })
+    expect(failure()).toEqual({ appId: MEMBER_APP, activityId: 'lost', senderAppId: LEAD_APP })
+    act('member-back', { actorAppId: MEMBER_APP, targetAppId: LEAD_APP, createdAt: 300 })
+    expect(failure()).toBeUndefined()
+  })
+
+  it('leaves a failure in a cleared IM chat in its history, not on the list as a stop', () => {
+    const svc = build()
+    for (const [id, endReason] of [['im-cleared', 'cleared'], ['im-stopped', 'stopped']] as const) {
+      store.insertEpoch({
+        id, teamId: TEAM_ID, startedAt: 1, endedAt: 5, endReason, summary: null,
+        lifecycle: 'conversation', chatKey: `instance-1:group:${id}`,
+      })
+      store.insertActivity({
+        id: `${id}-lost`, teamId: TEAM_ID, epochId: id, kind: 'reply', actorAppId: MEMBER_APP, targetAppId: LEAD_APP, subject: 'Draft', body: null,
+        refId: null, correlationId: null, status: 'undelivered', createdAt: 100,
+      })
+    }
+    const list = svc.listConversations(TEAM_ID)
+    expect(list.find(c => c.epochId === 'im-cleared')?.failure).toBeUndefined()
+    expect(list.find(c => c.epochId === 'im-stopped')?.failure).toMatchObject({ appId: MEMBER_APP, activityId: 'im-stopped-lost' })
+  })
+
   it('names who took part in a task in roster order, only on the team task list', async () => {
     const svc = build()
     const { epochId } = await svc.openConversation(TEAM_ID, 'Brief')
@@ -409,6 +442,9 @@ describe('TeamService — conversations + pending escalations', () => {
     busyByApp = new Map()
     const conv = svc.listConversations(TEAM_ID).find(c => c.epochId === 'conv-joined')
     expect(conv?.active).toBe(true)
+    // The task panel reads the same busy, or it calls a task finished that the list shows running.
+    const lead = svc.getEpochBoard(TEAM_ID, 'conv-joined')?.roster?.find(m => m.appId === LEAD_APP)
+    expect(lead?.busy).toEqual([{ epochId: 'conv-joined', kind: 'conversation', label: 'topic' }])
   })
 
   it('renameConversation relabels the session', async () => {
@@ -423,6 +459,110 @@ describe('TeamService — conversations + pending escalations', () => {
     const { epochId } = await svc.openConversation(TEAM_ID)
     await svc.archiveConversation(TEAM_ID, epochId)
     expect(svc.listConversations(TEAM_ID)).toEqual([expect.objectContaining({ epochId, completed: true })])
+  })
+
+  it('archiving unfinished work records it as ended by the viewer, apart from finished work', async () => {
+    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
+    const { epochId } = await svc.openConversation(TEAM_ID)
+    await svc.archiveConversation(TEAM_ID, epochId)
+    expect(store.getEpochById(epochId)).toMatchObject({ endReason: 'ended', workItem: { status: 'completed', endedBy: 'me' } })
+    const task = svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)
+    expect(task).toMatchObject({ completed: true, endedManually: true, endedByMe: true })
+    expect(task?.endedBy).toBeUndefined()
+    store.updateWorkItem(epochId, { status: 'open' })
+    expect(store.getEpochById(epochId)?.workItem?.endedBy).toBeNull()
+  })
+
+  it('archiving work that already finished keeps it finished', async () => {
+    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
+    store.insertEpoch({
+      id: 'conv-done', teamId: TEAM_ID, startedAt: 1, endedAt: 5, endReason: 'completed', summary: 'Shipped',
+      lifecycle: 'conversation', chatKey: nativeConversationChatKey('done'),
+    })
+    await svc.archiveConversation(TEAM_ID, 'conv-done')
+    expect(store.getEpochById('conv-done')).toMatchObject({ endReason: 'completed', workItem: { endedBy: null } })
+    expect(svc.listConversations(TEAM_ID).find(c => c.epochId === 'conv-done')?.endedManually).toBeUndefined()
+  })
+
+  it('archiving open work whose subtasks are all done records it as finished, not ended by hand', async () => {
+    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
+    const { epochId } = await svc.openConversation(TEAM_ID)
+    store.insertTask({
+      id: 'task-done', teamId: TEAM_ID, epochId, title: 'Draft the brief',
+      assigneeAppId: LEAD_APP, status: 'done', resultRef: null, note: null,
+      parentId: null, createdByAppId: LEAD_APP, createdAt: 1, updatedAt: 1,
+    })
+    await svc.archiveConversation(TEAM_ID, epochId)
+    expect(store.getEpochById(epochId)).toMatchObject({ endReason: 'completed', workItem: { status: 'completed', endedBy: null } })
+    expect(svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.endedManually).toBeUndefined()
+  })
+
+  it('archiving work that stopped or failed judges it by its subtasks, as the list does', async () => {
+    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
+    const sealed = (id: string, endReason: EpochEndReason, status: 'done' | 'in_progress') => {
+      store.insertEpoch({
+        id, teamId: TEAM_ID, startedAt: 1, endedAt: 5, endReason, summary: null,
+        lifecycle: 'conversation', chatKey: nativeConversationChatKey(id),
+      })
+      store.insertTask({
+        id: `${id}-task`, teamId: TEAM_ID, epochId: id, title: 'Draft the brief',
+        assigneeAppId: LEAD_APP, status, resultRef: null, note: null,
+        parentId: null, createdByAppId: LEAD_APP, createdAt: 1, updatedAt: 1,
+      })
+    }
+    for (const reason of ['stopped', 'error', 'timeout'] as const) {
+      sealed(`done-${reason}`, reason, 'done')
+      await svc.archiveConversation(TEAM_ID, `done-${reason}`)
+      expect(store.getEpochById(`done-${reason}`)).toMatchObject({ endReason: 'completed', workItem: { status: 'completed', endedBy: null } })
+    }
+    sealed('open-stopped', 'stopped', 'in_progress')
+    await svc.archiveConversation(TEAM_ID, 'open-stopped')
+    expect(store.getEpochById('open-stopped')).toMatchObject({ endReason: 'ended', workItem: { endedBy: 'me' } })
+  })
+
+  it('archiving work handed out by message settles it the way the list does', async () => {
+    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
+    const message = (epochId: string, id: string, actorAppId: string, targetAppId: string, createdAt: number) => store.insertActivity({
+      id, teamId: TEAM_ID, epochId, kind: 'message', actorAppId, targetAppId, subject: 'Draft', body: null,
+      refId: null, correlationId: null, status: 'sent', createdAt,
+    })
+    const { epochId: answered } = await svc.openConversation(TEAM_ID, 'Answered')
+    message(answered, 'ask-1', LEAD_APP, MEMBER_APP, 100)
+    message(answered, 'answer-1', MEMBER_APP, LEAD_APP, 200)
+    const { epochId: waiting } = await svc.openConversation(TEAM_ID, 'Waiting')
+    message(waiting, 'ask-2', LEAD_APP, MEMBER_APP, 100)
+    await svc.archiveConversation(TEAM_ID, answered)
+    await svc.archiveConversation(TEAM_ID, waiting)
+    expect(store.getEpochById(answered)?.endReason).toBe('completed')
+    expect(store.getEpochById(waiting)).toMatchObject({ endReason: 'ended', workItem: { endedBy: 'me' } })
+  })
+
+  it('on a joined office, names the host owner who ended a task and refuses to end one locally', async () => {
+    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
+    store.materializeJoinedOffice({
+      hostNodeId: 'host-1',
+      selfNodeId: 'viewer-1',
+      snapshot: {
+        team: { id: TEAM_ID, name: 'Team', goal: 'g', leadAppId: LEAD_APP, collabMode: 'free', hostNodeId: 'host-1' },
+        members: [
+          { appId: LEAD_APP, memberName: 'Lead', role: 'Lead', isLead: true, ownerNodeId: 'host-1', memberIdentity: 'host-person', ownerDisplayName: 'Zhang' },
+        ],
+        edges: [],
+      },
+    })
+    store.upsertEpoch({
+      id: 'conv-ended', teamId: TEAM_ID, startedAt: 1, endedAt: 5, endReason: 'ended', summary: null,
+      lifecycle: 'conversation', chatKey: nativeConversationChatKey('ended'),
+      workItem: { id: 'conv-ended', teamId: TEAM_ID, title: null, status: 'completed', createdBy: 'me', endedBy: 'host-person', createdAt: 1, updatedAt: 5 },
+    })
+    expect(svc.listConversations(TEAM_ID).find(c => c.epochId === 'conv-ended')).toMatchObject({ endedManually: true, endedBy: 'Zhang' })
+    expect(svc.listConversations(TEAM_ID).find(c => c.epochId === 'conv-ended')?.endedByMe).toBeUndefined()
+    store.insertEpoch({
+      id: 'conv-open', teamId: TEAM_ID, startedAt: 1, endedAt: null, endReason: null, summary: null,
+      lifecycle: 'conversation', chatKey: nativeConversationChatKey('open'),
+    })
+    await expect(svc.archiveConversation(TEAM_ID, 'conv-open')).rejects.toThrow('host')
+    expect(store.getEpochById('conv-open')?.endedAt).toBeNull()
   })
 
   it('tells when a conversation was ended as done, but not when it was stopped', () => {

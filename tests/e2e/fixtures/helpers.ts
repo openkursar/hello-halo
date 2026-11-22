@@ -72,8 +72,8 @@ export async function openDigitalHumanConversation(window: Page, name: string, r
 export async function openCollaborationTeamView(window: Page) {
   await expect(window.getByText('Temporary team', { exact: true })).toHaveCount(1)
   const open = window.getByRole('button', { name: 'Open team view', exact: true })
-  // A report that started a reply is folded into its sender line until expanded.
-  if (!await open.count()) await window.getByRole('button', { name: /^Received (a report|reports) from / }).last().click()
+  // A message that started a reply is folded into its sender line until expanded.
+  if (!await open.count()) await window.getByRole('button', { name: /^Received (a message|messages) from / }).last().click()
   await open.last().click()
 }
 

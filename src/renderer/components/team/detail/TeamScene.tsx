@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next'
 import type { RosterMember, TeamDetail } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { formatTimeAgo } from '../../../utils/format-time'
+import { markdownPreview } from '../../../utils/markdown-preview'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
 import { progressMemberName } from '../workbench/progress-labels'
 import type { TaskProgress } from '../workbench/progress'
@@ -22,7 +23,6 @@ const STAGE_HEIGHT = { wide: 168, narrow: 160 }
 const NARROW_PILE_HEIGHT = 96
 const BODY_PAD = 20
 const BODY_GAP = 8
-const TICKER = 2
 
 const DOT: Partial<Record<CrewState, string>> = { working: 'working', waiting: 'waiting', failed: 'failed', done: 'done' }
 const STATE_TONE: Partial<Record<CrewState, string>> = { waiting: 'text-halo-warning', failed: 'text-destructive' }
@@ -31,10 +31,12 @@ const STATE_TONE: Partial<Record<CrewState, string>> = { waiting: 'text-halo-war
  * Who is on the task right now and who is free, at a fixed height so members
  * coming and going move faces around instead of resizing the card.
  */
-export function TeamScene({ detail, epochId, progress, data, onOpenMember, onOpenAll, onOpenExchange }: {
+export function TeamScene({ detail, epochId, progress, ended = false, data, onOpenMember, onOpenAll, onOpenExchange }: {
   detail: TeamDetail
   epochId: string
   progress: TaskProgress
+  /** A person closed it unfinished, so nobody earns a done check. */
+  ended?: boolean
   data: TaskActivityData
   onOpenMember: (appId: string) => void
   onOpenAll: () => void
@@ -54,15 +56,17 @@ export function TeamScene({ detail, epochId, progress, data, onOpenMember, onOpe
   const roster = detail.roster
   const leadAppId = detail.team.leadAppId ?? null
   const members = useMemo(() => new Map(roster.map(member => [member.appId, member])), [roster])
-  const crew = useMemo<CrewEntry[]>(() => progress.members
+  // Once finished, a failure or wait along the way is history in the steps, not someone on it now.
+  const crew = useMemo<CrewEntry[]>(() => progress.finished ? [] : progress.members
     .filter(row => row.state === 'working' || row.state === 'waiting' || row.state === 'failed')
-    .map(row => ({ appId: row.appId, state: crewState(members.get(row.appId), row.state === 'waiting', row.state === 'failed') })), [progress.members, members])
-  const tookPart = useMemo(() => new Set([...progress.members.filter(row => row.state === 'done').map(row => row.appId), ...data.participants]), [progress.members, data.participants])
-  // Once finished and nobody is on it, the stage keeps who did the work (lead first) instead of standing empty.
-  const cast = useMemo<CrewEntry[]>(() => crew.length || !progress.finished ? crew : roster
+    .map(row => ({ appId: row.appId, state: crewState(members.get(row.appId), row.state === 'waiting', row.state === 'failed') })), [progress.finished, progress.members, members])
+  const tookPart = useMemo(() => new Set([...progress.members.filter(row => row.state !== 'idle').map(row => row.appId), ...data.participants]), [progress.members, data.participants])
+  const didPart = useMemo(() => new Set(progress.members.filter(row => row.state === 'done').map(row => row.appId)), [progress.members])
+  // With nobody on it, the stage keeps who took part (lead first) instead of standing empty; work ended unfinished earns no check.
+  const cast = useMemo<CrewEntry[]>(() => crew.length ? crew : roster
     .filter(member => member.appId === leadAppId || tookPart.has(member.appId))
     .sort((a, b) => Number(b.appId === leadAppId) - Number(a.appId === leadAppId))
-    .map(member => ({ appId: member.appId, state: 'done' })), [crew, progress.finished, roster, leadAppId, tookPart])
+    .map(member => ({ appId: member.appId, state: !ended && (progress.finished || didPart.has(member.appId)) ? 'done' : 'idle' })), [crew, progress.finished, ended, roster, leadAppId, tookPart, didPart])
   const recent = useRecentTalk(data.activities)
   const links = useMemo(() => talkLinks(recent, epochId, new Set(crew.filter(entry => entry.state !== 'offline').map(entry => entry.appId))), [recent, epochId, crew])
   const ordered = useMemo(() => orderCrew(cast, links), [cast, links])
@@ -81,22 +85,29 @@ export function TeamScene({ detail, epochId, progress, data, onOpenMember, onOpe
   const describe = (appId: string) => `${nameOf(appId)} · ${crewStateText(state.get(appId)!, partnersOf(appId, links).map(nameOf), t)}`
 
   const count = (match: CrewState) => crew.filter(entry => entry.state === match).length
+  // Only a question this user can answer waits for "you"; the rest wait for their own owners.
+  const answerable = new Set(progress.members.filter(row => row.state === 'waiting' && row.decisionId).map(row => row.appId))
+  const waitingForMe = crew.filter(entry => entry.state === 'waiting' && answerable.has(entry.appId)).length
+  const waitingForOwner = count('waiting') - waitingForMe
   const chips: { text: string; tone?: string; dot?: string }[] = []
   if (crew.length) {
     if (count('working')) chips.push({ text: t('{{count}} working', { count: count('working') }), dot: 'bg-primary' })
-    if (count('waiting')) chips.push({ text: t('{{count}} waiting for you', { count: count('waiting') }), tone: 'text-halo-warning', dot: 'bg-halo-warning' })
+    if (waitingForMe) chips.push({ text: t('{{count}} waiting for you', { count: waitingForMe }), tone: 'text-halo-warning', dot: 'bg-halo-warning' })
+    if (waitingForOwner) chips.push({ text: t('{{count}} waiting for a decision', { count: waitingForOwner }), dot: 'bg-halo-warning' })
     if (count('failed')) chips.push({ text: t('{{count}} ran into a problem', { count: count('failed') }), tone: 'text-destructive', dot: 'bg-destructive' })
-    if (talking.size) chips.push({ text: t('{{count}} talking', { count: talking.size }), dot: 'border-[1.5px] border-primary bg-transparent' })
+    if (talking.size) chips.push({ text: t('{{count}} talking', { count: talking.size }), dot: 'border-2 border-primary bg-transparent' })
     chips.push({ text: t('{{count}} on standby', { count: idle.length }), dot: 'bg-faint-foreground' })
   } else {
     chips.push({ text: t('No one is working on it right now · {{count}} took part', { count: cast.length || roster.filter(member => tookPart.has(member.appId)).length }) })
   }
 
   const exchanges = useMemo(() => data.activities.filter(isExchange), [data.activities])
-  const ticker = crew.length ? exchanges
+  // Only live talk belongs on the scene; older exchanges and failures stay behind "All exchanges".
+  const latest = count('working') ? recent
+    .filter(activity => activity.epochId === epochId)
     .map(activity => ({ activity, at: taskTime(activity.createdAt) ?? 0 }))
-    .sort((a, b) => b.at - a.at)
-    .slice(0, TICKER) : []
+    .sort((a, b) => b.at - a.at)[0] : undefined
+  const subject = latest ? markdownPreview(latest.activity.subject).replace(/\n/g, ' ') : ''
 
   const scale = layout && layout.height > stageHeight ? stageHeight / layout.height : 1
   const offset = layout ? (stageHeight - layout.height * scale) / 2 : 0
@@ -106,7 +117,7 @@ export function TeamScene({ detail, epochId, progress, data, onOpenMember, onOpe
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 px-3.5 pt-2.5">
       <h3 className="text-[12.5px] font-semibold">{t('Team scene')}</h3>
       {chips.map(chip => <span key={chip.text} className={`inline-flex items-center gap-1.5 text-xs ${chip.tone ?? 'text-subtle-foreground'}`}>
-        {chip.dot && <i aria-hidden="true" className={`size-[7px] rounded-full ${chip.dot}`} />}{chip.text}
+        {chip.dot && <i aria-hidden="true" className={`size-2 shrink-0 rounded-full ${chip.dot}`} />}{chip.text}
       </span>)}
     </div>
     {width > 0 && <div className={`flex gap-2 px-2.5 pb-1.5 pt-1 ${wide ? '' : 'flex-col'}`}>
@@ -141,11 +152,11 @@ export function TeamScene({ detail, epochId, progress, data, onOpenMember, onOpe
       <IdlePile members={idle} tookPart={tookPart} wide={wide} nameOf={nameOf} onOpenMember={onOpenMember} t={t} />
     </div>}
     <div className="grid gap-[3px] px-3.5 pb-1.5 pt-1.5">
-      {ticker.map(({ activity, at }) => <button key={activity.id} type="button" onClick={() => onOpenExchange(activity.id)} className="block w-full truncate rounded text-left text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-        {at > 0 && <span className="mr-1.5 tabular-nums text-faint-foreground">{formatTimeAgo(at, t)}</span>}
-        <span className="text-foreground">{nameOf(activity.actorAppId)}</span> → <span className="text-foreground">{nameOf(activity.targetAppId!)}</span>
-        {activity.subject.trim() && <>: {activity.subject.trim()}</>}
-      </button>)}
+      {latest && <button type="button" onClick={() => onOpenExchange(latest.activity.id)} className="block w-full truncate rounded text-left text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+        {latest.at > 0 && <span className="mr-1.5 tabular-nums text-faint-foreground">{formatTimeAgo(latest.at, t)}</span>}
+        <span className="text-foreground">{nameOf(latest.activity.actorAppId)}</span> → <span className="text-foreground">{nameOf(latest.activity.targetAppId!)}</span>
+        {subject && <>: {subject}</>}
+      </button>}
       <MemberConversationsLink count={exchanges.length} onOpen={onOpenAll} className="justify-self-start" />
     </div>
   </section>

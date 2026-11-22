@@ -24,6 +24,7 @@ import {
   SPACE_COORDINATOR_MEMBER_NAME,
   TEAM_FOLDER_REF_PREFIX,
   isTeamFolderRef,
+  TEAM_OUTPUT_TEXT_EPOCHS_MAX,
 } from '../../../shared/apps/team-types'
 import { provisionLeadSpec } from './lead'
 import { conversationKindOf, deriveConversationLabel, deriveConversationTitle } from './epoch-label'
@@ -37,7 +38,7 @@ import type { AutomationSpec } from '../../../shared/apps/spec-types'
 import type { Artifact } from '../../services/artifact.service'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { AgentModelSelection } from '../../../shared/types/ai-sources'
-import type { TeamStore, NativeTaskScope } from './types'
+import type { TeamStore, NativeTaskScope, SubtaskStats } from './types'
 import type {
   CollabSummary,
   Team,
@@ -60,9 +61,12 @@ import type {
   EpochRoster,
   TeamArtifactGroup,
   TeamOutputPage,
+  TeamOutputFilter,
   TeamArtifactOpenResult,
   TeamArtifact,
+  TeamActivity,
   TeamConversation,
+  TeamMemberFailure,
   TeamListNativeTasksInput,
   TeamNativeTaskPage,
   TeamPendingEscalation,
@@ -76,6 +80,7 @@ import type {
 } from '../../../shared/apps/team-types'
 import { isRemoteMember, toLocalMembers } from '../../../shared/apps/team-types'
 import { delegatedTasks } from '../../../shared/apps/team-delegations'
+import { openMemberFailures } from '../../../shared/apps/team-failures'
 import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
 import { parseSpaceCollabChatKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 
@@ -301,7 +306,7 @@ export interface TeamService {
   removeTrigger(teamId: string, triggerId: string): void
   listArtifacts(teamId: string, epochId?: string): Promise<TeamArtifactGroup[]>
   /** Every file the team declared across its work, newest first, a page at a time. */
-  listOutputs(teamId: string, page?: { offset?: number; limit?: number; producers?: string[] }): TeamOutputPage
+  listOutputs(teamId: string, page?: { offset?: number; limit?: number; producers?: string[] } & TeamOutputFilter): TeamOutputPage
   /**
    * Resolve a shared file to a path this machine can open. Location-transparent:
    * a teammate's file is fetched from their machine and written here read-only,
@@ -1089,11 +1094,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         id: team.id,
         name: team.name,
         status: liveStatus(team),
-        memberCount: members.filter((m) => !m.isLead).length,
+        memberCount: members.length,
         hasWaitingUser: blockedOnUs || waitingCount > 0,
         waitingCount,
         leadAppId: team.leadAppId,
         localMembers: toLocalMembers(members),
+        roster: [...members].sort((a, b) => Number(b.isLead) - Number(a.isLead)).map(m => ({ appId: m.appId, memberName: m.memberName, isLead: m.isLead })),
         hostNodeId: team.hostNodeId,
         updatedAt: team.updatedAt,
       }
@@ -1682,11 +1688,14 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   }
 
   /** Every file the team declared, newest first, one page at a time. `producers` narrows it to those members' files. */
-  function listOutputs(teamId: string, page: { offset?: number; limit?: number; producers?: string[] } = {}): TeamOutputPage {
+  function listOutputs(teamId: string, page: { offset?: number; limit?: number; producers?: string[] } & TeamOutputFilter = {}): TeamOutputPage {
     const team = requireTeam(teamId)
     const offset = Math.max(0, Math.floor(page.offset ?? 0))
     const limit = Math.min(100, Math.max(1, Math.floor(page.limit ?? 30)))
-    const { rows, total } = store.listOutputRefs(teamId, { offset, limit, producers: page.producers })
+    const since = Number.isFinite(page.since) ? page.since : undefined
+    const text = page.text?.trim().slice(0, 200) || undefined
+    const textEpochIds = text ? page.textEpochIds?.slice(0, TEAM_OUTPUT_TEXT_EPOCHS_MAX) : undefined
+    const { rows, total } = store.listOutputRefs(teamId, { offset, limit, producers: page.producers, since, text, textEpochIds })
     const memberById = new Map(store.listMembersByTeam(teamId).map((m) => [m.appId, m]))
     const outputs = rows.map(({ epochId, appId, ref, at }) => {
       const { path } = resolveRef(team, epochId, appId, ref)
@@ -1778,7 +1787,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       const localStatus = runtime?.getMemberStatus(member.appId)
       const status = member.awaitingDecision ? 'waiting_user'
         : localStatus && localStatus !== 'idle' ? localStatus : store.getParticipantStatus(teamId, member.appId) ?? projected.get(member.appId) ?? 'idle'
-      const busy = runtime?.getMemberBusy(member.appId, teamId) ?? store.getJoinedMemberBusy(teamId, member.appId) ?? []
+      // The runtime only sees turns on this machine; a joined office learns the rest from the host's roster.
+      const localBusy = runtime?.getMemberBusy(member.appId, teamId) ?? []
+      const busy = localBusy.length ? localBusy : store.getJoinedMemberBusy(teamId, member.appId)
       return {
         appId: member.appId, memberName: member.memberName, role: member.role, duty: member.duty,
         isLead: member.isLead, status, ...projectOwnership(member),
@@ -2012,13 +2023,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const projected = new Map<string, TeamNativeTaskPage['items'][number]>()
     for (const [teamId, epochs] of byTeam) {
       const team = requireTeam(teamId)
-      const members = new Map(store.listMembersByTeam(teamId).map(member => [member.appId, member]))
-      const byId = new Map(epochs.map(epoch => [epoch.id, epoch]))
       for (const item of projectConversations(team, epochs, false, pending)) {
-        const entry = byId.get(item.epochId)?.workItem?.entryAppId
-        const entryMember = entry ? members.get(entry) : undefined
-        const startedBy = !item.createdByMe && entryMember && isRemoteMember(entryMember) ? entryMember.ownerDisplayName?.trim() : undefined
-        projected.set(item.epochId, { ...item, teamName: team.name, spaceId: input.spaceId, ...(startedBy ? { startedBy } : {}) })
+        projected.set(item.epochId, { ...item, teamName: team.name, spaceId: input.spaceId })
       }
     }
     const last = page.at(-1)
@@ -2028,6 +2034,30 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         ? Buffer.from(JSON.stringify({ spaceId: input.spaceId, at: last.lastActivityAt ?? last.startedAt, id: last.id })).toString('base64url')
         : null,
     }
+  }
+
+  /** Who serves which epoch right now: local live sessions on the host, the host's roster snapshot on a joined node. */
+  function busyByEpochOf(team: Team, members: TeamMember[]): Map<string, Set<string>> {
+    const rt = getRuntime()
+    const busyByEpoch = new Map<string, Set<string>>()
+    for (const m of members) {
+      const busy = team.hostNodeId != null ? store.getJoinedMemberBusy(team.id, m.appId) : rt?.getMemberBusy(m.appId, team.id) ?? []
+      for (const b of busy) busyByEpoch.set(b.epochId, (busyByEpoch.get(b.epochId) ?? new Set()).add(m.appId))
+    }
+    return busyByEpoch
+  }
+
+  /** Subtasks per epoch as the task panel settles them: the board's, else the work handed out by message alone. */
+  function settleSubtasks(team: Team, { subtasks, teamwork }: SubtaskStats, busyByEpoch: Map<string, Set<string>>): Map<string, { done: number; open: number }> {
+    const settled = new Map(subtasks)
+    const delegated = [...teamwork].filter(epochId => !subtasks.has(epochId))
+    const messages = store.listExchangesByEpochs(team.id, delegated)
+    for (const epochId of delegated) {
+      const rows = delegatedTasks({ teamId: team.id, epochId, leadAppId: team.leadAppId ?? null, activities: messages.filter(row => row.epochId === epochId), busyAppIds: busyByEpoch.get(epochId) ?? new Set() })
+      const done = rows.filter(row => row.status === 'done').length
+      if (rows.length) settled.set(epochId, { done, open: rows.length - done })
+    }
+    return settled
   }
 
   function projectConversations(team: Team, openEpochs: TeamEpoch[], detailed = true, pending?: PendingEscalationRecord[]): TeamConversation[] {
@@ -2042,18 +2072,11 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     // (`getJoinedMemberBusy`). Without this branch a joiner sees every
     // conversation as idle and its "busy now" list is always empty.
     const isJoined = team.hostNodeId != null
-    const rt = getRuntime()
-    const activeEpochIds = new Set(rt?.getActiveEpochIds?.(teamId))
+    const activeEpochIds = new Set(getRuntime()?.getActiveEpochIds?.(teamId))
     const participantWork = store.getParticipantWorkStates(teamId)
     for (const [epochId, state] of participantWork) if (state.active) activeEpochIds.add(epochId)
-    const busyByEpoch = new Map<string, Set<string>>()
-    for (const m of members) {
-      const busy = isJoined ? store.getJoinedMemberBusy(teamId, m.appId) : rt?.getMemberBusy(m.appId, teamId) ?? []
-      for (const b of busy) {
-        activeEpochIds.add(b.epochId)
-        busyByEpoch.set(b.epochId, (busyByEpoch.get(b.epochId) ?? new Set()).add(m.appId))
-      }
-    }
+    const busyByEpoch = busyByEpochOf(team, members)
+    for (const epochId of busyByEpoch.keys()) activeEpochIds.add(epochId)
     const localWaitingMembers = new Map<string, string[]>()
     const memberIds = new Set(members.map(member => member.appId))
     for (const escalation of pending ?? deps.getPendingEscalations?.() ?? []) {
@@ -2065,20 +2088,45 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
 
     const ownIds = new Set(members.filter(m => !isRemoteMember(m)).map(m => m.appId))
-    const { involved, outputCounts, unansweredDecisionMembers, subtasks, teamwork, participants } = store.getConversationStats(teamId, [...ownIds], openEpochs.map(epoch => epoch.id), detailed)
+    const stats = store.getConversationStats(teamId, [...ownIds], openEpochs.map(epoch => epoch.id), detailed)
+    const { involved, outputCounts, unansweredDecisionMembers, teamwork, participants } = stats
+    const subtasks = settleSubtasks(team, stats, busyByEpoch)
     const answered = detailed ? deps.listAnsweredMembers?.(teamId, [...ownIds], openEpochs.map(epoch => epoch.id)) : undefined
-    // Work handed out by message alone leaves the board empty; settle it the way the task panel does.
-    const delegated = [...teamwork].filter(epochId => !subtasks.has(epochId))
-    const messages = store.listExchangesByEpochs(teamId, delegated)
-    for (const epochId of delegated) {
-      const rows = delegatedTasks({ teamId, epochId, leadAppId: team.leadAppId ?? null, activities: messages.filter(row => row.epochId === epochId), busyAppIds: busyByEpoch.get(epochId) ?? new Set() })
-      const done = rows.filter(row => row.status === 'done').length
-      if (rows.length) subtasks.set(epochId, { done, open: rows.length - done })
+    // A cleared IM chat takes no further turns, so a failure left in it is history, not a stop to act on.
+    const unfinished = openEpochs.filter(epoch => epoch.workItem?.status !== 'completed' && !(epoch.endedAt !== null && (epoch.endReason === 'completed' || epoch.endReason === 'cleared'))).map(epoch => epoch.id)
+    // The list names a stopped task's failure from its whole record, as the task panel does.
+    const failedRecords = new Map<string, TeamActivity[]>()
+    for (const row of store.listActivityOfFailedEpochs(teamId, unfinished)) {
+      const rows = failedRecords.get(row.epochId)
+      if (rows) rows.push(row)
+      else failedRecords.set(row.epochId, [row])
+    }
+    const failures = new Map<string, TeamMemberFailure>()
+    for (const [epochId, rows] of failedRecords) {
+      const failure = openMemberFailures(rows, busyByEpoch.get(epochId) ?? new Set()).values().next().value
+      if (failure) failures.set(epochId, failure)
     }
     const joinedStatuses = isJoined ? store.getJoinedMemberStatuses(teamId) : null
     const membersByAppId = new Map(members.map(member => [member.appId, member]))
     const memberOrder = new Map(members.map((member, index) => [member.appId, index]))
     const byRoster = (left: string, right: string) => ((memberOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (memberOrder.get(right) ?? Number.MAX_SAFE_INTEGER)) || left.localeCompare(right)
+    const viewer = deps.getViewerIdentity?.()
+    const ownerNames = new Map<string, string>()
+    for (const member of members) {
+      const name = member.ownerDisplayName?.trim()
+      const owner = member.memberIdentity ?? (isRemoteMember(member) ? member.ownerNodeId : undefined)
+      if (owner && name && !ownerNames.has(owner)) ownerNames.set(owner, name)
+    }
+    const enderName = (epoch: TeamEpoch): string | undefined => {
+      const endedBy = epoch.workItem?.endedBy
+      return endedBy && endedBy !== viewer ? ownerNames.get(endedBy) : undefined
+    }
+    const starterName = (epoch: TeamEpoch): string | undefined => {
+      const createdBy = epoch.workItem?.createdBy
+      if (createdBy && ownerNames.has(createdBy)) return ownerNames.get(createdBy)
+      const entry = epoch.workItem?.entryAppId ? membersByAppId.get(epoch.workItem.entryAppId) : undefined
+      return entry && isRemoteMember(entry) ? entry.ownerDisplayName?.trim() || undefined : undefined
+    }
     return openEpochs.map((epoch) => {
       const chatKey = epoch.chatKey ?? ''
       const kind = epoch.lifecycle === 'run' ? 'run' : conversationKindOf(chatKey)
@@ -2096,6 +2144,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         ...localWaiting,
         ...(participantWork.get(epoch.id)?.waitingAppIds ?? []),
       ])].sort(byRoster)
+      const createdByMe = !!epoch.workItem?.createdBy && epoch.workItem.createdBy === viewer
+      const startedBy = createdByMe ? undefined : starterName(epoch)
+      const endedBy = enderName(epoch)
       const participantAppIds = detailed ? [...new Set([...(participants.get(epoch.id) ?? []), ...(answered?.get(epoch.id) ?? []), ...(busyByEpoch.get(epoch.id) ?? []), ...waitingMembers])].sort(byRoster) : []
       return {
         epochId: epoch.id,
@@ -2106,8 +2157,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
           : {}),
         workItemId: epoch.workItem?.id ?? epoch.id,
         completed: epoch.workItem?.status === 'completed',
-        ...(epoch.endedAt !== null && epoch.endReason === 'completed' ? { finishedAt: epoch.endedAt } : {}),
-        createdByMe: !!epoch.workItem?.createdBy && epoch.workItem.createdBy === deps.getViewerIdentity?.(),
+        ...(epoch.endedAt !== null && (epoch.endReason === 'completed' || epoch.endReason === 'ended') ? { finishedAt: epoch.endedAt } : {}),
+        ...(epoch.endedAt !== null && epoch.endReason === 'ended' ? { endedManually: true, ...(endedBy ? { endedBy } : {}), ...(!!viewer && epoch.workItem?.endedBy === viewer ? { endedByMe: true } : {}) } : {}),
+        createdByMe,
+        ...(startedBy ? { startedBy } : {}),
         involvedMe: involved.has(epoch.id),
         triggerType: epoch.triggerType,
         summary: epoch.summary,
@@ -2126,6 +2179,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         waitingForMe: localWaiting.length > 0,
         ...(waitingMembers.length > 0 ? { waitingMemberAppIds: waitingMembers } : {}),
         ...(participantAppIds.length > 0 ? { participantAppIds } : {}),
+        ...(failures.has(epoch.id) ? { failure: failures.get(epoch.id) } : {}),
       }
     })
   }
@@ -2162,12 +2216,19 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   }
 
   async function archiveConversation(teamId: string, epochId: string): Promise<void> {
-    requireTeam(teamId)
+    // Tasks are ended where the team is hosted, by its owner; a joined node's seal would never reach the host.
+    const team = requireTeam(teamId)
+    if (team.hostNodeId != null) throw new Error('Only the team’s host can end its tasks')
     const epoch = store.getEpochById(epochId)
     if (!epoch || epoch.teamId !== teamId) throw new Error('Task not found in this team')
-    store.updateWorkItem(epochId, { status: 'completed' })
-    await requireRuntime().sealConversationEpoch(teamId, epochId, 'completed')
-    console.log(`${LOG_TAG} archiveConversation: team=${teamId} epoch=${epochId}`)
+    if (epoch.endedAt !== null && (epoch.endReason === 'completed' || epoch.endReason === 'ended')) return
+    // Work judged finished as the task list does, at least one subtask and all of them done, is filed as
+    // finished, even when it was stopped or failed before; anything else was ended by a person unfinished.
+    const subtasks = settleSubtasks(team, store.getSubtaskStats(teamId, [epochId]), busyByEpochOf(team, store.listMembersByTeam(teamId))).get(epochId)
+    const reason = subtasks && subtasks.done > 0 && !subtasks.open ? 'completed' : 'ended'
+    store.updateWorkItem(epochId, { status: 'completed', ...(reason === 'ended' ? { endedBy: deps.getViewerIdentity?.() ?? null } : {}) })
+    await requireRuntime().sealConversationEpoch(teamId, epochId, reason)
+    console.log(`${LOG_TAG} archiveConversation: team=${teamId} epoch=${epochId} reason=${reason}`)
   }
 
   return {

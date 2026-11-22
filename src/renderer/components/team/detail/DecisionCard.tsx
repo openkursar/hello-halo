@@ -18,7 +18,7 @@ export function useHeldDecisions(pending: readonly TeamPendingEscalation[]) {
 export type HeldDecisions = ReturnType<typeof useHeldDecisions>
 
 /** A question a member is waiting on, answered in place. */
-export function DecisionCard({ detail, decision, task, taskSpaceId, open, onOpen, onOpenTask }: {
+export function DecisionCard({ detail, decision, task, taskSpaceId, open, onOpen, onOpenTask, flat = false }: {
   detail: TeamDetail
   decision: TeamPendingEscalation
   task?: TeamConversation
@@ -26,6 +26,8 @@ export function DecisionCard({ detail, decision, task, taskSpaceId, open, onOpen
   open: boolean
   onOpen: (open: boolean) => void
   onOpenTask?: (epochId: string) => void
+  /** Tint only, for a stack where a border on every card would be noise. */
+  flat?: boolean
 }) {
   const { t } = useTranslation()
   const reply = () => {
@@ -33,7 +35,7 @@ export function DecisionCard({ detail, decision, task, taskSpaceId, open, onOpen
     openTeamConversation(taskSpaceId, { teamId: detail.team.id, epochId: decision.epochId ?? null, teamName: detail.team.name, label: task?.label, appId: decision.appId, entryId: decision.entryId, decision: true })
   }
   const meta = [decision.memberName, onOpenTask ? task?.label : null, decision.entry?.ts ? t('Asked {{time}}', { time: formatTimeAgo(decision.entry.ts, t) }) : null].filter(Boolean).join(' · ')
-  return <div className={`rounded-[15px] border ${toneSurface('attention')} p-3.5`}>
+  return <div className={`rounded-[15px] ${flat ? '' : 'border'} ${toneSurface('attention')} p-3.5`}>
     <p className="flex items-start gap-2 text-[14.5px] leading-6"><StateIcon state="waiting_user" className="mt-[3px]" /><span className="line-clamp-3 min-w-0 whitespace-pre-wrap break-words">{decision.question}</span></p>
     <p className="mt-0.5 truncate pl-[26px] text-[12.5px] text-faint-foreground">{meta}</p>
     {open && decision.entry && <div className="mt-3 pl-[26px]"><EscalationCard entry={decision.entry} appId={decision.appId} onResolved={() => {

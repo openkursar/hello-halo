@@ -1716,7 +1716,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     endReason: EpochEndReason = 'stopped',
     summary?: string | null
   ): Promise<void> {
-    if (endReason === 'completed' || endReason === 'cleared') escalationWaiters.delete(epochId)
+    if (endReason === 'completed' || endReason === 'ended' || endReason === 'cleared') escalationWaiters.delete(epochId)
     await sealEpochById(teamId, epochId, endReason, summary ?? null)
   }
 

@@ -20,19 +20,23 @@ import { ownedTaskMembers } from '../workbench/members'
 import { DockedPanel } from './DockedPanel'
 import { MemberFace } from './member-ui'
 import { MemberPanel } from './MemberPanel'
-import { MembersPanel } from './MembersPanel'
+import { MembersPage } from './MembersPage'
 import { OutputsPanel } from './OutputsPanel'
 import { doneThisMonth, liveTaskCount, memberState, type TaskStateKey } from './status'
 import { StateIcon } from './task-ui'
 import { TaskPanel, type TaskPanelReveal } from './TaskPanel'
 import { NO_TASK_FILTERS, TaskList, type TaskFilters } from './TaskList'
 
-/** The one side panel: a task, the team's outputs, or the member list with at most one member opened from it. */
-type Panel = { kind: 'task'; epochId: string } | { kind: 'outputs' } | { kind: 'members'; appId: string | null }
+/** The one side panel: a task, the team's outputs, or one member. */
+type Panel = { kind: 'task'; epochId: string } | { kind: 'outputs' } | { kind: 'member'; appId: string }
+/** A page that takes the task list's place, with its own way back. */
+type SubPage = 'settings' | 'members'
 
 const DOCK_WIDTH = 1040
 const COMPACT_WIDTH = 560
 const WIDE_CONTENT = 860
+/** Header, task list and the members page share this cap (1120px of content inside sm:px-10) so the actions line up with the list's right edge; the split view stays uncapped. */
+const PAGE_MAX = 'max-w-[1200px]'
 const STACK_FACES = 5
 const ICON_ACTION = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-subtle-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary'
 const SECONDARY_ACTION = 'inline-flex h-8 min-w-[32px] shrink-0 items-center justify-center gap-1.5 rounded-full bg-secondary px-2.5 text-[13px] sm:px-3.5 text-foreground transition-colors hover:bg-surface-hover disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary'
@@ -45,7 +49,7 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
   const navigationTarget = usePeopleViewStore(state => state.teamTarget)
   const apps = useAppsStore(state => state.apps)
   const [rootRef, width] = useElementWidth<HTMLDivElement>()
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [page, setPage] = useState<SubPage | null>(null)
   const [panel, setPanel] = useState<Panel | null>(null)
   const [filters, setFilters] = useState<TaskFilters>(NO_TASK_FILTERS)
   const [inviteOpen, setInviteOpen] = useState(false)
@@ -68,22 +72,22 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt || a.epochId.localeCompare(b.epochId)), [conversations])
   const ownedIds = useMemo(() => ownedTaskMembers(detail, apps).map(member => member.appId), [detail, apps])
   const roster = useMemo(() => [...detail.roster].sort((a, b) => Number(b.isLead) - Number(a.isLead)), [detail.roster])
-  const faces = useMemo(() => teamAvatarFaces({ id: team.id, name: team.name, localMembers: roster, memberCount: roster.filter(member => !member.isLead).length }), [team.id, team.name, roster])
+  const faces = useMemo(() => teamAvatarFaces(roster), [roster])
   const docked = width >= DOCK_WIDTH
   const compact = width > 0 && width < COMPACT_WIDTH
   const wide = mainWidth >= WIDE_CONTENT
   // A joined team is run from its owner's machine: invite and run stay visible but locked, so the page reads the same on both sides.
   const joined = !!team.hostNodeId
+  const hostOwner = joined ? detail.members.find(member => member.ownerNodeId === team.hostNodeId && member.ownerDisplayName?.trim())?.ownerDisplayName?.trim() : undefined
 
   const panelTask = panel?.kind === 'task' ? tasks.find(task => task.epochId === panel.epochId) : undefined
-  const membersOpen = panel?.kind === 'members'
-  const panelMember = panel?.kind === 'members' && panel.appId ? detail.roster.find(member => member.appId === panel.appId) : undefined
+  const panelMember = panel?.kind === 'member' ? detail.roster.find(member => member.appId === panel.appId) : undefined
   const outputsOpen = panel?.kind === 'outputs'
-  const panelOpen = !!panelTask || membersOpen || outputsOpen
+  const panelOpen = !!panelTask || !!panelMember || outputsOpen
 
-  const showSettings = (open: boolean) => {
-    setSettingsOpen(open)
-    if (open) setPanel(null)
+  const showPage = (next: SubPage | null) => {
+    setPage(next)
+    setPanel(null)
     setCondensed(false)
     mainRef.current?.scrollTo({ top: 0 })
   }
@@ -92,11 +96,13 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
     const memory = memoryFor(epochId)
     if (!next?.memberAppId) delete memory.memberAppId
     if (memory.open?.exchanges) memory.open = { ...memory.open, exchanges: false }
+    // A task opened from the members page opens beside it; settings give way to the list.
+    if (page === 'settings') showPage(null)
     setPanel({ kind: 'task', epochId })
     setReveal(next ? { ...next, seq: ++revealSeq.current } : undefined)
-    if (settingsOpen) showSettings(false)
   }
-  const openMembers = (appId: string | null = null) => setPanel({ kind: 'members', appId })
+  const openMembers = () => showPage('members')
+  const openMember = (appId: string) => setPanel({ kind: 'member', appId })
   const openOutputs = () => setPanel({ kind: 'outputs' })
   const closePanel = () => setPanel(null)
   const onScroll = (top: number) => {
@@ -115,7 +121,8 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
       const { entryId, appId, decision } = navigationTarget
       openTask(navigationTarget.epochId, entryId ? (decision ? { decisionId: entryId } : { activityId: entryId }) : appId && !decision ? { memberAppId: appId } : undefined)
     } else if (navigationTarget.appId && detail.roster.some(member => member.appId === navigationTarget.appId)) {
-      openMembers(navigationTarget.appId)
+      openMembers()
+      openMember(navigationTarget.appId)
     }
     usePeopleViewStore.setState({ teamTarget: null })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -153,16 +160,16 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
   const actions = <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
     {ownerOnly(<button onClick={() => setInviteOpen(true)} disabled={joined} aria-label={compact ? t('Invite') : undefined} title={joined ? undefined : t('Invite members')} className={SECONDARY_ACTION}>
       <UserPlus size={14} aria-hidden="true" />{!compact && t('Invite')}
-    </button>, t('Only the team owner can invite members'))}
+    </button>, hostOwner ? t('Only {{owner}}, the team owner, can invite members', { owner: hostOwner }) : t('Only the team owner can invite members'))}
     {stoppable
       ? <button onClick={() => void pause()} disabled={pausing} aria-label={compact ? t('Stop') : undefined} title={t('Stops the work in progress. The team, its tasks and its settings stay.')} className={SECONDARY_ACTION}>
         {pausing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Square size={12} fill="currentColor" aria-hidden="true" />}{!compact && t('Stop')}
       </button>
       : showRun && ownerOnly(<button onClick={() => void run()} disabled={joined || starting} aria-label={compact ? t('Run') : undefined} title={joined ? undefined : t('Run toward the team goal now')} className={SECONDARY_ACTION}>
         {starting ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}{!compact && t('Run')}
-      </button>, t('Only the team owner can run the team'))}
+      </button>, hostOwner ? t('Only {{owner}}, the team owner, can run the team', { owner: hostOwner }) : t('Only the team owner can run the team'))}
     {startButton}
-    <button onClick={() => showSettings(true)} aria-label={t('Team settings')} title={t('Team settings')} className={ICON_ACTION}><Settings size={16} aria-hidden="true" /></button>
+    <button onClick={() => showPage('settings')} aria-label={t('Team settings')} title={t('Team settings')} className={ICON_ACTION}><Settings size={16} aria-hidden="true" /></button>
   </div>
   const menuItem = (onClick: () => void, icon: ReactNode, label: ReactNode, disabled = false) => <button onClick={() => { setMoreOpen(false); onClick() }} disabled={disabled}
     className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13px] hover:bg-surface-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
@@ -178,8 +185,8 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
         {stoppable
           ? menuItem(() => void pause(), pausing ? <Loader2 size={14} className="animate-spin" /> : <Square size={11} fill="currentColor" />, t('Stop'), pausing)
           : showRun && menuItem(() => void run(), starting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />, t('Run'), joined || starting)}
-        {menuItem(() => showSettings(true), <Settings size={14} />, t('Team settings'))}
-        {joined && <p className="px-2.5 pb-1.5 pt-1 text-xs leading-5 text-subtle-foreground">{t('Only the team owner can invite members or run the team')}</p>}
+        {menuItem(() => showPage('settings'), <Settings size={14} />, t('Team settings'))}
+        {joined && <p className="px-2.5 pb-1.5 pt-1 text-xs leading-5 text-subtle-foreground">{hostOwner ? t('Only {{owner}}, the team owner, can invite members or run the team', { owner: hostOwner }) : t('Only the team owner can invite members or run the team')}</p>}
       </PopoverContent>
     </Popover>
   </div>
@@ -188,19 +195,17 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
       onRevealHandled={seq => setReveal(current => current?.seq === seq ? undefined : current)} onClose={closePanel} onOpenTask={id => openTask(id)} />
     : panelMember
       ? <MemberPanel key={panelMember.appId} detail={detail} member={panelMember} tasks={tasks} taskSpaceId={taskSpaceId} docked={isDocked} owned={ownedIds.includes(panelMember.appId)}
-        onOpenTask={epochId => openTask(epochId, { memberAppId: panelMember.appId })} onOpenProfile={() => openProfile(panelMember.appId)} onBack={() => openMembers()} onClose={closePanel} />
-      : membersOpen
-        ? <MembersPanel detail={detail} docked={isDocked} onOpenMember={openMembers} onClose={closePanel} />
-        : outputsOpen
-          ? <OutputsPanel detail={detail} tasks={tasks} docked={isDocked} onOpenTask={id => openTask(id)} onClose={closePanel} />
-          : null
-  const panelLabel = panelMember ? t('Member details') : membersOpen ? t('Members') : outputsOpen ? t('Outputs') : t('Task details')
+        onOpenTask={epochId => openTask(epochId, { memberAppId: panelMember.appId })} onOpenProfile={() => openProfile(panelMember.appId)} onClose={closePanel} />
+      : outputsOpen
+        ? <OutputsPanel detail={detail} tasks={tasks} docked={isDocked} onOpenTask={id => openTask(id)} onClose={closePanel} />
+        : null
+  const panelLabel = panelMember ? t('Member details') : outputsOpen ? t('Outputs') : t('Task details')
   const backButton = 'shrink-0 rounded-full p-1.5 text-subtle-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary'
 
   const back = <button onClick={() => onBack ? onBack() : useTeamStore.getState().selectTeam(null)} aria-label={t('Back to teams')} title={t('Back to teams')} className={backButton}><ArrowLeft size={18} /></button>
   const pulse = (!loading || tasks.length > 0) && <TeamPulse detail={detail} tasks={tasks} outputsOpen={outputsOpen} onOpenOutputs={openOutputs} className="min-w-0 overflow-hidden whitespace-nowrap" />
   // Side by side, the team collapses to one bar over both columns so the list and the panel each scroll on their own.
-  const split = panelOpen && docked && !settingsOpen
+  const split = panelOpen && docked && !page
   useEffect(() => {
     if (mainRef.current) onScroll(mainRef.current.scrollTop)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -209,7 +214,7 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
   // The collapsed header, the same whether scrolled past the title or sitting over the list and a panel.
   const teamBar = (className: string, tools: ReactNode) => <div className={`flex items-center gap-2.5 border-b border-border-soft bg-background px-3 py-2.5 sm:px-4 ${className}`}>
     {back}
-    <button onClick={() => openMembers()} aria-label={t('View team members')} title={t('View team members')} aria-expanded={membersOpen} className={`shrink-0 rounded-full p-0.5 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${membersOpen ? 'bg-secondary' : ''}`}>
+    <button onClick={openMembers} aria-label={t('View team members')} title={t('View team members')} className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
       <TeamAvatar faces={faces} name={team.name} size={36} />
     </button>
     <div className="min-w-0 flex-1 text-left">
@@ -226,16 +231,25 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
     {split && teamBar('shrink-0', panelActions)}
     <div className="relative flex min-h-0 flex-1">
       <main ref={attachMain} onScroll={event => onScroll(event.currentTarget.scrollTop)} className="relative min-w-0 flex-1 overflow-y-auto">
-        {settingsOpen
+        {page
           ? <>
             <div className={`sticky top-0 z-20 flex h-12 items-center gap-2 bg-background/90 px-3 backdrop-blur sm:px-4 ${condensed ? 'shadow-[0_1px_0_hsl(var(--border)/0.5)]' : ''}`}>
-              <button onClick={() => showSettings(false)} className="inline-flex h-8 min-w-0 items-center gap-1.5 rounded-full px-2 text-[13px] text-subtle-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+              <button onClick={() => showPage(null)} className="inline-flex h-8 min-w-0 items-center gap-1.5 rounded-full px-2 text-[13px] text-subtle-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
                 <ArrowLeft size={16} className="shrink-0" aria-hidden="true" /><span className="truncate">{team.name}</span>
               </button>
             </div>
-            <div className="mx-auto w-full max-w-2xl px-5 pb-16 pt-2 sm:px-6">
-              <h1 ref={titleRef} className="mb-5 text-[22px] font-semibold leading-8 tracking-tight">{t('Team settings')}</h1>
-              <SettingsTab detail={detail} openMemberId={null} onOpenMemberChange={appId => { if (appId) openMembers(appId) }} layout="page" />
+            <div className={`mx-auto w-full ${page === 'settings' ? 'max-w-2xl px-5 sm:px-6' : `${PAGE_MAX} px-6 sm:px-10`} pb-16 pt-2`}>
+              {page === 'settings'
+                ? <>
+                  <h1 ref={titleRef} className="mb-5 text-[22px] font-semibold leading-8 tracking-tight">{t('Team settings')}</h1>
+                  <SettingsTab detail={detail} openMemberId={null} onOpenMemberChange={appId => { if (appId) openMember(appId) }} layout="page" />
+                </>
+                : <>
+                  <h1 ref={titleRef} className="mb-4 flex items-baseline gap-2 text-[22px] font-semibold leading-8 tracking-tight">
+                    {t('Members')}<span className="text-[15px] font-normal tabular-nums text-faint-foreground">{detail.roster.length}</span>
+                  </h1>
+                  <MembersPage detail={detail} tasks={tasks} selectedId={panelMember?.appId ?? null} onOpenMember={openMember} />
+                </>}
             </div>
           </>
           : <>
@@ -248,8 +262,8 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
                 {teamBar(`absolute inset-x-0 top-0 transition-[opacity,transform,visibility] duration-200 ${condensed ? 'visible translate-y-0 opacity-100' : 'invisible -translate-y-1 opacity-0'}`, actions)}
               </div>
 
-              <section className="flex flex-col items-center px-6 pb-1 pt-3 text-center sm:px-10">
-                <MemberStrip detail={detail} roster={roster} selected={membersOpen} onClick={() => openMembers()} />
+              <section className={`mx-auto flex w-full ${PAGE_MAX} flex-col items-center px-6 pb-1 pt-3 text-center sm:px-10`}>
+                <MemberStrip detail={detail} roster={roster} onClick={openMembers} />
                 <div className={`mt-3 items-center gap-3 ${wide ? 'grid w-full grid-cols-[1fr_auto_1fr]' : 'flex max-w-full justify-center'}`}>
                   {wide && <span aria-hidden="true" />}
                   <div className="flex min-w-0 items-center justify-center gap-2">
@@ -262,9 +276,9 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
               </section>
             </>}
 
-            <div className={split ? 'px-5 pb-16 pt-4 sm:px-6' : 'px-6 pb-16 pt-8 sm:px-10'}>
+            <div className={split ? 'px-5 pb-16 pt-4 sm:px-6' : `mx-auto w-full ${PAGE_MAX} px-6 pb-16 pt-8 sm:px-10`}>
               <TaskList wide={wide} detail={detail} tasks={tasks} taskSpaceId={taskSpaceId} filters={filters} onFilters={setFilters} selectedId={panelTask?.epochId ?? null} loading={loading} error={error}
-                onOpenTask={id => openTask(id)} onOpenSettings={() => showSettings(true)} focused={panelOpen} />
+                onOpenTask={id => openTask(id)} onOpenSettings={() => showPage('settings')} onOpenMembers={openMembers} focused={panelOpen} />
             </div>
           </>}
       </main>
@@ -307,15 +321,15 @@ function TeamPulse({ detail, tasks, outputsOpen, onOpenOutputs, className }: {
   </p>
 }
 
-/** Who is on the team at a glance, and how many of them are busy; a member on several tasks counts once. Opens the member list. */
-function MemberStrip({ detail, roster, selected, onClick }: { detail: TeamDetail; roster: TeamDetail['roster']; selected: boolean; onClick: () => void }) {
+/** Who is on the team at a glance, and how many of them are busy; a member on several tasks counts once. Opens the members page. */
+function MemberStrip({ detail, roster, onClick }: { detail: TeamDetail; roster: TeamDetail['roster']; onClick: () => void }) {
   const { t } = useTranslation()
   if (!roster.length) return null
   const veiled = roster.length > STACK_FACES
   const shown = roster.slice(0, STACK_FACES)
   const rest = roster.length - STACK_FACES + 1
   const working = roster.filter(member => memberState(detail, member) === 'working').length
-  return <button onClick={onClick} aria-label={t('View team members')} aria-expanded={selected} className={`inline-flex items-center gap-2.5 rounded-full py-1 pl-1 pr-3 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selected ? 'bg-secondary' : ''}`}>
+  return <button onClick={onClick} aria-label={t('View team members')} className="inline-flex items-center gap-2.5 rounded-full py-1 pl-1 pr-3 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
     <span className="flex -space-x-2">
       {shown.map((member, index) => <span key={member.appId} className="relative rounded-full ring-2 ring-background">
         {veiled && index === shown.length - 1

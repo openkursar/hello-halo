@@ -4,8 +4,7 @@ import { usePointerDrag } from '../../../hooks/usePointerDrag'
 import { useTeamViewPrefsStore } from '../../../stores/team-view-prefs.store'
 
 const MIN_WIDTH = 400
-const DEFAULT_MAX = 640
-const DEFAULT_SHARE = 0.45
+const DEFAULT_SHARE = 0.6
 /** The page beside the panel never gets narrower than this. */
 const MIN_PAGE = 480
 const KEY_STEP = 16
@@ -18,7 +17,7 @@ export function DockedPanel({ label, containerWidth, children }: { label: string
   const origin = useRef({ x: 0, width: 0 })
   const max = Math.max(MIN_WIDTH, containerWidth - MIN_PAGE)
   const clamp = (value: number) => Math.round(Math.min(max, Math.max(MIN_WIDTH, value)))
-  const width = clamp(live ?? stored ?? Math.min(DEFAULT_MAX, containerWidth * DEFAULT_SHARE))
+  const width = clamp(live ?? stored ?? containerWidth * DEFAULT_SHARE)
   const save = (value: number) => useTeamViewPrefsStore.getState().setDetailPanelWidth(clamp(value))
 
   const drag = usePointerDrag({

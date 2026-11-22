@@ -105,7 +105,7 @@ describe('a teammate message in the transcript', () => {
 
     const html = renderToStaticMarkup(createElement(ReplyOpeners, { senderName: 'Halo', openers: [opener, team({ id: 'team-2', metadata: { teamId: 'team', teamName: 'Crew', fromMemberName: 'Scout' } })] }))
     expect(html).toContain('Halo')
-    expect(html).toContain('Received reports from Reviewer and 1 more')
+    expect(html).toContain('Received messages from Reviewer and 1 more')
     expect(html).not.toContain('Details follow')
   })
 

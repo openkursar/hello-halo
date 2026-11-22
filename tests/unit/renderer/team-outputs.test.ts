@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TeamOutput } from '../../../src/shared/apps/team-types'
-import { mergeOutputs, outputGroups } from '../../../src/renderer/components/team/detail/outputs'
+import { mergeOutputs, outputGroups, rangeStart } from '../../../src/renderer/components/team/detail/outputs'
 
 const output = (ref: string, at: Date, epochId = 'e1'): TeamOutput =>
   ({ epochId, appId: 'a', memberName: 'writer', ref, name: ref, path: `/work/${ref}`, at: at.getTime() })
@@ -27,5 +27,13 @@ describe('team outputs', () => {
     const at = new Date(2026, 10, 19)
     const merged = mergeOutputs([output('a', at), output('b', at)], [output('b', at), output('b', at, 'e2'), output('c', at)])
     expect(merged.map(item => `${item.epochId}/${item.ref}`)).toEqual(['e1/a', 'e1/b', 'e2/b', 'e1/c'])
+  })
+
+  it('starts a time range at local midnight, counting today as one of its days', () => {
+    const now = new Date(2026, 10, 19, 15).getTime()
+    expect(rangeStart('all', now)).toBeUndefined()
+    expect(rangeStart('today', now)).toBe(new Date(2026, 10, 19).getTime())
+    expect(rangeStart('week', now)).toBe(new Date(2026, 10, 13).getTime())
+    expect(rangeStart('month', now)).toBe(new Date(2026, 9, 21).getTime())
   })
 })

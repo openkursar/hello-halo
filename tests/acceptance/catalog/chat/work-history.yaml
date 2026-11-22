@@ -17,11 +17,9 @@ references:
   - src/main/apps/runtime/session-transcript.ts
   - src/renderer/components/team/session-history.ts
   - src/renderer/components/chat/StreamingSection.tsx
-  - src/renderer/components/chat/team-collab/TeamCollabPanel.tsx
   - src/renderer/components/chat/ReplyEndingNote.tsx
   - src/main/services/agent/reply-ending.ts
   - tests/e2e/specs/acceptance-work-history.spec.ts
-  - tests/e2e/specs/team-collab.spec.ts
 promises:
   answer-first:
     en: A finished reply's answer is in view, with its work folded to one line above it that says how long it took. A reply with nothing but its answer has no such line.
@@ -41,9 +39,6 @@ promises:
   ended-short:
     en: A reply that was stopped, cut off or reached its step limit says so under its words, also after the app restarts, so they read as progress rather than a final answer; right after a stop, the chat's own notice with its Continue action speaks for it instead.
     zh: 被停止、意外中断或达到步数上限的回复，在文字下方注明这一点，应用重启后依然如此，使这些文字读作进展而不是最终答复；刚停止时由聊天原有的提示（含“继续”）代为说明。
-  team-summary:
-    en: A conversation's team takes one line at the end of the chat — its name, how many members and how many are working — and opens the full team view; the chat does not list the members.
-    zh: 对话的团队在聊天底部只占一行：团队名称、成员数和工作中人数，并可打开完整团队视图；聊天中不列出成员。
 scenarios:
   - id: chat.work-history.finished
     title:
@@ -200,26 +195,3 @@ scenarios:
     notes:
       en: Separate processes on one machine joined by the office link; not two physical machines.
       zh: 同一台电脑上的独立进程通过办公室连接组成，不是两台物理电脑。
-  - id: chat.work-history.team-summary
-    title:
-      en: See the conversation's team in one line
-      zh: 一行看到对话的团队
-    verifies:
-      - team-summary
-    platforms: *a1
-    profiles:
-      - regression
-    evidence: app-e2e
-    mode: none
-    automation: automated
-    variants:
-      viewport: ['1280', '390']
-    preconditions:
-      - en: A seeded profile holds a real collaboration bound to a space conversation.
-        zh: 预置配置中有一个绑定到空间对话的真实协作。
-    steps:
-      - en: Open the conversation, read the team line, then choose View team.
-        zh: 打开对话，查看团队行，然后点击“查看团队”。
-    expected:
-      - en: One line names the team and its member and working counts without listing members, fits the width, and opens the team's task room.
-        zh: 一行显示团队名称、成员数和工作中人数，不列出成员，不超出宽度，并能打开团队的任务房间。

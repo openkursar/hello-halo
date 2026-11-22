@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
-import type { Team, TeamListItem, TeamNativeTaskPage, TeamUpdatedEvent } from '../../shared/apps/team-types'
+import type { Team, TeamListItem, TeamNativeTaskPage, TeamRosterFace, TeamUpdatedEvent } from '../../shared/apps/team-types'
 import { teamTaskKey, useTeamChatPinsStore } from '../stores/team-chat-pins.store'
 import { useTeamChatHiddenStore, type HiddenTeamChat } from '../stores/team-chat-hidden.store'
 
 export type NativeTeamTask = TeamNativeTaskPage['items'][number]
-type TeamSummary = Pick<Team, 'id' | 'name'> & Partial<Pick<TeamListItem, 'localMembers' | 'memberCount' | 'leadAppId'>>
+type TeamSummary = Pick<Team, 'id' | 'name'> & Partial<Pick<TeamListItem, 'roster'>>
 
 /**
  * Faces shown for a team. `overflow` counts the members not shown as a plain
@@ -24,26 +24,19 @@ const PAGE_SIZE = 50
 const AVATAR_SLOTS = 4
 
 /**
- * Up to four slots: every member when the team fits, otherwise four faces with
- * the last one veiled by `+n` (n = total - 3, the veiled member included).
- * `memberCount` excludes the lead and remote members have no local face, so the
- * total is reconciled against the faces we do have; without a fourth local
- * face the count stands in a slot of its own.
+ * Up to four slots, lead first: every member when the team fits, otherwise four
+ * faces with the last one veiled by `+n` (n = total - 3, the veiled member included).
  */
-export function teamAvatarFaces(team: TeamSummary): TeamAvatarFaces {
-  const members = team.localMembers ?? []
-  const lead = members.find(member => member.isLead)
-  const faces = lead ? [lead, ...members.filter(member => member.appId !== lead.appId)] : members
-  const total = Math.max(faces.length, (team.memberCount ?? 0) + (team.leadAppId || lead ? 1 : 0))
+export function teamAvatarFaces(roster: readonly TeamRosterFace[]): TeamAvatarFaces {
+  const faces = [...roster].sort((a, b) => Number(b.isLead) - Number(a.isLead))
   const names = faces.slice(0, AVATAR_SLOTS).map(member => member.memberName)
-  const veiled = total > AVATAR_SLOTS && names.length === AVATAR_SLOTS
-  return { names, overflow: veiled ? total - (AVATAR_SLOTS - 1) : total - names.length }
+  return { names, overflow: faces.length > AVATAR_SLOTS ? faces.length - (AVATAR_SLOTS - 1) : 0 }
 }
 
 export function buildTeamRows(tasks: NativeTeamTask[], teams: TeamSummary[], pins: string[], isOpen: (id: string) => boolean, hidden: Record<string, HiddenTeamChat> = EMPTY_HIDDEN) {
   const pinned: TeamListRow[] = []
   const rows: TeamListRow[] = []
-  const groups = new Map(teams.map(team => [team.id, { name: team.name, avatar: teamAvatarFaces(team), tasks: [] as NativeTeamTask[] }]))
+  const groups = new Map(teams.map(team => [team.id, { name: team.name, avatar: teamAvatarFaces(team.roster ?? []), tasks: [] as NativeTeamTask[] }]))
   for (const task of tasks) {
     if (hidden[teamTaskKey(task.teamId, task.epochId)]) continue
     const group = groups.get(task.teamId) ?? { name: task.teamName, avatar: EMPTY_FACES, tasks: [] }

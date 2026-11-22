@@ -24,9 +24,9 @@ describe('homepage collaboration without a reply to carry it', () => {
       epochId: 'epoch', appId: 'lead', detail, showEmpty: false, onActivity: () => {}, homepageConversation: true,
     }))
     expect(html).not.toContain('collaboration messages')
-    expect(html).toContain('Received a report from Writer')
+    expect(html).toContain('Received a message from Writer')
     expect(html).toContain('Sent a message to Writer')
-    expect(html.indexOf('Received a report from Writer')).toBeLessThan(html.indexOf('Sent a message to Writer'))
+    expect(html.indexOf('Received a message from Writer')).toBeLessThan(html.indexOf('Sent a message to Writer'))
     expect(html.indexOf('Sent a message to Writer')).toBeLessThan(html.indexOf('Any tasks?'))
   })
 })

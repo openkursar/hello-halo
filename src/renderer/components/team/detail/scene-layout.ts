@@ -55,8 +55,8 @@ export function layoutScene(shown: readonly CrewEntry[], hidden: number, links: 
     }
   }
 
-  // A finished team stands in a line; while working, a slight stagger keeps it from reading as a table.
-  const stagger = shown.some(entry => entry.state !== 'done')
+  // A resting team stands in a line; while working, a slight stagger keeps it from reading as a table.
+  const stagger = shown.some(entry => entry.state !== 'done' && entry.state !== 'idle')
   const out: SceneLayout = { faces: [], labels: [], more: null, width: stageWidth, height: 0 }
   let y = 0
   let top = Infinity

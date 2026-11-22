@@ -625,6 +625,24 @@ describe('TeamStore', () => {
         total: 2,
       })
     })
+
+    it('filters by time after taking each file\u2019s latest declaration', () => {
+      const { rows, total } = store.listOutputRefs('team-1', { offset: 0, limit: 10, since: 300 })
+      expect(total).toBe(2)
+      expect(rows.map(row => row.ref)).toEqual(['report.xlsx', 'plan.md'])
+    })
+
+    it('matches text against the file name, the producer\u2019s name and title-matched tasks', () => {
+      store.addMember(makeMember({ appId: 'b', memberName: 'Analyst' }))
+      store.insertFinding(makeFinding({ id: 'f5', epochId: 'e3', authorAppId: 'a', ref: '/Users/report-owner/notes_v1.md', createdAt: 500 }))
+      const refs = (filter: { text: string; textEpochIds?: string[] }) =>
+        store.listOutputRefs('team-1', { offset: 0, limit: 10, ...filter }).rows.map(row => `${row.epochId}:${row.ref}`)
+      expect(refs({ text: 'REPORT' })).toEqual(['e2:report.xlsx'])
+      expect(refs({ text: 'analyst' })).toEqual(['e2:report.xlsx', 'e1:plan.md'])
+      expect(refs({ text: 'nothing', textEpochIds: ['e1'] })).toEqual(['e1:plan.md'])
+      expect(refs({ text: '_v' })).toEqual(['e3:/Users/report-owner/notes_v1.md'])
+      expect(refs({ text: '%' })).toEqual([])
+    })
   })
 
   // ===========================================================================
@@ -738,6 +756,16 @@ describe('TeamStore', () => {
       const { workItem, ...legacy } = old
       store.upsertEpoch(legacy)
       expect(store.getEpochById(old.id)!.workItem!.title).toBe('New title')
+    })
+
+    it('keeps the real start of an epoch a joiner shadowed on arrival, whichever side sends it on', () => {
+      store.insertTeam(makeTeam())
+      store.insertEpoch(makeEpoch({ startedAt: 5000 }))
+      const shadow = store.getEpochById('epoch-1')!
+      store.upsertEpoch({ ...shadow, startedAt: 1000 })
+      expect(store.getEpochById('epoch-1')!.startedAt).toBe(1000)
+      store.upsertEpoch(shadow)
+      expect(store.getEpochById('epoch-1')!.startedAt).toBe(1000)
     })
 
     it('cannot revive cleared context with a delayed replica but accepts explicit completed-task resume', () => {

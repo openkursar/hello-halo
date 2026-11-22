@@ -1,24 +1,26 @@
-import { useMemo, useReducer, useState, type ReactNode } from 'react'
+import { useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { CalendarClock, Check, ChevronDown, Loader2, Search, X } from 'lucide-react'
-import type { TeamConversation, TeamDetail, TeamPendingEscalation } from '../../../../shared/apps/team-types'
+import type { TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { useTeamStore } from '../../../stores/team.store'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/Popover'
-import { toneSurface } from '../workbench/task-brief'
 import { useRecentTalk } from './crew-ui'
-import { DecisionCard, useHeldDecisions } from './DecisionCard'
+import { NeedsYou } from './NeedsYou'
 import { isMoving, isTeamWork, needsUser, sortByState, taskState } from './status'
-import { factText, matchesSource, PILL_ON_TINT, SectionHeading, sourceLabel, StateIcon, TaskRow, taskTitle, type TaskSource } from './task-ui'
+import { matchesSource, MoreToggle, sourceLabel, StateIcon, TaskRow, taskTitle, type TaskSource } from './task-ui'
 
 export interface TaskFilters { query: string; source: TaskSource | 'all' }
 
 export const NO_TASK_FILTERS: TaskFilters = { query: '', source: 'all' }
 
-const SOURCES: (TaskSource | 'all')[] = ['all', 'mine', 'involved', 'scheduled', 'im', 'others']
-const DONE_PREVIEW = 10
+/** Who started the work and which channel it came through are separate questions, so each gets its own group. */
+const SOURCE_GROUPS: (TaskSource | 'all')[][] = [['all'], ['mine', 'involved', 'others'], ['scheduled', 'im']]
+const PREVIEW = 10
+/** Each "more" click mounts at most this many rows, so a long history never lands in one frame. */
+const STEP = 20
 
-type Fold = 'moving' | 'stopped' | 'done' | 'chats'
-const OPEN_BY_DEFAULT: Record<Fold, boolean> = { moving: true, stopped: true, done: true, chats: false }
+type Fold = 'yours' | 'moving' | 'others' | 'stopped' | 'done' | 'chats'
+const OPEN_BY_DEFAULT: Record<Fold, boolean> = { yours: true, moving: true, others: true, stopped: true, done: true, chats: false }
 /** Sections the user folded, kept per team for this session. */
 const folds = new Map<string, Record<Fold, boolean>>()
 
@@ -29,7 +31,7 @@ function useFolds(teamId: string) {
   return { open, toggle }
 }
 
-export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters, selectedId, loading, error, onOpenTask, onOpenSettings, focused = false }: {
+export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters, selectedId, loading, error, onOpenTask, onOpenSettings, onOpenMembers, focused = false }: {
   wide: boolean
   /** A task or member panel is open, so the "Needs you" board steps aside; every task keeps its own group either way. */
   focused?: boolean
@@ -43,10 +45,10 @@ export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters,
   error: string | null
   onOpenTask: (epochId: string) => void
   onOpenSettings: () => void
+  onOpenMembers: () => void
 }) {
   const { t } = useTranslation()
   const { open, toggle } = useFolds(detail.team.id)
-  const [allDone, setAllDone] = useState(false)
   const [sourceOpen, setSourceOpen] = useState(false)
   const query = filters.query.trim().toLocaleLowerCase()
   const pending = useMemo(() => [...(detail.pendingEscalations ?? [])].sort((a, b) => (a.entry?.ts ?? 0) - (b.entry?.ts ?? 0)), [detail.pendingEscalations])
@@ -60,7 +62,9 @@ export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters,
   ), [detail, filters.source, query, tasks, t])
   const groups = useMemo(() => {
     const sorted = sortByState(detail, filtered)
+    const yours: TeamConversation[] = []
     const moving: TeamConversation[] = []
+    const others: TeamConversation[] = []
     const stopped: TeamConversation[] = []
     const done: TeamConversation[] = []
     const chats: TeamConversation[] = []
@@ -70,16 +74,17 @@ export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters,
       if (!isTeamWork(task) && !needsUser(key)) {
         chats.push(task)
         chatRunning ||= isMoving(key)
-      } else if (isMoving(key)) moving.push(task)
+      } else if (key === 'waiting_user') yours.push(task)
+      else if (key === 'running') moving.push(task)
+      else if (key === 'waiting_member') others.push(task)
       else if (key === 'done') done.push(task)
       else stopped.push(task)
     }
     done.sort((a, b) => (b.finishedAt ?? b.lastActivityAt) - (a.finishedAt ?? a.lastActivityAt))
-    return { sorted, moving, stopped, done, chats, chatRunning }
+    return { sorted, yours, moving, others, stopped, done, chats, chatRunning }
   }, [detail, filtered])
   const searching = query !== ''
   const filtering = searching || filters.source !== 'all'
-  const shownDone = allDone ? groups.done : groups.done.slice(0, DONE_PREVIEW)
   const recent = useRecentTalk(detail.activities)
   const crew = useMemo(() => ({ recent, cap: wide ? 4 : 3, size: wide ? 24 : 22 }), [recent, wide])
   const rows = (items: TeamConversation[]) => items.map(task => <TaskRow key={task.epochId} detail={detail} task={task} selected={selectedId === task.epochId} crew={crew} onOpen={() => onOpenTask(task.epochId)} />)
@@ -88,7 +93,7 @@ export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters,
 
   // Rows here are separated by spacing alone; the shared hairline stays for other lists.
   return <div className="[&_.task-row]:before:hidden">
-    {!focused && <NeedsYou detail={detail} tasks={tasks} pending={pending} attention={attention} taskSpaceId={taskSpaceId} onOpenTask={onOpenTask} />}
+    {!focused && <NeedsYou detail={detail} tasks={tasks} pending={pending} attention={attention} taskSpaceId={taskSpaceId} onOpenTask={onOpenTask} onOpenMembers={onOpenMembers} />}
     <div className={`flex items-center ${wide ? 'gap-4' : 'gap-2'}`}>
     <label className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full bg-secondary px-3.5 focus-within:ring-2 focus-within:ring-primary">
       <Search size={15} className="shrink-0 text-faint-foreground" aria-hidden="true" />
@@ -100,11 +105,13 @@ export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters,
         <PopoverTrigger ariaLabel={t('Task source')} className={`h-7 items-center gap-1 rounded-full px-3 text-[12.5px] transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${filters.source === 'all' ? 'text-subtle-foreground' : 'bg-secondary text-foreground'}`}>
           {sourceLabel(filters.source, t)}<ChevronDown size={13} aria-hidden="true" />
         </PopoverTrigger>
-        <PopoverContent align="end" sideOffset={6} className="w-44 p-1">
-          {SOURCES.map(value => <button key={value} onClick={() => { onFilters({ ...filters, source: value }); setSourceOpen(false) }} className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13px] hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-            <span className="min-w-0 flex-1 truncate">{sourceLabel(value, t)}</span>
-            {filters.source === value && <Check size={13} className="shrink-0 text-primary" aria-hidden="true" />}
-          </button>)}
+        <PopoverContent align="end" sideOffset={6} className="w-44 space-y-2 p-1">
+          {SOURCE_GROUPS.map(group => <div key={group[0]}>
+            {group.map(value => <button key={value} onClick={() => { onFilters({ ...filters, source: value }); setSourceOpen(false) }} className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13px] hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+              <span className="min-w-0 flex-1 truncate">{sourceLabel(value, t)}</span>
+              {filters.source === value && <Check size={13} className="shrink-0 text-primary" aria-hidden="true" />}
+            </button>)}
+          </div>)}
         </PopoverContent>
       </Popover>
     </div>
@@ -118,21 +125,24 @@ export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters,
     </div>}
 
     {searching ? <div className="mt-6">{rows(groups.sorted)}</div> : <div className="mt-6 space-y-7">
+      {groups.yours.length > 0 && <section>
+        <GroupToggle title={t('Awaiting your confirmation')} count={groups.yours.length} open={open.yours} onToggle={() => toggle('yours')} />
+        {open.yours && rows(groups.yours)}
+      </section>}
       {groups.moving.length > 0 && <section>
         <GroupToggle title={t('In progress')} count={groups.moving.length} open={open.moving} onToggle={() => toggle('moving')} />
         {open.moving && rows(groups.moving)}
       </section>}
-      {groups.stopped.length > 0 && <section>
-        <GroupToggle title={t('Stopped partway')} count={groups.stopped.length} open={open.stopped} onToggle={() => toggle('stopped')} />
-        {open.stopped && rows(groups.stopped)}
+      {groups.others.length > 0 && <section>
+        <GroupToggle title={t('Waiting on others')} count={groups.others.length} open={open.others} onToggle={() => toggle('others')} />
+        {open.others && rows(groups.others)}
       </section>}
-      {groups.done.length > 0 && <section>
-        <GroupToggle title={t('Completed')} count={groups.done.length} open={open.done} onToggle={() => toggle('done')} />
-        {open.done && rows(shownDone)}
-        {open.done && groups.done.length > shownDone.length && <button onClick={() => setAllDone(true)} className="mt-1 h-8 rounded px-0.5 text-[13px] text-subtle-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-          {t('View {{count}} earlier', { count: groups.done.length - shownDone.length })}
-        </button>}
-      </section>}
+      {/* Quiet work with nothing left open shares this group, so its heading claims no more than that nothing runs; each row says why it stopped. */}
+      {groups.stopped.length > 0 && <SteppedGroup teamId={detail.team.id} title={t('Not in progress')} items={groups.stopped} open={open.stopped} onToggle={() => toggle('stopped')} rows={rows}
+        moreLabel={count => t('View {{count}} more', { count })} />}
+      {/* A whole column of finished work stays quieter than the live groups above it. */}
+      {groups.done.length > 0 && <SteppedGroup teamId={detail.team.id} title={t('Completed')} items={groups.done} open={open.done} onToggle={() => toggle('done')} rows={rows}
+        moreLabel={count => t('View {{count}} earlier', { count })} className="[&_[data-done]]:opacity-[.55]" />}
       {groups.chats.length > 0 && <section>
         <GroupToggle title={t('Q&A')} count={groups.chats.length} open={open.chats} onToggle={() => toggle('chats')}>
           {groups.chatRunning && !open.chats && <StateIcon state="running" className="self-center" />}
@@ -143,34 +153,31 @@ export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters,
   </div>
 }
 
-/** What is waiting on the user across the team: questions answered in place, then tasks that stopped on something. */
-function NeedsYou({ detail, tasks, pending, attention, taskSpaceId, onOpenTask }: {
-  detail: TeamDetail; tasks: readonly TeamConversation[]; pending: TeamPendingEscalation[]; attention: TeamConversation[]
-  taskSpaceId: string | null; onOpenTask: (epochId: string) => void
+/** A long group shows its first rows and opens the rest a step at a time. */
+function SteppedGroup({ teamId, title, items, open, onToggle, rows, moreLabel, className }: {
+  teamId: string
+  title: string
+  items: TeamConversation[]
+  open: boolean
+  onToggle: () => void
+  rows: (items: TeamConversation[]) => ReactNode
+  moreLabel: (count: number) => string
+  className?: string
 }) {
   const { t } = useTranslation()
-  const { decisions, answeringId, setAnswering } = useHeldDecisions(pending)
-  if (!decisions.length && !attention.length) return null
-  return <section className="mb-7">
-    <SectionHeading title={t('Needs you')} count={pending.length + attention.length} />
-    <div className="space-y-2.5">
-      {decisions.map(item => <DecisionCard key={item.entryId} detail={detail} decision={item} task={tasks.find(task => task.epochId === item.epochId)} taskSpaceId={taskSpaceId}
-        open={answeringId === item.entryId} onOpen={open => setAnswering(open ? item : null)} onOpenTask={onOpenTask} />)}
-      {attention.map(task => {
-        const state = taskState(detail, task)
-        const failed = state.key === 'error'
-        const subtasks = task.subtasks ? task.subtasks.done + task.subtasks.open : 0
-        const meta = [taskTitle(detail, task, t), subtasks ? t('{{done}}/{{total}} subtasks', { done: task.subtasks!.done, total: subtasks }) : null].filter(Boolean).join(' · ')
-        return <div key={task.epochId} className={`flex items-start gap-2 rounded-[15px] border ${toneSurface(failed ? 'error' : 'attention')} px-3.5 py-3`}>
-          <StateIcon state={state.key} className="mt-[3px]" />
-          <div className="min-w-0 flex-1">
-            <p className="line-clamp-3 break-words text-[14.5px] leading-6">{factText(state.key, state.fact, t)}</p>
-            <p className="mt-0.5 truncate text-[12.5px] text-faint-foreground">{meta}</p>
-            <button onClick={() => onOpenTask(task.epochId)} className={`mt-3 ${PILL_ON_TINT}`}>{t('View task')}</button>
-          </div>
-        </div>
-      })}
-    </div>
+  const [shown, setShown] = useState({ teamId, limit: PREVIEW })
+  const limit = shown.teamId === teamId ? shown.limit : PREVIEW
+  const left = Math.max(0, items.length - limit)
+  const ref = useRef<HTMLElement>(null)
+  return <section ref={ref} className={className}>
+    <GroupToggle title={title} count={items.length} open={open} onToggle={onToggle} />
+    {open && rows(items.slice(0, limit))}
+    {open && left > 0 && <MoreToggle onClick={() => setShown({ teamId, limit: limit + STEP })}>{moreLabel(Math.min(STEP, left))}</MoreToggle>}
+    {open && left === 0 && items.length > PREVIEW && <MoreToggle up onClick={() => {
+      setShown({ teamId, limit: PREVIEW })
+      // Collapsing removes rows above the viewport; bring the group back instead of leaving the user far below it.
+      requestAnimationFrame(() => ref.current?.scrollIntoView({ block: 'nearest' }))
+    }}>{t('Show less')}</MoreToggle>}
   </section>
 }
 
@@ -178,7 +185,7 @@ function GroupToggle({ title, count, open, onToggle, children }: { title: string
   return <button onClick={onToggle} aria-expanded={open} className="mb-1.5 ml-0.5 flex items-baseline gap-1.5 text-[13px] font-medium text-foreground/85 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
     {title}<span className="tabular-nums text-faint-foreground">{count}</span>
     {children}
-    <ChevronDown size={13} aria-hidden="true" className={`self-center text-faint-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
+    <ChevronDown size={13} aria-hidden="true" className={`self-center text-faint-foreground transition-transform ${open ? '' : '-rotate-90'}`} />
   </button>
 }
 

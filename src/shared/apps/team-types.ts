@@ -28,7 +28,8 @@ export type MemberSourcing = 'manual' | 'ai'
 
 export type EscalationRouting = 'user' | 'lead'
 export type TeamStatus = 'idle' | 'running' | 'waiting_user' | 'error'
-export type EpochEndReason = 'completed' | 'stopped' | 'timeout' | 'error' | 'cleared'
+/** 'ended': a person closed the task before it was done; final like 'completed', and only a person reopens it. */
+export type EpochEndReason = 'completed' | 'ended' | 'stopped' | 'timeout' | 'error' | 'cleared'
 
 /**
  * Execution mode of an epoch:
@@ -259,6 +260,8 @@ export interface TeamWorkItem {
   title: string | null
   status: 'open' | 'completed'
   createdBy: string | null
+  /** Who closed it by hand; cleared whenever it opens again. */
+  endedBy?: string | null
   createdAt: number
   updatedAt: number
 }
@@ -392,9 +395,16 @@ export type TeamConversationKind = 'native' | 'im' | 'member' | 'run' | 'collab'
 export interface TeamConversation {
   workItemId?: string
   completed?: boolean
-  /** When the work was ended as done; absent while open and again once it resumes. */
+  /** When the work was ended as done or by a person; absent while open and again once it resumes. */
   finishedAt?: number
+  /** A person ended it before it was done. */
+  endedManually?: boolean
+  /** Display name of whoever ended it by hand, when it was someone else and can be told. */
+  endedBy?: string
+  endedByMe?: boolean
   createdByMe?: boolean
+  /** Display name of the person who started the task, when it is someone else and can be told. */
+  startedBy?: string
   involvedMe?: boolean
   triggerType?: TeamRunTriggerType
   summary?: string | null
@@ -430,6 +440,20 @@ export interface TeamConversation {
   waitingMemberAppIds?: string[]
   /** Members who took part in this task in roster order; only on a team's own task list. */
   participantAppIds?: string[]
+  /** The newest failure still holding up unfinished work, read from the task's whole record. */
+  failure?: TeamMemberFailure
+}
+
+/** A member stopped in one task: a message that never reached it, or its own failed turn. */
+export interface TeamMemberFailure {
+  appId: string
+  /** The record that tells it. */
+  activityId: string
+  /** Whose message never arrived; absent when the member's own turn failed. */
+  senderAppId?: string | null
+  /** Failed own turn: why, as the engine reported it. */
+  reason?: string
+  timedOut?: boolean
 }
 
 /** One busy assignment of a member: which thing it is serving, with a label. */
@@ -806,10 +830,13 @@ export interface TeamLocalMember {
   isSystemCoordinator?: boolean
 }
 
+export type TeamRosterFace = Pick<TeamLocalMember, 'appId' | 'memberName' | 'isLead'>
+
 export interface TeamListItem {
   id: string
   name: string
   status: TeamStatus
+  /** Includes the lead. */
   memberCount: number
   hasWaitingUser: boolean
   /** How many decisions are waiting on the user (drives the "N waiting" badge). */
@@ -826,6 +853,8 @@ export interface TeamListItem {
    * `memberCount`.
    */
   localMembers: TeamLocalMember[]
+  /** Every member wherever it runs, lead first — for faces, not for picking targets. */
+  roster: TeamRosterFace[]
   /**
    * Set when this office is hosted by another node — this reader joined it.
    * `hostNodeId != null` is the established "did I join this, or do I own
@@ -945,6 +974,18 @@ export interface TeamOutputPage {
   outputs: TeamOutput[]
   total: number
 }
+
+export interface TeamOutputFilter {
+  /** Only files last declared at or after this time (ms). */
+  since?: number
+  /** Matches file names and producer names. */
+  text?: string
+  /** Tasks the caller matched to `text` by title; their files match as well. */
+  textEpochIds?: string[]
+}
+
+/** Keeps a title-matched task list small enough for a query string. */
+export const TEAM_OUTPUT_TEXT_EPOCHS_MAX = 200
 
 /** Files produced by one member during a run, grouped for the team artifacts view. */
 export interface TeamArtifactGroup {
@@ -1317,8 +1358,6 @@ export interface TeamNativeTaskPage {
   items: (TeamConversation & {
     teamName: string
     spaceId: string
-    /** Display name of the person who started the task, when it can be told. */
-    startedBy?: string
   })[]
   nextCursor: string | null
 }

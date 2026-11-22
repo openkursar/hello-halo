@@ -7,7 +7,7 @@ import { blinkDelay, orderCrew, partnersOf, pastCrew, recentTalk, rowGroups, tal
 import { MemberFace } from './member-ui'
 import type { MemberStateKey } from './status'
 
-export const CREW_FACE: Record<CrewState, MemberStateKey> = { working: 'working', waiting: 'waiting_user', failed: 'error', offline: 'offline', done: 'idle' }
+export const CREW_FACE: Record<CrewState, MemberStateKey> = { working: 'working', waiting: 'waiting_user', failed: 'error', offline: 'offline', done: 'idle', idle: 'idle' }
 
 /** `partners` are the names of whoever this member is talking with right now. */
 export function crewStateText(state: CrewState, partners: readonly string[], t: TFunction): string {
@@ -15,6 +15,7 @@ export function crewStateText(state: CrewState, partners: readonly string[], t: 
   if (state === 'failed') return t('Ran into a problem')
   if (state === 'offline') return t('Offline')
   if (state === 'done') return t('Did their part')
+  if (state === 'idle') return t('On standby')
   return partners.length ? t('Talking with {{names}}', { names: partners.join(', ') }) : t('Working')
 }
 
@@ -32,7 +33,7 @@ export function useRecentTalk(activities: readonly TeamActivity[] | undefined): 
   return recent
 }
 
-const STATE_TONE: Record<CrewState, string> = { working: 'text-primary', waiting: 'text-halo-warning', failed: 'text-destructive', offline: 'text-subtle-foreground', done: 'text-halo-success' }
+const STATE_TONE: Record<CrewState, string> = { working: 'text-primary', waiting: 'text-halo-warning', failed: 'text-destructive', offline: 'text-subtle-foreground', done: 'text-halo-success', idle: 'text-subtle-foreground' }
 
 const PAST_CAP = { finished: 4, live: 3 }
 const POP_GROUP = 'block [&+&]:mt-2.5 [&+&]:border-t [&+&]:border-border-soft [&+&]:pt-2'

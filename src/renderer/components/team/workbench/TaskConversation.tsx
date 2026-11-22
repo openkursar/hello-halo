@@ -13,7 +13,8 @@ import { DispatchLine, OpenersLine } from '../../chat/team-collab'
 import { inputsByReply } from '../../chat/transcript'
 import { TaskTimestamp } from './TaskTimestamp'
 import { taskTime } from './time'
-import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, undeliveredParties, type SharedTaskDecision } from './model'
+import { undeliveredParties } from '../../../../shared/apps/team-failures'
+import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, type SharedTaskDecision } from './model'
 import { UndeliveredNote } from './UndeliveredNote'
 
 export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, working = false, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation, taskCompleted = false, homepageConversation = false, readonly = false, authorName, liveReply, onOpenMember, revealActivity, onActivityRevealed, endingShownBelow }: {

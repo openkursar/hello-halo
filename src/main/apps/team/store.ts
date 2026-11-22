@@ -23,7 +23,7 @@ import { createCollaborationRequests, type CollaborationRequests } from './colla
 import { createCollaborationSourceBindings, type CollaborationSourceBindings } from './source-bindings'
 import { createTeamParticipants, type TeamParticipants } from './participants'
 import { getWorkMember, findWorkMember, listWorkMembers } from './work-members'
-import type { TeamWorkItem } from '../../../shared/apps/team-types'
+import type { TeamOutputFilter, TeamWorkItem } from '../../../shared/apps/team-types'
 import type {
   Team,
   TeamMember,
@@ -1444,6 +1444,18 @@ export class TeamStore implements ITeamStore {
       ORDER BY created_at ASC, rowid ASC`).all(teamId, JSON.stringify(epochIds)) as TeamActivityRow[]).map(rowToActivity)
   }
 
+  /** Whole records of the given epochs that hold any failure, without bodies; epochs without one are skipped. */
+  listActivityOfFailedEpochs(teamId: string, epochIds: string[]): TeamActivity[] {
+    if (!epochIds.length) return []
+    return (this.db.prepare(`SELECT id, team_id, epoch_id, kind, actor_app_id, target_app_id, subject, NULL AS body, ref_id, correlation_id, status, created_at
+      FROM team_activity
+      WHERE team_id = @teamId AND epoch_id IN (
+        SELECT DISTINCT epoch_id FROM team_activity
+        WHERE team_id = @teamId AND epoch_id IN (SELECT value FROM json_each(@epochIds)) AND status IN ('undelivered', 'error', 'timeout')
+      )
+      ORDER BY created_at ASC, rowid ASC`).all({ teamId, epochIds: JSON.stringify(epochIds) }) as TeamActivityRow[]).map(rowToActivity)
+  }
+
   listRecentActivityByEpoch(teamId: string, epochId: string, limit: number): TeamActivity[] {
     const rows = this.stmtListRecentActivityByEpoch.all(teamId, epochId, limit) as TeamActivityRow[]
     return rows.reverse().map(rowToActivity)
@@ -1527,12 +1539,6 @@ export class TeamStore implements ITeamStore {
       ORDER BY request.epoch_id, request.actor_app_id`).all(bindings) as { epoch_id: string; actor_app_id: string }[]
     const unansweredDecisionMembers = new Map<string, string[]>()
     for (const row of waiting) unansweredDecisionMembers.set(row.epoch_id, [...(unansweredDecisionMembers.get(row.epoch_id) ?? []), row.actor_app_id])
-    const subtasks = this.db.prepare(`SELECT epoch_id, SUM(status = 'done') AS done, SUM(status IN ('pending', 'in_progress', 'blocked')) AS open
-      FROM blackboard_tasks WHERE team_id = @teamId ${scope} GROUP BY epoch_id`).all(bindings) as { epoch_id: string; done: number; open: number }[]
-    const teamwork = this.db.prepare(`SELECT DISTINCT epoch_id FROM team_activity
-      WHERE team_id = @teamId ${scope} AND kind IN ('message', 'reply')
-        AND (actor_app_id NOT IN (SELECT app_id FROM team_members WHERE team_id = @teamId AND is_lead = 1)
-          OR target_app_id NOT IN (SELECT app_id FROM team_members WHERE team_id = @teamId AND is_lead = 1))`).all(bindings) as { epoch_id: string }[]
     const taking = detailed ? this.db.prepare(`SELECT DISTINCT epoch_id, app_id FROM (
       SELECT epoch_id, actor_app_id AS app_id FROM team_activity WHERE team_id = @teamId ${scope}
       UNION ALL SELECT epoch_id, target_app_id FROM team_activity WHERE team_id = @teamId ${scope} AND target_app_id IS NOT NULL
@@ -1546,13 +1552,27 @@ export class TeamStore implements ITeamStore {
       involved: new Set(involved.map(row => row.epoch_id)),
       outputCounts: new Map(counts.map(row => [row.epoch_id, row.count])),
       unansweredDecisionMembers,
-      subtasks: new Map(subtasks.map(row => [row.epoch_id, { done: row.done, open: row.open }])),
-      teamwork: new Set(teamwork.map(row => row.epoch_id)),
+      ...this.getSubtaskStats(teamId, epochIds),
       participants,
     }
   }
 
-  listOutputRefs(teamId: string, page: { offset: number; limit: number; producers?: string[] }): {
+  getSubtaskStats(teamId: string, epochIds?: string[]): { subtasks: Map<string, { done: number; open: number }>; teamwork: Set<string> } {
+    const scope = epochIds === undefined ? '' : ' AND epoch_id IN (SELECT value FROM json_each(@epochs))'
+    const bindings = { teamId, ...(epochIds === undefined ? {} : { epochs: JSON.stringify(epochIds) }) }
+    const subtasks = this.db.prepare(`SELECT epoch_id, SUM(status = 'done') AS done, SUM(status IN ('pending', 'in_progress', 'blocked')) AS open
+      FROM blackboard_tasks WHERE team_id = @teamId ${scope} GROUP BY epoch_id`).all(bindings) as { epoch_id: string; done: number; open: number }[]
+    const teamwork = this.db.prepare(`SELECT DISTINCT epoch_id FROM team_activity
+      WHERE team_id = @teamId ${scope} AND kind IN ('message', 'reply')
+        AND (actor_app_id NOT IN (SELECT app_id FROM team_members WHERE team_id = @teamId AND is_lead = 1)
+          OR target_app_id NOT IN (SELECT app_id FROM team_members WHERE team_id = @teamId AND is_lead = 1))`).all(bindings) as { epoch_id: string }[]
+    return {
+      subtasks: new Map(subtasks.map(row => [row.epoch_id, { done: row.done, open: row.open }])),
+      teamwork: new Set(teamwork.map(row => row.epoch_id)),
+    }
+  }
+
+  listOutputRefs(teamId: string, page: { offset: number; limit: number; producers?: string[] } & TeamOutputFilter): {
     rows: Array<{ epochId: string; appId: string; ref: string; at: number }>
     total: number
   } {
@@ -1564,10 +1584,25 @@ export class TeamStore implements ITeamStore {
       UNION ALL SELECT epoch_id, result_ref, assignee_app_id, updated_at FROM blackboard_tasks
         WHERE team_id = @teamId AND result_ref IS NOT NULL AND result_ref != '' AND assignee_app_id IS NOT NULL${only('assignee_app_id')}
     ) GROUP BY epoch_id, ref`
-    const bindings = { teamId, ...(page.producers ? { producers: JSON.stringify(page.producers) } : {}) }
-    const rows = this.db.prepare(`${declared} ORDER BY at DESC, epoch_id, ref LIMIT @limit OFFSET @offset`)
+    const conditions: string[] = []
+    if (page.since !== undefined) conditions.push('at >= @since')
+    if (page.text) {
+      // The file name is what follows the last separator of the ref.
+      const name = `substr(ref, length(rtrim(ref, replace(replace(replace(ref, '/', ''), '\\', ''), ':', ''))) + 1)`
+      const byTask = page.textEpochIds?.length ? ' OR epoch_id IN (SELECT value FROM json_each(@textEpochs))' : ''
+      conditions.push(`(${name} LIKE @text ESCAPE '\\' OR app_id IN (SELECT app_id FROM team_members WHERE team_id = @teamId AND member_name LIKE @text ESCAPE '\\')${byTask})`)
+    }
+    const matched = conditions.length ? `SELECT * FROM (${declared}) WHERE ${conditions.join(' AND ')}` : declared
+    const bindings = {
+      teamId,
+      ...(page.producers ? { producers: JSON.stringify(page.producers) } : {}),
+      ...(page.since !== undefined ? { since: page.since } : {}),
+      ...(page.text ? { text: `%${page.text.replace(/[\\%_]/g, '\\$&')}%` } : {}),
+      ...(page.text && page.textEpochIds?.length ? { textEpochs: JSON.stringify(page.textEpochIds) } : {}),
+    }
+    const rows = this.db.prepare(`${matched} ORDER BY at DESC, epoch_id, ref LIMIT @limit OFFSET @offset`)
       .all({ ...bindings, limit: page.limit, offset: page.offset }) as Array<{ epoch_id: string; ref: string; app_id: string; at: number }>
-    const { total } = this.db.prepare(`SELECT COUNT(*) AS total FROM (${declared})`).get(bindings) as { total: number }
+    const { total } = this.db.prepare(`SELECT COUNT(*) AS total FROM (${matched})`).get(bindings) as { total: number }
     return { rows: rows.map(row => ({ epochId: row.epoch_id, appId: row.app_id, ref: row.ref, at: row.at })), total }
   }
 
@@ -1617,7 +1652,7 @@ export class TeamStore implements ITeamStore {
     return { ...rowToEpoch(row), workItem: workItemFromRow(row) }
   }
 
-  updateWorkItem(epochId: string, patch: Partial<Pick<TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId'>>): void {
+  updateWorkItem(epochId: string, patch: Partial<Pick<TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId' | 'endedBy'>>): void {
     updateWorkItem(this.db, epochId, patch)
   }
 
@@ -1716,7 +1751,8 @@ export class TeamStore implements ITeamStore {
     this.db
       .prepare(
         `UPDATE team_epochs
-           SET ended_at = @ended_at, end_reason = @end_reason, summary = @summary,
+           SET started_at = MIN(started_at, COALESCE(@started_at, started_at)),
+               ended_at = @ended_at, end_reason = @end_reason, summary = @summary,
                title = @title, outcome = @outcome, chat_key = @chat_key,
                lifecycle = @lifecycle,
                last_activity_at = MAX(COALESCE(last_activity_at, 0), @last_activity_at)
@@ -1724,6 +1760,9 @@ export class TeamStore implements ITeamStore {
       )
       .run({
         id: epoch.id,
+        // A joiner shadows the host's open epoch with its arrival time, and either side may send its row on; the earliest start is the real one.
+        // Under MIN a bad start from a peer would stick for good, so only a real time counts.
+        started_at: Number.isFinite(epoch.startedAt) && epoch.startedAt > 0 ? epoch.startedAt : null,
         ended_at: epoch.endedAt,
         end_reason: epoch.endReason,
         summary: epoch.summary,
