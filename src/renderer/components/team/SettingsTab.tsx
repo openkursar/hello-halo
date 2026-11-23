@@ -632,8 +632,8 @@ function DangerSection({ detail }: { detail: TeamDetail }) {
             : t('Dissolve {{name}}?', { name: detail.team.name })}
           message={doomed.length > 0
             ? (leadDeleted
-              ? t('{{names}} were created by AI for this team. Dissolving deletes them and their own data unless another team also uses them. The same applies to the team’s own lead. Every space is kept. This cannot be undone.', { names })
-              : t('{{names}} were created by AI for this team. Dissolving deletes them and their own data unless another team also uses them. Every space is kept. This cannot be undone.', { names }))
+              ? t('{{names}} were created by AI for this team. Dissolving deletes them and their own data unless another team also uses them. The same applies to the team’s own lead. Every space is kept. This cannot be undone.', { names, count: doomed.length })
+              : t('{{names}} were created by AI for this team. Dissolving deletes them and their own data unless another team also uses them. Every space is kept. This cannot be undone.', { names, count: doomed.length }))
             : (leadDeleted
               ? t('The team and its whole run history are deleted, along with the team\u2019s own lead, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.')
               : t('The team and its whole run history are deleted, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.'))}
