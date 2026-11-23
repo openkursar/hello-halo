@@ -9,7 +9,7 @@ import {
 } from '../fixtures/acceptance-knowledge'
 import { readAcceptanceConversation, sendAcceptanceMessage, waitForAcceptanceIdle } from '../fixtures/acceptance-app'
 import { contentText } from '../fixtures/acceptance-model'
-import { openManagedPerson, openManagedPersonSettings, seedManagedPerson } from '../fixtures/acceptance-management'
+import { openManagedPersonSettings, openNewPersonConversation, seedManagedPerson } from '../fixtures/acceptance-management'
 import { navigateToChat, waitForHomePage } from '../fixtures/helpers'
 
 test.setTimeout(180000)
@@ -64,9 +64,7 @@ async function bindPerson(page: Page, kb: KnowledgeBaseEntry, person: InstalledA
 
 async function freshConversation(page: Page, person?: InstalledApp) {
   if (person) {
-    await openManagedPerson(page, person.spec.name)
-    await page.getByTitle('Opens the conversation with this digital human in the workspace chat', { exact: true }).click()
-    await expect(page.getByTitle(`Chatting with ${person.spec.name}`, { exact: true })).toBeVisible()
+    await openNewPersonConversation(page, { id: person.id, name: person.spec.name })
   } else {
     await navigateToChat(page)
     const create = page.getByRole('button', { name: 'New', exact: true })

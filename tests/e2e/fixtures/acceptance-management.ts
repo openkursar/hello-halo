@@ -6,7 +6,7 @@ import type { HaloAPI } from '../../../src/preload'
 import type { InstalledApp } from '../../../src/shared/apps/app-types'
 import { cleanupTestConfigDir, createTestConfigDir, getAppEntryPath, launchElectronApp } from './electron'
 import { seedDigitalHumanChat, type SeededDigitalHumanChat } from './seed-digital-human-chat'
-import { navigateToApps, navigateToChat, navigateToWorkspaces, waitForHomePage } from './helpers'
+import { navigateToApps, navigateToChat, navigateToWorkspaces, startNewDigitalHumanConversation, waitForHomePage } from './helpers'
 import { closeManagementApp, trackManagementApp, type OwnedManagementApp } from './acceptance-management-process'
 
 export interface ManagedSpace {
@@ -262,6 +262,29 @@ export async function openManagedPerson(page: Page, name: string) {
   if (!(await directory.isVisible())) await page.getByRole('button', { name: 'All digital humans', exact: true }).click()
   await directory.fill(name)
   await page.getByRole('button', { name, exact: true }).click()
+}
+
+/** The person's own Halo chats, as the conversation lists show them. */
+export async function listManagedPersonChats(page: Page, appId: string): Promise<Array<{ source: string; chatId: string; title?: string; customName?: string; lastMessage?: string }>> {
+  const result = await page.evaluate(id => (window as unknown as { halo: HaloAPI }).halo.imSessionsList(id), appId)
+  expect(result.success).toBe(true)
+  return (result.data as Array<{ appId: string; source: string; chatId: string; messageCount?: number; lastMessage?: string }>)
+    .filter(record => record.appId === appId && (record.source === 'local' || (record.source === 'native' && ((record.messageCount ?? 0) > 0 || !!record.lastMessage))))
+}
+
+/**
+ * A new, empty conversation with a person through its own page, as a user
+ * would: Chat continues the person's latest conversation, so a person that
+ * already has one starts another from the sidebar.
+ */
+export async function openNewPersonConversation(page: Page, person: { id: string; name: string }) {
+  const before = new Set((await listManagedPersonChats(page, person.id)).map(record => record.chatId))
+  await openManagedPerson(page, person.name)
+  await page.getByTitle('Opens the conversation with this digital human in the workspace chat', { exact: true }).click()
+  await expect(page.getByTitle(`Chatting with ${person.name}`, { exact: true })).toBeVisible()
+  if (before.size > 0) await startNewDigitalHumanConversation(page, person.name)
+  await expect.poll(async () => (await listManagedPersonChats(page, person.id)).filter(record => !before.has(record.chatId)).length).toBe(1)
+  await expect(page.locator('.message-user')).toHaveCount(0)
 }
 
 export async function openManagedPersonSettings(page: Page, name: string) {

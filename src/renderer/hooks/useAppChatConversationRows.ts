@@ -12,12 +12,13 @@
  *
  * One row per conversation that actually exists — the app's legacy default
  * session once it has been used, plus every local session (each created
- * explicitly by picking the digital human in the input or the resource rail).
+ * explicitly: a new conversation with the digital human, picking it in the
+ * input, or its Chat while it had no conversation).
  * A digital human with no conversations contributes no rows.
  */
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
-import { acquireAppChatSessions, getAppChatSessions, subscribeAppChatSessions } from '../stores/app-chat-sessions'
+import { acquireAppChatSessions, getAppChatSessions, isHaloChatRecord, subscribeAppChatSessions } from '../stores/app-chat-sessions'
 import { useAppChatPinsStore } from '../stores/app-chat-pins.store'
 import { useSpaceDigitalHumans } from './useSpaceDigitalHumans'
 import { getCurrentLanguage } from '../i18n'
@@ -36,8 +37,9 @@ export interface AppChatConversationRow {
   digitalHumanName: string
   /** True for the app's single native default session. */
   isDefault: boolean
-  /** Raw registry fields for non-default rows — used to derive a per-row label. */
+  /** Raw registry fields used to derive a per-row label (`conversation-row-format`). */
   customName?: string
+  title?: string
   displayName: string
   lastMessage?: string
   /** Epoch ms; falls back to the app's last run / install time when never chatted. */
@@ -85,13 +87,15 @@ export function useAppChatConversationRows(spaceId: string | null, { enabled = t
       // Starting one is the input selector's job, not this list's.
       const defaultRecord = sessions.find(s => s.appId === app.id && s.source === 'native')
       const defaultConversationId = getAppChatConversationId(app.id)
-      if (defaultRecord && ((defaultRecord.messageCount ?? 0) > 0 || defaultRecord.lastMessage)) {
+      if (defaultRecord && isHaloChatRecord(defaultRecord)) {
         rows.push({
           id: defaultConversationId,
           appId: app.id,
           appSpaceId: app.spaceId ?? null,
           digitalHumanName,
           isDefault: true,
+          customName: defaultRecord.customName,
+          title: defaultRecord.title,
           displayName: digitalHumanName,
           lastMessage: defaultRecord.lastMessage,
           updatedAt: defaultRecord.lastActiveAt ?? fallbackUpdatedAt,
@@ -112,6 +116,7 @@ export function useAppChatConversationRows(spaceId: string | null, { enabled = t
           digitalHumanName,
           isDefault: false,
           customName: session.customName,
+          title: session.title,
           displayName: session.displayName,
           lastMessage: session.lastMessage,
           updatedAt: session.lastActiveAt,

@@ -973,6 +973,22 @@ describe('the conversation list names a message of cards alone', () => {
       sessionRegistry.current = null
     }
   })
+
+  it('and offers that name as the chat\'s title, by the space conversation rule', async () => {
+    const register = vi.fn()
+    sessionRegistry.current = { register, getPushableSessions: () => [] }
+    keptMemberContext()
+    try {
+      await sendAppChatMessage({
+        appId: app.id,
+        spaceId: 'space-1',
+        message: '  Read   https://example.org/workspace/notes  ',
+      }).catch(() => {})
+      expect(register.mock.calls[0]?.[5]).toMatchObject({ title: 'Read example.org › notes' })
+    } finally {
+      sessionRegistry.current = null
+    }
+  })
 })
 
 

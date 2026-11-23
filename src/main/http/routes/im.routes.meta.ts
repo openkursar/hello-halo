@@ -127,7 +127,7 @@ export const MODULE: RouteModuleMeta = {
       group: ['channels', 'digital-human'],
       summary: 'List every chat thread a digital human has, its own and IM ones',
       returns:
-        '{success:true,data:[{appId,channel,source:"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,proactive,instanceId,pushLinks?:[{appId,autoSync}]}]}',
+        '{success:true,data:[{appId,channel,source:"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,title?,proactive,instanceId,pushLinks?:[{appId,autoSync}]}]}',
       notes: [
         'Optional ?appId= narrows it to one digital human. This is the only listing of its threads — there is no sessions/list beside sessions/create.',
         'source says what a thread is: "local" = a named thread the user created in Halo, "im" = a real chat with a person on an IM platform, "http" = created through this API.',

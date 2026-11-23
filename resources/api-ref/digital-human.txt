@@ -394,7 +394,7 @@ POST   /api/apps/tags/rename                                       Rename or rem
 
 GET    /api/im-sessions                                            List every chat thread a digital human has, its own and IM ones
      curl -s "$HALO_API_URL/api/im-sessions" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
-     # out: {success:true,data:[{appId,channel,source:"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,proactive,instanceId,pushLinks?:[{appId,autoSync}]}]}
+     # out: {success:true,data:[{appId,channel,source:"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,title?,proactive,instanceId,pushLinks?:[{appId,autoSync}]}]}
      # note: Optional ?appId= narrows it to one digital human. This is the only listing of its threads — there is no sessions/list beside sessions/create.
      # note: source says what a thread is: "local" = a named thread the user created in Halo, "im" = a real chat with a person on an IM platform, "http" = created through this API.
      # note: Reading or writing one thread needs a conversationId, which is not a field here — build it from four fields of the record: app-chat:<appId>:<channel>:<chatType>:<chatId>.

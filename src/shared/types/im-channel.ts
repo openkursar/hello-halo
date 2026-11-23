@@ -745,6 +745,13 @@ export interface ImSessionRecord {
    * Unlike displayName, this IS overwritten as fresher lookups succeed.
    */
   resolvedName?: string
+  /**
+   * The owner's own Halo chats (`'native'`/`'local'` sources) only: the title
+   * the conversation takes once from its first user message, by the rule a
+   * space conversation uses (`shared/conversation-title`). Later messages
+   * change only {@link lastMessage}; `customName` still comes first.
+   */
+  title?: string
   /** Most recent message sender name */
   lastSender?: string
   /** Most recent message preview (truncated to 50 chars) */

@@ -11,6 +11,10 @@ paths:
   - src/renderer/components/chat/ConversationList.tsx
   - src/renderer/stores/conversation-list-prefs.store.ts
   - src/renderer/stores/chat.store.ts
+  - src/renderer/stores/app-chat-sessions.ts
+  - src/renderer/hooks/useAppChatConversationRows.ts
+  - src/renderer/components/chat/conversation-row-format.ts
+  - src/renderer/utils/conversation-navigation.ts
 dependsOn:
   - workspaces
 scope:

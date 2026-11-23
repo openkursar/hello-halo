@@ -8,7 +8,7 @@ import type { MemorySettings } from '../../../src/shared/types/memory'
 import type { Thought } from '../../../src/shared/types/transcript'
 import { expect, readAcceptanceConversation, readAcceptanceErrors, waitForAcceptanceIdle } from './acceptance-app'
 import {
-  listManagedConversations, openManagedPerson, openManagedPersonSettings, openWorkspaceMenu, readManagedPerson,
+  listManagedConversations, openManagedPersonSettings, openNewPersonConversation, openWorkspaceMenu, readManagedPerson,
   seedManagedSpace, workspaceCard, type ManagedSpace,
 } from './acceptance-management'
 import { navigateToChat, navigateToWorkspaces } from './helpers'
@@ -150,9 +150,7 @@ export async function openFreshMemoryConversation(page: Page, world: MemoryWorld
   // Initialize the ordinary workspace through its UI before testing memory in a person's new chat.
   await expect.poll(async () => (await listManagedConversations(page, world.space.id)).length).toBeGreaterThan(0)
   if (person) {
-    await openManagedPerson(page, person.spec.name)
-    await page.getByTitle('Opens the conversation with this digital human in the workspace chat', { exact: true }).click()
-    await expect(page.getByTitle(`Chatting with ${person.spec.name}`, { exact: true })).toBeVisible()
+    await openNewPersonConversation(page, { id: person.id, name: person.spec.name })
   } else {
     await page.getByRole('button', { name: 'New', exact: true }).click()
   }

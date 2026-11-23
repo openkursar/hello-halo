@@ -157,12 +157,13 @@ export const CHAT_TITLE_PREVIEW_CHARS = 50
  * `untitled` is the caller's (localized) stand-in for a chat with no name and no message.
  */
 export function digitalHumanChatTitle(
-  chat: { name: string; isDefault: boolean; customName?: string; displayName?: string; lastMessage?: string },
+  chat: { name: string; isDefault: boolean; customName?: string; title?: string; displayName?: string; lastMessage?: string },
   untitled: string
 ): string {
   if (chat.isDefault) return chat.name
   const label =
     chat.customName ||
+    chat.title ||
     chat.displayName?.trim() ||
     (chat.lastMessage ? chat.lastMessage.slice(0, CHAT_TITLE_PREVIEW_CHARS) : '') ||
     untitled

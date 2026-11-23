@@ -856,6 +856,13 @@ default; extra sessions are keyed `app-chat:{appId}:local:direct:{uuid}`.
   (`getAllSessions` / `setCustomName`); only create / fork / delete need
   dedicated lifecycle (`createNativeChatSession` / `forkNativeChatSession` /
   `deleteNativeChatSession` in `app-chat.ts`).
+- A default or local session is titled once, by its first user message under
+  the space-conversation rule (`shared/conversation-title`); later messages
+  change only `lastMessage`, `customName` still wins, and clearing the chat
+  drops the title. A record from before titles were kept takes the preview it
+  was listed under on its next message. A digital human's "Chat" in the
+  renderer reopens the most recently active of these, read from the records the
+  conversation lists already hold; only "new conversation" always creates one.
 
 **Session fork ("continue in client")**: forking an IM/other session into a
 local one copies the source JSONL transcript (immediate history) and records

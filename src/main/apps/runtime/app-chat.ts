@@ -63,6 +63,7 @@ import { closeSessionAndWait, captureToolsetExecutionOptions, openAgentExecution
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
+import { titleFromFirstMessage } from '../../../shared/conversation-title'
 import { ENVIRONMENT_NOTICE_TEXT } from '../../../shared/transcript'
 import { prepareWorkspaceNotice } from './workspace-notice'
 import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
@@ -490,7 +491,7 @@ async function buildSessionMemoryPreamble(
 function registerExternalChatSession(
   conversationId: string,
   appId: string,
-  opts?: { displayName?: string; lastSender?: string; lastMessage?: string }
+  opts?: { displayName?: string; lastSender?: string; lastMessage?: string; title?: string }
 ): void {
   const target = resolveSessionRegistryTarget(conversationId, appId)
   if (!target) return
@@ -503,6 +504,7 @@ function registerExternalChatSession(
     displayName: opts?.displayName,
     lastSender: opts?.lastSender,
     lastMessage: opts?.lastMessage,
+    title: opts?.title,
   })
 
   emitSessionUpdated(appId, target, { lastMessage: opts?.lastMessage, lastSender: opts?.lastSender })
@@ -773,10 +775,12 @@ async function runAppChatTurn(
   // Keeps the conversation list's summary of this session current (IM sessions
   // are kept by dispatch-inbound). A message of cards alone is named by the
   // same rule as in a space conversation; one that names nothing keeps the last.
+  // The title is kept only by a chat that has none yet.
   registerExternalChatSession(conversationId, app.id, {
     displayName: senderIdentity?.name,
     lastSender: senderIdentity?.name,
     lastMessage: request.recorded?.content ?? (messageSummaryText(message, request.references) || undefined),
+    title: titleFromFirstMessage(request.recorded?.content ?? message, request.references) ?? undefined,
   })
 
   const memory = getAppMemoryService()

@@ -20,7 +20,7 @@
 
 import { readFileSync, renameSync } from 'fs'
 import { randomUUID } from 'crypto'
-import type { ImPushLink, ImSessionRecord } from '../../../shared/types/im-channel'
+import type { ImPushLink, ImSessionRecord, SessionSource } from '../../../shared/types/im-channel'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
 import { buildTeamSessionKey } from '../../../shared/apps/im-keys'
 import { truncateUtf16Safe } from './text-truncate'
@@ -60,6 +60,11 @@ const HTTP_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
  * harmless. Structural changes persist promptly via the microtask path instead.
  */
 const SOFT_PERSIST_THROTTLE_MS = 5000
+
+/** Only the owner's own Halo chats are titled; the others go by who is on the other side. */
+function keepsTitle(source: SessionSource): boolean {
+  return source === 'native' || source === 'local'
+}
 
 /** The push link `appId` holds on another digital human's IM session, if any. */
 function pushLinkOf(session: ImSessionRecord, appId: string): ImPushLink | undefined {
@@ -116,6 +121,9 @@ export class ImSessionRegistry {
    * - New session: creates with proactive=false, sets displayName once
    * - Existing session: updates lastActiveAt, lastSender, lastMessage only
    *   (never overwrites displayName or customName)
+   *
+   * `title` is the message's title as a first message; an owner's Halo chat
+   * keeps the first one it is given (see {@link ImSessionRecord.title}).
    */
   register(
     appId: string,
@@ -127,6 +135,7 @@ export class ImSessionRegistry {
       displayName?: string
       lastSender?: string
       lastMessage?: string
+      title?: string
       teamContext?: ImSessionRecord['teamContext']
       contactId?: string
     }
@@ -142,6 +151,16 @@ export class ImSessionRegistry {
         this.sessionRevisions.delete(existing)
         if (existing.contextId) existing.contextId = randomUUID()
       }
+      let titled = false
+      if (keepsTitle(existing.source) && !existing.title) {
+        // A chat that was listed under its latest message before titles were
+        // kept stays under the one it shows now.
+        const title = (existing.messageCount ?? 0) > 0 && existing.lastMessage ? existing.lastMessage : opts?.title
+        if (title) {
+          existing.title = title
+          titled = true
+        }
+      }
       // displayName is intentionally NOT updated — stable after first registration
       existing.lastActiveAt = Date.now()
       existing.instanceId = instanceId // Always update to latest instance
@@ -150,7 +169,7 @@ export class ImSessionRegistry {
       if (opts?.lastSender !== undefined) existing.lastSender = opts.lastSender
       if (opts?.lastMessage !== undefined) existing.lastMessage = truncateUtf16Safe(opts.lastMessage, 50)
       if (contactChanged) existing.contactId = opts!.contactId
-      this.requestPersist(instanceChanged || archiveChanged || contactChanged)
+      this.requestPersist(instanceChanged || archiveChanged || contactChanged || titled)
     } else {
       const source = classifySessionSource(channel)
       this.sessions.set(key, {
@@ -162,6 +181,7 @@ export class ImSessionRegistry {
         chatId,
         chatType,
         ...(opts?.contactId ? { contactId: opts.contactId } : {}),
+        ...(opts?.title && keepsTitle(source) ? { title: opts.title } : {}),
         displayName: opts?.displayName || chatId,
         proactive: false,
         lastActiveAt: Date.now(),
@@ -277,8 +297,9 @@ export class ImSessionRegistry {
    * wiped (see app-chat.ts's clearSessionByConversationId, shared by
    * clearAppChat/clearImSession/deleteNativeChatSession's own removal path).
    * Identity fields (displayName/customName/proactive/forkOrigin/...) are left
-   * untouched — only lastMessage/messageCount are zeroed so a conversation-list
-   * preview matches the now-empty transcript. No-op for unknown sessions.
+   * untouched — only lastMessage/messageCount and the title taken from the
+   * first message are cleared, so a conversation-list entry matches the
+   * now-empty transcript. No-op for unknown sessions.
    */
   resetActivity(appId: string, channel: string, chatId: string): void {
     const session = this.sessions.get(this.buildKey(appId, channel, chatId))
@@ -287,6 +308,7 @@ export class ImSessionRegistry {
     if (session.contextId) session.contextId = randomUUID()
     session.lastMessage = undefined
     session.messageCount = 0
+    delete session.title
     this.requestPersist(true)
   }
 

@@ -15,6 +15,8 @@ references:
   - tests/e2e/specs/acceptance-conversations.spec.ts
   - tests/e2e/specs/acceptance-conversation-title.spec.ts
   - tests/e2e/specs/acceptance-person-chat-entry.spec.ts
+  - src/renderer/utils/conversation-navigation.ts
+  - src/main/apps/runtime/im-session-registry.ts
 promises:
   identity:
     en: A new conversation has independent history and a blank composer.
@@ -22,6 +24,9 @@ promises:
   organize:
     en: The conversation list and header reflect the current saved name; names and pinned state survive reopening.
     zh: 对话列表和页眉反映当前保存的名称；名称与置顶状态在重新打开后保留。
+  continue:
+    en: Chat with a person continues my latest conversation with them; a new one starts only when there is none or when I ask for one.
+    zh: 与数字人「聊天」会继续我和它最近的对话；只有没有对话或我主动新建时才开始新对话。
   delete:
     en: Removing a selected conversation affects only its history; clearing a digital-human conversation requires its explicit confirmation.
     zh: 移除选中对话只影响其历史；清空数字人对话需要明确确认。
@@ -50,12 +55,12 @@ scenarios:
     expected:
       - en: The new composer is blank and the old history remains in the original.
         zh: 新输入框为空，旧记录仍属于原对话。
-  - id: conversations.organize.person-new
+  - id: conversations.organize.person-continue
     title:
-      en: Keep the requested person when opening consecutive new chats
-      zh: 连续新开聊天时保持选定数字人
+      en: Continue the latest chat with a person from Chat
+      zh: 从「聊天」继续与数字人最近的对话
     verifies:
-      - identity
+      - continue
     platforms: *a1
     profiles:
       - regression
@@ -68,16 +73,78 @@ scenarios:
       - en: A newly installed person belongs to an isolated workspace with no ordinary or person conversations.
         zh: 新安装数字人属于隔离空间，该空间尚无普通对话或个人聊天。
     steps:
-      - en: Open Chat from the person's details, send a message, return to their details and open Chat again.
-        zh: 从数字人详情打开聊天并发送消息，返回其详情后再次打开聊天。
+      - en: Open Chat from the person's details and send a message; return to their details, open Chat again and send another.
+        zh: 从数字人详情打开聊天并发送消息；返回详情再次打开聊天并再发一条。
+      - en: After a separate chat with the person has a newer message, open Chat from their details once more.
+        zh: 与该数字人的另一个对话有了更新的消息后，再次从详情打开聊天。
     expected:
-      - en: Both actions create a distinct empty chat addressed to the requested person; actual requests and saved replies retain those identities.
-        zh: 两次操作均创建面向所选数字人的独立空聊天，实际请求与保存回复保持对应身份。
+      - en: The first Chat creates one empty chat addressed to the person; opening Chat again shows that chat with its history, creates nothing, and the next message lands in it.
+        zh: 首次打开聊天创建一个面向该数字人的空聊天；再次打开显示该聊天及其历史，不新建任何对话，下一条消息进入该聊天。
+      - en: Once a newer chat exists, Chat opens that one; no ordinary workspace conversation receives these person-chat messages.
+        zh: 有了更新的对话后，「聊天」打开那一个；普通空间对话不会收到这些数字人聊天消息。
+    notes:
+      en: The empty-workspace entry is deliberately retained as its own regression. The latest chat is chosen among the person's own Halo chats only; IM and remote-call chats are excluded by the renderer's selection rule, which unit tests cover and this scenario does not exercise. Only the model endpoint is scripted, and no recipient or navigation handler is replaced.
+      zh: 空空间入口单独保留为回归。最近对话只在数字人自己的 Halo 聊天中选取；IM 与远程调用会话由渲染端选择规则排除，单元测试覆盖，本场景不涉及。仅脚本化模型端点，不替换接收者或导航处理器。
+  - id: conversations.organize.person-new
+    title:
+      en: Start a separate chat with a person on request
+      zh: 按需与数字人开始独立对话
+    verifies:
+      - identity
+      - continue
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: The person already has a chat with history in its isolated workspace.
+        zh: 该数字人在隔离空间中已有含历史的聊天。
+    steps:
+      - en: Use the person's new-conversation action in the conversation list and send a message.
+        zh: 在对话列表中使用该数字人的新建对话操作并发送消息。
+    expected:
+      - en: A distinct empty chat addressed to the same person opens; actual requests and saved replies retain that identity.
+        zh: 打开一个面向同一数字人的独立空聊天，实际请求与保存回复保持该身份。
       - en: The earlier chat remains unchanged and no ordinary workspace conversation receives these person-chat messages.
         zh: 先前聊天保持不变，普通空间对话不会收到这些数字人聊天消息。
+  - id: conversations.organize.person-title
+    title:
+      en: Keep a person chat's first-question title
+      zh: 数字人聊天保持首问标题
+    verifies:
+      - organize
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A newly installed person in an isolated workspace; its chats are not renamed at first.
+        zh: 隔离空间中新安装的数字人；其聊天起初未改名。
+    steps:
+      - en: Send a first question in a chat with the person, then a different message in the same chat.
+        zh: 在与该数字人的聊天中发送首问，再在同一聊天发送一条不同的消息。
+      - en: Start a second chat with its own first question and switch back to the first chat.
+        zh: 开始第二个聊天并发送其首问，再切回第一个聊天。
+      - en: Rename the first chat, then restart the application and open Chat from the person's details.
+        zh: 重命名第一个聊天，然后重启应用并从数字人详情打开聊天。
+    expected:
+      - en: Each chat is listed and headed by its first question; a later message changes only its preview.
+        zh: 每个聊天在列表和页眉中以首问为标题；后续消息只改变预览。
+      - en: The header follows the chat that is open; a rename replaces the title in the list and header.
+        zh: 页眉跟随当前打开的聊天；改名后列表和页眉显示新名称。
+      - en: Titles and the rename survive restart, and Chat opens the most recently active chat.
+        zh: 重启后标题与改名保留，「聊天」打开最近活跃的聊天。
     notes:
-      en: The empty-workspace entry is deliberately retained as its own regression. Other fixtures may initialize an ordinary conversation as a precondition; doing so does not verify this direct details-to-chat route. Only the model endpoint is scripted, and no recipient or navigation handler is replaced.
-      zh: 空空间入口单独保留为回归；其他fixture可以先初始化普通对话，但那不代表已验证此详情直达聊天路径。仅脚本化模型端点，不替换接收者或导航处理器。
+      en: The rename is made through the session rename API the list's Rename action uses; the list's inline editor is not exercised here. A chat kept from before titles existed takes the preview it was listed under on its next message, which the registry unit tests cover.
+      zh: 改名通过列表「重命名」所用的会话改名接口完成，本场景不操作列表内联编辑框。标题功能之前已有的聊天会在下一条消息时沿用当时列表显示的预览，由注册表单元测试覆盖。
   - id: conversations.organize.pin
     title:
       en: Rename and pin a conversation

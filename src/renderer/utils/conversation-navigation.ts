@@ -12,6 +12,7 @@
  */
 
 import { api } from '../api'
+import { getAppChatSessions, isAppChatSessionsLoading, latestHaloChatId, loadAppChatSessions } from '../stores/app-chat-sessions'
 import { useAppStore } from '../stores/app.store'
 import { useChatStore } from '../stores/chat.store'
 import { useSpaceStore } from '../stores/space.store'
@@ -100,11 +101,9 @@ export function openSkillInComposer(skill: { spaceId: string | null; name: strin
  * caller reports a failure the same way).
  *
  * The single place the renderer creates a digital-human session: the input's
- * recipient picker, its "@" mention path, the resource rail's chat action, and
- * every "Chat"/"talk to it now" button all mean the same thing and must not
- * each evolve their own request — including not silently reopening whatever
- * conversation happened to be most recent, which reads as "nothing happened"
- * when the user expected a new one.
+ * recipient picker, its "@" mention path, a digital human's "new conversation"
+ * action, and a "Chat" button for one without conversations all mean the same
+ * thing and must not each evolve their own request.
  */
 export async function startDigitalHumanConversation(appId: string): Promise<string | null> {
   try {
@@ -119,19 +118,31 @@ export async function startDigitalHumanConversation(appId: string): Promise<stri
 
 const openingChats = new Map<string, Promise<boolean>>()
 
+/** Its most recent Halo chat, from the records the conversation lists already hold. */
+async function latestDigitalHumanConversation(appId: string): Promise<string | null> {
+  // Before the first read, no records means "not known yet" rather than "none".
+  const sessions = isAppChatSessionsLoading() ? await loadAppChatSessions() : getAppChatSessions()
+  return latestHaloChatId(sessions, appId)
+}
+
 /**
- * "Talk to this digital human now": start a fresh conversation and open it on
- * the main board. Repeat calls for the same digital human while one is still
- * being created share it, so a double-click doesn't leave an extra empty
- * session behind.
+ * "Chat" with a digital human: open its most recent conversation on the main
+ * board, or start one when it has none. `newConversation` always starts one.
+ * Repeat calls for the same digital human while one is still being opened
+ * share it, so a double-click doesn't leave an extra empty session behind.
  *
  * Returns false when no conversation could be created.
  */
-export function openDigitalHumanChat(appId: string, appSpaceId: string): Promise<boolean> {
+export function openDigitalHumanChat(
+  appId: string,
+  appSpaceId: string,
+  { newConversation = false }: { newConversation?: boolean } = {}
+): Promise<boolean> {
   const pending = openingChats.get(appId)
   if (pending) return pending
   const opening = (async () => {
-    const conversationId = await startDigitalHumanConversation(appId)
+    const conversationId = (newConversation ? null : await latestDigitalHumanConversation(appId))
+      ?? await startDigitalHumanConversation(appId)
     if (!conversationId) return false
     navigateToAppChat(appSpaceId, appId, conversationId)
     return true

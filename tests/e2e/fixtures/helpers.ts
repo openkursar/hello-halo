@@ -58,10 +58,25 @@ export async function openDigitalHumanConversation(window: Page, name: string, r
   const section = window.getByTitle('Conversations with digital humans available in this workspace', { exact: true })
   await section.waitFor({ state: 'visible', timeout: 15000 })
   if (await section.getAttribute('aria-expanded') !== 'true') await section.click()
-  const group = window.getByRole('button', { name, exact: true }).first()
+  // The composer's recipient chip carries the same name; only the group header folds.
+  const group = window.getByRole('button', { name, exact: true }).and(window.locator('[aria-expanded]')).first()
   await group.waitFor({ state: 'visible' })
   if (await group.getAttribute('aria-expanded') !== 'true') await group.click()
   await window.getByText(rowText).first().click()
+}
+
+/**
+ * Start a new conversation with a digital human from its group in the sidebar
+ * (desktop layouts) — the explicit "new" action, where its "Chat" elsewhere
+ * continues the latest one. The button shows while the group is hovered.
+ */
+export async function startNewDigitalHumanConversation(window: Page, name: string) {
+  const section = window.getByTitle('Conversations with digital humans available in this workspace', { exact: true })
+  await section.waitFor({ state: 'visible', timeout: 15000 })
+  if (await section.getAttribute('aria-expanded') !== 'true') await section.click()
+  const create = window.getByRole('button', { name: `New conversation with ${name}`, exact: true })
+  await create.locator('xpath=..').hover()
+  await create.click()
 }
 
 /** Navigate through the persistent rail and wait for the settings content. */

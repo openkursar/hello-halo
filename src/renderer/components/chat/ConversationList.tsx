@@ -697,7 +697,7 @@ export const ConversationList = memo(function ConversationList({
     trackHome('home.conversation.create', { surface: 'dh_group' })
     // Starting one under a collapsed group should still show it.
     setAppGroupOpen(spaceId, appId, true)
-    void openDigitalHumanChat(appId, spaceId)
+    void openDigitalHumanChat(appId, spaceId, { newConversation: true })
   }
 
   const handleToggleAppChatPin = (e: React.MouseEvent, row: AppChatConversationRow) => {
@@ -1320,7 +1320,7 @@ export const ConversationList = memo(function ConversationList({
                 onClick={(e) => {
                   e.stopPropagation()
                   setEditingId(dhRow.id)
-                  setEditingTitle(dhRow.customName || dhRow.displayName.trim() || '')
+                  setEditingTitle(dhRow.customName || dhRow.title || dhRow.displayName.trim() || '')
                   setMenuOpenId(null)
                   setMenuPosition(null)
                 }}

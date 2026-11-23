@@ -74,6 +74,11 @@ describe('digitalHumanChatTitle', () => {
     expect(digitalHumanChatTitle({ ...chat, displayName: '' }, 'Neuer Chat')).toBe('Analyst: Neuer Chat')
   })
 
+  it('goes by the title its first message gave it, not its latest message', () => {
+    expect(digitalHumanChatTitle({ ...chat, title: 'Plan the launch', displayName: '', lastMessage: 'Now the budget' }, 'New chat')).toBe('Analyst: Plan the launch')
+    expect(digitalHumanChatTitle({ ...chat, customName: 'Q3', title: 'Plan the launch' }, 'New chat')).toBe('Analyst: Q3')
+  })
+
   it('cuts a long first message to the preview length', () => {
     const title = digitalHumanChatTitle({ ...chat, lastMessage: 'x'.repeat(CHAT_TITLE_PREVIEW_CHARS + 30) }, 'New chat')
     expect(title).toBe(`Analyst: ${'x'.repeat(CHAT_TITLE_PREVIEW_CHARS)}`)
