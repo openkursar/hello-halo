@@ -271,8 +271,8 @@ export interface TeamRuntime {
   ensureConversationEpoch(teamId: string, chatKey: string, title?: string, createdBy?: string, entryAppId?: string): TeamEpoch
   /** Rename a conversation epoch (captured + replicated office-wide). */
   renameConversationEpoch(teamId: string, epochId: string, title: string | null): void
-  /** Auto-name an untitled native conversation from the person's first message. */
-  maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): void
+  /** Return the newly saved title, if the person's message named this native conversation. */
+  maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): string | undefined
   /** A turn is entering this epoch: stamp its activity, and wake it if hibernated. */
   noteEpochTurn(teamId: string, epochId: string, fromHuman?: boolean): boolean
   /** Release a deleting scope's local resources without changing its business history; caller closes descendants first. */

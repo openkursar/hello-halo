@@ -207,14 +207,8 @@ export interface Orchestration {
   ensureConversationEpoch(teamId: string, chatKey: string, title?: string, createdBy?: string, entryAppId?: string): TeamEpoch
   /** Rename a conversation epoch (office-shared: the change is captured + replicated). */
   renameConversationEpoch(teamId: string, epochId: string, title: string | null): void
-  /**
-   * Auto-name a native conversation from its first user message (parity with the
-   * space chat's first-message title). No-op unless the epoch is a still-untitled
-   * NATIVE conversation and the turn is the lead's (the front desk the user talks
-   * to). The derived title is captured + replicated like any rename, so every
-   * node's session list stops showing "New session".
-   */
-  maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): void
+  /** Return the newly saved title, if the person's message named this native conversation. */
+  maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): string | undefined
   /** Record activity and resume an execution scope. Only a human request may reopen archived work. */
   noteEpochTurn(teamId: string, epochId: string, fromHuman?: boolean): boolean
   closeEpochResources(teamId: string, epochId: string, options?: { disposing?: boolean }): Promise<void>
@@ -1501,7 +1495,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     console.log(`${LOG_TAG} renameConversationEpoch: team=${teamId} epoch=${epochId}`)
   }
 
-  function maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): void {
+  function maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): string | undefined {
     const epoch = store.getEpochById(epochId)
     // Only a still-untitled NATIVE conversation gets auto-named. Member/IM chats
     // already derive their label (member name / chat name); runs use a summary.
@@ -1526,6 +1520,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     publishEpoch(epochId)
     emitTeamUpdated(teamId)
     console.log(`${LOG_TAG} auto-named conversation: team=${teamId} epoch=${epochId} title="${title}"`)
+    return title
   }
 
   /**

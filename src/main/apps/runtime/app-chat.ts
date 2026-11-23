@@ -912,7 +912,8 @@ async function runAppChatTurn(
     // Auto-name a native "New session" from the person's first message (parity
     // with the space chat). A teammate-driven turn's input is a relayed
     // envelope, never the user's words.
-    getActiveTeamRuntime()?.maybeAutoNameConversation(teamContext.teamId, teamContext.epochId, fromHuman, message)
+    const savedTitle = getActiveTeamRuntime()?.maybeAutoNameConversation(teamContext.teamId, teamContext.epochId, fromHuman, message)
+    if (savedTitle && teamPromptCtx?.taskTitle !== undefined) teamPromptCtx.taskTitle = savedTitle
   }
   // Source chats share one tool contract; a guest needs an explicit collaboration grant.
   const teamToolset = !teamContext && !origin && (imSession || parseNativeChatKey(conversationId)?.appId === appId)
