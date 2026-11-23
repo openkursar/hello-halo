@@ -395,6 +395,40 @@ test.describe('production webview carrier', () => {
     await expect.poll(() => electronApp.evaluate(({ webContents }, freshId) => !!webContents.fromId(freshId), freshId)).toBe(false)
   })
 
+  test('closing a page while the main view is busy keeps the application running', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.close-busy-host\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
+    const viewId = 'carrier-close-busy-host'
+    const url = browserSite.pageUrl(viewId)
+    await createBrowser(window, viewId, url)
+    await showBrowser(window, viewId)
+    const id = await guestIdentity(electronApp, url)
+    expect(await electronApp.evaluate(({ webContents }, id) => webContents.fromId(id)!.debugger.isAttached(), id), 'the page keeps its debugger attached').toBe(true)
+    // The host removes the webview only after this loop, so the page outlives its WebContents object.
+    const closing = window.evaluate(async viewId => {
+      const result = (window as unknown as { halo: HaloAPI }).halo.destroyBrowserView(viewId)
+      const busyUntil = Date.now() + 3000
+      while (Date.now() < busyUntil) { /* hold the host renderer */ }
+      return { result: await result, busyUntil }
+    }, viewId)
+    await expect.poll(() => electronApp.evaluate(({ webContents }, id) => !!webContents.fromId(id), id), { timeout: 2500 }).toBe(false)
+    const collectedAt = await electronApp.evaluate(() => {
+      process.getBuiltinModule('node:v8').setFlagsFromString('--expose-gc')
+      const gc = process.getBuiltinModule('node:vm').runInNewContext('gc') as () => void
+      gc()
+      gc()
+      return Date.now()
+    })
+    const closed = await closing
+    expect(closed.result).toMatchObject({ success: true })
+    expect(collectedAt, 'memory must be reclaimed while the host still holds the page').toBeLessThan(closed.busyUntil)
+    await expect.poll(() => window.evaluate(viewId => Array.from(document.querySelectorAll('webview')).some(element => (element as HTMLElement).dataset.browserPageId === viewId), viewId)).toBe(false)
+    await createBrowser(window, viewId, url)
+    expect(await guestIdentity(electronApp, url)).not.toBe(id)
+    await showBrowser(window, viewId)
+    await assertBrowserFrame(electronApp, window, viewId)
+    await destroyBrowser(window, viewId)
+    await testInfo.attach('close-busy-host', { body: Buffer.from(JSON.stringify({ guestId: id, collectedAt, busyUntil: closed.busyUntil })), contentType: 'application/json' })
+  })
+
   test('the actual live browser budget releases the oldest hidden guest and recreates it only on activation', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.page-budget\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     await navigateToChat(window)
     const pages: Array<{ url: string; id: number; viewId: string; nonce: unknown }> = []

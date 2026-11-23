@@ -23,6 +23,9 @@ promises:
   layout:
     en: Browser surfaces respect overlays, fullscreen controls and display scaling.
     zh: 浏览区域遵守弹层、全屏控件与缩放布局。
+  close:
+    en: Closing a browser page ends only that page, even while the main view is busy; the application keeps running and can open new pages.
+    zh: 关闭网页只结束该网页，即使主界面正忙；应用继续运行并能打开新网页。
 scenarios:
   - id: browser.recovery.close-view
     title:
@@ -359,3 +362,27 @@ scenarios:
     notes:
       en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
       zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。
+  - id: browser.recovery.close-busy-host
+    title:
+      en: Close a page while the main view is busy
+      zh: 主界面忙碌时关闭网页
+    verifies:
+      - close
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A local test page is open in the real application.
+        zh: 真实应用中打开了本地测试网页。
+    steps:
+      - en: Close the page while the main view is briefly busy, and reclaim memory before the view removes the page.
+        zh: 主界面短暂忙碌时关闭网页，并在界面移除网页前回收内存。
+    expected:
+      - en: The application keeps running, and a new page opens and paints.
+        zh: 应用继续运行，新网页能打开并正常绘制。
+    notes:
+      en: The test forces a full garbage collection in the main process after the page's application object is released and before the busy main view removes the page, the window in which a still-attached page debugger used to crash the whole application. It asserts that the collection ran inside that window.
+      zh: 测试在网页的应用对象释放后、忙碌的主界面移除网页前，于主进程强制完整垃圾回收；页面调试器仍挂着时，正是这个时间窗曾让整个应用崩溃。测试会断言回收确实发生在该时间窗内。
