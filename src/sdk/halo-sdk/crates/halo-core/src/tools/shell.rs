@@ -377,8 +377,7 @@ fn wrapper(
             quote(&state.cwd),
             quote(harness.text(TextId::ToolsShellWrapperCwdRetained))
         ));
-        // Use shell builtins so a command can change PATH without losing its snapshot.
-        let dump = if is_zsh(shell) {
+        let fallback = if is_zsh(shell) {
             r#"for __agent_env_name in "${(@k)parameters}"; do
     if [[ ${(tP)__agent_env_name} == *export* ]]; then
         printf '%s=%s\0' "$__agent_env_name" "${(P)__agent_env_name}"
@@ -393,7 +392,7 @@ done"#
 done < <(compgen -e)"#
         };
         script.push(format!(
-            "{{ printf '%s\\0' \"$__agent_cwd\" && {{ {dump}; }} && printf '\\0'; }} > {} 2>/dev/null || true",
+            "{{ printf '%s\\0' \"$__agent_cwd\" && if [[ -x /usr/bin/env ]]; then /usr/bin/env -0; else {fallback}; fi && printf '\\0'; }} > {} 2>/dev/null || true",
             quote(&windows_posix(&file.to_string_lossy()))
         ));
     }
@@ -437,7 +436,8 @@ fn parse_state(raw: &str) -> Option<ShellState> {
         if !name.next().is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
             || !name.all(|c| c.is_ascii_alphanumeric() || c == b'_')
         {
-            return None;
+            // An inherited name need not be a shell identifier that can be restored with export.
+            continue;
         }
         env.insert(key.to_owned(), value.to_owned());
     }
@@ -469,7 +469,8 @@ mod migration_tests {
             "MULTILINE=line1\nPATH=/missing\nNEW_KEY=not-a-variable\nλ\n", "VAR2=ok",
             "SHLVL=2", "BASH_VERSION=5.1", "PIPESTATUS=0", "_=last", "PWD=/stale",
             "__agent_cwd=/stale", "__agent_ec=0", "__agent_env_name=FOO",
-            "BASH_FUNC_foo%%=() { echo bar; }", "MYVAR=keep", "", "",
+            "BASH_FUNC_foo%%=() { echo bar; }", "café=ok", "with.dot=value", "BAD-NAME=value",
+            "1KEY=value", "MYVAR=keep", "", "",
         ].join("\0");
         tokio::fs::write(&file, raw).await.unwrap();
         let state = read_state(&file).await.unwrap();
@@ -482,14 +483,14 @@ mod migration_tests {
             assert_eq!(state.env.get(key).map(String::as_str), Some(value));
         }
         for key in ["SHLVL", "BASH_VERSION", "PIPESTATUS", "_", "PWD", "__agent_cwd", "__agent_ec",
-            "__agent_env_name", "BASH_FUNC_foo%%", "NEW_KEY"] {
+            "__agent_env_name", "BASH_FUNC_foo%%", "NEW_KEY", "café", "with.dot", "BAD-NAME", "1KEY"] {
             assert!(!state.env.contains_key(key));
         }
         for invalid in [
             "", "/workspace\nFOO=bar\n", "/workspace\0PATH=partial", "/workspace\0PATH=partial\0",
             "\0FOO=bar\0\0", "relative/path\0FOO=bar\0\0", "/line\nfeed\0FOO=bar\0\0",
             "PATH=/usr/bin\0FOO=bar\0\0", "SECRET=fixture-value\0FOO=bar\0\0",
-            "/workspace\0BAD-NAME=value\0\0", "/workspace\0not-an-entry\0\0",
+            "/workspace\0not-an-entry\0\0",
         ] {
             assert!(parse_state(invalid).is_none());
         }
@@ -643,6 +644,26 @@ mod migration_tests {
     async fn finish(root: PathBuf, shell: ShellTools) {
         shell.close().await;
         tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn zsh_nonportable_export_keeps_the_working_directory_path_and_other_exports() {
+        let (root, shell, mut ctx) = fixture().await;
+        ctx.env = json!({"AGENT_SHELL": "/bin/zsh", "LC_ALL": "en_US.UTF-8", "ZDOTDIR": root});
+        let child = root.join("sub");
+        tokio::fs::create_dir(&child).await.unwrap();
+        let first = shell.execute(
+            &json!({"command": "cd sub && export café=ok PORTABLE=retained PATH=/missing && test \"$café\" = ok"}),
+            ctx.clone(),
+        ).await;
+        assert_eq!(first["isError"], false);
+        let next = shell.execute(
+            &json!({"command": "printf '%s\\n' \"$PWD\" \"$PORTABLE\" \"$PATH\""}), ctx,
+        ).await;
+        assert_eq!(next["isError"], false);
+        assert_eq!(next["content"], format!("{}\nretained\n/missing", child.display()));
+        finish(root, shell).await;
     }
 
     #[tokio::test]
