@@ -20,6 +20,7 @@ import {
   useConversationListPrefs, isSectionOpen, isListFolded, type ConversationSection, type ConversationListLayout,
 } from '../../stores/conversation-list-prefs.store'
 import { ROW_HEIGHT, usePaneResize, PaneResizeHandle } from './conversation-list-panes'
+import { useConversationReveal } from './conversation-list-reveal'
 import { api } from '../../api'
 import { cn } from '../../lib/utils'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
@@ -101,12 +102,12 @@ const ATTENTION_ORDER: TaskStatus[] = ['waiting', 'error', 'completed-unseen', '
 const EMPTY_SECTION_CHOICES: Partial<Record<ConversationSection, boolean>> = {}
 const EMPTY_GROUP_CHOICES: Record<string, boolean> = {}
 
-/** The digital-humans section and groups the list opened on its own (not the user). */
+/** The sections and digital-human groups the list opened on its own (not the user). */
 interface AutoOpen {
-  section: boolean
+  sections: ReadonlySet<ConversationSection>
   apps: ReadonlySet<string>
 }
-const NO_AUTO_OPEN: AutoOpen = { section: false, apps: new Set() }
+const NO_AUTO_OPEN: AutoOpen = { sections: new Set(), apps: new Set() }
 
 /**
  * The scroller takes no padding: Virtuoso's viewport is absolutely positioned
@@ -306,7 +307,7 @@ export const ConversationList = memo(function ConversationList({
   const workingApps = useMemo(() => digitalHumansAtWork(conversationStatuses, appsRunningTasks), [conversationStatuses, appsRunningTasks])
 
   // What the list opens on its own, kept in memory only: the stored prefs hold
-  // nothing but the user's own clicks. `section` and `apps` override a stored
+  // nothing but the user's own clicks. `sections` and `apps` override a stored
   // fold until the user toggles that section or group again.
   const [autoOpen, setAutoOpen] = useState<AutoOpen & { space: string }>(() => ({ space: spaceKey, ...NO_AUTO_OPEN }))
   const auto: AutoOpen = autoOpen.space === spaceKey ? autoOpen : NO_AUTO_OPEN
@@ -314,20 +315,26 @@ export const ConversationList = memo(function ConversationList({
     setAutoOpen(prev => {
       const base = prev.space === spaceKey ? prev : { space: spaceKey, ...NO_AUTO_OPEN }
       const next = change(base)
-      return next.section === base.section && next.apps === base.apps ? base : { space: spaceKey, ...next }
+      return next.sections === base.sections && next.apps === base.apps ? base : { space: spaceKey, ...next }
     })
   }, [spaceKey])
+  const autoOpenSection = useCallback((section: ConversationSection) => {
+    updateAutoOpen(prev => (prev.sections.has(section) ? prev : { ...prev, sections: new Set(prev.sections).add(section) }))
+  }, [updateAutoOpen])
 
-  const pinnedOpen = isSectionOpen(sectionChoices, 'pinned')
-  const digitalHumansOpen = auto.section || isSectionOpen(sectionChoices, 'digital-humans')
-  const conversationsOpen = isSectionOpen(sectionChoices, 'conversations')
+  const pinnedOpen = auto.sections.has('pinned') || isSectionOpen(sectionChoices, 'pinned')
+  const digitalHumansOpen = auto.sections.has('digital-humans') || isSectionOpen(sectionChoices, 'digital-humans')
+  const conversationsOpen = auto.sections.has('conversations') || isSectionOpen(sectionChoices, 'conversations')
   const toggleSection = useCallback((section: ConversationSection) => {
-    const open = section === 'digital-humans'
-      ? auto.section || isSectionOpen(sectionChoices, section)
-      : isSectionOpen(sectionChoices, section)
-    if (section === 'digital-humans') updateAutoOpen(prev => (prev.section ? { ...prev, section: false } : prev))
+    const open = auto.sections.has(section) || isSectionOpen(sectionChoices, section)
+    updateAutoOpen(prev => {
+      if (!prev.sections.has(section)) return prev
+      const sections = new Set(prev.sections)
+      sections.delete(section)
+      return { ...prev, sections }
+    })
     setSectionOpen(spaceKey, section, !open)
-  }, [setSectionOpen, spaceKey, sectionChoices, auto.section, updateAutoOpen])
+  }, [setSectionOpen, spaceKey, sectionChoices, auto.sections, updateAutoOpen])
 
   // A digital human's group starts closed and opens on its own when it holds the
   // open conversation or a session needs attention; that stays until the user folds it.
@@ -348,14 +355,14 @@ export const ConversationList = memo(function ConversationList({
     setAppGroupOpen(spaceKey, appId, !open)
   }, [setAppGroupOpen, spaceKey, updateAutoOpen])
   // Opening a conversation (from here or e.g. the task panel) shows its section
-  // and group even if the user had folded them; pinned sessions already show.
+  // and group even if the user had folded them; pinned sessions sit outside any group.
   const selectedAppChatId = selectedAppChat?.conversationId
   const selectedAppChatPinned = !!selectedAppChatId && allAppChatRows.some(row => row.id === selectedAppChatId && row.starred)
   useEffect(() => {
     if (!selectedAppId || !selectedAppChatId || selectedAppChatPinned) return
-    updateAutoOpen(prev => (prev.section && prev.apps.has(selectedAppId)
+    updateAutoOpen(prev => (prev.sections.has('digital-humans') && prev.apps.has(selectedAppId)
       ? prev
-      : { section: true, apps: new Set(prev.apps).add(selectedAppId) }))
+      : { sections: new Set(prev.sections).add('digital-humans'), apps: new Set(prev.apps).add(selectedAppId) }))
   }, [selectedAppId, selectedAppChatId, selectedAppChatPinned, updateAutoOpen])
   // A group that needs attention stays open after the session settles, unless the user folded it.
   useEffect(() => {
@@ -446,6 +453,22 @@ export const ConversationList = memo(function ConversationList({
     return buildDigitalHumanRows(allAppChatRows, () => true)
       .filter(row => row.type === 'dh-item' && (listed.has(row.key) || conversationStatuses.has(row.key)))
   }, [allAppChatRows, digitalHumanRows, digitalHumansOpen, conversationStatuses])
+  const stripRows = useMemo(() => [
+    ...(pinnedOpen ? pinnedRows : []),
+    ...stripDigitalHumanRows,
+    ...(conversationsOpen ? conversationRows : []),
+  ], [pinnedOpen, pinnedRows, stripDigitalHumanRows, conversationsOpen, conversationRows])
+  const reveal = useConversationReveal({
+    spaceId: spaceKey,
+    conversationId: selectedAppChat ? selectedAppChat.conversationId : currentConversationId,
+    panes: {
+      pinned: { rows: pinnedRows, open: pinnedOpen },
+      'digital-humans': { rows: digitalHumanRows, open: digitalHumansOpen },
+      conversations: { rows: conversationRows, open: conversationsOpen },
+    },
+    strip: folded ? stripRows : null,
+    openSection: autoOpenSection,
+  })
   // Its most urgent session status, for the folded digital-humans header; one of
   // its digital humans working anywhere counts as generating.
   const digitalHumanAttention = useMemo(() => {
@@ -618,6 +641,7 @@ export const ConversationList = memo(function ConversationList({
 
   const handleSelectConversation = (conv: ConversationMeta) => {
     trackHome('home.conversation.select', { kind: 'normal', pinned: !!conv.starred })
+    reveal.pickedInList(conv.id)
     useChatStore.getState().selectConversation(conv.id)
   }
 
@@ -663,6 +687,7 @@ export const ConversationList = memo(function ConversationList({
     if (!spaceId) return
     trackHome('home.conversation.select', { kind: 'digital_human', pinned: row.starred, appId: row.appId })
     markEntry('home_conv_dh')
+    reveal.pickedInList(row.id)
     useChatStore.getState().selectAppChatConversation(spaceId, row.appId, row.id)
   }
 
@@ -722,6 +747,7 @@ export const ConversationList = memo(function ConversationList({
         onClick={() => !isEditing && handleSelectConversation(conversation)}
         onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'item', key: conversation.id, conversation }, t))}
         onMouseLeave={hideHoverCard}
+        aria-current={isActive}
         data-menu-open={menuOpenId === conversation.id || undefined}
         className={cn(
           'group relative flex w-full items-center gap-1.5 rounded-sm pl-2.5 pr-1.5 py-1.5 text-[13px] transition-colors ease-halo cursor-pointer',
@@ -812,6 +838,7 @@ export const ConversationList = memo(function ConversationList({
         onClick={() => !isEditing && !row.uninstalled && handleSelectAppChat(row)}
         onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'dh-item', key: row.id, row, standalone }, t))}
         onMouseLeave={hideHoverCard}
+        aria-current={isActive && !row.uninstalled}
         data-menu-open={menuOpenId === row.id || undefined}
         className={cn(
           'group relative flex w-full items-center gap-1.5 rounded-sm pr-1.5 py-1.5 text-[13px] transition-colors ease-halo',
@@ -994,12 +1021,8 @@ export const ConversationList = memo(function ConversationList({
             to tell them apart; it is portaled and fixed-positioned because
             this column scrolls, and a scroll container clips anything
             reaching past its edge. */}
-        <div className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-0.5">
-          {[
-            ...(pinnedOpen ? pinnedRows : []),
-            ...stripDigitalHumanRows,
-            ...(conversationsOpen ? conversationRows : []),
-          ].map(row => {
+        <div ref={reveal.stripRef} className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-0.5">
+          {stripRows.map(row => {
             if (row.type === 'dh-header') return null
             const isAppChat = row.type === 'dh-item'
             const id = isAppChat ? row.row.id : row.conversation.id
@@ -1084,10 +1107,14 @@ export const ConversationList = memo(function ConversationList({
               style={{ flex: `0 1 ${Math.min(pinnedResize.height, pinnedListHeight || pinnedRows.length * ROW_HEIGHT)}px` }}
             >
               <Virtuoso<ConversationRow>
+                {...reveal.listProps.pinned}
                 data={pinnedRows}
                 overscan={200}
                 computeItemKey={(_, row) => row.key}
-                totalListHeightChanged={setPinnedListHeight}
+                totalListHeightChanged={height => {
+                  setPinnedListHeight(height)
+                  if (height > 0) reveal.listMeasured('pinned')
+                }}
                 style={{ height: '100%' }}
                 className="overflow-x-hidden"
                 components={pinnedListComponents}
@@ -1135,9 +1162,13 @@ export const ConversationList = memo(function ConversationList({
               }}
             >
               <Virtuoso
+                {...reveal.listProps['digital-humans']}
                 data={digitalHumanRows}
                 overscan={200}
-                totalListHeightChanged={setDigitalHumanListHeight}
+                totalListHeightChanged={height => {
+                  setDigitalHumanListHeight(height)
+                  if (height > 0) reveal.listMeasured('digital-humans')
+                }}
                 style={{ height: '100%' }}
                 className="overflow-x-hidden"
                 components={listComponents}
@@ -1180,8 +1211,10 @@ export const ConversationList = memo(function ConversationList({
           {conversationsOpen && (
             <div className="flex-1 min-h-0">
               <Virtuoso
+                {...reveal.listProps.conversations}
                 data={conversationRows}
                 overscan={200}
+                totalListHeightChanged={height => { if (height > 0) reveal.listMeasured('conversations') }}
                 style={{ height: '100%' }}
                 // Virtuoso's scroller only sets overflow-y, which leaves overflow-x
                 // resolving to `auto` — a stray pixel of row width then shows a

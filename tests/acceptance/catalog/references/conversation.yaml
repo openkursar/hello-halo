@@ -5,8 +5,8 @@ title:
   en: Open a conversation from a conv link
   zh: 从会话链接打开会话
 story:
-  en: When a reply or a Markdown file points at another conversation, I can open it inside Halo, and a dead link tells me so instead of asking the operating system.
-  zh: 回复或 Markdown 文件指向另一个会话时，我能在 Halo 内打开它；失效的链接直接告诉我，而不是交给操作系统。
+  en: When a reply or a Markdown file points at another conversation, I can open it inside Halo and see it in the conversation list, and a dead link tells me so instead of asking the operating system.
+  zh: 回复或 Markdown 文件指向另一个会话时，我能在 Halo 内打开它并在会话列表里看到它；失效的链接直接告诉我，而不是交给操作系统。
 basis: documented
 references:
   - src/shared/conversation-reference.ts
@@ -15,10 +15,14 @@ references:
   - src/renderer/components/chat/MarkdownRenderer.tsx
   - src/renderer/components/canvas/viewers/MarkdownViewer.tsx
   - src/main/services/external-link.service.ts
+  - src/renderer/components/chat/ConversationList.tsx
+  - src/renderer/components/chat/conversation-list-reveal.ts
   - tests/unit/shared/conversation-reference.test.ts
   - tests/unit/renderer/open-conversation-reference.test.ts
+  - tests/unit/renderer/conversation-list-reveal.test.ts
   - tests/unit/services/external-link.test.ts
   - tests/e2e/specs/acceptance-conversation-links.spec.ts
+  - tests/e2e/specs/acceptance-conversation-link-sidebar.spec.ts
 promises:
   open:
     en: A conv link with a short id or a full conversation id opens exactly that conversation inside Halo.
@@ -26,6 +30,9 @@ promises:
   unavailable:
     en: A conv link whose conversation does not exist, or that is malformed, shows "This conversation is no longer available" and nothing is handed to the operating system.
     zh: 指向不存在会话或格式错误的会话链接显示“此会话已不可用”，不交给操作系统处理。
+  sidebar:
+    en: After a conv link opens a conversation, the conversation list shows it highlighted and in view wherever it sits — far down the list, among the pinned, in a digital human's group, in another workspace, or as a dot when the list is folded. A folded section opens only for the moment, and a conversation already in view does not move the list.
+    zh: 会话链接打开一个会话后，会话列表把它高亮并显示在视野内，无论它在列表深处、置顶分组、数字人分组、另一个空间，还是列表收成圆点时的圆点。折叠的分组只临时展开；目标本来就在视野内时列表不移动。
 scenarios:
   - id: references.conversation.open
     title:
@@ -54,3 +61,33 @@ scenarios:
     notes:
       en: Fixes https://github.com/openkursar/hello-halo/issues/509. The real app runs with a scripted model; the two target conversations are created through the app's own conversation API. External hand-off is observed by replacing Electron's shell and dialog entry points in the main process with recorders, which also keeps the test from touching the host; a positive control confirms the recorder sees the app's real external-open path. Not covered here — digital-human chat keys (app-chat:…), ambiguous short ids, keyboard activation, remote web access and middle-click; those rely on the unit tests.
       zh: 修复 https://github.com/openkursar/hello-halo/issues/509。真实应用、脚本模型；两个目标会话通过应用自身的会话接口创建。外部交接通过在主进程把 Electron 的 shell 与 dialog 入口替换为记录器来观察，同时避免触碰宿主机；正向对照确认记录器能看到应用真实的外部打开路径。此处未覆盖：数字人会话键（app-chat:…）、有歧义的短 id、键盘激活、远程网页访问与中键点击，这些依赖单元测试。
+  - id: references.conversation.sidebar
+    title:
+      en: See the linked conversation in the conversation list
+      zh: 在会话列表中看到链接打开的会话
+    verifies: [sidebar]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A desktop-width window; the workspace holds forty stored conversations, eight pinned ones and a digital human's chat, and another workspace holds thirty. The newest conversation's reply links to the oldest conversation, the oldest pin, the oldest conversation in the other workspace and the digital human's chat; those link back, and the oldest conversation also links to one two rows above it.
+        zh: 桌面宽度窗口；工作区有四十个已保存对话、八个置顶对话和一个数字人会话，另一个工作区有三十个对话。最新对话的回复链接到最旧的对话、最早置顶的对话、另一个工作区最旧的对话和数字人会话；这些会话都链接回来，最旧的对话还链接到它上方两行的对话。
+    steps:
+      - en: Fold the Pinned section, then follow each link from the newest conversation and come back, following the link to the conversation two rows up on the way.
+        zh: 折叠“置顶”分组，然后从最新对话依次点击每个链接再返回，途中点击指向上方两行对话的链接。
+      - en: Fold the list to its dots and follow the link to the oldest conversation again.
+        zh: 把列表收成圆点，再次点击指向最旧对话的链接。
+    expected:
+      - en: Each opened conversation's row is in view and marked as the open one; reaching the oldest conversation, the oldest pin and the oldest conversation in the other workspace scrolls their lists, the last after the workspace switch.
+        zh: 每个打开的会话所在行都在视野内并标记为当前会话；到达最旧对话、最早置顶对话和另一工作区最旧对话时，各自的列表会滚动，最后一个在切换工作区之后。
+      - en: The conversation two rows up was already in view, and the list does not move.
+        zh: 上方两行的对话本来就在视野内，列表不移动。
+      - en: The Pinned section and the Digital Humans section open for the moment while the saved fold choices stay as they were.
+        zh: “置顶”和“数字人”分组临时展开，保存的折叠选择保持不变。
+      - en: Folded, the oldest conversation's dot is scrolled into view and marked, and the list stays folded.
+        zh: 收起时，最旧对话的圆点滚入视野并被标记，列表保持收起。
+    notes:
+      en: Fixes https://github.com/openkursar/hello-halo/issues/590. The real app runs without a model; every conversation is created through the app's own conversation API and the links sit in stored replies, which render through the same path as a live reply. The open row is read through aria-current; being in view is the row's visible share inside its scrolling list. Not covered here — opening from global search or the task panel, the phone-width history sheet (the sidebar is not shown below 640px), and remote web access; the list's own logic for those paths is covered by the unit tests.
+      zh: 修复 https://github.com/openkursar/hello-halo/issues/590。真实应用、无模型；所有会话都通过应用自身的会话接口创建，链接位于已保存的回复中，与实时回复走同一渲染路径。当前行通过 aria-current 读取；“在视野内”指该行在其滚动列表中的可见比例。此处未覆盖：从全局搜索或任务面板打开、手机宽度下的历史面板（640px 以下不显示侧栏）以及远程网页访问；列表在这些路径上的逻辑由单元测试覆盖。
