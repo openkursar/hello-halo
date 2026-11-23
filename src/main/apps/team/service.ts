@@ -1367,9 +1367,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const target = members.find((m) => m.appId === appId)
     if (!target) throw new Error(`Member not found: ${appId}`)
 
+    const cleanup = canRemoveMemberApp(target, team.owningSpaceId)
     store.removeMember(teamId, appId)
 
-    if (target.aiProvisioned && !isRemoteMember(target)) {
+    if (cleanup) {
       await cleanupOrphanApp(appId, team.owningSpaceId)
     }
 
@@ -1454,6 +1455,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   // ── Dissolve (orphan cleanup) ──
 
+  function canRemoveMemberApp(member: TeamMember, owningSpaceId: string): boolean {
+    return member.aiProvisioned && !isRemoteMember(member)
+      && appManager.getApp(member.appId)?.spaceId === owningSpaceId
+      && !store.listMembersByAppId(member.appId).some(ref => ref.teamId !== member.teamId)
+  }
+
   async function cleanupOrphanApp(appId: string, owningSpaceId: string): Promise<void> {
     if (store.listMembersByAppId(appId).length > 0) return
 
@@ -1528,6 +1535,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   async function performDissolution(teamId: string, opts: { silent?: boolean; preserveInstalledMembers?: boolean }): Promise<void> {
     const team = store.getTeamById(teamId)
     if (!team) return
+    // A move or membership change while sessions stop may narrow cleanup, never expand it.
+    const cleanupIds = new Set(opts.preserveInstalledMembers ? [] : store.listMembersByTeam(teamId)
+      .filter(member => canRemoveMemberApp(member, team.owningSpaceId)).map(member => member.appId))
     const rt = getRuntime()
     const epochs = store.listEpochsByTeam(teamId)
     const remoteStops: Array<{ appId: string; teamId: string; epochId: string }> = []
@@ -1579,8 +1589,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     for (const source of sources) emitUpdated(source.id, { team: requireTeam(source.id) })
     await rt?.teamFolders.remove(teamId, epochIds)
 
-    if (!opts.preserveInstalledMembers) for (const m of members) {
-      if (m.aiProvisioned && !isRemoteMember(m)) {
+    for (const m of members) {
+      if (cleanupIds.has(m.appId) && m.aiProvisioned && !isRemoteMember(m)) {
         await cleanupOrphanApp(m.appId, team.owningSpaceId)
       }
     }

@@ -434,7 +434,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
         <ConfirmDialog
           title={deleteTarget ? t('Delete {{name}}?', { name: removeTarget.memberName }) : t('Remove {{name}} from this team?', { name: removeTarget.memberName })}
           message={deleteTarget
-            ? t('Removing it deletes the digital human itself, and that cannot be undone. The space it works in is shared with the rest of the team and stays, along with everything in it. (If you have also added it to another team, it stays there and nothing is deleted.)')
+            ? t('Removing it deletes the digital human and its own data, and that cannot be undone. The space it works in stays, along with everyone else’s files in it. (If you have also added it to another team, it stays there and nothing is deleted.)')
             : t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: removeTarget.memberName })}
           confirmLabel={deleteTarget ? t('Delete') : t('Remove')}
           cancelLabel={t('Cancel')}

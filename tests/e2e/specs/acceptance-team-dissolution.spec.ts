@@ -1,10 +1,30 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative, sep } from 'node:path'
+import type { Locator, Page, TestInfo } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
 import type { Team, TeamDetail } from '../../../src/shared/apps/team-types'
 import { test, expect, managementAcceptance, listManagedPeople, listManagedSpaces, seedManagedPerson, seedManagedSpace } from '../fixtures/acceptance-management'
 import { openPeoplePage, openTeamCard } from '../fixtures/acceptance-team-pages'
 import { setTheme } from '../fixtures/helpers'
+
+async function captureConfirmation(page: Page, dialog: Locator, name: string, testInfo: TestInfo) {
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    for (const theme of ['dark', 'light'] as const) {
+      await setTheme(page, theme)
+      await dialog.evaluate(async element => {
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+        await Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished))
+      })
+      const box = await dialog.boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.x).toBeGreaterThanOrEqual(0)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width)
+      await testInfo.attach(`${name}-${viewport.width}-${theme}`, { body: await page.screenshot(), contentType: 'image/png' })
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 900 })
+}
 
 test('dissolving a filtered team keeps moved people in their workspace across restart', {
   annotation: ['teams.cluster.dissolve', 'people.directory.removed-team'].map(id => managementAcceptance(id).annotation),
@@ -25,6 +45,19 @@ test('dissolving a filtered team keeps moved people in their workspace across re
   const members = (detail.data as TeamDetail).members
   const moved = members.find(member => member.memberName === 'Moved reviewer')!
   const stayed = members.find(member => member.memberName === 'Team reviewer')!
+  await openTeamCard(window, name)
+  await window.getByRole('button', { name: 'Team settings', exact: true }).click()
+  const settings = window.getByRole('dialog', { name: 'Team settings' })
+  await settings.getByRole('button', { name: 'Advanced', exact: true }).click()
+  await settings.getByRole('button', { name: 'Dissolve team', exact: true }).click()
+  const multiple = window.getByRole('alertdialog', { name: `Dissolve ${name} and delete 2 digital humans?` })
+  await expect(multiple).toContainText(moved.memberName)
+  await expect(multiple).toContainText(stayed.memberName)
+  await expect(multiple).toContainText('were created by AI')
+  await captureConfirmation(window, multiple, 'dissolve-two', testInfo)
+  await multiple.getByRole('button', { name: 'Cancel' }).click()
+  await window.keyboard.press('Escape')
+
   const files: string[] = []
   for (const appId of [moved.appId, neighbor.id]) {
     const result = await window.evaluate(input => (globalThis as unknown as { halo: HaloAPI }).halo.appMoveSpace(input), { appId, newSpaceId: destination.id })
@@ -48,16 +81,23 @@ test('dissolving a filtered team keeps moved people in their workspace across re
 
   await openTeamCard(window, name)
   await window.getByRole('button', { name: 'Team settings', exact: true }).click()
-  await window.getByRole('dialog', { name: 'Team settings' }).getByRole('button', { name: 'Advanced', exact: true }).click()
-  await window.getByRole('button', { name: 'Dissolve team', exact: true }).click()
-  const confirm = window.getByRole('alertdialog', { name: new RegExp(`Dissolve ${name} and delete 1 digital human`) })
-  await expect(confirm).toContainText('Team reviewer')
+  await settings.getByRole('button', { name: 'Delete member', exact: true }).click()
+  const deletion = window.getByRole('alertdialog', { name: `Delete ${stayed.memberName}?` })
+  await expect(deletion).toContainText('deletes the digital human and its own data')
+  await captureConfirmation(window, deletion, 'delete-member', testInfo)
+  await deletion.getByRole('button', { name: 'Cancel' }).click()
+  await settings.getByRole('button', { name: 'Remove member', exact: true }).click()
+  const removal = window.getByRole('alertdialog', { name: `Remove ${moved.memberName} from this team?` })
+  await expect(removal).toContainText(`${moved.memberName} stays yours`)
+  await captureConfirmation(window, removal, 'remove-member', testInfo)
+  await removal.getByRole('button', { name: 'Cancel' }).click()
+  await settings.getByRole('button', { name: 'Advanced', exact: true }).click()
+  await settings.getByRole('button', { name: 'Dissolve team', exact: true }).click()
+  const confirm = window.getByRole('alertdialog', { name: `Dissolve ${name} and delete 1 digital human?` })
+  await expect(confirm).toContainText('Team reviewer was created by AI')
   await expect(confirm).not.toContainText('Moved reviewer')
   await expect(confirm).toContainText('Every space is kept')
-  for (const theme of ['dark', 'light'] as const) {
-    await setTheme(window, theme)
-    await testInfo.attach(`dissolve-${theme}`, { body: await confirm.screenshot(), contentType: 'image/png' })
-  }
+  await captureConfirmation(window, confirm, 'dissolve-one', testInfo)
   await confirm.getByRole('button', { name: 'Dissolve and delete permanently', exact: true }).click()
   await expect.poll(async () => (await listManagedPeople(window)).some(p => p.id === stayed.appId)).toBe(false)
   for (const restart of [false, true]) {

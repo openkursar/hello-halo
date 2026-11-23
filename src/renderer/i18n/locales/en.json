@@ -2791,7 +2791,7 @@
   "Removed {{count}} selections_other": "Removed {{count}} selections",
   "Removed account": "Removed account",
   "Removed by ops": "Removed by ops",
-  "Removing it deletes the digital human itself, and that cannot be undone. The space it works in is shared with the rest of the team and stays, along with everything in it. (If you have also added it to another team, it stays there and nothing is deleted.)": "Removing it deletes the digital human itself, and that cannot be undone. The space it works in is shared with the rest of the team and stays, along with everything in it. (If you have also added it to another team, it stays there and nothing is deleted.)",
+  "Removing it deletes the digital human and its own data, and that cannot be undone. The space it works in stays, along with everyone else’s files in it. (If you have also added it to another team, it stays there and nothing is deleted.)": "Removing it deletes the digital human and its own data, and that cannot be undone. The space it works in stays, along with everyone else’s files in it. (If you have also added it to another team, it stays there and nothing is deleted.)",
   "Removing soon": "Removing soon",
   "Removing…": "Removing…",
   "Rename": "Rename",

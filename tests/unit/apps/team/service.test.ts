@@ -540,6 +540,29 @@ describe('TeamService', () => {
       }
     })
 
+    it.each(['into', 'out of'])('keeps a member moved %s the owning workspace while stopping the team', async direction => {
+      const team = await ctx.service.createTeam(manualInput({ memberSourcing: 'ai', members: [] }),
+        [{ memberName: 'Reviewer', role: 'review', responsibility: 'Review findings' }])
+      const member = ctx.store.listMembersByTeam(team.id).find(m => !m.isLead)!
+      const app = ctx.appManager.apps.get(member.appId)!
+      app.spaceId = direction === 'into' ? 'another-space' : SPACE_A
+      ctx.store.insertEpoch({ id: 'work', teamId: team.id, lifecycle: 'run', startedAt: 1, endedAt: null, endReason: null, summary: null })
+      ctx.store.addMember({ teamId: team.id, appId: 'remote', memberName: 'Peer', role: '', isLead: false,
+        aiProvisioned: false, addedAt: 1, ownerNodeId: 'other-node', origin: 'remote' })
+      ctx.runtime.stopMemberTurn.mockImplementation(async () => {
+        app.spaceId = direction === 'into' ? SPACE_A : 'another-space'
+        return true
+      })
+
+      await ctx.service.dissolveTeam(team.id)
+
+      expect(ctx.runtime.stopMemberTurn).toHaveBeenCalledOnce()
+      expect(ctx.store.getTeamById(team.id)).toBeNull()
+      expect(ctx.appManager.getApp(member.appId)).toBe(app)
+      expect(ctx.appManager.deleteApp).not.toHaveBeenCalledWith(member.appId)
+      expect(ctx.appManager.deleteApp).toHaveBeenCalledWith(team.leadAppId)
+    })
+
     it('keeps a legacy member alone in its separate workspace', async () => {
       const team = await ctx.service.createTeam(manualInput({ members: [] }))
       const appId = await ctx.appManager.install('legacy-member-space', { name: 'Reviewer' })
