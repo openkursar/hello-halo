@@ -18,6 +18,7 @@ const POLL_INTERVAL_MS = 15_000
 let records: ImSessionRecord[] = []
 let recordsKey = '[]'
 let loading = true
+let readSucceeded = false
 const listeners = new Set<() => void>()
 let consumers = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -34,6 +35,7 @@ function refresh(): Promise<void> {
         console.warn('[AppChatSessions] Session list unavailable:', res.error)
         return
       }
+      readSucceeded = true
       const nextKey = JSON.stringify(res.data)
       if (nextKey === recordsKey) return
       records = res.data as ImSessionRecord[]
@@ -95,6 +97,15 @@ export function isAppChatSessionsLoading(): boolean {
 export async function loadAppChatSessions(): Promise<ImSessionRecord[]> {
   await refresh()
   return records
+}
+
+/**
+ * The records for a decision that would act on "none", or null while no read
+ * has succeeded: until then an empty list means unknown. Reads now if none has.
+ */
+export async function knownAppChatSessions(): Promise<ImSessionRecord[] | null> {
+  if (!readSucceeded) await refresh()
+  return readSucceeded ? records : null
 }
 
 /**

@@ -122,8 +122,9 @@ export class ImSessionRegistry {
    * - Existing session: updates lastActiveAt, lastSender, lastMessage only
    *   (never overwrites displayName or customName)
    *
-   * `title` is the message's title as a first message; an owner's Halo chat
-   * keeps the first one it is given (see {@link ImSessionRecord.title}).
+   * `ownerTitle` is present only for the owner's own message and gives its
+   * title as a first message; it is read only when an owner's Halo chat is
+   * about to take its title (see {@link ImSessionRecord.title}).
    */
   register(
     appId: string,
@@ -135,7 +136,7 @@ export class ImSessionRegistry {
       displayName?: string
       lastSender?: string
       lastMessage?: string
-      title?: string
+      ownerTitle?: () => string | undefined
       teamContext?: ImSessionRecord['teamContext']
       contactId?: string
     }
@@ -154,12 +155,10 @@ export class ImSessionRegistry {
       let titled = false
       if (keepsTitle(existing.source) && !existing.title) {
         // A chat that was listed under its latest message before titles were
-        // kept stays under the one it shows now.
-        const title = (existing.messageCount ?? 0) > 0 && existing.lastMessage ? existing.lastMessage : opts?.title
-        if (title) {
-          existing.title = title
-          titled = true
-        }
+        // kept stays under the one it shows now, its count kept or not.
+        const title = (existing.title === undefined && existing.lastMessage) || opts?.ownerTitle?.() || ''
+        titled = title !== existing.title
+        existing.title = title
       }
       // displayName is intentionally NOT updated — stable after first registration
       existing.lastActiveAt = Date.now()
@@ -181,7 +180,7 @@ export class ImSessionRegistry {
         chatId,
         chatType,
         ...(opts?.contactId ? { contactId: opts.contactId } : {}),
-        ...(opts?.title && keepsTitle(source) ? { title: opts.title } : {}),
+        ...(keepsTitle(source) ? { title: opts?.ownerTitle?.() || '' } : {}),
         displayName: opts?.displayName || chatId,
         proactive: false,
         lastActiveAt: Date.now(),

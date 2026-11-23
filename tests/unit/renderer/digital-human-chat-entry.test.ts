@@ -103,6 +103,24 @@ describe('Chat with a digital human', () => {
     expect(env.api.appSessionCreate).not.toHaveBeenCalled()
     expect(opened()).toBe(buildLocalSessionKey('analyst', 'recent'))
   })
+  it('starts one on purpose, and says so, when the conversations cannot be read; continues once they can', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    env.api.imSessionsList.mockResolvedValue({ success: false, error: 'registry unavailable' })
+    const { sessions, navigation } = await load()
+    await sessions.loadAppChatSessions()
+    expect(sessions.isAppChatSessionsLoading()).toBe(false)
+
+    await expect(navigation.openDigitalHumanChat('analyst', 'space-1')).resolves.toBe(true)
+    expect(env.api.imSessionsList).toHaveBeenCalledTimes(2)
+    expect(env.api.appSessionCreate).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not read existing conversations'), { appId: 'analyst' })
+
+    env.api.imSessionsList.mockResolvedValue({ success: true, data: [record('local', 'recent', 500)] })
+    await navigation.openDigitalHumanChat('analyst', 'space-1')
+    expect(env.api.appSessionCreate).toHaveBeenCalledTimes(1)
+    expect(opened()).toBe(buildLocalSessionKey('analyst', 'recent'))
+    warn.mockRestore()
+  })
 })
 
 describe('A new conversation with a digital human', () => {

@@ -491,7 +491,7 @@ async function buildSessionMemoryPreamble(
 function registerExternalChatSession(
   conversationId: string,
   appId: string,
-  opts?: { displayName?: string; lastSender?: string; lastMessage?: string; title?: string }
+  opts?: { displayName?: string; lastSender?: string; lastMessage?: string; ownerTitle?: () => string | undefined }
 ): void {
   const target = resolveSessionRegistryTarget(conversationId, appId)
   if (!target) return
@@ -504,7 +504,7 @@ function registerExternalChatSession(
     displayName: opts?.displayName,
     lastSender: opts?.lastSender,
     lastMessage: opts?.lastMessage,
-    title: opts?.title,
+    ownerTitle: opts?.ownerTitle,
   })
 
   emitSessionUpdated(appId, target, { lastMessage: opts?.lastMessage, lastSender: opts?.lastSender })
@@ -775,12 +775,14 @@ async function runAppChatTurn(
   // Keeps the conversation list's summary of this session current (IM sessions
   // are kept by dispatch-inbound). A message of cards alone is named by the
   // same rule as in a space conversation; one that names nothing keeps the last.
-  // The title is kept only by a chat that has none yet.
+  // Only the owner's own words can title the chat, and only while it has no title.
   registerExternalChatSession(conversationId, app.id, {
     displayName: senderIdentity?.name,
     lastSender: senderIdentity?.name,
     lastMessage: request.recorded?.content ?? (messageSummaryText(message, request.references) || undefined),
-    title: titleFromFirstMessage(request.recorded?.content ?? message, request.references) ?? undefined,
+    ownerTitle: isPersonRequest(request)
+      ? () => titleFromFirstMessage(request.recorded?.content ?? message, request.references) ?? undefined
+      : undefined,
   })
 
   const memory = getAppMemoryService()

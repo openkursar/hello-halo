@@ -127,12 +127,13 @@ export const MODULE: RouteModuleMeta = {
       group: ['channels', 'digital-human'],
       summary: 'List every chat thread a digital human has, its own and IM ones',
       returns:
-        '{success:true,data:[{appId,channel,source:"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,title?,proactive,instanceId,pushLinks?:[{appId,autoSync}]}]}',
+        '{success:true,data:[{appId,channel,source:"native"|"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,title?,proactive,instanceId,pushLinks?:[{appId,autoSync}]}]}',
       notes: [
         'Optional ?appId= narrows it to one digital human. This is the only listing of its threads — there is no sessions/list beside sessions/create.',
-        'source says what a thread is: "local" = a named thread the user created in Halo, "im" = a real chat with a person on an IM platform, "http" = created through this API.',
-        'Reading or writing one thread needs a conversationId, which is not a field here — build it from four fields of the record: app-chat:<appId>:<channel>:<chatType>:<chatId>.',
-        'Only "local" and "http" threads accept a message from this API. An "im" thread is refused on send — this API must not put words into a real conversation with a person.',
+        'source says what a thread is: "native" = the digital human\'s main thread with the user in Halo (chatId "default"), "local" = a named thread the user created in Halo, "im" = a real chat with a person on an IM platform, "http" = created through this API.',
+        'title (main and "local" threads only) is the name the thread took from the user\'s first message, empty until one names it; customName, when set, is the user\'s own name for it and wins.',
+        'Reading or writing one thread needs a conversationId, which is not a field here — build it from four fields of the record: app-chat:<appId>:<channel>:<chatType>:<chatId>. The "native" main thread is the exception: its conversationId is app-chat:<appId>, or leave conversationId out.',
+        'The main thread, "local" and "http" threads accept a message from this API. An "im" thread is refused on send — this API must not put words into a real conversation with a person.',
       ].join('\n'),
     },
     'POST /api/im-sessions/set-proactive': {

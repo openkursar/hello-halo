@@ -12,7 +12,7 @@
  */
 
 import { api } from '../api'
-import { getAppChatSessions, isAppChatSessionsLoading, latestHaloChatId, loadAppChatSessions } from '../stores/app-chat-sessions'
+import { knownAppChatSessions, latestHaloChatId } from '../stores/app-chat-sessions'
 import { useAppStore } from '../stores/app.store'
 import { useChatStore } from '../stores/chat.store'
 import { useSpaceStore } from '../stores/space.store'
@@ -118,11 +118,13 @@ export async function startDigitalHumanConversation(appId: string): Promise<stri
 
 const openingChats = new Map<string, Promise<boolean>>()
 
-/** Its most recent Halo chat, from the records the conversation lists already hold. */
-async function latestDigitalHumanConversation(appId: string): Promise<string | null> {
-  // Before the first read, no records means "not known yet" rather than "none".
-  const sessions = isAppChatSessionsLoading() ? await loadAppChatSessions() : getAppChatSessions()
-  return latestHaloChatId(sessions, appId)
+/**
+ * Its most recent Halo chat, from the records the conversation lists already
+ * hold; null when it has none, `unknown` when they could not be read.
+ */
+async function latestDigitalHumanConversation(appId: string): Promise<string | null | 'unknown'> {
+  const sessions = await knownAppChatSessions()
+  return sessions ? latestHaloChatId(sessions, appId) : 'unknown'
 }
 
 /**
@@ -141,8 +143,12 @@ export function openDigitalHumanChat(
   const pending = openingChats.get(appId)
   if (pending) return pending
   const opening = (async () => {
-    const conversationId = (newConversation ? null : await latestDigitalHumanConversation(appId))
-      ?? await startDigitalHumanConversation(appId)
+    const latest = newConversation ? null : await latestDigitalHumanConversation(appId)
+    if (latest === 'unknown') {
+      // Deliberate: starting one is what Chat did before it continued the latest.
+      console.warn('[ConversationNavigation] Chat could not read existing conversations; starting a new one', { appId })
+    }
+    const conversationId = (latest === 'unknown' ? null : latest) ?? await startDigitalHumanConversation(appId)
     if (!conversationId) return false
     navigateToAppChat(appSpaceId, appId, conversationId)
     return true

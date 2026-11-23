@@ -740,8 +740,8 @@ describe('ImSessionRegistry — a Halo chat\'s title', () => {
   it('keeps the first message\'s title while later messages only change the preview', async () => {
     const reg = new ImSessionRegistry(file)
     reg.createLocalSession('app1', 'uuid-1')
-    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'Plan the launch', title: 'Plan the launch' })
-    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'Now the budget', title: 'Now the budget' })
+    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'Plan the launch', ownerTitle: () => 'Plan the launch' })
+    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'Now the budget', ownerTitle: () => 'Now the budget' })
 
     expect(reg.findSession('app1', 'local', 'uuid-1')).toMatchObject({ title: 'Plan the launch', lastMessage: 'Now the budget', messageCount: 2 })
     await new Promise(resolve => setTimeout(resolve, 20))
@@ -750,8 +750,8 @@ describe('ImSessionRegistry — a Halo chat\'s title', () => {
 
   it('titles the default chat on its first send', () => {
     const reg = new ImSessionRegistry(file)
-    reg.register('app1', 'native', 'default', 'direct', '', { lastMessage: 'Hello there', title: 'Hello there' })
-    reg.register('app1', 'native', 'default', 'direct', '', { lastMessage: 'Something else', title: 'Something else' })
+    reg.register('app1', 'native', 'default', 'direct', '', { lastMessage: 'Hello there', ownerTitle: () => 'Hello there' })
+    reg.register('app1', 'native', 'default', 'direct', '', { lastMessage: 'Something else', ownerTitle: () => 'Something else' })
     expect(reg.findSession('app1', 'native', 'default')?.title).toBe('Hello there')
   })
 
@@ -759,7 +759,7 @@ describe('ImSessionRegistry — a Halo chat\'s title', () => {
     const reg = new ImSessionRegistry(file)
     reg.createLocalSession('app1', 'uuid-1')
     reg.setCustomName('app1', 'local', 'uuid-1', 'Mine')
-    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'First', title: 'First' })
+    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'First', ownerTitle: () => 'First' })
     expect(reg.findSession('app1', 'local', 'uuid-1')).toMatchObject({ customName: 'Mine', title: 'First' })
   })
 
@@ -767,7 +767,7 @@ describe('ImSessionRegistry — a Halo chat\'s title', () => {
     const reg = new ImSessionRegistry(file)
     reg.createLocalSession('app1', 'uuid-1')
     reg.register('app1', 'local', 'uuid-1', 'direct', '', {})
-    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'Second', title: 'Second' })
+    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'Second', ownerTitle: () => 'Second' })
     expect(reg.findSession('app1', 'local', 'uuid-1')?.title).toBe('Second')
   })
 
@@ -777,26 +777,62 @@ describe('ImSessionRegistry — a Halo chat\'s title', () => {
       displayName: '', proactive: false, lastActiveAt: 1, messageCount: 4, lastMessage: 'What it shows now',
     }]))
     const reg = new ImSessionRegistry(file)
-    reg.register('app1', 'local', 'old', 'direct', '', { lastMessage: 'A new message', title: 'A new message' })
+    reg.register('app1', 'local', 'old', 'direct', '', { lastMessage: 'A new message', ownerTitle: () => 'A new message' })
     expect(reg.findSession('app1', 'local', 'old')).toMatchObject({ title: 'What it shows now', lastMessage: 'A new message' })
   })
 
-  it('gives no title to IM or API chats', () => {
+  it('keeps that message for a chat saved before message counts were kept', () => {
+    writeFileSync(file, JSON.stringify([
+      { appId: 'app1', channel: 'local', source: 'local', instanceId: '', chatId: 'older', chatType: 'direct', displayName: '', proactive: false, lastActiveAt: 1, lastMessage: 'Listed by this' },
+      { appId: 'app1', channel: 'native', source: 'native', instanceId: '', chatId: 'default', chatType: 'direct', displayName: 'default', proactive: false, lastActiveAt: 1, lastMessage: 'Default preview' },
+    ]))
+    const reg = new ImSessionRegistry(file)
+    reg.register('app1', 'local', 'older', 'direct', '', { lastMessage: 'A new message', ownerTitle: () => 'A new message' })
+    reg.register('app1', 'native', 'default', 'direct', '', { lastMessage: 'Another', ownerTitle: () => 'Another' })
+    expect(reg.findSession('app1', 'local', 'older')).toMatchObject({ title: 'Listed by this', lastMessage: 'A new message' })
+    expect(reg.findSession('app1', 'native', 'default')).toMatchObject({ title: 'Default preview', lastMessage: 'Another' })
+  })
+
+  it('gives no title to IM or API chats, and never works one out for them', () => {
     const reg = new ImSessionRegistry(file)
     const channel = IM_CHANNEL_TYPES[0]
-    reg.register('app1', channel, 'chat-1', 'direct', 'inst-1', { lastMessage: 'hi', title: 'hi' })
-    reg.register('app1', 'http', 'user-9', 'direct', '', { lastMessage: 'hi', title: 'hi' })
-    reg.register('app1', 'http', 'user-9', 'direct', '', { lastMessage: 'again', title: 'again' })
+    const ownerTitle = vi.fn(() => 'hi')
+    reg.register('app1', channel, 'chat-1', 'direct', 'inst-1', { lastMessage: 'hi', ownerTitle })
+    reg.register('app1', 'http', 'user-9', 'direct', '', { lastMessage: 'hi', ownerTitle })
+    reg.register('app1', 'http', 'user-9', 'direct', '', { lastMessage: 'again', ownerTitle })
     expect(reg.findSession('app1', channel, 'chat-1')?.title).toBeUndefined()
     expect(reg.findSession('app1', 'http', 'user-9')?.title).toBeUndefined()
+    expect(ownerTitle).not.toHaveBeenCalled()
+  })
+
+  it('works the title out only while the chat has none', () => {
+    const reg = new ImSessionRegistry(file)
+    reg.createLocalSession('app1', 'uuid-1')
+    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'First', ownerTitle: () => 'First' })
+    const later = vi.fn(() => 'Later')
+    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'Later', ownerTitle: later })
+    expect(later).not.toHaveBeenCalled()
+    expect(reg.findSession('app1', 'local', 'uuid-1')?.title).toBe('First')
+  })
+
+  it('is never given by another conversation\'s message, even one that opens the chat', async () => {
+    const reg = new ImSessionRegistry(file)
+    reg.createLocalSession('app1', 'uuid-1')
+    reg.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'From a colleague AI' })
+    expect(reg.findSession('app1', 'local', 'uuid-1')).toMatchObject({ title: '', lastMessage: 'From a colleague AI' })
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    const reopened = new ImSessionRegistry(file)
+    reopened.register('app1', 'local', 'uuid-1', 'direct', '', { lastMessage: 'My own question', ownerTitle: () => 'My own question' })
+    expect(reopened.findSession('app1', 'local', 'uuid-1')).toMatchObject({ title: 'My own question', lastMessage: 'My own question' })
   })
 
   it('lets a cleared chat take a new title', () => {
     const reg = new ImSessionRegistry(file)
-    reg.register('app1', 'native', 'default', 'direct', '', { lastMessage: 'Before', title: 'Before' })
+    reg.register('app1', 'native', 'default', 'direct', '', { lastMessage: 'Before', ownerTitle: () => 'Before' })
     reg.resetActivity('app1', 'native', 'default')
     expect(reg.findSession('app1', 'native', 'default')?.title).toBeUndefined()
-    reg.register('app1', 'native', 'default', 'direct', '', { lastMessage: 'After', title: 'After' })
+    reg.register('app1', 'native', 'default', 'direct', '', { lastMessage: 'After', ownerTitle: () => 'After' })
     expect(reg.findSession('app1', 'native', 'default')?.title).toBe('After')
   })
 })
