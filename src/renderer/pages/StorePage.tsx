@@ -23,7 +23,7 @@ export function StorePage() {
   // (own back button, own title), so the browse-page title/lead below is
   // dropped there. The Header keeps its title and search on every screen,
   // same as the other top-level pages.
-  const isSubView = useAppsPageStore(state => !!state.storeSelectedSlug || state.storeMineOpen || state.storeCliOpen)
+  const isSubView = useAppsPageStore(state => !!state.storeSelectedSlug || state.storeMineOpen)
 
   return (
     <div className="h-full flex flex-col bg-background">

@@ -1,5 +1,5 @@
 /**
- * Command-line tools — the store's second-level view listing the CLI tools an
+ * Command-line tools — the store tab listing the CLI tools an
  * administrator has approved for this account, with what is installed here.
  *
  * Nothing is downloaded until the user installs a version from this page; the
@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowLeft, Loader2, AlertCircle, SquareTerminal } from 'lucide-react'
+import { Loader2, AlertCircle, SquareTerminal } from 'lucide-react'
 import { api } from '../../api'
 import {
   STORE_NOT_SIGNED_IN,
@@ -59,9 +59,16 @@ function authLabel(t: Translate, value: CliCatalogVersion['auth']): string | nul
   return null
 }
 
-export function StoreCliTools() {
+function matchesQuery(tool: CliCatalogTool, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  if (tool.displayName.toLowerCase().includes(q) || tool.id.toLowerCase().includes(q)) return true
+  return tool.versions.some(version => version.commands.some(command => command.toLowerCase().includes(q)))
+}
+
+export function StoreCliTools({ reloadKey = 0 }: { reloadKey?: number }) {
   const { t } = useTranslation()
-  const setStoreCliOpen = useAppsPageStore(s => s.setStoreCliOpen)
+  const searchQuery = useAppsPageStore(s => s.storeSearchQuery)
   const [tools, setTools] = useState<CliCatalogTool[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -96,7 +103,7 @@ export function StoreCliTools() {
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, reloadKey])
 
   useEffect(() => {
     if (error !== STORE_NOT_SIGNED_IN) return
@@ -125,102 +132,94 @@ export function StoreCliTools() {
     }
   }, [load, showToast, t])
 
+  const shownTools = tools?.filter(tool => matchesQuery(tool, searchQuery)) ?? []
+
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-background">
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-[880px] mx-auto w-full px-4 sm:px-6 pt-5 pb-8">
-          <button
-            onClick={() => setStoreCliOpen(false)}
-            className="flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-primary transition-colors mb-5"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            {t('Back to Store')}
-          </button>
-          {loading ? (
-            <div className="flex justify-center py-16">
-              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : error === STORE_NOT_SIGNED_IN && signInStatus === 'unavailable' ? (
-            <StoreNotice
-              icon={<AlertCircle className="w-6 h-6 text-halo-warning" />}
-              title={t('Sign-in is unavailable in this build')}
-              desc={t('This store offers command-line tools to signed-in accounts, but this build has no identity provider configured. Contact your administrator to enable sign-in.')}
-            />
-          ) : error === STORE_NOT_SIGNED_IN && signInStatus === 'signed-in' ? (
-            <StoreNotice
-              icon={<AlertCircle className="w-6 h-6 text-halo-warning" />}
-              title={t('Could not verify your account')}
-              desc={t('You are signed in, but the store could not verify your session. Sign in again, or ask your administrator to check the store server.')}
-              action={
-                <button
-                  onClick={() => handleSignIn(true)}
-                  disabled={signingIn}
-                  className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-60"
-                >
-                  {signingIn && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  {t('Sign in again')}
-                </button>
-              }
-            />
-          ) : error === STORE_NOT_SIGNED_IN ? (
-            <StoreNotice
-              icon={<AlertCircle className="w-6 h-6 text-halo-warning" />}
-              title={t('Sign in to see command-line tools')}
-              desc={t('Your administrator chooses which command-line tools your account can install. Sign in to see them.')}
-              action={
-                <button
-                  onClick={() => handleSignIn(false)}
-                  disabled={signingIn}
-                  className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-60"
-                >
-                  {signingIn && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  {t('Sign in')}
-                </button>
-              }
-            />
-          ) : error ? (
-            <StoreNotice
-              icon={<AlertCircle className="w-6 h-6 text-destructive" />}
-              title={t('Failed to load command-line tools')}
-              desc={error}
-              action={
-                <button
-                  onClick={load}
-                  className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-                >
-                  {t('Retry')}
-                </button>
-              }
-            />
-          ) : (
-            <section>
-              <div className="mb-3">
-                <h2 className="text-[13px] font-semibold tracking-[0.5px] text-foreground">{t('Command-line tools')}</h2>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {t('Approved by your administrator. Install the ones you need; tasks started afterwards can use them.')}
-                </p>
-              </div>
-              {!tools || tools.length === 0 ? (
-                <div className="rounded-[10px] border border-border-soft bg-card py-12 text-center text-[13px] text-muted-foreground">
-                  {t('No command-line tools are available yet')}
-                </div>
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {tools.map(tool => (
-                    <CliToolRow
-                      key={tool.id}
-                      tool={tool}
-                      busy={busyId === tool.id}
-                      disabled={busyId !== null}
-                      onInstall={version => handleInstall(tool, version)}
-                    />
-                  ))}
-                </ul>
-              )}
-            </section>
-          )}
+    <div className="max-w-[880px] w-full px-6 sm:px-10 pt-4 pb-6">
+      {loading ? (
+        <div className="flex justify-center py-16">
+          <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
-      </div>
+      ) : error === STORE_NOT_SIGNED_IN && signInStatus === 'unavailable' ? (
+        <StoreNotice
+          icon={<AlertCircle className="w-6 h-6 text-halo-warning" />}
+          title={t('Sign-in is unavailable in this build')}
+          desc={t('This store offers command-line tools to signed-in accounts, but this build has no identity provider configured. Contact your administrator to enable sign-in.')}
+        />
+      ) : error === STORE_NOT_SIGNED_IN && signInStatus === 'signed-in' ? (
+        <StoreNotice
+          icon={<AlertCircle className="w-6 h-6 text-halo-warning" />}
+          title={t('Could not verify your account')}
+          desc={t('You are signed in, but the store could not verify your session. Sign in again, or ask your administrator to check the store server.')}
+          action={
+            <button
+              onClick={() => handleSignIn(true)}
+              disabled={signingIn}
+              className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-60"
+            >
+              {signingIn && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {t('Sign in again')}
+            </button>
+          }
+        />
+      ) : error === STORE_NOT_SIGNED_IN ? (
+        <StoreNotice
+          icon={<AlertCircle className="w-6 h-6 text-halo-warning" />}
+          title={t('Sign in to see command-line tools')}
+          desc={t('Your administrator chooses which command-line tools your account can install. Sign in to see them.')}
+          action={
+            <button
+              onClick={() => handleSignIn(false)}
+              disabled={signingIn}
+              className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-60"
+            >
+              {signingIn && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {t('Sign in')}
+            </button>
+          }
+        />
+      ) : error ? (
+        <StoreNotice
+          icon={<AlertCircle className="w-6 h-6 text-destructive" />}
+          title={t('Failed to load command-line tools')}
+          desc={error}
+          action={
+            <button
+              onClick={load}
+              className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+            >
+              {t('Retry')}
+            </button>
+          }
+        />
+      ) : (
+        <section>
+          <p className="text-xs text-muted-foreground mb-3">
+            {t('Approved by your administrator. Install the ones you need; tasks started afterwards can use them.')}
+          </p>
+          {!tools || tools.length === 0 ? (
+            <div className="rounded-[10px] border border-border-soft bg-card py-12 text-center text-[13px] text-muted-foreground">
+              {t('No command-line tools are available yet')}
+            </div>
+          ) : shownTools.length === 0 ? (
+            <div className="rounded-[10px] border border-border-soft bg-card py-12 text-center text-[13px] text-muted-foreground">
+              {t('No matching command-line tools')}
+            </div>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {shownTools.map(tool => (
+                <CliToolRow
+                  key={tool.id}
+                  tool={tool}
+                  busy={busyId === tool.id}
+                  disabled={busyId !== null}
+                  onInstall={version => handleInstall(tool, version)}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
     </div>
   )
 }

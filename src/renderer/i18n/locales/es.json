@@ -4304,5 +4304,7 @@
   "Scanned. Confirm the sign-in on your phone.": "Escaneado. Confirma el inicio de sesión en tu teléfono.",
   "Waiting for confirmation on your phone": "Esperando la confirmación en tu teléfono",
   "Scan with your company app to sign in": "Escanea con la app de tu empresa para iniciar sesión",
-  "Company tools can now use this sign-in. Halo hands them access itself; the AI never sees it.": "Las herramientas de la empresa ya pueden usar este inicio de sesión. Halo les entrega el acceso directamente; la IA nunca lo ve."
+  "Company tools can now use this sign-in. Halo hands them access itself; the AI never sees it.": "Las herramientas de la empresa ya pueden usar este inicio de sesión. Halo les entrega el acceso directamente; la IA nunca lo ve.",
+  "Search command-line tools": "Buscar herramientas de línea de comandos",
+  "No matching command-line tools": "No hay herramientas de línea de comandos que coincidan"
 }

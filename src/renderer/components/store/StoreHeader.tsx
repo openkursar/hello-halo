@@ -3,11 +3,12 @@
  *
  * Search input and type filter tabs for the store. Category chips live in the
  * content area (StoreCategoryBar) so they sit on the gray band rather than the
- * white header.
+ * white header. The command-line tools tab shares the row but reads its own
+ * catalog, so it is a separate view rather than a type filter.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Search, RefreshCw, Upload, ChevronRight, SquareTerminal } from 'lucide-react'
+import { Search, RefreshCw, Upload, ChevronRight } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useStoreCapabilities } from '../../hooks/useStoreCapabilities'
@@ -35,6 +36,21 @@ function tabLabel(t: (key: string) => string, id: MainTabId): string {
  * Gated on `capabilities.publish`: hidden when the build has no configured
  * publish target. Local package import lives on AppsPage → Manual Add instead.
  */
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex-shrink-0 h-[34px] px-3.5 border-b-2 -mb-px text-[13px] font-medium transition-colors ease-halo ${
+        active
+          ? 'border-primary text-foreground'
+          : 'border-transparent text-subtle-foreground hover:text-foreground'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
 function PublishButton({ onClick }: { onClick: () => void }) {
   const { t } = useTranslation()
   return (
@@ -50,12 +66,18 @@ function PublishButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-export function StoreHeader() {
+interface StoreHeaderProps {
+  /** Replaces the store refresh, for a tab that reads another catalog. */
+  onRefresh?: () => void
+}
+
+export function StoreHeader({ onRefresh }: StoreHeaderProps = {}) {
   const { t } = useTranslation()
   const capabilities = useStoreCapabilities()
   const storeSearchQuery = useAppsPageStore(state => state.storeSearchQuery)
   const storeTypeFilter = useAppsPageStore(state => state.storeTypeFilter)
   const storeLoading = useAppsPageStore(state => state.storeLoading)
+  const storeCliOpen = useAppsPageStore(state => state.storeCliOpen)
   const setStoreSearch = useAppsPageStore(state => state.setStoreSearch)
   const setStoreCategory = useAppsPageStore(state => state.setStoreCategory)
   const setStoreTypeFilter = useAppsPageStore(state => state.setStoreTypeFilter)
@@ -94,6 +116,8 @@ export function StoreHeader() {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current)
     }
+    // The command-line tools tab filters its own list as the query changes.
+    if (useAppsPageStore.getState().storeCliOpen) return
     debounceRef.current = setTimeout(() => {
       const state = useAppsPageStore.getState()
       void Promise.resolve(
@@ -121,7 +145,8 @@ export function StoreHeader() {
   const handleTabClick = useCallback((tabId: MainTabId) => {
     const nextType = tabId === 'discover' ? null : tabId
     const state = useAppsPageStore.getState()
-    if (state.storeTypeFilter === nextType && !state.storeSearchQuery && !state.storeCategory) return
+    if (!state.storeCliOpen && state.storeTypeFilter === nextType && !state.storeSearchQuery && !state.storeCategory) return
+    setStoreCliOpen(false)
     setStoreTypeFilter(nextType)
     setStoreCategory(null)
     setStoreSearch('')
@@ -129,7 +154,14 @@ export function StoreHeader() {
     // repaints when the index actually moved, so switching tabs stays instant.
     loadStoreApps({ type: nextType ?? undefined })
     void revalidateStore()
-  }, [setStoreTypeFilter, setStoreCategory, setStoreSearch, loadStoreApps, revalidateStore])
+  }, [setStoreCliOpen, setStoreTypeFilter, setStoreCategory, setStoreSearch, loadStoreApps, revalidateStore])
+
+  const handleCliTabClick = useCallback(() => {
+    if (useAppsPageStore.getState().storeCliOpen) return
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    setStoreSearch('')
+    setStoreCliOpen(true)
+  }, [setStoreSearch, setStoreCliOpen])
 
   return (
     <div className="flex flex-col gap-3 mx-6 sm:mx-10 pt-3 flex-shrink-0">
@@ -141,30 +173,20 @@ export function StoreHeader() {
             type="text"
             value={storeSearchQuery}
             onChange={e => handleSearchChange(e.target.value)}
-            placeholder={t('Search Digital Humans / Skills / MCP')}
+            placeholder={storeCliOpen ? t('Search command-line tools') : t('Search Digital Humans / Skills / MCP')}
             className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border-soft rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50"
           />
         </div>
         <button
-          onClick={refreshStore}
-          disabled={storeLoading}
+          onClick={onRefresh ?? refreshStore}
+          disabled={!onRefresh && storeLoading}
           className="p-2 text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-lg transition-colors disabled:opacity-50"
           title={t('Refresh')}
         >
-          <RefreshCw className={`w-4 h-4 ${storeLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-4 h-4 ${!onRefresh && storeLoading ? 'animate-spin' : ''}`} />
         </button>
         {capabilities?.publish && (
           <PublishButton onClick={() => { setPublishPreselect(null); setShowShareDialog(true) }} />
-        )}
-        {capabilities?.cliTools && (
-          <button
-            onClick={() => setStoreCliOpen(true)}
-            className="flex flex-shrink-0 items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-[13px] border border-border-soft bg-card text-muted-foreground hover:text-foreground hover:border-border rounded-lg transition-colors"
-            title={t('Command-line tools')}
-          >
-            <SquareTerminal className="w-4 h-4" />
-            <span className="hidden sm:inline">{t('CLI tools')}</span>
-          </button>
         )}
         {capabilities?.identity === 'account' && (
           <button
@@ -182,22 +204,20 @@ export function StoreHeader() {
           active tab carries its own 2px accent rule on top of the shared
           bottom divider (prototype `.tabs{border-bottom:1px solid border}`). */}
       <div className="flex items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border">
-        {MAIN_TABS.map(tab => {
-          const active = tab === 'discover' ? storeTypeFilter === null : storeTypeFilter === tab
-          return (
-            <button
-              key={tab}
-              onClick={() => handleTabClick(tab)}
-              className={`flex-shrink-0 h-[34px] px-3.5 border-b-2 -mb-px text-[13px] font-medium transition-colors ease-halo ${
-                active
-                  ? 'border-primary text-foreground'
-                  : 'border-transparent text-subtle-foreground hover:text-foreground'
-              }`}
-            >
-              {tabLabel(t, tab)}
-            </button>
-          )
-        })}
+        {MAIN_TABS.map(tab => (
+          <TabButton
+            key={tab}
+            active={!storeCliOpen && (tab === 'discover' ? storeTypeFilter === null : storeTypeFilter === tab)}
+            onClick={() => handleTabClick(tab)}
+          >
+            {tabLabel(t, tab)}
+          </TabButton>
+        ))}
+        {capabilities?.cliTools && (
+          <TabButton active={storeCliOpen} onClick={handleCliTabClick}>
+            {t('CLI tools')}
+          </TabButton>
+        )}
       </div>
 
       {showShareDialog && (

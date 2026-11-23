@@ -4143,5 +4143,7 @@
   "Scanned. Confirm the sign-in on your phone.": "已扫码，请在手机上确认登录。",
   "Waiting for confirmation on your phone": "等待手机确认",
   "Scan with your company app to sign in": "使用公司 App 扫码登录",
-  "Company tools can now use this sign-in. Halo hands them access itself; the AI never sees it.": "公司工具现在可以使用此登录。访问凭证由 Halo 直接交给工具，AI 不会看到。"
+  "Company tools can now use this sign-in. Halo hands them access itself; the AI never sees it.": "公司工具现在可以使用此登录。访问凭证由 Halo 直接交给工具，AI 不会看到。",
+  "Search command-line tools": "搜索命令行工具",
+  "No matching command-line tools": "没有匹配的命令行工具"
 }

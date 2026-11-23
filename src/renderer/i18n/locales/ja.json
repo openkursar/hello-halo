@@ -4143,5 +4143,7 @@
   "Scanned. Confirm the sign-in on your phone.": "スキャンしました。スマートフォンでサインインを確認してください。",
   "Waiting for confirmation on your phone": "スマートフォンでの確認を待っています",
   "Scan with your company app to sign in": "会社のアプリでスキャンしてサインイン",
-  "Company tools can now use this sign-in. Halo hands them access itself; the AI never sees it.": "会社のツールがこのサインインを使えるようになりました。アクセスは Halo がツールに直接渡し、AI には見えません。"
+  "Company tools can now use this sign-in. Halo hands them access itself; the AI never sees it.": "会社のツールがこのサインインを使えるようになりました。アクセスは Halo がツールに直接渡し、AI には見えません。",
+  "Search command-line tools": "コマンドラインツールを検索",
+  "No matching command-line tools": "一致するコマンドラインツールはありません"
 }

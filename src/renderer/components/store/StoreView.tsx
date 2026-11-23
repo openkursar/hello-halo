@@ -5,7 +5,7 @@
  * between the header (search/filter), grid/detail views, and install dialog.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -34,6 +34,7 @@ export function StoreView() {
   const loadStoreApps = useAppsPageStore(state => state.loadStoreApps)
   const checkUpdates = useAppsPageStore(state => state.checkUpdates)
   const didInitRef = useRef(false)
+  const [cliReloadKey, setCliReloadKey] = useState(0)
 
   // Only while the store is the view in front of the user — a background tab has
   // nothing to keep fresh.
@@ -59,6 +60,19 @@ export function StoreView() {
     }
     void checkUpdates()
   }, [storeApps.length, storeLoading, loadStoreApps, checkUpdates])
+
+  // Command-line tools tab: its own catalog, so no category bar and no store
+  // loading or error states.
+  if (storeCliOpen && !storeSelectedSlug && !storeMineOpen) {
+    return (
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <StoreHeader onRefresh={() => setCliReloadKey(key => key + 1)} />
+        <div className="flex-1 overflow-y-auto bg-muted/20">
+          <StoreCliTools reloadKey={cliReloadKey} />
+        </div>
+      </div>
+    )
+  }
 
   // Error state
   if (storeError && !storeLoading && storeApps.length === 0) {
@@ -113,11 +127,6 @@ export function StoreView() {
   // My Publications second-level view
   if (storeMineOpen) {
     return <StoreMine />
-  }
-
-  // Command-line tools second-level view
-  if (storeCliOpen) {
-    return <StoreCliTools />
   }
 
   const showDiscover = storeTypeFilter === null && !storeSearchQuery

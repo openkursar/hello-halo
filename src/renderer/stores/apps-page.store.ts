@@ -163,7 +163,7 @@ interface AppsPageState {
   storeHasMore: boolean
   /** True when the store's "My Publications" second-level view is open. */
   storeMineOpen: boolean
-  /** True when the store's command-line tools second-level view is open. */
+  /** True when the store's command-line tools tab is selected. */
   storeCliOpen: boolean
   storeSelectedSlug: string | null
   storeAutoInstall: boolean
@@ -556,7 +556,7 @@ export const useAppsPageStore = create<AppsPageState>()(
     // every caller of this action wants the navigation, and a store action
     // is the one place that can guarantee it happens instead of relying on
     // each of the four call sites to remember to add it themselves.
-    set({ storeTypeFilter: type })
+    set({ storeTypeFilter: type, storeCliOpen: false })
     useAppStore.getState().navigate('store')
     await get().loadStoreApps()
   },

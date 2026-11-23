@@ -4143,5 +4143,7 @@
   "Scanned. Confirm the sign-in on your phone.": "Scanned. Confirm the sign-in on your phone.",
   "Waiting for confirmation on your phone": "Waiting for confirmation on your phone",
   "Scan with your company app to sign in": "Scan with your company app to sign in",
-  "Company tools can now use this sign-in. Halo hands them access itself; the AI never sees it.": "Company tools can now use this sign-in. Halo hands them access itself; the AI never sees it."
+  "Company tools can now use this sign-in. Halo hands them access itself; the AI never sees it.": "Company tools can now use this sign-in. Halo hands them access itself; the AI never sees it.",
+  "Search command-line tools": "Search command-line tools",
+  "No matching command-line tools": "No matching command-line tools"
 }
