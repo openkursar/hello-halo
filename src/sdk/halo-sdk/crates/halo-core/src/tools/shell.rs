@@ -391,9 +391,11 @@ done"#
     fi
 done < <(compgen -e)"#
         };
+        let file = quote(&windows_posix(&file.to_string_lossy()));
+        // Reopen and truncate: env can reject -0 or fail partway through a dump.
         script.push(format!(
-            "{{ printf '%s\\0' \"$__agent_cwd\" && if [[ -x /usr/bin/env ]]; then /usr/bin/env -0; else {fallback}; fi && printf '\\0'; }} > {} 2>/dev/null || true",
-            quote(&windows_posix(&file.to_string_lossy()))
+            "{{ printf '%s\\0' \"$__agent_cwd\" && /usr/bin/env -0 && printf '\\0'; }} >| {file} 2>/dev/null || \
+             {{ printf '%s\\0' \"$__agent_cwd\" && {{ {fallback}; }} && printf '\\0'; }} >| {file} 2>/dev/null || true"
         ));
     }
     script.push("exit $__agent_ec".into());
@@ -800,6 +802,48 @@ mod restore_tests {
         file.cleanup().await;
         assert!(!path.exists());
         tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    async fn check_failed_env_dump(shell: &str, emit: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("halo-shell-env-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir(&root).await.unwrap();
+        let root = tokio::fs::canonicalize(root).await.unwrap();
+        let child = root.join("sub");
+        tokio::fs::create_dir(&child).await.unwrap();
+        let env = root.join("fixture env");
+        let program = format!("#!/bin/sh\nprintf '%s\\n' \"$1\" >> emitter-calls\n{emit}\nexit 1\n");
+        tokio::fs::write(&env, program).await.unwrap();
+        tokio::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o700)).await.unwrap();
+        let state = ShellState { cwd: root.to_string_lossy().into_owned(), env: HashMap::new() };
+        let file = StateFile::create(&root).unwrap();
+        let script = wrapper(
+            "cd sub && printf x >> command-calls && export KEEP='first\nPATH=/missing' && (exit 7)",
+            shell, &state, Some(&file.path), &crate::harness::baseline(), &mut HashMap::new(),
+        ).replace("/usr/bin/env", &quote(env.to_str().unwrap()));
+        let output = Command::new(shell).args(["-c", &script]).env_clear()
+            .env("HOME", &root).env("PATH", "/missing").output().await.unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(tokio::fs::read(child.join("command-calls")).await.unwrap(), b"x");
+        assert_eq!(tokio::fs::read(child.join("emitter-calls")).await.unwrap(), b"-0\n");
+        let saved = read_state(&file.path).await.unwrap();
+        assert_eq!(saved.cwd, child.to_string_lossy());
+        assert_eq!(saved.env["KEEP"], "first\nPATH=/missing");
+        assert!(!saved.env.contains_key("PARTIAL"));
+        drop(file);
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejecting_env_dump_falls_back_without_rerunning_the_command() {
+        check_failed_env_dump("/bin/bash", "").await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn partial_env_dump_is_replaced_before_zsh_fallback() {
+        check_failed_env_dump("/bin/zsh", "printf 'PARTIAL=discard\\0incomplete'").await;
     }
 
     #[tokio::test]
