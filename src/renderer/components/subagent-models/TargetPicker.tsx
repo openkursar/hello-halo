@@ -7,11 +7,10 @@ import { AccountModelList, AccountModelSection, ModelChoice } from '../ai-config
 import { accountSearchText, filterAccountModels, modelSearchWords } from '../ai-config/account-model-search'
 import { targetKey, targetLabel } from './model-presentation'
 
-export function TargetPicker({ config, value, onChange, immediate = false }: {
+export function TargetPicker({ config, value, onChange }: {
   config: AISourcesConfig
   value?: SubagentModelTarget
   onChange: (target: SubagentModelTarget) => void
-  immediate?: boolean
 }) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
@@ -29,8 +28,8 @@ export function TargetPicker({ config, value, onChange, immediate = false }: {
   const selected = value && targetKey(value)
 
   return (
-    <div role={immediate ? 'group' : 'radiogroup'} aria-label={t('Account and model')} className="space-y-2">
-      {!immediate && value && <p className="break-words text-sm text-foreground">{targetLabel(value, config, t)}</p>}
+    <div role="radiogroup" aria-label={t('Account and model')} className="space-y-2">
+      {value && <p className="break-words text-sm text-foreground">{targetLabel(value, config, t)}</p>}
       <AccountModelList query={query} onSearch={setQuery} searchLabel={availableGroups.length ? t('Search accounts, models and groups') : t('Search accounts and models')}>
         {accounts.map(({ source, models }) => (
           <AccountModelSection
@@ -41,7 +40,7 @@ export function TargetPicker({ config, value, onChange, immediate = false }: {
             searching={words.length > 0}
             renderModel={model => {
               const target: SubagentModelTarget = { kind: 'model', sourceId: source.id, modelId: model.id }
-              return <ModelChoice key={model.id} kind={immediate ? 'action' : 'radio'} name={id} label={model.name || model.id} checked={selected === targetKey(target)} onChange={() => onChange(target)} />
+              return <ModelChoice key={model.id} kind="radio" name={id} label={model.name || model.id} checked={selected === targetKey(target)} onChange={() => onChange(target)} />
             }}
           />
         ))}
@@ -50,7 +49,7 @@ export function TargetPicker({ config, value, onChange, immediate = false }: {
             <div className="px-3 pt-2 text-xs text-muted-foreground">{t('Load-Balancing Groups')}</div>
             {groups.map(group => {
               const target: SubagentModelTarget = { kind: 'group', groupId: group.id }
-              return <ModelChoice key={group.id} kind={immediate ? 'action' : 'radio'} name={id} label={group.name} checked={selected === targetKey(target)} onChange={() => onChange(target)} nested={false} />
+              return <ModelChoice key={group.id} kind="radio" name={id} label={group.name} checked={selected === targetKey(target)} onChange={() => onChange(target)} nested={false} />
             })}
           </div>
         )}

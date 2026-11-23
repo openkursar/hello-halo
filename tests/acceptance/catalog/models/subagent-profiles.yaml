@@ -16,7 +16,7 @@ references:
 promises:
   quiet: Advanced assignments appear only after opening the existing add menu; viewing or cancelling empty slots never persists or activates them, changes the main selection, or adds model tools, prompts, polling or routing requests.
   slots: Small, Medium and Large remain in fixed order, cannot be renamed or deleted, may remain unconfigured, and only bound targets enter the runtime catalog. Clearing preserves description and identity, increments revision and removes the target.
-  editor: Assignments use inline labelled keyboard-accessible editors, one at a time. Failure and conflicts preserve the draft, Escape does not silently discard it, cancellation restores focus, and dark and light desktop and narrow layouts have no horizontal overflow.
+  editor: Configure, Edit and Add open the same inline labelled keyboard-accessible form, one at a time, showing the name of a custom assignment, its purpose and its current target together; one Save applies them. Failure and conflicts preserve the draft, Escape closes only an untouched form, cancellation restores focus, and dark and light desktop and narrow layouts have no horizontal overflow.
   persistence: Targeted owner IPC and HTTP operations persist atomically, validate names and targets, reject stale revisions and protect managed assignments from stale whole-config saves. Accounts and the main selection remain unchanged.
   activation: The first saved bound assignment activates the optional capability with inherit as default. Task selection requires a bound target; removing the last one resets to inherit without stopping existing work.
   inheritance: Every newly created collaborator inherits its direct parent's effective provider-default, off, effort, budget or adaptive reasoning captured from the actual execution, even without advanced assignments. Later parent changes never rewrite existing collaborators; older records without snapshots retain their compatibility behavior.
@@ -93,8 +93,8 @@ scenarios:
       width: ['1280', '390']
     expected:
       - Three fixed headings precede the secondary custom entry; labelled editors remain in place with no modal or horizontal overflow.
-      - Choosing a model for a fixed slot applies it without a separate Save. Choosing nothing leaves the old state intact and cancellation restores focus.
-      - Saving details is a separate action. Conflict errors and Escape preserve that draft, and a successfully chosen target survives restart.
+      - Configure and Edit show the purpose and the account and model together, with the current target selected and repeated nowhere else in the row. A chosen model applies only on Save; cancelling leaves the old state intact and restores focus.
+      - Conflict errors and Escape preserve a changed draft, and a saved target survives restart.
       - Screenshots record the actual themed application at the requested width.
   - id: models.subagent-profiles.baseline-reasoning
     title: Every delegation entry inherits actual parent reasoning without configuration
