@@ -7,6 +7,7 @@
  * Features:
  *   - Portal rendering (escapes stacking context)
  *   - Viewport collision detection with auto-flip
+ *   - Follows its trigger while the page scrolls or resizes; closes once the trigger is out of sight
  *   - Click-outside and Escape to dismiss
  *   - Keyboard accessible trigger (Enter / Space)
  *   - Scale-in entry animation
@@ -20,6 +21,7 @@ import {
   useRef,
   useEffect,
   useLayoutEffect,
+  useCallback,
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
@@ -143,12 +145,11 @@ export function PopoverContent({
   const [pos, setPos] = useState({ top: 0, left: 0 })
   const [ready, setReady] = useState(false)
 
-  // Calculate position synchronously before paint
-  useLayoutEffect(() => {
-    if (!open) {
-      setReady(false)
-      return
-    }
+  // Latest callback, so the effect below keeps its listeners when the parent passes a new one
+  const closeRef = useRef(setOpen)
+  closeRef.current = setOpen
+
+  const place = useCallback(() => {
     const trigger = triggerRef.current
     const content = contentRef.current
     if (!trigger || !content) return
@@ -187,9 +188,42 @@ export function PopoverContent({
     top = Math.max(margin, Math.min(top, vh - cr.height - margin))
     left = Math.max(margin, Math.min(left, vw - cr.width - margin))
 
-    setPos({ top, left })
+    setPos(prev => (prev.top === top && prev.left === left ? prev : { top, left }))
     setReady(true)
-  }, [open, side, align, sideOffset])
+  }, [side, align, sideOffset, triggerRef])
+
+  // Calculate position synchronously before paint
+  useLayoutEffect(() => {
+    if (!open) {
+      setReady(false)
+      return
+    }
+    place()
+  }, [open, place])
+
+  // A fixed panel does not travel with its trigger: follow it while the page scrolls or resizes,
+  // and close once it has scrolled out of sight.
+  useEffect(() => {
+    if (!open) return
+    const trigger = triggerRef.current
+    if (!trigger) return
+
+    const onScroll = (e: Event) => {
+      if (e.target instanceof Node && e.target.contains(trigger)) place()
+    }
+    const observer = new IntersectionObserver(entries => {
+      if (!entries[entries.length - 1].isIntersecting) closeRef.current(false)
+    })
+
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    window.addEventListener('resize', place)
+    observer.observe(trigger)
+    return () => {
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', place)
+      observer.disconnect()
+    }
+  }, [open, place, triggerRef])
 
   // Dismiss on click outside or Escape
   useEffect(() => {
