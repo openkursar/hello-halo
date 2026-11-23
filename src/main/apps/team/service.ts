@@ -180,7 +180,6 @@ export interface TeamTriggerSync {
 export interface TeamSpaceDeps {
   spaceExists: (spaceId: string) => boolean
   createMemberSpace: (params: { teamName: string; memberName: string; owningSpaceId: string }) => string
-  deleteMemberSpace?: (spaceId: string) => void
   /**
    * The directory a space's agent works in — where its published artifacts
    * actually live. Not the space's internal bookkeeping path; the two differ for
@@ -1370,7 +1369,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
     store.removeMember(teamId, appId)
 
-    if (target.aiProvisioned) {
+    if (target.aiProvisioned && !isRemoteMember(target)) {
       await cleanupOrphanApp(appId, team.owningSpaceId)
     }
 
@@ -1455,44 +1454,20 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   // ── Dissolve (orphan cleanup) ──
 
-  /**
-   * Best-effort: failures logged, never thrown. Skips apps still referenced.
-   *
-   * Deletes the space only when the team provisioned it. A member built by AI
-   * gets a space of its own, so removing it takes back only what the team
-   * created. The lead is provisioned into the team's owning space — the user's
-   * own — where the app must go but the space must stay: deleting it would
-   * take that space's files and every other app living in it, and nothing
-   * restores them.
-   *
-   * This reads the space rather than how the app was flagged, because
-   * aiProvisioned is true for both. It holds as long as the lead is the only
-   * member provisioned into the owning space. Put anything else there, or give
-   * the lead a space of its own, and the two stop meaning the same thing —
-   * silently, since nothing here would fail.
-   */
   async function cleanupOrphanApp(appId: string, owningSpaceId: string): Promise<void> {
     if (store.listMembersByAppId(appId).length > 0) return
 
-    const app = appManager.getApp(appId)
-    const spaceId = app?.spaceId ?? null
+    // Legacy per-member spaces have no ownership record to distinguish them from a user's move.
+    if (appManager.getApp(appId)?.spaceId !== owningSpaceId) {
+      console.log(`${LOG_TAG} Skipped orphan cleanup: app=${appId} not found in team workspace=${owningSpaceId}`)
+      return
+    }
     try {
       await appManager.uninstall(appId, { purge: true, reason: 'system' })
       await appManager.deleteApp(appId)
       console.log(`${LOG_TAG} cleanupOrphanApp: deleted app=${appId}`)
     } catch (err) {
       console.warn(`${LOG_TAG} cleanupOrphanApp failed for app=${appId}:`, err)
-    }
-    if (spaceId && spaceId === owningSpaceId) {
-      console.log(`${LOG_TAG} cleanupOrphanApp: kept the team's owning space=${spaceId} (app=${appId})`)
-      return
-    }
-    if (spaceId && spaces.deleteMemberSpace) {
-      try {
-        spaces.deleteMemberSpace(spaceId)
-      } catch (err) {
-        console.warn(`${LOG_TAG} deleteMemberSpace failed for space=${spaceId}:`, err)
-      }
     }
   }
 
@@ -1605,7 +1580,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     await rt?.teamFolders.remove(teamId, epochIds)
 
     if (!opts.preserveInstalledMembers) for (const m of members) {
-      if (m.aiProvisioned) {
+      if (m.aiProvisioned && !isRemoteMember(m)) {
         await cleanupOrphanApp(m.appId, team.owningSpaceId)
       }
     }

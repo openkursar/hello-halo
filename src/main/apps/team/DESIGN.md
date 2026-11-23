@@ -261,8 +261,11 @@ logged), written through on every change.
 - `team_members` carries an extra column `ai_provisioned INTEGER NOT NULL
   DEFAULT 0`, present in the frozen `TeamMember` contract but not shown in
   §8.2. It marks members whose app was auto-created for this team (AI sourcing)
-  so the service can clean up orphans on dissolve. Manual members are never
-  auto-deleted.
+  so the service can clean up orphans on dissolve or removal. Only a local app
+  still in the team’s owning space and no longer referenced by any team is
+  deleted. Manual members and all spaces are kept. A legacy per-member space
+  has no ownership record distinguishing it from a user-selected destination;
+  both the member and its space are retained.
   Dissolve also removes the team folders of every epoch the team had
   (`runtime.teamFolders.remove`, see `apps/runtime/team` DESIGN), reading the
   epoch ids before the team row goes.

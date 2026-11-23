@@ -342,23 +342,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
     asksForPreset ? { appId, delegatedPolicy: capabilityPolicyFromPreset(preset) } : { appId },
   )
   const [promote, setPromote] = useState<{ appId: string; name: string } | null>(null)
-  // What removal actually does decides what the confirmation may promise, and
-  // it differs three ways: a member you added keeps everything; a member AI
-  // built loses itself and its own space; the lead loses itself but not the
-  // space, which is the team's owning space and therefore the user's own.
-  const [remove, setRemove] = useState<{
-    appId: string
-    name: string
-    aiProvisioned: boolean
-    /**
-     * The app lives in the team's owning space, so removal leaves the space
-     * behind — the demoted lead's case. False when the app record cannot be
-     * read at all: a member on a teammate's machine has none, and neither does
-     * any member while the app list is still loading. Both are answered with
-     * the more destructive wording rather than a promise that anything stays.
-     */
-    inOwningSpace: boolean
-  } | null>(null)
+  const [remove, setRemove] = useState<{ appId: string; name: string; aiProvisioned: boolean } | null>(null)
   // In a team joined from elsewhere, each digital human of this computer can be
   // taken out on its own. The last one going is this computer leaving the team.
   // The roster can change under an open dialog (an earlier removal lands, the
@@ -399,11 +383,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
               onRemove={readOnly || member.isLead ? undefined : () => setRemove({
                 appId: member.appId,
                 name: member.memberName,
-                aiProvisioned: member.aiProvisioned,
-                // Spelled out rather than app?.spaceId === …, so that "we could
-                // not tell" stays a decision made here instead of a value that
-                // falls out of optional chaining somewhere else.
-                inOwningSpace: app !== undefined && app.spaceId === detail.team.owningSpaceId,
+                aiProvisioned: member.aiProvisioned && !isRemoteMember(member),
               })}
               onWithdraw={readOnly && !isRemoteMember(member)
                 ? () => setWithdraw({ appId: member.appId, name: member.memberName })
@@ -449,24 +429,11 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
 
       {remove && (
         <ConfirmDialog
-          // The verb names the worst outcome the press authorises, not the one
-          // that is certain — the worst outcome always has a single value,
-          // "what actually happens" does not.
-          title={!remove.aiProvisioned
-            ? t('Remove {{name}} from this team?', { name: remove.name })
-            : remove.inOwningSpace
-              ? t('Delete {{name}}?', { name: remove.name })
-              : t('Delete {{name}} permanently?', { name: remove.name })}
-          message={!remove.aiProvisioned
-            ? t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })
-            : remove.inOwningSpace
-              ? t('Removing it deletes the digital human itself, and that cannot be undone. The space it works in is shared with the rest of the team and stays, along with everything in it. (If you have also added it to another team, it stays there and nothing is deleted.)', { name: remove.name })
-              : t('Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.')}
-          // Lighter when the app's space is the team's shared owning space: that
-          // space survives removal, so one rung down from "permanently".
-          confirmLabel={!remove.aiProvisioned
-            ? t('Remove')
-            : remove.inOwningSpace ? t('Delete') : t('Delete permanently')}
+          title={t('Remove {{name}} from this team?', { name: remove.name })}
+          message={remove.aiProvisioned
+            ? t('AI created this digital human for this team. Removing it permanently deletes it and its own data unless it now works in another space or another team also uses it. Its space is kept.')
+            : t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })}
+          confirmLabel={t('Remove')}
           cancelLabel={t('Cancel')}
           variant={remove.aiProvisioned ? 'danger' : 'default'}
           onConfirm={() => { const r = remove; setRemove(null); void removeMember(detail.team.id, r.appId) }}
@@ -624,34 +591,8 @@ function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOp
 
 function DangerSection({ detail }: { detail: TeamDetail }) {
   const dissolveTeam = useTeamStore(s => s.dissolveTeam)
-  const allApps = useAppsStore(s => s.apps)
   const { t } = useTranslation()
   const [confirm, setConfirm] = useState(false)
-
-  // The members dissolve actually deletes. The lead is excluded on purpose: it
-  // is hidden from the Digital Humans list, so naming it here would show a name
-  // the user has never seen, inside an irreversible confirmation.
-  const doomed = useMemo(
-    () => detail.members.filter(m => !m.isLead && m.aiProvisioned),
-    [detail.members]
-  )
-  // One source for both the count and the names, so the two can never disagree.
-  // The lead stays out of both and is disclosed in its own sentence instead —
-  // putting it in the count would split the two apart again.
-  const names = doomed.map(m => m.memberName).join(', ')
-  // Whether the lead dies with the team depends on who made it, not on its
-  // being the lead: one the team provisioned is deleted, one the user promoted
-  // from their own is not (service.ts provisionLead vs promoteExistingLead).
-  const leadDeleted = detail.members.find(m => m.isLead)?.aiProvisioned === true
-  // A newly AI-provisioned member's space is the team's owning space, so
-  // dissolving never touches its files. Members provisioned before that
-  // change still have their own separate spaces, which dissolving does
-  // delete; check every one rather than assume, so a mixed-age team gets
-  // the cautious wording instead of a false promise.
-  const allSpacesSurvive = doomed.length > 0 && doomed.every(m => {
-    const app = allApps.find(a => a.id === m.appId)
-    return app !== undefined && app.spaceId === detail.team.owningSpaceId
-  })
 
   return (
     <>
@@ -663,43 +604,15 @@ function DangerSection({ detail }: { detail: TeamDetail }) {
           {t('Dissolve team')}
         </button>
         <p className="mt-1 text-xs text-muted-foreground/60">
-          {/* Read before the button, so it has to survive being read alone:
-              it used to promise no digital human was deleted, and the dialog's
-              correction arrived only after the user had already been reassured. */}
-          {doomed.length > 0
-            ? (leadDeleted
-              ? t('Deletes the team and its run history, along with {{count}} digital humans AI created for it and the team\u2019s own lead. The digital humans you added stay yours.', { count: doomed.length })
-              : t('Deletes the team and its run history, along with {{count}} digital humans AI created for it. The digital humans you added stay yours.', { count: doomed.length }))
-            : (leadDeleted
-              ? t('Deletes the team and its run history, along with the team\u2019s own lead. The digital humans you added stay yours.')
-              : t('Deletes the team and its run history. The digital humans you added stay yours.'))}
+          {t('Deletes the team and its run history. Digital humans created for this team may also be deleted.')}
         </p>
       </div>
 
       {confirm && (
         <ConfirmDialog
-          title={doomed.length > 0
-            ? t('Dissolve {{name}} and delete {{count}} digital humans?', { name: detail.team.name, count: doomed.length })
-            : t('Dissolve {{name}}?', { name: detail.team.name })}
-          // The lead sentence sits before "cannot be undone", which closes off
-          // everything listed above it — anything added after would fall outside it.
-          message={doomed.length > 0
-            ? (allSpacesSurvive
-              ? (leadDeleted
-                ? t('{{names}} were created by AI for this team. Dissolving deletes them, and that cannot be undone. The team\u2019s own lead is deleted with it. The space they all worked in is yours and stays, along with everything in it.', { names })
-                : t('{{names}} were created by AI for this team. Dissolving deletes them, and that cannot be undone. The space they worked in is yours and stays, along with everything in it.', { names }))
-              : (leadDeleted
-                ? t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. The team\u2019s own lead is deleted with it. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names })
-                : t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names })))
-            : (leadDeleted
-              ? t('The team and its whole run history are deleted, along with the team\u2019s own lead, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.')
-              : t('The team and its whole run history are deleted, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.'))}
-          // A lead the team provisioned is deleted too, so even with no AI
-          // members the verb cannot be a bare "Dissolve" — unless the lead is
-          // one the user promoted, in which case nothing of theirs goes.
-          confirmLabel={doomed.length > 0
-            ? t('Dissolve and delete permanently')
-            : leadDeleted ? t('Dissolve and delete') : t('Dissolve')}
+          title={t('Dissolve {{name}}?', { name: detail.team.name })}
+          message={t('The team and its run history will be deleted. Digital humans that AI created for this team and that still work in its space will be deleted with their own data, unless another team also uses them. Members you added yourself, anyone in another space, and all spaces are kept. This cannot be undone.')}
+          confirmLabel={t('Dissolve')}
           cancelLabel={t('Cancel')}
           variant="danger"
           onConfirm={() => { setConfirm(false); void dissolveTeam(detail.team.id) }}

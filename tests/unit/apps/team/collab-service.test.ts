@@ -119,7 +119,6 @@ function buildService(overrides?: Partial<TeamServiceDeps>) {
       spaceExists: () => true,
       // Mirrors production: a member shares the owning space.
       createMemberSpace: ({ owningSpaceId }) => owningSpaceId,
-      deleteMemberSpace: vi.fn(),
     },
     listArtifacts: vi.fn(async () => []),
     proposeMembersFromGoal: vi.fn(async () => []),
@@ -518,7 +517,6 @@ describe('temporary space collaborations', () => {
       spaces: {
         spaceExists: () => true,
         createMemberSpace: ({ owningSpaceId }) => owningSpaceId,
-        deleteMemberSpace: vi.fn(),
         resolveWorkDir: (spaceId) => (spaceId === SPACE ? '/work/project' : null),
       },
     })
