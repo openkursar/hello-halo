@@ -73,6 +73,26 @@ mod tests {
         assert!(!actual.contains_key("UNDEFINED"));
         assert_eq!(actual.get("KEPT").map(String::as_str), Some("base"));
     }
+
+    #[test]
+    fn windows_environment_overrides_and_removals_ignore_key_case() {
+        let base = json!({"Path":"system", "home":"original", "REMOVE":"old"});
+        let first = json!({"PATH":"tools;system", "HOME":"override"});
+        let mut last = json!({"path":"final;tools;system"});
+        last["remove"] = crate::js::undefined();
+        let actual = merged_environment(&base, &[&first, &last], true);
+        assert_eq!(actual.len(), 2);
+        assert_eq!(actual["PATH"], "final;tools;system");
+        assert_eq!(actual["HOME"], "override");
+    }
+
+    #[test]
+    fn posix_environment_retains_distinct_key_case() {
+        let base = json!({"Path":"unrelated", "PATH":"system"});
+        let actual = merged_environment(&base, &[&json!({"PATH":"override"})], false);
+        assert_eq!(actual["PATH"], "override");
+        assert_eq!(actual["Path"], "unrelated");
+    }
 }
 
 pub fn home(options: &Value) -> String {

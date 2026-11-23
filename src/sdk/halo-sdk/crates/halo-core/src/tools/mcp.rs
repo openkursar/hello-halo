@@ -140,7 +140,7 @@ impl Connection {
             let environment = crate::core::conventions::merged_environment(
                 &crate::core::conventions::process_environment(options),
                 &[&config["env"]],
-                false,
+                cfg!(windows),
             );
             command.env_clear().envs(environment);
             #[cfg(windows)]

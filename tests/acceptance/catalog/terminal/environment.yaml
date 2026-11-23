@@ -141,9 +141,13 @@ scenarios:
     steps:
       - en: Ask a real command tool to write its working directory and the selected marker to a fixture output file.
         zh: 让真实命令工具把当前目录及所选标记写入测试产物。
+      - en: Export a multiline value containing PATH and assignment-shaped lines, then inspect the environment with a second command in the same conversation.
+        zh: 导出包含 PATH 及形似赋值行的多行变量，再在同一会话运行第二条命令检查环境。
     expected:
       - en: The command receives the exact selected workspace and marker without relying on shell startup files.
         zh: 命令收到准确的选定空间及标记，不依赖 Shell 启动文件。
+      - en: The later command retains the original command path and exact multiline value, without creating variables from lines inside that value.
+        zh: 后续命令保留原有命令路径和完整多行值，不把值中的行变成其他变量。
     requirements:
       - halo-sdk
     notes:

@@ -30,6 +30,28 @@ test('native public tool pool retains ordering, instance boundaries and direct v
   } finally { await releaseNativeToolOwner(context.sessionId); await rm(root, { recursive: true, force: true }); }
 });
 
+test('native shell snapshots preserve PATH and multiline values between commands', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'halo-shell-environment-'));
+  const bash = sdk.findToolByName(sdk.getAllTools(), 'Bash');
+  const marker = 'first line\nPATH=/usr/bin:/bin\nSNAPSHOT_NOT_A_KEY=fixture\nUnicode: λ\n';
+  const context = { sessionId: `shell-environment-${randomUUID()}`, cwd: root,
+    env: { HOME: root, Z_DIAGNOSTIC: marker }, abortSignal: new AbortController().signal,
+    costTracker: new sdk.CostTracker('fixture'), currentTurn: 1, readFileState: new Map(), skillCatalog: [] };
+  try {
+    const command = 'printf "%s\\0%s\\0%s" "$PATH" "$Z_DIAGNOSTIC" "${SNAPSHOT_NOT_A_KEY-unset}"';
+    const first = await bash.execute({ command }, context);
+    const second = await bash.execute({ command }, context);
+    assert.equal(first.isError, false); assert.equal(second.isError, false);
+    const [path, value, absent] = second.content.split('\0');
+    assert.ok(path.length > 0); assert.equal(value, marker); assert.equal(absent, 'unset');
+    assert.equal(second.content, first.content);
+    const exported = await bash.execute({ command: 'export SNAPSHOT_EXPORT="retained=value"' }, context);
+    assert.equal(exported.isError, false);
+    const retained = await bash.execute({ command: 'printf "%s" "$SNAPSHOT_EXPORT"' }, context);
+    assert.equal(retained.content, 'retained=value');
+  } finally { await releaseNativeToolOwner(context.sessionId); await rm(root, { recursive: true, force: true }); }
+});
+
 test('direct native file tools use the caller read map and direct shell calls retain session state', async () => {
   const root = await mkdtemp(join(tmpdir(), 'halo-native-tools-')), tools = sdk.getAllTools();
   const path = join(root, 'file.txt'), state = new Map(), observed = [];

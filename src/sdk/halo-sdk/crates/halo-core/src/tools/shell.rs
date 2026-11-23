@@ -200,6 +200,7 @@ fn filtered(key: &str) -> bool {
         "PWD",
         "__agent_ec",
         "__agent_cwd",
+        "__agent_env_name",
         "FUNCNAME",
         "PIPESTATUS",
         "OLDPWD",
@@ -376,8 +377,23 @@ fn wrapper(
             quote(&state.cwd),
             quote(harness.text(TextId::ToolsShellWrapperCwdRetained))
         ));
+        // Use shell builtins so a command can change PATH without losing its snapshot.
+        let dump = if is_zsh(shell) {
+            r#"for __agent_env_name in "${(@k)parameters}"; do
+    if [[ ${(tP)__agent_env_name} == *export* ]]; then
+        printf '%s=%s\0' "$__agent_env_name" "${(P)__agent_env_name}"
+    fi
+done"#
+        } else {
+            r#"while IFS= read -r __agent_env_name; do
+    case "$__agent_env_name" in ''|[0-9]*|*[!a-zA-Z0-9_]*) continue;; esac
+    if [[ ${!__agent_env_name+x} ]]; then
+        printf '%s=%s\0' "$__agent_env_name" "${!__agent_env_name}"
+    fi
+done < <(compgen -e)"#
+        };
         script.push(format!(
-            "{{ printf '%s\\n' \"$__agent_cwd\"; env; }} > {} 2>/dev/null || true",
+            "{{ printf '%s\\0' \"$__agent_cwd\" && {{ {dump}; }} && printf '\\0'; }} > {} 2>/dev/null || true",
             quote(&windows_posix(&file.to_string_lossy()))
         ));
     }
@@ -385,38 +401,46 @@ fn wrapper(
     script.join("\n")
 }
 async fn read_state(file: &Path) -> Option<ShellState> {
-    let raw = tokio::fs::read_to_string(file).await.ok()?;
-    let mut lines = raw.strip_suffix('\n').unwrap_or(&raw).split('\n');
-    let cwd = lines.next()?.to_owned();
+    let raw = match tokio::fs::read_to_string(file).await {
+        Ok(raw) => raw,
+        Err(error) => {
+            tracing::warn!(%error, "shell state discarded: snapshot could not be read");
+            return None;
+        }
+    };
+    let state = parse_state(&raw);
+    if state.is_none() {
+        tracing::warn!("shell state discarded: malformed or incomplete snapshot");
+    }
+    state
+}
+
+fn parse_state(raw: &str) -> Option<ShellState> {
+    // The final empty record distinguishes a complete dump from a partial write.
+    let mut records = raw.strip_suffix("\0\0")?.split('\0');
+    let cwd = records.next()?.to_owned();
     let cwd = if cfg!(windows) {
         posix_to_windows(&cwd)
     } else {
         cwd
     };
     if !Path::new(&cwd).is_absolute() || cwd.contains(['\0', '\r', '\n']) {
-        tracing::warn!("shell state discarded: invalid working directory");
         return None;
     }
     let mut env = HashMap::new();
-    let mut key = String::new();
-    let mut value = String::new();
-    let flush = |k: &str, v: &str, env: &mut HashMap<String, String>| {
-        if !k.is_empty() && !filtered(k) {
-            env.insert(k.into(), v.into());
+    for record in records {
+        let (key, value) = record.split_once('=')?;
+        if filtered(key) {
+            continue;
         }
-    };
-    let regex = regex::Regex::new(r"^([A-Za-z_][A-Za-z0-9_]*)=").unwrap();
-    for line in lines {
-        if let Some(c) = regex.captures(line) {
-            flush(&key, &value, &mut env);
-            key = c[1].into();
-            value = line[c[0].len()..].into();
-        } else if !key.is_empty() {
-            value.push('\n');
-            value.push_str(line);
+        let mut name = key.bytes();
+        if !name.next().is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
+            || !name.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        {
+            return None;
         }
+        env.insert(key.to_owned(), value.to_owned());
     }
-    flush(&key, &value, &mut env);
     Some(ShellState { cwd, env })
 }
 
@@ -437,14 +461,39 @@ mod migration_tests {
     }
     #[tokio::test]
     async fn state_parser_preserves_values_filters_internal_keys_and_rejects_invalid_cwd() {
-        let (root,shell,ctx)=fixture().await; let file=root.join("state");
+        let (root, shell, ctx) = fixture().await;
+        let file = root.join("state");
         assert!(read_state(&file).await.is_none());
-        tokio::fs::write(&file,format!("{}\nFOO=bar\nBAZ=qux\nVAR=key=value=more\nMULTILINE=line1\ncontinued\nVAR2=ok\nSHLVL=2\nBASH_VERSION=5.1\nPIPESTATUS=0\n_=last\nPWD=/stale\n__agent_cwd=/stale\n__agent_ec=0\nBASH_FUNC_foo%%=() {{ echo bar; }}\nMYVAR=keep\n",ctx.cwd)).await.unwrap();
-        let state=read_state(&file).await.unwrap();assert_eq!(state.cwd,ctx.cwd);
-        for (key,value) in [("FOO","bar"),("BAZ","qux"),("VAR","key=value=more"),("MULTILINE","line1\ncontinued"),("VAR2","ok"),("MYVAR","keep")] { assert_eq!(state.env.get(key).map(String::as_str),Some(value)); }
-        for key in ["SHLVL","BASH_VERSION","PIPESTATUS","_","PWD","__agent_cwd","__agent_ec","BASH_FUNC_foo%%"] { assert!(!state.env.contains_key(key)); }
-        for invalid in ["","\n\n/p\nFOO=bar\n","PATH=/usr/bin\nFOO=bar\n","relative/path\nFOO=bar\n","SECRET=fixture-value\nFOO=bar\n"] {tokio::fs::write(&file,invalid).await.unwrap();assert!(read_state(&file).await.is_none());}
-        finish(root,shell).await;
+        let raw = [
+            &ctx.cwd, "FOO=bar", "BAZ=qux", "VAR=key=value=more", "EMPTY=", "PATH=expected",
+            "MULTILINE=line1\nPATH=/missing\nNEW_KEY=not-a-variable\nλ\n", "VAR2=ok",
+            "SHLVL=2", "BASH_VERSION=5.1", "PIPESTATUS=0", "_=last", "PWD=/stale",
+            "__agent_cwd=/stale", "__agent_ec=0", "__agent_env_name=FOO",
+            "BASH_FUNC_foo%%=() { echo bar; }", "MYVAR=keep", "", "",
+        ].join("\0");
+        tokio::fs::write(&file, raw).await.unwrap();
+        let state = read_state(&file).await.unwrap();
+        assert_eq!(state.cwd, ctx.cwd);
+        for (key, value) in [
+            ("FOO", "bar"), ("BAZ", "qux"), ("VAR", "key=value=more"), ("EMPTY", ""),
+            ("PATH", "expected"), ("MULTILINE", "line1\nPATH=/missing\nNEW_KEY=not-a-variable\nλ\n"),
+            ("VAR2", "ok"), ("MYVAR", "keep"),
+        ] {
+            assert_eq!(state.env.get(key).map(String::as_str), Some(value));
+        }
+        for key in ["SHLVL", "BASH_VERSION", "PIPESTATUS", "_", "PWD", "__agent_cwd", "__agent_ec",
+            "__agent_env_name", "BASH_FUNC_foo%%", "NEW_KEY"] {
+            assert!(!state.env.contains_key(key));
+        }
+        for invalid in [
+            "", "/workspace\nFOO=bar\n", "/workspace\0PATH=partial", "/workspace\0PATH=partial\0",
+            "\0FOO=bar\0\0", "relative/path\0FOO=bar\0\0", "/line\nfeed\0FOO=bar\0\0",
+            "PATH=/usr/bin\0FOO=bar\0\0", "SECRET=fixture-value\0FOO=bar\0\0",
+            "/workspace\0BAD-NAME=value\0\0", "/workspace\0not-an-entry\0\0",
+        ] {
+            assert!(parse_state(invalid).is_none());
+        }
+        finish(root, shell).await;
     }
     #[tokio::test]
     async fn shell_selection_and_wrapper_restore_are_environment_scoped() {
@@ -733,6 +782,34 @@ mod restore_tests {
     }
 
     #[tokio::test]
+    async fn multiline_environment_cannot_replace_path_in_the_next_command() {
+        let root = std::env::temp_dir().join(format!("halo-shell-snapshot-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let root = tokio::fs::canonicalize(root).await.unwrap();
+        let file = root.join("state");
+        let value = "first\nPATH=/missing\nSNAPSHOT_NOT_A_KEY=fixture\n";
+        for shell in ["/bin/bash", "/bin/zsh"].into_iter().filter(|shell| Path::new(shell).is_file()) {
+            let mut state = ShellState { cwd: root.to_string_lossy().into_owned(), env: HashMap::new() };
+            for round in 0..2 {
+                let mut env = HashMap::from([("PATH".into(), "/usr/bin:/bin".into()), ("HOME".into(), state.cwd.clone())]);
+                if round == 0 {
+                    env.insert("Z_DIAGNOSTIC".into(), value.into());
+                }
+                let script = wrapper("printf '%s\\0%s' \"$PATH\" \"$Z_DIAGNOSTIC\"", shell, &state, Some(&file),
+                    &crate::harness::baseline(), &mut env);
+                let output = Command::new(shell).args(["-c", &script]).env_clear().envs(env).output().await.unwrap();
+                assert!(output.status.success());
+                assert_eq!(output.stdout, format!("/usr/bin:/bin\0{value}").as_bytes());
+                state = read_state(&file).await.unwrap();
+                assert_eq!(state.env["PATH"], "/usr/bin:/bin");
+                assert_eq!(state.env["Z_DIAGNOSTIC"], value);
+                assert!(!state.env.contains_key("SNAPSHOT_NOT_A_KEY"));
+            }
+        }
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn persisted_values_stay_out_of_argv_and_override_shell_startup() {
         let root =
             std::env::temp_dir().join(format!("halo-shell-restore-{}", uuid::Uuid::new_v4()));
@@ -1014,7 +1091,7 @@ async fn run(
     let mut environment = crate::core::conventions::merged_environment(
         &base_environment,
         &[&defaults, &ctx.env],
-        false,
+        cfg!(windows),
     );
     let shell = shell_path(&json!(environment))?;
     let background = output.is_some();
