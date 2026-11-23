@@ -96,6 +96,13 @@ describe('buildTeamImBridge', () => {
 })
 
 describe('buildTeamEntry — no per-turn content', () => {
+  it('identifies a named or untitled team task and adds nothing outside a task', () => {
+    const guidance = 'Team messages, questions for the user and scheduled checks you create here are recorded under this task, so keep them about this task.'
+    expect(buildTeamEntry(makeCtx({ taskTitle: 'Review "A"\nnext' }))).toContain(`Current team task: "Review \\"A\\" next". ${guidance}`)
+    expect(buildTeamEntry(makeCtx({ taskTitle: '' }))).toContain(`You are working in an untitled team task. ${guidance}`)
+    expect(buildTeamEntry(makeCtx())).not.toContain(guidance)
+  })
+
   it('uses one lead address even when an existing source has the old stored name', () => {
     const context = makeCtx({ collabMode: 'structured', selfIsLead: false, selfMemberName: 'Alice', roster: [
       { ...localMate, appId: 'source', memberName: 'coordinator', role: '', isLead: true },

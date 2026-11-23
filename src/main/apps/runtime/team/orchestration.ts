@@ -1843,9 +1843,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         }
       })
 
+    const epoch = store.getEpochById(epochId)
     return {
       teamName: team.name,
       goal: team.goal,
+      taskTitle: !team.ephemeral && epoch ? (epoch.workItem?.title || epoch.title || '').trim() : undefined,
       temporaryCollaboration: team.ephemeral === true,
       collabMode: team.collabMode,
       escalationRouting: team.escalationRouting,
@@ -1859,7 +1861,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       selfIsDisposable: ('isTemporary' in self && self.isTemporary) || (team.ephemeral === true && self.aiProvisioned),
       roster,
       teamFolder: deps.teamFolders?.forMember(teamId, epochId, selfAppId) ?? null,
-      chatKey: store.getEpochById(epochId)?.chatKey ?? null,
+      chatKey: epoch?.chatKey ?? null,
     }
   }
 

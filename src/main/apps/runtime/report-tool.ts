@@ -19,6 +19,7 @@ import { notifyAppEvent } from '../../services/notification.service'
 import { isServerMode } from '../../foundation/runtime-mode'
 import { reportOutputDir, resolveReportFile } from './report-output'
 import { getActiveTeamRuntime } from './team'
+import { withTeamTaskReceipt } from './team-task-context'
 import { oneLineExcerpt } from './text-truncate'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 
@@ -42,6 +43,7 @@ export interface ReportToolContext {
   plansDir?: string
   /** Drives team-specific report routing when present. */
   teamContext?: TeamTriggerContext
+  taskTitle?: string
   canComplete?: () => boolean
   onReported?: () => void
 }
@@ -425,11 +427,12 @@ export function createReportToolServer(
         broadcastToAll('app:escalation:new', escalationEvent)
         sendToRenderer('app:escalation:new', escalationEvent)
 
-        return textResult(
+        return textResult(withTeamTaskReceipt(
           `Escalation sent to user (entry: ${entryId}). ` +
           resumeExpectation(!!team) +
-          describeOpenQuestions(store, runContext, entryId)
-        )
+          describeOpenQuestions(store, runContext, entryId),
+          persisted && team ? runContext.taskTitle : undefined
+        ))
       }
 
       return textResult(`Report saved (entry: ${entryId}).`)

@@ -2080,6 +2080,16 @@ describe('TeamOrchestration', () => {
       expect(store.listMembersByTeam(TEAM_ID, EPOCH_ID)).toHaveLength(5)
     })
 
+    it('projects the title of the requested task, not another open task or the standing goal', () => {
+      seedTeam(store)
+      const orch = build(makeSession().deps)
+      const first = orch.ensureConversationEpoch(TEAM_ID, 'native:first', 'Check revisions')
+      const second = orch.ensureConversationEpoch(TEAM_ID, 'native:second')
+      store.updateWorkItem(first.id, { title: 'Revised brief' })
+      expect(orch.buildPromptContext(TEAM_ID, LEAD_APP, first.id)?.taskTitle).toBe('Revised brief')
+      expect(orch.buildPromptContext(TEAM_ID, LEAD_APP, second.id)?.taskTitle).toBe('')
+    })
+
     it('projects roster with topology contactability, per member', () => {
       seedTeam(store, { collabMode: 'structured' })
       makeEpoch(store, EPOCH_ID)
@@ -2144,7 +2154,10 @@ describe('TeamOrchestration', () => {
       it('is true for a member the temporary collaboration built', () => {
         seedTeam(store, { ephemeral: true, aiProvisioned: true, collabMode: 'free' })
         makeEpoch(store, EPOCH_ID)
-        expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!.selfIsDisposable).toBe(true)
+        store.renameEpoch(EPOCH_ID, 'Private collaboration')
+        const context = make().buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!
+        expect(context.selfIsDisposable).toBe(true)
+        expect(context.taskTitle).toBeUndefined()
       })
 
       it('is false for a digital human the person installed, even in a temporary collaboration', () => {

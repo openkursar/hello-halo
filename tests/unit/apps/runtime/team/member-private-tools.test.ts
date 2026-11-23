@@ -52,7 +52,7 @@ it.each([undefined, 'colleague', 'guest'] as const)('keeps public work separate 
   const postFinding = vi.fn(() => ({ findingId: 'finding' }))
   const readMemberRecord = vi.fn(async () => ({ ok: false as const, reason: 'unavailable' as const, message: 'record read' }))
   const binding = bindTeamToolSession(sourceKey, {
-    teamId: 'public', epochId: 'public-work', callerAppId: 'parent', collabMode: 'free', selfIsLead: false,
+    teamId: 'public', epochId: 'public-work', taskTitle: 'Public assignment', callerAppId: 'parent', collabMode: 'free', selfIsLead: false,
     requestId: 'root/parent', origin, participants, bus, callerWorkDir: directory,
     blackboard: { postFinding, postActivity: vi.fn() } as any, readMemberRecord,
     canSpawn: () => true, spawnSource: () => ({ modelSelection: { modelSourceId: 'source', modelId: 'model' }, engineId: 'halo',
@@ -80,8 +80,11 @@ it.each([undefined, 'colleague', 'guest'] as const)('keeps public work separate 
   expect(readMemberRecord).not.toHaveBeenCalled()
   expect(stopMemberTurn).not.toHaveBeenCalled()
   store.renameMember('public', 'peer-id', name)
-  expect(await call('team_send', { to: name, message: 'Public assignment' })).not.toMatchObject({ isError: true })
-  expect(await call('team_send', { to: handle, message: 'Private follow-up' })).not.toMatchObject({ isError: true })
+  const sharedReply = await call('team_send', { to: name, message: 'Public assignment' })
+  expect(sharedReply.content[0].text).toContain('Recorded under task "Public assignment".')
+  const privateReply = await call('team_send', { to: handle, message: 'Private follow-up' })
+  expect(privateReply.isError).not.toBe(true)
+  expect(privateReply.content[0].text).not.toContain('Recorded under')
   expect(sends.mock.calls.map(([input]) => [input.teamId, input.to])).toEqual([
     ['private', handle], ['public', 'peer-id'], ['private', handle],
   ])

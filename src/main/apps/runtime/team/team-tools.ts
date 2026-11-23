@@ -15,6 +15,7 @@ import { TeamBusError } from './message-bus'
 import { TeamCheckError, describeSchedule } from './checks'
 import { resolveArtifactRef, explainArtifactRefRejection, formatArtifactSize } from './artifact-path'
 import { renderBoardMarkdown } from './board-render'
+import { withTeamTaskReceipt } from '../team-task-context'
 import type { MessageBus } from './message-bus'
 import type { Blackboard, PostActivityInput, PublishedRefClaim } from './blackboard'
 import type { TeamChecks } from './checks'
@@ -32,6 +33,7 @@ type SdkMcpServer = ReturnType<typeof createSdkMcpServer>
 export interface TeamMcpContext {
   teamId: string
   epochId: string
+  taskTitle?: string
   callerAppId: string
   collabMode: CollabMode
   selfIsLead: boolean
@@ -248,10 +250,11 @@ function buildSendOperation(resolve: ResolveTeamMcpContext): NonNullable<Collabo
         ...(ctx.origin ? { origin: ctx.origin } : {}),
         ...(typeof continuedRequest === 'string' ? { requestId: continuedRequest } : ctx.requestId ? { requestId: ctx.requestId } : {}),
       })
+      const receipt = (text: string) => textResult(withTeamTaskReceipt(text, ctx.taskTitle))
       // A teammate send is always async; the sync receipt shape is unreachable
       // from here (only a person's 1:1 chat asks for one).
       if (!('messageId' in result)) {
-        return textResult(`Message sent to "${input.to}".`)
+        return receipt(`Message sent to "${input.to}".`)
       }
 
       if (result.delivery === 'undelivered') {
@@ -263,7 +266,7 @@ function buildSendOperation(resolve: ResolveTeamMcpContext): NonNullable<Collabo
         )
       }
       if (result.delivery === 'queued') {
-        return textResult(
+        return receipt(
           `Message queued for "${input.to}" (id: ${result.messageId}). They are busy with another turn ` +
             `right now; it will be delivered the moment that turn ends. If this is urgent, consider ` +
             `another teammate.`
@@ -274,7 +277,7 @@ function buildSendOperation(resolve: ResolveTeamMcpContext): NonNullable<Collabo
         // mid-task, so an answer is not the next thing they will do — and from
         // 'queued', which would have the sender wait for a turn to end that
         // this message has already reached inside.
-        return textResult(
+        return receipt(
           `Message delivered to "${input.to}" (id: ${result.messageId}) while they were working — they ` +
             `see it at their next step, without being interrupted. They may be part-way through ` +
             `something, so give them room to react; if they answer while you work, it arrives after your current tool call.`
@@ -285,14 +288,14 @@ function buildSendOperation(resolve: ResolveTeamMcpContext): NonNullable<Collabo
         // all this end can observe, and whether it woke the member is knowable
         // only there. Said plainly because the alternative is a lead that waits
         // indefinitely on a member that never ran, unable to tell the two apart.
-        return textResult(
+        return receipt(
           `Message accepted for "${input.to}" (id: ${result.messageId}). They run on another machine, so ` +
             `this end cannot confirm they actually started — silence is NOT evidence they are working. ` +
             `Carry on with other work, and if nothing comes back, check whether they ever picked it up ` +
             `(team_read_board) rather than waiting longer.`
         )
       }
-      return textResult(
+      return receipt(
         `Message delivered to "${input.to}" (id: ${result.messageId}). If they answer, it will arrive ` +
           `after your current tool call while you continue working.`
       )
@@ -569,10 +572,10 @@ function buildScheduleTool(resolve: ResolveTeamMcpContext) {
           body: input.instruction,
           refId: check.id,
         })
-        return textResult(
+        return textResult(withTeamTaskReceipt(
           `"${input.to}" will now wake ${describeSchedule(check.schedule)} with your instruction ` +
-            `(check id: ${check.id}). Call team_unschedule when it is no longer needed.`
-        )
+            `(check id: ${check.id}). Call team_unschedule when it is no longer needed.`, ctx.taskTitle
+        ))
       } catch (err) {
         return busErrorResult(err)
       }

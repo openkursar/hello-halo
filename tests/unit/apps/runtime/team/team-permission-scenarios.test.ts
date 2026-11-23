@@ -1638,6 +1638,26 @@ describe('a question asked in a held-back turn', () => {
 // ============================================
 
 describe('the owner and the owner\u2019s own digital humans', () => {
+  it.each(['Review revisions', ''])('names the same task in the prompt and all three coordination receipts: %j', async title => {
+    runtime.renameConversationEpoch(TEAM_ID, epochId, title || null)
+    runtime.ensureConversationEpoch(TEAM_ID, 'native:unrelated', 'Unrelated work')
+    const receipts: string[] = []
+    duringNextTurnOf(LEAD, async turn => {
+      receipts.push(await callTool(turn.teamTools, 'team_send', { to: 'tester', message: 'Review the revisions.' }))
+      receipts.push(await callTool(turn.teamTools, 'team_schedule', { to: 'lead', every: '15m', instruction: 'Check for revisions.' }))
+      receipts.push(await callTool(turn.report, 'report_to_user', { type: 'escalation', message: 'Approve the revisions?' }))
+    })
+    await fromTheOwner(LEAD, 'Check the revisions.')
+
+    const prompt = promptOf(turnsOf(LEAD)[0])
+    expect(prompt).toContain(title ? `Current team task: "${title}".` : 'You are working in an untitled team task.')
+    expect(prompt).not.toContain('Unrelated work')
+    const landing = title ? `Recorded under task "${title}".` : 'Recorded under this task.'
+    expect(receipts).toHaveLength(3)
+    for (const receipt of receipts) expect(receipt).toContain(landing)
+    expect(h.entries.find(entry => entry.type === 'escalation')?.content.teamContext).toMatchObject({ teamId: TEAM_ID, epochId })
+  })
+
   it('the owner\u2019s own message has the owner\u2019s reach, right after a teammate\u2019s held-back turn on the same conversation', async () => {
     saveDelegatedPolicy(DEV, READ_ONLY)
     await fromAnotherMachine(DEV, 'Draft the solution design for the import job.')

@@ -55,6 +55,7 @@ export interface MemberTurn {
   readonly appId: string
   readonly teamId: string
   readonly epochId: string
+  readonly taskTitle?: string
   readonly forwardDepth?: number
   readonly collabMode: CollabMode
   readonly selfIsLead: boolean

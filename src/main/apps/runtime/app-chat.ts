@@ -1020,7 +1020,7 @@ async function runAppChatTurn(
     // question asked while serving a request from outside persists that
     // request's origin, so the turn its answer resumes serves it too (see
     // resumeFromEscalation).
-    ...(teamContext ? { teamContext: { ...teamContext, origin: relayedOrigin } } : {}),
+    ...(teamContext ? { teamContext: { ...teamContext, origin: relayedOrigin }, taskTitle: teamPromptCtx?.taskTitle } : {}),
   }
 
   // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
@@ -1133,6 +1133,7 @@ async function runAppChatTurn(
           kind: 'member', requestId: teamRequestId,
           member: {
             appId: app.id, teamId: teamContext.teamId, epochId: teamContext.epochId, forwardDepth: teamContext.forwardDepth,
+            taskTitle: teamPromptCtx.taskTitle,
             collabMode: teamPromptCtx.collabMode, selfIsLead: teamPromptCtx.selfIsLead, teamFolder: teamPromptCtx.teamFolder,
             disposable: disposableMember, servesGuest: permCtx?.isOwner === false,
           },
