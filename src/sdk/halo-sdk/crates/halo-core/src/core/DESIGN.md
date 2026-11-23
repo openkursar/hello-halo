@@ -17,10 +17,11 @@ Implementation filenames below refer to Rust modules.
 
 ## Preset instructions
 
-`Options.ultraEffort` defaults to false. It selects only the task-effort and
-failure-response guidance within `How you work`; identity and all other guidance
-remain the same. The normal mode emphasizes efficient use of the token budget.
-UltraEffort encourages fuller investment, varied approaches and useful parallel
+`Options.ultraEffort` defaults to false. It adds a fullest-effort instruction to
+`How you work` and replaces the failure-response guidance; identity and all other
+guidance remain the same. The normal mode has no separate effort instruction and
+answers a failed attempt without repetitive retries or scope expansion.
+UltraEffort encourages fullest effort, varied approaches and useful parallel
 collaboration with at most four active agents including the source agent. This is
 prompt guidance, not a new runtime concurrency limit.
 
@@ -28,8 +29,8 @@ The option is independent of provider reasoning `effort`, prompt profiles,
 permissions, budgets and completion checks. It stays in the stable system prefix
 across model switches and is inherited by child sessions. Complete custom
 system-prompt strings are not rewritten. The native Harness catalog is the text
-source for work and communication guidance; the TypeScript prompt helpers use its
-generated baseline. Communication is shared by both modes.
+source for these instructions. Communication and design guidance are shared by
+both modes.
 
 ## Streaming and scheduling
 

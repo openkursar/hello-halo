@@ -245,7 +245,7 @@ describe('grouped worker runtime with real threads', () => {
     for (const entry of requests) {
       const prompt = JSON.stringify(entry.request.systemPrompt);
       expect(prompt.includes("Put your fullest effort into solving the user's task")).toBe(ultraEffort);
-      expect(prompt.includes("Fulfill the user's request efficiently")).toBe(!ultraEffort);
+      expect(prompt.includes('Avoid repetitive attempts or scope expansion.')).toBe(!ultraEffort);
       expect(prompt).toContain('# Communicating');
       expect(entry.threadId).toBe(current.threadId);
     }

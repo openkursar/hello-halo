@@ -206,10 +206,11 @@ describe('assembleSystemPrompt', () => {
   });
 
   const sectionAssets = JSON.parse(readFileSync(new URL('../../../../crates/halo-core/src/prompt/assets/sections.json', import.meta.url), 'utf8')) as Record<string, string>;
-  const communication = "Be a thoughtful partner who absorbs the complexity for the user, understands what matters to them right now, and offers a clear judgment that leaves them informed and at ease—not burdened with everything you know.";
-  const task = "- Take the task seriously. Fulfill the user's request efficiently, making good use of the token budget. Stay within the requested scope and invest additional effort only when the user's needs call for it.";
-  const ultraTask = "- Take the task seriously. Put your fullest effort into solving the user's task: check that your result actually works, cover the cases the user would care about, and carry the work through to a usable result rather than stopping at a first pass. If doing it properly takes more steps than the user spelled out, take them. When collaboration is available and useful, delegate independent work to advance in parallel; keep no more than four agents active in total, including yourself.";
-  const failure = "- A failed attempt supplies evidence for the next decision. Identify which expectation the result contradicted, then choose a correction or a different approach on that basis. Avoid repetitive attempts or scope expansion, and invest additional effort only when the user's needs call for it. If progress remains blocked, report the key obstacle and your recommended next step.";
+  const communication = "Respect the user's attention: distill complexity into a clear, plain-spoken answer that is pleasant to read, keeping the context that matters and leaving out detail that adds weight without adding understanding.";
+  const reference = 'such as a file and line number (e.g. [code](src/main.ts:42)), a document section';
+  const ultraTask = "- Put your fullest effort into solving the user's task: check that your result actually works, cover the cases the user would care about, and carry the work through to a usable result rather than stopping at a first pass. If doing it properly takes more steps than the user spelled out, take them. When collaboration is available and useful, delegate independent work to advance in parallel; keep no more than four agents active in total, including yourself.";
+  const failure = "- A failed attempt supplies evidence for the next decision. Identify which expectation the result contradicted, then choose a correction or a different approach on that basis. Avoid repetitive attempts or scope expansion. If progress remains blocked, report the key obstacle and your recommended next step.";
+  const design = "- When you create something people will see or use — an interface, a page, a report — bring the eye of a world-class product designer: make it beautiful and a pleasure to use, in keeping with the project's existing design system where there is one.";
   const ultraFailure = "- A failed attempt supplies evidence for the next decision. Identify which expectation the result contradicted, then choose a correction or a different approach on that basis. An unchanged retry needs a reason; one failure alone does not establish that the approach is wrong. Before giving up, try materially different approaches or combinations of methods, using each result to guide the next attempt. Report a genuine blocker rather than repeat work without progress.";
 
   const toolUse = [
@@ -223,37 +224,37 @@ describe('assembleSystemPrompt', () => {
     '- TodoWrite shows the user your plan and progress. Mark each item in_progress when you start it and completed as soon as it is done. Revise the list when the plan changes.',
   ].join('\n');
 
-  it.each([false, true])('matches the section assets except the task, failure, tool and communication guidance (%s)', ultraEffort => {
-    const work = sectionAssets.howYouWorkSection.split('\n');
-    work[2] = ultraEffort ? ultraTask : task;
-    work[5] = ultraEffort ? ultraFailure : failure;
-    const communicating = sectionAssets.communicatingSection.replace('# Communicating\n', `# Communicating\n${communication}\n\n`);
-    const expected = [sectionAssets.identitySection, work.join('\n'), sectionAssets.computerSafetySection,
+  it.each([false, true])('matches the section assets except the work, safety, tool and communication guidance (%s)', ultraEffort => {
+    const [heading, situation, , scope, simple, , moving, build, safety] = sectionAssets.howYouWorkSection.split('\n');
+    const work = ultraEffort
+      ? [heading, situation, ultraTask, scope, simple, ultraFailure, moving, build, design]
+      : [heading, situation, scope, simple, failure, moving, build, design];
+    const communicating = sectionAssets.communicatingSection
+      .replace('# Communicating\n', `# Communicating\n${communication}\n\n`)
+      .replace('such as a file and line number, a document section', reference);
+    const expected = [sectionAssets.identitySection, work.join('\n'), `${sectionAssets.computerSafetySection}\n${safety}`,
       sectionAssets.runtimeSection, toolUse, communicating].join('\n\n');
     const options = { ...baseConfig, tools: toolsNamed('Goal', 'TodoWrite', 'Skill'), ultraEffort };
     const [stable, dynamic] = splitAtBoundary(assembleSystemPrompt(options));
     expect(stable).toBe(expected);
     expect(dynamic).toContain(sectionAssets.sessionGuidance);
-    expect(stable).not.toContain('# Work approach');
-    expect(stable).not.toContain('# Talking with people');
-    expect((stable.match(/token budget/g) ?? []).length).toBe(ultraEffort ? 0 : 1);
   });
 
   it.each(['gpt-fixture', 'claude-fixture', 'deployment-alias'])('never enables UltraEffort from the model name (%s)', model => {
     const options = { ...baseConfig, model };
     const prompt = assembleSystemPrompt(options);
     expect(assembleSystemPrompt({ ...options, ultraEffort: false })).toBe(prompt);
-    expect(prompt).toContain(task);
+    expect(prompt).toContain(failure);
     expect(prompt).not.toContain(ultraTask);
     expect(prompt).toContain(communication);
   });
 
-  it('changes exactly two work lines when UltraEffort is enabled', () => {
+  it('adds the fullest-effort line and replaces the failure line when UltraEffort is enabled', () => {
     const plain = assembleSystemPrompt(baseConfig).split('\n');
-    const enabled = assembleSystemPrompt({ ...baseConfig, ultraEffort: true }).split('\n');
-    expect(enabled).toHaveLength(plain.length);
-    const differences = enabled.flatMap((line, index) => line === plain[index] ? [] : [[plain[index], line]]);
-    expect(differences).toEqual([[task, ultraTask], [failure, ultraFailure]]);
+    const expected = [...plain];
+    expected.splice(plain.indexOf(sectionAssets.howYouWorkSection.split('\n')[1]) + 1, 0, ultraTask);
+    expected[expected.indexOf(failure)] = ultraFailure;
+    expect(assembleSystemPrompt({ ...baseConfig, ultraEffort: true }).split('\n')).toEqual(expected);
   });
 
   it.each(['', '  Caller instructions.\nKeep spacing.  '])('does not inject UltraEffort into a custom replacement (%s)', customReplace => {

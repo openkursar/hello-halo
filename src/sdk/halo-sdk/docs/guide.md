@@ -458,13 +458,13 @@ context only.
 
 ## Workflows and Prompt Profiles
 
-`ultraEffort` changes two preset instructions: task investment and response to
-failed attempts. The normal mode uses the token budget efficiently within the
-requested scope. UltraEffort encourages fullest effort, different approaches and
-method combinations, and useful parallel collaboration with no more than four
-active agents in total, including the source agent. The agent-count wording is
-guidance, not a runtime admission limit. Identity and all other instructions,
-including communication, are shared by both modes.
+`ultraEffort` adds a fullest-effort instruction and changes the response to failed
+attempts. In the normal mode, a failed attempt leads to a correction without
+repetitive retries or scope expansion. UltraEffort encourages fullest effort,
+different approaches and method combinations, and useful parallel collaboration
+with no more than four active agents in total, including the source agent. The
+agent-count wording is guidance, not a runtime admission limit. Identity and all
+other instructions, including communication and design, are shared by both modes.
 
 ```ts
 const session = await createSession({
