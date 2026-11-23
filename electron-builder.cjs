@@ -154,7 +154,9 @@ function distributionDirectory() {
 
 module.exports = {
   ...base,
-  get directories() { return { ...base.directories, app: distributionDirectory() } },
+  // electron-builder merges CLI `-c` overrides into this object, so the key must
+  // be writable; only reading `app` stages the distribution.
+  directories: { ...base.directories, get app() { return distributionDirectory() } },
   asarUnpack: resolveAsarUnpack(base),
   productName: field('name'),
   protocols: [{ name: field('name'), schemes: [product.content.deepLinkScheme || 'halo'] }],
