@@ -118,6 +118,14 @@ describe('a teammate message in the transcript', () => {
     const cards = tree.filter(node => node.type === ArrivalCard)
     expect(cards.map(node => [node.props?.message, node.props?.inProcess])).toEqual([[arrival, undefined]])
   })
+
+  it('received during a reply is not redrawn with each streamed word, and draws its own kind’s line', async () => {
+    const { ArrivalCard: Card } = await vi.importActual<typeof import('../../../src/renderer/components/chat/ArrivalCard')>('../../../src/renderer/components/chat/ArrivalCard')
+    expect((Card as unknown as { $$typeof: symbol }).$$typeof).toBe(Symbol.for('react.memo'))
+    const arrival = team({ timestamp: at(0) })
+    expect(renderToStaticMarkup(createElement(Card, { message: arrival, inProcess: true })))
+      .toBe(renderToStaticMarkup(createElement(TeamMemberMessage, { message: arrival, inProcess: true })))
+  })
 })
 
 describe('the team line', () => {
