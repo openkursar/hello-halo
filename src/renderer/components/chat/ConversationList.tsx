@@ -453,11 +453,11 @@ export const ConversationList = memo(function ConversationList({
     return buildDigitalHumanRows(allAppChatRows, () => true)
       .filter(row => row.type === 'dh-item' && (listed.has(row.key) || conversationStatuses.has(row.key)))
   }, [allAppChatRows, digitalHumanRows, digitalHumansOpen, conversationStatuses])
-  const stripRows = useMemo(() => [
+  const stripRows = useMemo(() => (folded ? [
     ...(pinnedOpen ? pinnedRows : []),
     ...stripDigitalHumanRows,
     ...(conversationsOpen ? conversationRows : []),
-  ], [pinnedOpen, pinnedRows, stripDigitalHumanRows, conversationsOpen, conversationRows])
+  ] : null), [folded, pinnedOpen, pinnedRows, stripDigitalHumanRows, conversationsOpen, conversationRows])
   const reveal = useConversationReveal({
     spaceId: spaceKey,
     conversationId: selectedAppChat ? selectedAppChat.conversationId : currentConversationId,
@@ -466,7 +466,7 @@ export const ConversationList = memo(function ConversationList({
       'digital-humans': { rows: digitalHumanRows, open: digitalHumansOpen },
       conversations: { rows: conversationRows, open: conversationsOpen },
     },
-    strip: folded ? stripRows : null,
+    strip: stripRows,
     openSection: autoOpenSection,
   })
   // Its most urgent session status, for the folded digital-humans header; one of
@@ -1022,7 +1022,7 @@ export const ConversationList = memo(function ConversationList({
             this column scrolls, and a scroll container clips anything
             reaching past its edge. */}
         <div ref={reveal.stripRef} className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-0.5">
-          {stripRows.map(row => {
+          {stripRows?.map(row => {
             if (row.type === 'dh-header') return null
             const isAppChat = row.type === 'dh-item'
             const id = isAppChat ? row.row.id : row.conversation.id

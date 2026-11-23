@@ -3,10 +3,11 @@
  * elsewhere (a conversation link, search, the task panel, another space), its
  * row is scrolled into view and highlighted.
  *
- * The row is found by id in the rows the list already holds and reached through
- * the virtual list's scroll-to-index, so nothing in between is rendered and the
- * cost does not grow with the list. The request is one-shot: once the row has
- * been reached, later reorders of the list never move it again.
+ * The row is found by a linear search of the rows the list already holds, made
+ * only while a reveal is pending, and reached through the virtual list's
+ * scroll-to-index, so the rows in between are never rendered and nothing is
+ * read. The request is one-shot: once the row has been reached, later reorders
+ * of the list never move it again.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
