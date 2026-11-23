@@ -16,6 +16,7 @@ struct Fixture {
     iterations: mpsc::UnboundedReceiver<Vec<Value>>,
     stream: VecDeque<Value>,
     requests: Vec<Value>,
+    results: Vec<Value>,
     discovery: bool,
     fail_call_append: bool,
     calls: usize,
@@ -79,6 +80,7 @@ impl Fixture {
             iterations,
             stream: VecDeque::new(),
             requests: Vec::new(),
+            results: Vec::new(),
             discovery,
             fail_call_append,
             calls: 0,
@@ -156,6 +158,9 @@ impl Fixture {
                         self.session.event_consumed(id, None);
                     }
                     let event = envelope["event"].clone();
+                    if event["type"] == "result" {
+                        self.results.push(event.clone());
+                    }
                     if event["type"] == "system"
                         && event["subtype"] == "session_state_changed"
                         && event["state"] == "idle"
@@ -388,6 +393,112 @@ async fn capture_states_whether_the_durable_journal_already_owns_history() {
         records.iter().filter(|entry| entry["type"] == "user" && entry["message"]["role"] == "user").count(),
         1
     );
+    fixture.close().await;
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
+async fn a_first_local_command_records_an_empty_history_that_strict_resume_continues() {
+    let directory = std::env::temp_dir().join(format!("halo-command-history-{}", uuid::Uuid::new_v4()));
+    let mut first = Fixture::new(directory.clone(), true, json!({})).await;
+    first.turn("/compact").await;
+    first.turn("/help").await;
+    assert!(first.requests.is_empty());
+    let records = first.journal_records();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["type"], "empty_history");
+    assert_eq!(records[0]["sessionId"], json!(first.session.id()));
+    assert!(records[0].get("message").is_none());
+    let session_id = first.session.id().to_owned();
+    first.close().await;
+
+    let options = json!({"resume":session_id,"strictResume":true});
+    let mut second = Fixture::new(directory.clone(), true, options.clone()).await;
+    assert_eq!(second.session.command("readHistory", json!([])).await.unwrap(), json!([]));
+    second.turn("/help").await;
+    assert_eq!(second.journal_records().len(), 1);
+    second.turn(INPUT).await;
+    assert_eq!(second.requests.len(), 1);
+    let sent = second.requests[0]["messages"].to_string();
+    assert!(sent.contains(INPUT));
+    assert!(!sent.contains("/compact") && !sent.contains("/help"), "{sent}");
+    second.close().await;
+
+    let mut third = Fixture::new(directory.clone(), true, options).await;
+    third.turn("Continue from disk.").await;
+    assert!(third.requests[0]["messages"].to_string().contains(INPUT));
+    third.close().await;
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
+async fn a_recorded_empty_history_resumes_with_the_discovery_format_of_a_new_session() {
+    let directory = std::env::temp_dir().join(format!("halo-command-discovery-{}", uuid::Uuid::new_v4()));
+    let mut first = Fixture::new(directory.clone(), true, discovery_options(false)).await;
+    first.turn("/help").await;
+    let records = first.journal_records();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["type"], "empty_history");
+    assert!(records[0].get("toolContextVersion").is_none(), "{records:?}");
+    let session_id = first.session.id().to_owned();
+    first.close().await;
+
+    let mut options = discovery_options(false);
+    options["resume"] = json!(session_id);
+    options["strictResume"] = json!(true);
+    let mut second = Fixture::new(directory.clone(), true, options).await;
+    second.turn("Discover and read two records.").await;
+    assert_eq!(second.calls, 2);
+    let records = second.journal_records();
+    assert!(records.len() > 1);
+    assert!(
+        records[1..].iter().all(|record| record.get("toolContextVersion").is_some()),
+        "{records:?}"
+    );
+    second.close().await;
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
+async fn local_commands_record_no_empty_history_without_input_or_over_recorded_history() {
+    let directory = std::env::temp_dir().join(format!("halo-command-boundaries-{}", uuid::Uuid::new_v4()));
+    let idle = Fixture::new(directory.clone(), true, json!({})).await;
+    let idle_path = idle.path.clone();
+    idle.close().await;
+    assert!(!idle_path.exists(), "a session that received no input writes nothing");
+
+    let mut memory = Fixture::new(directory.clone(), false, json!({})).await;
+    memory.turn("/help").await;
+    assert!(!memory.path.exists());
+    memory.close().await;
+
+    let mut used = Fixture::new(directory.clone(), true, json!({})).await;
+    used.turn(INPUT).await;
+    used.turn("/help").await;
+    assert!(used.journal_records().iter().all(|record| record["type"] != "empty_history"));
+    std::fs::remove_file(&used.path).unwrap();
+    used.turn("/help").await;
+    assert!(
+        !used.path.exists(),
+        "a lost journal is not replaced by an empty history while live history remains"
+    );
+    used.close().await;
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
+async fn an_unwritable_empty_history_leaves_the_command_and_its_in_memory_history_intact() {
+    let directory = std::env::temp_dir().join(format!("halo-command-unwritable-{}", uuid::Uuid::new_v4()));
+    let mut fixture = Fixture::new(directory.clone(), true, json!({})).await;
+    std::fs::create_dir_all(&fixture.path).unwrap();
+    fixture.turn("/help").await;
+    let result = fixture.results.last().unwrap();
+    assert_eq!(result["is_error"], false, "{result}");
+    assert!(result["result"].as_str().unwrap().contains("Available commands"), "{result}");
+    let journal = fixture.session.transcript.lock().unwrap().clone().unwrap();
+    assert!(!journal.has_complete_history().await);
+    let checkpoint = fixture.session.command("captureCheckpoint", json!([])).await.unwrap();
+    assert_eq!(checkpoint["messages"], json!([]), "{checkpoint}");
     fixture.close().await;
     std::fs::remove_dir_all(&directory).unwrap();
 }

@@ -576,6 +576,106 @@ async fn strict_resume_refuses_history_without_readable_messages() {
     assert_eq!(error.details.unwrap()["reason"], "unreadable");
 }
 
+fn empty_history(session: &str) -> Value {
+    json!({"type":"empty_history","uuid":"empty-history","parentUuid":null,"sessionId":session,
+        "isSidechain":false,"userType":"external","cwd":"/fixture/project","version":"1.0.0"})
+}
+
+#[tokio::test]
+async fn strict_resume_restores_a_recorded_empty_history_and_what_follows_it() {
+    let directory = Directory::new();
+    write_records(&directory.0, "commands", &[empty_history("commands")]);
+    assert!(load_resume(&directory.0, "commands", true)
+        .await
+        .unwrap()
+        .is_empty());
+    write_records(
+        &directory.0,
+        "continued",
+        &[
+            empty_history("continued"),
+            json!({"type":"user","message":{"role":"user","content":"after commands"}}),
+            json!({"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"answered"}]}}),
+        ],
+    );
+    assert_eq!(
+        load_resume(&directory.0, "continued", true).await.unwrap(),
+        vec![
+            json!({"role":"user","content":"after commands"}),
+            json!({"role":"assistant","content":[{"type":"text","text":"answered"}]}),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_recorded_empty_history_does_not_cover_records_that_follow_it() {
+    let directory = Directory::new();
+    write_records(
+        &directory.0,
+        "unreadable",
+        &[
+            empty_history("unreadable"),
+            json!({"type":"user","message":{"role":"user","content":5}}),
+        ],
+    );
+    let error = load_resume(&directory.0, "unreadable", true)
+        .await
+        .unwrap_err();
+    assert_eq!(error.details.unwrap()["reason"], "unreadable");
+    let damaged = write_transcript(
+        &directory.0,
+        "damaged",
+        &format!("{}\n{{\"type\":\"user\",\"mess\n", empty_history("damaged")),
+    );
+    assert!(!super::read_report(&damaged, None).await.unwrap().empty_history);
+    let error = load_resume(&directory.0, "damaged", true)
+        .await
+        .unwrap_err();
+    assert_eq!(error.details.unwrap()["reason"], "incomplete");
+    let mut marked = empty_history("marked");
+    marked["toolContextVersion"] = json!(2);
+    marked["toolContextRecord"] = json!(false);
+    write_records(&directory.0, "marked", &[marked]);
+    for strict in [true, false] {
+        let error = load_resume(&directory.0, "marked", strict)
+            .await
+            .unwrap_err();
+        assert_eq!(error.details.unwrap()["reason"], "incomplete");
+    }
+}
+
+#[tokio::test]
+async fn context_inspection_reports_a_recorded_empty_history_in_the_format_a_new_session_adopts() {
+    let directory = Directory::new();
+    let options = options(&directory.0);
+    write_records(&directory.0, "commands", &[empty_history("commands")]);
+    assert_eq!(
+        super::read_session_tool_context_mode("commands", options.clone())
+            .await
+            .unwrap(),
+        "deferred"
+    );
+    write_records(
+        &directory.0,
+        "legacy",
+        &[
+            empty_history("legacy"),
+            json!({"type":"user","message":{"role":"user","content":"legacy"}}),
+        ],
+    );
+    assert_eq!(
+        super::read_session_tool_context_mode("legacy", options.clone())
+            .await
+            .unwrap(),
+        "full"
+    );
+    write_records(&directory.0, "unreadable", &[json!({"type":"queue-operation"})]);
+    let error = super::read_session_tool_context_mode("unreadable", options)
+        .await
+        .unwrap_err();
+    assert_eq!(error.details.unwrap()["reason"], "unreadable");
+}
+
 #[tokio::test]
 async fn strict_resume_refuses_damaged_records() {
     let directory = Directory::new();

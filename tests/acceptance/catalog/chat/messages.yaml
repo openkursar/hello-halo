@@ -293,3 +293,51 @@ scenarios:
       - A model endpoint that rejects the unsigned block receives one corrected summary request, still containing the evidence, latest constraint, and instructions. The slash command is never sent as ordinary work.
       - One summary checkpoint is appended without rewriting the original record. The original chat stays readable, and after restart the next request uses the summary and the latest constraint without that rejected block.
     notes: The real app resumes a seeded SDK journal and uses a local Anthropic-compatible endpoint. This isolates history compatibility without requiring live credentials or testing model selection UI.
+
+  - id: chat.messages.command-first-restart
+    title:
+      en: Continue after a restart a conversation that began with a command
+      zh: 以命令开头的对话在重启后继续
+    verifies: [slash-command, persist]
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: A fresh isolated workspace on the Halo SDK engine uses a scripted model.
+        zh: 隔离空间使用 Halo SDK 引擎与脚本化模型。
+    steps:
+      - en: Start a new conversation by sending "/compact", restart the app, reopen that conversation and send an ordinary message.
+        zh: 新建对话并发送“/compact”，重启应用，重新打开该对话后发送一条普通消息。
+    expected:
+      - en: The command reports the context unchanged without a model request. After the restart the reply arrives in the same engine session, without the "Some earlier details could not be restored exactly" notice and without a recovered-history block in the model request.
+        zh: 命令提示上下文未变，且不产生模型请求；重启后在同一引擎会话中得到回复，不出现“部分早期细节无法精确恢复”提示，模型请求中也没有恢复历史块。
+    notes:
+      en: The restart makes the app resume the engine session from disk, the same path a rebuild after an MCP connection failure or idle cleanup takes. Other local commands such as /help share that path but are not exercised here; digital-human chats are not covered.
+      zh: 重启使应用从磁盘恢复引擎会话，与 MCP 连接失败或空闲回收后的重建路径相同。/help 等其他本地命令同路径但此处未覆盖；数字人对话未覆盖。
+
+  - id: chat.messages.lost-record-restart
+    title:
+      en: Continue after a restart when the engine's saved session is missing
+      zh: 引擎保存的会话丢失后，重启仍能继续对话
+    verifies: [persist]
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: A fresh isolated workspace on the Halo SDK engine uses a scripted model, and a conversation has one completed turn.
+        zh: 隔离空间使用 Halo SDK 引擎与脚本化模型，对话已完成一轮。
+    steps:
+      - en: Quit the app, remove the engine's saved session file for that conversation, restart, reopen the conversation and send a follow-up.
+        zh: 退出应用，删除该对话对应的引擎会话文件，重启后重新打开该对话并继续追问。
+    expected:
+      - en: The follow-up is answered. One "Some earlier details could not be restored exactly" notice precedes it, and the model request carries the earlier exchange as recovered history.
+        zh: 追问得到回复；回复前出现一条“部分早期细节无法精确恢复”提示，模型请求携带之前的对话作为恢复历史。
+    notes:
+      en: Guards the opposite side of chat.messages.command-first-restart, where nothing was lost and no notice may appear.
+      zh: 与 chat.messages.command-first-restart 相对：后者没有丢失，不应出现提示。

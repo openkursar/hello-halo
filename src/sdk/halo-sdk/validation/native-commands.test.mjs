@@ -8,6 +8,7 @@ import { test } from 'node:test';
 const compiled = process.env.SDK_BEHAVIOR_TEST_ROOT ?? fileURLToPath(new URL('../dist', import.meta.url));
 const { createSession } = await import(pathToFileURL(join(compiled, 'native/session.js')).href);
 const { query } = await import(pathToFileURL(join(compiled, 'native/query.js')).href);
+const { readSessionToolContextMode } = await import(pathToFileURL(join(compiled, 'native/session-tool-context.js')).href);
 const capabilities = () => ({ streaming: true, toolCalling: true, thinking: true, imageInput: true, pdfInput: false, audioInput: false, videoInput: false, caching: false, systemPromptStyle: 'top_level' });
 const deferred = () => { let resolve; const promise = new Promise(receipt => { resolve = receipt; }); return { promise, resolve }; };
 function fixtureProvider(script) {
@@ -70,6 +71,45 @@ test('native session commands skip work requests and leave empty history unchang
     assert.deepEqual(await session.command('readHistory'), []);
     assert.deepEqual(prompts, ['/help', '/model model-b', '/compact']);
     assert.equal(model.requests.length, 0);
+  } finally { await session?.[Symbol.asyncDispose](); await f.close(); }
+});
+
+test('a session that only ran a local command resumes strictly like a new session', { timeout: 15000 }, async () => {
+  const f = await fixture(); let session;
+  let effects = 0;
+  const records = {
+    mcpServers: { records: { type: 'sdk', name: 'records', instance: {
+      listTools: () => [{ name: 'lookup', description: 'Read a fixture record.', inputSchema: { type: 'object' } }],
+      async callTool() { effects++; return { content: [{ type: 'text', text: 'Verified fixture record.' }] }; },
+    } } },
+    toolDiscovery: { services: { records: { identity: 'command-records', loading: 'deferred', summary: 'Read fixture records' } } },
+  };
+  const options = { ...f.options, ...records, persistSession: true };
+  try {
+    const local = fixtureProvider(async () => { throw new Error('Local command reached provider'); });
+    session = await createSession({ ...options, provider: local });
+    const compact = await send(session, '/compact');
+    assert.match(result(compact).result, /kept unchanged/);
+    const id = session.sessionId;
+    assert.equal(result(compact).session_id, id);
+    assert.equal(local.requests.length, 0);
+    await session[Symbol.asyncDispose](); session = undefined;
+    assert.equal(await readSessionToolContextMode(id, { cwd: f.cwd, env: f.options.env }), 'deferred');
+
+    const next = fixtureProvider(async (_request, step) => {
+      if (step === 1) return { type: 'tool_use', id: 'search', name: 'ToolSearch', input: { query: 'select:mcp__records__lookup' } };
+      if (step === 2) return { type: 'tool_use', id: 'lookup', name: 'CallTool', input: { tool: 'mcp__records__lookup', arguments: {} } };
+      return { type: 'text', text: 'Read after resuming.' };
+    });
+    session = await createSession({ ...options, provider: next, resume: id, strictResume: true });
+    assert.equal(session.sessionId, id);
+    assert.deepEqual(await session.command('readHistory'), []);
+    const events = await send(session, 'Read the fixture record.');
+    assert.equal(result(events).is_error, false, JSON.stringify(result(events)));
+    assert.equal(effects, 1);
+    const sent = JSON.stringify(next.requests[0].messages);
+    assert.ok(sent.includes('Read the fixture record.'), sent);
+    assert.ok(!sent.includes('/compact') && !sent.includes('kept unchanged'), sent);
   } finally { await session?.[Symbol.asyncDispose](); await f.close(); }
 });
 

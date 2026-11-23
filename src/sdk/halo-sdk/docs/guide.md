@@ -247,7 +247,10 @@ records, recorded results that cannot be paired, duplicate calls). The error
 carries `code: 'RESUME_HISTORY_UNAVAILABLE'` and `reason: 'missing' |
 'unreadable' | 'incomplete'`, also across the worker boundary
 (`isResumeHistoryError`). A call with no recorded result and history left out
-by the size bounds are not treated as losses.
+by the size bounds are not treated as losses. A session that has only run local
+commands, such as `/help`, has an empty recorded history: strict resume restores
+it as empty rather than reporting it missing. Like any saved session, it is listed,
+can be forked and can be chosen by `continue`.
 
 ## Design Principles
 
@@ -638,8 +641,9 @@ modes. Existing histories without a discovery baseline retain full declarations;
 start a new session to adopt discovery. Hosts needing to select interface behavior
 before resuming can use `readSessionToolContextMode(sessionId, { cwd, env,
 resumeSessionAt })`, exported by both public SDK entries. It returns `deferred`
-for the recorded client-context format and `full` for legacy history; missing or
-damaged records raise the ordinary resume error. Worker hosts should use
+for the recorded client-context format and `full` for legacy history; a session
+that has only run local commands has no legacy history and reports `deferred`.
+Missing or damaged records raise the ordinary resume error. Worker hosts should use
 `runtime.readSessionToolContextMode(sessionId, options, { signal, group })`,
 which borrows the existing pool without creating a session or connecting tools.
 The standalone helper validates bounded history on the calling thread. Call

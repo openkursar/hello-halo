@@ -223,7 +223,9 @@ request that actually goes out. A failed summary or checkpoint retains live
 history; a committed checkpoint is installed even when cancellation arrived
 during its write. Cancellation keeps
 the session available for the next input. No safe reduction is reported as an
-unchanged context, without a successful compact boundary.
+unchanged context, without a successful compact boundary. In a session with no
+history yet, that outcome records an empty history so the session stays resumable;
+see [the journal contract](TRANSCRIPT.md).
 
 ## Context capacity and caching
 
