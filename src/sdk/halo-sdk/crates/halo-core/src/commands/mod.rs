@@ -386,7 +386,7 @@ pub async fn dispatch_with_harness(
     let result = match &entry.executor {
         Executor::Host => return Ok(DispatchOutcome::HostHandled(metadata)),
         Executor::Skill(skill) => {
-            let body = crate::skills::load_with_harness(skill, args, harness).await?;
+            let body = crate::skills::load_for_model(skill, args, harness).await?;
             let content = format!(
                 "{}{}{}{}\n{}",
                 fixed_text(ResourceId::SkillProtocol, &["invocation", "name_prefix"]),
@@ -716,7 +716,10 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("native-skill-command-{}.md", uuid::Uuid::new_v4()));
         std::fs::write(&path, "Review these changes$ARGUMENTS_SUFFIX.").unwrap();
-        let skills = json!([{"name":"qux","description":"Review changes","source":{"kind":"file","path":path}}]);
+        let skills = json!([
+            {"name":"qux","description":"Review changes","source":{"kind":"file","path":path}},
+            {"name":"commit","description":"Record changes","source":{"kind":"builtin","name":"commit"}},
+        ]);
         let registry = CommandRegistry::from_options(&json!({}), &skills, true).unwrap();
         let host = Host::default();
         let result = dispatch(
@@ -729,6 +732,7 @@ mod tests {
             &CancellationToken::new(),
         )
         .await;
+        let directory = std::fs::canonicalize(path.parent().unwrap()).unwrap();
         std::fs::remove_file(path).unwrap();
         let DispatchOutcome::PromptReplacement { messages, .. } = result.unwrap() else {
             panic!("expected skill prompt replacement");
@@ -736,13 +740,19 @@ mod tests {
         assert_eq!(
             messages,
             vec![
-                json!({"role":"user","content":"<skill-instructions name=\"qux\">\nReview these changes: hello world.\n</skill-instructions>"})
+                json!({"role":"user","content":format!("<skill-instructions name=\"qux\">\nBase directory for this skill: {}. Resolve the skill's relative file references (scripts, references, assets) from this directory.\nReview these changes: hello world.\n</skill-instructions>", json!(directory))})
             ]
         );
         assert_eq!(
             crate::prompt::skill_context::collect_active(&messages, &[]),
             vec![json!({"name":"qux"})]
         );
+        let builtin = dispatch(&registry, "commit", "", &json!({}), &host, &host, &CancellationToken::new()).await.unwrap();
+        let DispatchOutcome::PromptReplacement { messages, .. } = builtin else {
+            panic!("expected built-in skill prompt replacement");
+        };
+        assert!(messages[0]["content"].as_str().unwrap().starts_with("<skill-instructions name=\"commit\">\n"));
+        assert!(!messages[0]["content"].as_str().unwrap().contains("Base directory"));
     }
     #[tokio::test]
     async fn command_results_and_host_effects_match_fixtures() {

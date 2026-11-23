@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rename, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -210,6 +210,48 @@ test('native prompt commands expand skills and preserve multimodal session repla
     assert.ok(blocks.some(block => block.type === 'text' && block.text === 'replaced input'));
     assert.ok(!JSON.stringify(model.requests[1].messages).includes('ignored assistant'));
   } finally { await session?.[Symbol.asyncDispose](); await f.close(); }
+});
+
+test('a file skill tells the provider where to find its resources on tool and slash invocation', { timeout: 15000 }, async () => {
+  const f = await fixture();
+  try {
+    const directory = join(f.root, 'skill package');
+    await mkdir(join(directory, 'assets'), { recursive: true });
+    const path = join(directory, 'SKILL.md');
+    const instructions = 'Read assets/receipt.txt before answering.';
+    await writeFile(path, instructions);
+    await writeFile(join(directory, 'assets', 'receipt.txt'), 'package receipt');
+    const skillCatalog = [{ name: 'receipt', description: 'Read the package receipt', source: { kind: 'file', path } }];
+    for (const invokeTool of [true, false]) {
+      const model = fixtureProvider(async (request, step) => {
+        const blocks = request.messages.flatMap(message => typeof message.content === 'string' ? [{ text: message.content }] : message.content);
+        if (invokeTool && step === 1) {
+          assert.ok(!JSON.stringify(request).includes('skill package'));
+          return { type: 'tool_use', id: 'load-receipt', name: 'Skill', input: { skill: 'receipt' } };
+        }
+        const receipt = blocks.find(block => block.tool_use_id === 'read-receipt');
+        if (receipt) {
+          assert.equal(Boolean(receipt.is_error), false);
+          assert.match(receipt.content, /package receipt/);
+          return { type: 'text', text: 'receipt read' };
+        }
+        const text = invokeTool ? blocks.find(block => block.tool_use_id === 'load-receipt')?.content
+          : blocks.find(block => block.text?.startsWith('<skill-instructions name="receipt">\n'))?.text;
+        assert.equal(typeof text, 'string');
+        const lines = text.split('\n');
+        const base = lines[invokeTool ? 0 : 1].match(/^Base directory for this skill: ("(?:[^"\\]|\\.)*")\. Resolve/);
+        assert.ok(base, 'The model must receive a quoted resource base before the body');
+        assert.equal(lines[invokeTool ? 1 : 2], instructions);
+        const file = join(JSON.parse(base[1]), 'assets', 'receipt.txt');
+        assert.equal(await realpath(file), await realpath(join(directory, 'assets', 'receipt.txt')));
+        return { type: 'tool_use', id: 'read-receipt', name: 'Read', input: { file_path: file } };
+      });
+      const session = await createSession({ ...f.options, provider: model, tools: ['Skill', 'Read'], skillCatalog, permissionMode: 'bypassPermissions' });
+      try {
+        assert.equal(result(await send(session, invokeTool ? 'Read the package receipt' : '/receipt')).result, 'receipt read');
+      } finally { await session[Symbol.asyncDispose](); }
+    }
+  } finally { await f.close(); }
 });
 
 test('native controls acknowledge during a blocked provider while resident sessions retain their stream configuration', { timeout: 15000 }, async () => {

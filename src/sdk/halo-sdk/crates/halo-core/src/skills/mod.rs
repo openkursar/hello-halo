@@ -354,8 +354,26 @@ pub async fn load_with_harness(
     args: &str,
     harness: &crate::harness::ResolvedHarness,
 ) -> Result<String> {
+    load_instructions(entry, args, harness, false).await
+}
+
+pub(crate) async fn load_for_model(
+    entry: &Value,
+    args: &str,
+    harness: &crate::harness::ResolvedHarness,
+) -> Result<String> {
+    load_instructions(entry, args, harness, true).await
+}
+
+async fn load_instructions(
+    entry: &Value,
+    args: &str,
+    harness: &crate::harness::ResolvedHarness,
+    include_resource_base: bool,
+) -> Result<String> {
     let name = entry["name"].as_str().unwrap_or("");
     let source = &entry["source"];
+    let mut resource_base = None;
     let body = if source["kind"] == "builtin" {
         builtin_definitions_with_harness(harness)
             .as_array()
@@ -375,6 +393,20 @@ pub async fn load_with_harness(
         let path = source["path"]
             .as_str()
             .ok_or_else(|| Error::template("SKILL_SOURCE", TextId::ToolsSkillSourceInvalid, &[]))?;
+        let path = if include_resource_base {
+            // A linked SKILL.md uses resources beside its target, not beside the link.
+            let resolved = tokio::fs::canonicalize(path)
+                .await
+                .map_err(|e| Error::new("SKILL_READ", e.to_string()))?;
+            let directory = resolved
+                .parent()
+                .and_then(Path::to_str)
+                .ok_or_else(|| Error::template("SKILL_SOURCE", TextId::ToolsSkillSourceInvalid, &[]))?;
+            resource_base = Some(quote_resource_directory(directory));
+            resolved
+        } else {
+            PathBuf::from(path)
+        };
         let mut file = File::open(path)
             .await
             .map_err(|e| Error::new("SKILL_READ", e.to_string()))?;
@@ -417,7 +449,16 @@ pub async fn load_with_harness(
             &[("name", name.into())],
         ));
     }
+    if let Some(directory) = resource_base {
+        let prefix = harness.render(TextId::ToolsSkillResourceBase, &[("directory", &directory)]);
+        return Ok(format!("{prefix}\n{prompt}"));
+    }
     Ok(prompt)
+}
+
+fn quote_resource_directory(directory: &str) -> String {
+    // JSON quoting keeps the path on one line; escape '<' so it cannot close the slash marker.
+    json!(directory).to_string().replace('<', "\\u003c")
 }
 
 #[cfg(test)]

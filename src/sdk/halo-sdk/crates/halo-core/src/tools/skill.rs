@@ -1,6 +1,6 @@
 use super::{failure, success, utf16_prefix};
 use crate::harness::TextId;
-use crate::skills::{load_with_harness, normalize_name};
+use crate::skills::{load_for_model, normalize_name};
 use serde_json::{json, Value};
 
 pub async fn execute(
@@ -85,7 +85,7 @@ pub async fn execute(
         tracing::warn!(name, reason = "not found", "Skill invocation rejected");
         return failure(harness.render(TextId::ToolsSkillNotFound, &[("name", &name)]));
     };
-    match load_with_harness(entry, args, harness).await {
+    match load_for_model(entry, args, harness).await {
         Ok(prompt) => success(
             prompt,
             Some(json!({"skill":{"name":entry["name"],"source":entry["source"]}})),
@@ -109,12 +109,22 @@ mod tests {
         std::fs::write(&path, "---\ndescription: Project procedure\n---\nCheck project rules$ARGUMENTS_SUFFIX.").unwrap();
         let catalog = crate::skills::resolve_catalog(&json!({"cwd":root,"env":{"HOME":root.join("home")},"nativeProcessEnv":{}})).await.unwrap();
         let harness = crate::harness::baseline();
-        assert_eq!(execute(&catalog,&json!({"skill":"commit","args":"selected paths"}),&harness).await["content"],"Check project rules: selected paths.");
+        let result = execute(&catalog, &json!({"skill":"commit","args":"selected paths"}), &harness).await;
+        let directory = std::fs::canonicalize(path.parent().unwrap()).unwrap();
+        let expected = format!("Base directory for this skill: {}. Resolve the skill's relative file references (scripts, references, assets) from this directory.\nCheck project rules: selected paths.", json!(directory));
+        assert_eq!(result["content"], expected);
+        let listed = execute(&catalog, &json!({"skill":"list"}), &harness).await;
+        assert!(listed["content"].as_str().unwrap().contains("Project procedure"));
+        assert!(!listed["content"].as_str().unwrap().contains("Base directory"));
+        let builtin = execute(&catalog, &json!({"skill":"pull-request"}), &harness).await;
+        assert_eq!(builtin["isError"], false);
+        assert!(!builtin["content"].as_str().unwrap().contains("Base directory"));
         for input in [json!({"skill":"../private"}),json!({"skill":"commit","args":{}})] {
             assert_eq!(execute(&catalog,&input,&harness).await["isError"],true);
         }
         std::fs::write(&path,"Value: $ARGUMENTS; suffix$ARGUMENTS_SUFFIX").unwrap();
-        assert_eq!(execute(&catalog,&json!({"skill":"commit","args":"$& $ARGUMENTS"}),&harness).await["content"],"Value: $& $ARGUMENTS; suffix: $& $ARGUMENTS");
+        let result = execute(&catalog, &json!({"skill":"commit","args":"$& $ARGUMENTS"}), &harness).await;
+        assert_eq!(result["content"].as_str().unwrap().split_once('\n').unwrap().1, "Value: $& $ARGUMENTS; suffix: $& $ARGUMENTS");
         std::fs::write(&path,"x".repeat(1024*1024+1)).unwrap();
         let oversized = execute(&catalog,&json!({"skill":"commit"}),&harness).await;
         assert_eq!(oversized["isError"],true);
@@ -129,6 +139,26 @@ mod tests {
         let narrowed = execute(&json!(entries),&json!({"skill":"list","args":"entry-099"}),&harness).await;
         assert!(narrowed["content"].as_str().unwrap().contains("Available skills (1)"));
         assert!(narrowed["content"].as_str().unwrap().contains("entry-099"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn linked_skill_uses_its_targets_quoted_resource_directory() {
+        let root = std::env::temp_dir().join(format!("halo-skill-tool-{}", uuid::Uuid::new_v4()));
+        let target_dir = root.join("package \"quoted\"\n<assets>");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let target = target_dir.join("SKILL.md");
+        std::fs::write(&target, "Use assets/data.txt.").unwrap();
+        let source = root.join("SKILL.md");
+        std::os::unix::fs::symlink(&target, &source).unwrap();
+        let catalog = json!([{"name":"linked","description":"Resources","source":{"kind":"file","path":source}}]);
+        let result = execute(&catalog, &json!({"skill":"linked"}), &crate::harness::baseline()).await;
+        let (header, body) = result["content"].as_str().unwrap().split_once('\n').unwrap();
+        let encoded = header.strip_prefix("Base directory for this skill: ").unwrap().split_once(". Resolve").unwrap().0;
+        assert!(encoded.ends_with(r#"package \"quoted\"\n\u003cassets>""#));
+        assert_eq!(serde_json::from_str::<std::path::PathBuf>(encoded).unwrap(), std::fs::canonicalize(target_dir).unwrap());
+        assert_eq!(body, "Use assets/data.txt.");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

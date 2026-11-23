@@ -1828,7 +1828,9 @@ async fn skill_body_is_loaded_and_substituted_once() {
         )
         .await
         .unwrap();
-    assert_eq!(result["content"], "Read $ARGUMENTS. Details: $ARGUMENTS");
+    let content = result["content"].as_str().unwrap();
+    assert!(content.starts_with("Base directory for this skill: "));
+    assert_eq!(content.split_once('\n').unwrap().1, "Read $ARGUMENTS. Details: $ARGUMENTS");
     assert_eq!(result["metadata"]["skill"]["name"], "fixture");
     r.close().await.unwrap();
 }

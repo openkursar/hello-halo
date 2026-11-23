@@ -62,7 +62,8 @@ describe('worker skill catalogs', () => {
     await session.send('Load the workflow.');
     for await (const _message of session.stream()) { /* consume the actual worker execution */ }
     const loaded = await results(captureRequestsFile, collaborator);
-    expect(loaded.some(result => result.content === 'FOREIGN_COMMIT_BODY')).toBe(true);
+    const content = loaded.find(result => typeof result.content === 'string' && result.content.endsWith('\nFOREIGN_COMMIT_BODY'))?.content;
+    expect(content).toMatch(/^Base directory for this skill: [^\n]+\nFOREIGN_COMMIT_BODY$/);
     expect(JSON.stringify(loaded)).not.toContain('LOCAL_COMMIT_BODY');
     session.close(); await session.flush();
   });
