@@ -37,9 +37,14 @@ its own WebContents controller owns descendant sessions.
 AI monitoring shares the root debugger. Releasing an AI context removes its own
 monitoring but does not disable Page or detach a debugger retained here. A native
 detach invalidates registration; the next main navigation or DevTools closure
-reinstalls it. Page destruction removes listeners and child-session bookkeeping.
-There is no background polling or per-request interception. Work is bounded by
-live documents and occurs only when creating a document or calling a legacy API.
+reinstalls it. Page destruction removes listeners and child-session bookkeeping,
+then detaches the retained debugger while it can still be released. The page's
+DevTools host holds an attached debugger by raw pointer, and a webview guest's
+WebContents is destroyed before its host removes the frame; a debugger left
+attached can be garbage-collected in between and crash the main process when the
+frame goes. There is no background polling or per-request interception. Work is
+bounded by live documents and occurs only when creating a document or calling a
+legacy API.
 
 Browser views, including hidden automation pages, initialize through the page
 manager. Standalone login windows wait before leaving their loading document.

@@ -41,9 +41,11 @@ class BrowserCompatibility {
   private readonly children = new Map<string, Registration>()
   private readonly cancellations = new Set<() => void>()
   private readonly debuggerApi: WebContents['debugger']
+  private readonly webContentsId: number
 
   constructor(private readonly contents: WebContents) {
     this.debuggerApi = contents.debugger
+    this.webContentsId = contents.id
     this.debuggerApi.on('message', this.onMessage)
     this.debuggerApi.on('detach', this.onDetach)
     contents.on('did-start-navigation', this.onNavigation)
@@ -191,7 +193,7 @@ class BrowserCompatibility {
     console.warn('[BrowserCompatibility] Installation failed', {
       webContentsId: this.contents.id,
       stage,
-      error: (error instanceof Error ? error.message : String(error)).replace(/https?:\/\/[^\s]+/gi, '[URL redacted]'),
+      error: describeError(error),
     })
   }
 
@@ -203,5 +205,24 @@ class BrowserCompatibility {
     this.contents.removeListener('did-start-navigation', this.onNavigation)
     this.contents.removeListener('devtools-closed', this.onDevToolsClosed)
     controllers.delete(this.contents)
+    this.releaseDebugger()
   }
+
+  // The page's DevTools host holds an attached debugger by raw pointer, and a webview guest's
+  // WebContents is destroyed before its host removes the frame. A debugger left attached can be
+  // collected in between, and the frame teardown then crashes the main process.
+  private releaseDebugger(): void {
+    try {
+      if (this.debuggerApi.isAttached()) this.debuggerApi.detach()
+    } catch (error) {
+      console.warn('[BrowserCompatibility] Debugger release failed at page destruction', {
+        webContentsId: this.webContentsId,
+        error: describeError(error),
+      })
+    }
+  }
+}
+
+function describeError(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).replace(/https?:\/\/[^\s]+/gi, '[URL redacted]')
 }
