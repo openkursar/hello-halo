@@ -50,13 +50,15 @@ test('dissolving a filtered team keeps moved people in their workspace across re
   await window.getByRole('button', { name: 'Team settings', exact: true }).click()
   await window.getByRole('dialog', { name: 'Team settings' }).getByRole('button', { name: 'Advanced', exact: true }).click()
   await window.getByRole('button', { name: 'Dissolve team', exact: true }).click()
-  const confirm = window.getByRole('alertdialog', { name: `Dissolve ${name}?` })
-  await expect(confirm).toContainText('all spaces are kept')
+  const confirm = window.getByRole('alertdialog', { name: new RegExp(`Dissolve ${name} and delete 1 digital human`) })
+  await expect(confirm).toContainText('Team reviewer')
+  await expect(confirm).not.toContainText('Moved reviewer')
+  await expect(confirm).toContainText('Every space is kept')
   for (const theme of ['dark', 'light'] as const) {
     await setTheme(window, theme)
     await testInfo.attach(`dissolve-${theme}`, { body: await confirm.screenshot(), contentType: 'image/png' })
   }
-  await confirm.getByRole('button', { name: 'Dissolve', exact: true }).click()
+  await confirm.getByRole('button', { name: 'Dissolve and delete permanently', exact: true }).click()
   await expect.poll(async () => (await listManagedPeople(window)).some(p => p.id === stayed.appId)).toBe(false)
   for (const restart of [false, true]) {
     const page = restart ? await managementApp.restart() : window

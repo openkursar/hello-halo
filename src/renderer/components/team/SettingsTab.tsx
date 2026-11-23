@@ -37,6 +37,11 @@ interface SettingsTabProps {
 
 // ── Helpers ──
 
+function mayDeleteMember(member: TeamDetail['members'][number], app: { spaceId: string | null } | undefined, owningSpaceId: string): boolean {
+  // A missing local app may still be loading. Warn about deletion rather than promise it is kept.
+  return member.aiProvisioned && !isRemoteMember(member) && (!app || app.spaceId === owningSpaceId)
+}
+
 function configToValue(config: TeamScheduleConfig): ScheduleValue {
   if (config.cron) return { type: 'cron', cron: config.cron }
   return { type: 'every', every: config.every || '1h' }
@@ -342,7 +347,9 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
     asksForPreset ? { appId, delegatedPolicy: capabilityPolicyFromPreset(preset) } : { appId },
   )
   const [promote, setPromote] = useState<{ appId: string; name: string } | null>(null)
-  const [remove, setRemove] = useState<{ appId: string; name: string; aiProvisioned: boolean } | null>(null)
+  const [remove, setRemove] = useState<string | null>(null)
+  const removeTarget = remove && detail.members.find(member => member.appId === remove)
+  const deleteTarget = !!removeTarget && mayDeleteMember(removeTarget, appMap.get(removeTarget.appId), detail.team.owningSpaceId)
   // In a team joined from elsewhere, each digital human of this computer can be
   // taken out on its own. The last one going is this computer leaving the team.
   // The roster can change under an open dialog (an earlier removal lands, the
@@ -377,14 +384,10 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
               duty={member.duty ?? ''}
               description={app?.spec.description ?? ''}
               isLead={member.isLead}
-              aiProvisioned={member.aiProvisioned}
+              mayDelete={mayDeleteMember(member, app, detail.team.owningSpaceId)}
               onOpen={() => onOpenMember(member.appId)}
               onMakeLead={readOnly || member.isLead ? undefined : () => setPromote({ appId: member.appId, name: member.memberName })}
-              onRemove={readOnly || member.isLead ? undefined : () => setRemove({
-                appId: member.appId,
-                name: member.memberName,
-                aiProvisioned: member.aiProvisioned && !isRemoteMember(member),
-              })}
+              onRemove={readOnly || member.isLead ? undefined : () => setRemove(member.appId)}
               onWithdraw={readOnly && !isRemoteMember(member)
                 ? () => setWithdraw({ appId: member.appId, name: member.memberName })
                 : undefined}
@@ -427,16 +430,16 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
         />
       )}
 
-      {remove && (
+      {removeTarget && (
         <ConfirmDialog
-          title={t('Remove {{name}} from this team?', { name: remove.name })}
-          message={remove.aiProvisioned
-            ? t('AI created this digital human for this team. Removing it permanently deletes it and its own data unless it now works in another space or another team also uses it. Its space is kept.')
-            : t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })}
-          confirmLabel={t('Remove')}
+          title={deleteTarget ? t('Delete {{name}}?', { name: removeTarget.memberName }) : t('Remove {{name}} from this team?', { name: removeTarget.memberName })}
+          message={deleteTarget
+            ? t('Removing it deletes the digital human itself, and that cannot be undone. The space it works in is shared with the rest of the team and stays, along with everything in it. (If you have also added it to another team, it stays there and nothing is deleted.)')
+            : t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: removeTarget.memberName })}
+          confirmLabel={deleteTarget ? t('Delete') : t('Remove')}
           cancelLabel={t('Cancel')}
-          variant={remove.aiProvisioned ? 'danger' : 'default'}
-          onConfirm={() => { const r = remove; setRemove(null); void removeMember(detail.team.id, r.appId) }}
+          variant={deleteTarget ? 'danger' : 'default'}
+          onConfirm={() => { setRemove(null); void removeMember(detail.team.id, removeTarget.appId) }}
           onCancel={() => setRemove(null)}
         />
       )}
@@ -523,13 +526,12 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   )
 }
 
-function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOpen, onMakeLead, onRemove, onWithdraw }: {
+function MemberCard({ memberName, duty, description, isLead, mayDelete, onOpen, onMakeLead, onRemove, onWithdraw }: {
   memberName: string
   duty: string
   description: string
   isLead: boolean
-  /** Decides the delete button's wording: this is the only text read before pressing. */
-  aiProvisioned: boolean
+  mayDelete: boolean
   onOpen: () => void
   onMakeLead?: () => void
   onRemove?: () => void
@@ -565,8 +567,8 @@ function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOp
             <button
               onClick={onRemove}
               className="rounded p-1 text-muted-foreground/50 transition-colors hover:text-destructive"
-              title={aiProvisioned ? t('Delete member') : t('Remove member')}
-              aria-label={aiProvisioned ? t('Delete member') : t('Remove member')}
+              title={mayDelete ? t('Delete member') : t('Remove member')}
+              aria-label={mayDelete ? t('Delete member') : t('Remove member')}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>
@@ -591,8 +593,17 @@ function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOp
 
 function DangerSection({ detail }: { detail: TeamDetail }) {
   const dissolveTeam = useTeamStore(s => s.dissolveTeam)
+  const apps = useAppsStore(s => s.apps)
   const { t } = useTranslation()
   const [confirm, setConfirm] = useState(false)
+  const candidates = useMemo(() => {
+    const byId = new Map(apps.map(app => [app.id, app]))
+    return detail.members.filter(member => mayDeleteMember(member, byId.get(member.appId), detail.team.owningSpaceId))
+  }, [apps, detail.members, detail.team.owningSpaceId])
+  // The team’s own lead is described separately from the named members and their count.
+  const doomed = candidates.filter(member => !member.isLead)
+  const names = doomed.map(member => member.memberName).join(', ')
+  const leadDeleted = candidates.some(member => member.isLead)
 
   return (
     <>
@@ -604,15 +615,29 @@ function DangerSection({ detail }: { detail: TeamDetail }) {
           {t('Dissolve team')}
         </button>
         <p className="mt-1 text-xs text-muted-foreground/60">
-          {t('Deletes the team and its run history. Digital humans created for this team may also be deleted.')}
+          {doomed.length > 0
+            ? (leadDeleted
+              ? t('Deletes the team and its run history, along with {{count}} digital humans AI created for it and the team\u2019s own lead. The digital humans you added stay yours.', { count: doomed.length })
+              : t('Deletes the team and its run history, along with {{count}} digital humans AI created for it. The digital humans you added stay yours.', { count: doomed.length }))
+            : (leadDeleted
+              ? t('Deletes the team and its run history, along with the team\u2019s own lead. The digital humans you added stay yours.')
+              : t('Deletes the team and its run history. The digital humans you added stay yours.'))}
         </p>
       </div>
 
       {confirm && (
         <ConfirmDialog
-          title={t('Dissolve {{name}}?', { name: detail.team.name })}
-          message={t('The team and its run history will be deleted. Digital humans that AI created for this team and that still work in its space will be deleted with their own data, unless another team also uses them. Members you added yourself, anyone in another space, and all spaces are kept. This cannot be undone.')}
-          confirmLabel={t('Dissolve')}
+          title={doomed.length > 0
+            ? t('Dissolve {{name}} and delete {{count}} digital humans?', { name: detail.team.name, count: doomed.length })
+            : t('Dissolve {{name}}?', { name: detail.team.name })}
+          message={doomed.length > 0
+            ? (leadDeleted
+              ? t('{{names}} were created by AI for this team. Dissolving deletes them and their own data unless another team also uses them. The same applies to the team’s own lead. Every space is kept. This cannot be undone.', { names })
+              : t('{{names}} were created by AI for this team. Dissolving deletes them and their own data unless another team also uses them. Every space is kept. This cannot be undone.', { names }))
+            : (leadDeleted
+              ? t('The team and its whole run history are deleted, along with the team\u2019s own lead, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.')
+              : t('The team and its whole run history are deleted, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.'))}
+          confirmLabel={doomed.length > 0 ? t('Dissolve and delete permanently') : leadDeleted ? t('Dissolve and delete') : t('Dissolve')}
           cancelLabel={t('Cancel')}
           variant="danger"
           onConfirm={() => { setConfirm(false); void dissolveTeam(detail.team.id) }}

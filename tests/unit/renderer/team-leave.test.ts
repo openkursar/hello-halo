@@ -24,6 +24,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 const h = vi.hoisted(() => ({
   queue: [] as unknown[],
+  apps: [] as Array<{ id: string; spaceId: string; spec: { type: string } }>,
   dialogs: [] as Array<Record<string, unknown>>,
   store: {} as Record<string, ReturnType<typeof vi.fn>>,
 }))
@@ -55,7 +56,7 @@ vi.mock('../../../src/renderer/stores/team-view-prefs.store', () => ({
   useTeamViewPrefsStore: (select: (s: unknown) => unknown) => select({ setOfficeSkin: () => {} }),
 }))
 vi.mock('../../../src/renderer/stores/apps.store', () => ({
-  useAppsStore: (select: (s: unknown) => unknown) => select({ apps: [] }),
+  useAppsStore: (select: (s: unknown) => unknown) => select({ apps: h.apps }),
 }))
 vi.mock('../../../src/renderer/hooks/useAutosaveDraft', () => ({
   useAutosaveDraft: (value: string) => [value, () => {}, () => {}],
@@ -82,6 +83,7 @@ const t = interpolate
 
 beforeEach(() => {
   h.queue = []
+  h.apps = []
   h.dialogs = []
   for (const fn of Object.values(h.store)) fn.mockClear()
 })
@@ -207,6 +209,27 @@ describe('the "Remove from team" dialog', () => {
 })
 
 describe('the member list of a team this computer hosts', () => {
+  it.each([
+    ['home', 'Delete home?', 'Delete'],
+    ['unknown', 'Delete unknown?', 'Delete'],
+    ['moved', 'Remove moved from this team?', 'Remove'],
+    ['remote', 'Remove remote from this team?', 'Remove'],
+  ])('warns only about possible deletion when removing %s', (id, title, confirmLabel) => {
+    h.apps = [
+      { id: 'home', spaceId: 'space', spec: { type: 'automation' } },
+      { id: 'moved', spaceId: 'elsewhere', spec: { type: 'automation' } },
+    ]
+    h.queue = [null, null, id, null] // schedule, promote, remove, withdraw
+    const html = render(null, ['home', 'unknown', 'moved', 'remote'].map(name => member(name, {
+      aiProvisioned: true, ...(name === 'remote' && { origin: 'remote', ownerNodeId: 'another-node' }),
+    })))
+    expect(h.dialogs[0]).toMatchObject({ title, confirmLabel })
+    expect(h.dialogs[0].message).toContain(confirmLabel === 'Delete' ? 'another team' : 'stays yours')
+    expect(count(html, 'title="Delete member"')).toBe(2)
+    expect(count(html, 'title="Remove member"')).toBe(2)
+    expect(html).toContain('2 digital humans AI created for it')
+  })
+
   it('keeps "Remove member" for everyone but the lead', () => {
     const html = render(null, [member('lead', { isLead: true }), member('writer'), member('tester')])
 
