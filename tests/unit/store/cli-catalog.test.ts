@@ -337,3 +337,130 @@ describe('cli catalog: status and signatures', () => {
     expect((await host.readCliToolState())!.tools[ID].current).toBe('1.0.0')
   })
 })
+
+describe('cli catalog: administrator guide overrides', () => {
+  const TEXT = '# Bank notes\nAlways run `tool --check` first.\n'
+
+  function guideOf(content: string, revision = 1, extra: Record<string, unknown> = {}) {
+    return { revision, sha256: createHash('sha256').update(content).digest('hex'), content, signature: null, ...extra }
+  }
+
+  /** The guide path TOOLS.md of a new session names for the tool. */
+  async function sessionGuide(host: Awaited<ReturnType<typeof load>>['host']): Promise<{ path: string; text: string }> {
+    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
+    const binDir = await host.applyCliToolsEnv(env, { entry: 'chat', engine: 'claude' })
+    expect(binDir).not.toBeNull()
+    const index = readFileSync(join(binDir!, '..', 'TOOLS.md'), 'utf-8')
+    const row = index.split('\n').find(line => line.includes(`| ${ID} |`))
+    const path = row?.match(/`([^`]+)` \|$/)?.[1] ?? ''
+    return { path, text: path ? readFileSync(path, 'utf-8') : '' }
+  }
+
+  it('parses a valid override and drops a malformed one without touching the version', async () => {
+    const { catalog } = await load(null)
+    const bytes = new Uint8Array([1])
+    const parsed = catalog.parseCliCatalog(catalogBody([
+      tool([
+        versionEntry('3.0.0', bytes, { guide: guideOf(TEXT, 2) }),
+        versionEntry('2.0.0', bytes, { guide: { ...guideOf(TEXT), sha256: '0'.repeat(64) } }),
+        versionEntry('1.0.0', bytes),
+      ]),
+    ]))
+    expect(parsed[0].versions.map(v => v.guide)).toEqual([
+      { revision: 2, sha256: guideOf(TEXT).sha256, content: TEXT, signature: null },
+      'invalid',
+      null,
+    ])
+    const [status] = catalog.catalogStatusOf(parsed)
+    expect(Object.keys(status.guides!)).toEqual(['3.0.0', '1.0.0'])
+    expect(status.guides!['1.0.0'].override).toBeNull()
+    // The renderer never sees guide text.
+    const view = await catalog.fetchCliCatalog()
+    expect(JSON.stringify(view)).not.toContain('Bank notes')
+  })
+
+  it('applies an override on install, pins it per session, and reverts when the administrator resets it', async () => {
+    const bytes = packageBytes('1.0.0')
+    let guide: unknown = guideOf(TEXT)
+    const fetchCliCatalog = vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes, { guide })])]))
+    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
+
+    await catalog.installCliTool({ id: ID, version: '1.0.0' })
+    const record = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
+    expect(record.guideOverride).toEqual({ revision: 1, sha256: guideOf(TEXT).sha256 })
+    expect(JSON.stringify(record)).not.toContain('Bank notes')
+    const first = await sessionGuide(host)
+    expect(first.text).toBe(TEXT)
+    expect(first.path).toContain(join('guides', `${ID}.md`))
+
+    // A new revision reaches new sessions; the earlier session's copy is unchanged.
+    const edited = `${TEXT}Second revision.\n`
+    guide = guideOf(edited, 2)
+    await catalog.fetchCliCatalog()
+    const second = await sessionGuide(host)
+    expect(second.text).toBe(edited)
+    expect(second.path).not.toBe(first.path)
+    expect(readFileSync(first.path, 'utf-8')).toBe(TEXT)
+
+    // Reset: the package guide applies again and unreferenced texts are pruned.
+    guide = undefined
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
+    const third = await sessionGuide(host)
+    expect(third.path).not.toContain(join('guides', `${ID}.md`))
+    expect(third.path.endsWith('README.md') || third.path === '').toBe(true)
+  })
+
+  it('leaves the guide as it is when the override is malformed or for another payload', async () => {
+    const bytes = packageBytes('1.0.0')
+    let entry: Record<string, unknown> = { guide: guideOf(TEXT) }
+    const fetchCliCatalog = vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes, entry)])]))
+    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
+    await catalog.installCliTool({ id: ID, version: '1.0.0' })
+
+    entry = { guide: { ...guideOf('other'), content: 'tampered' } }
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(1)
+
+    entry = { guide: guideOf('for a different build', 5), integrity: `sha256-${'B'.repeat(43)}=` }
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(1)
+    expect((await sessionGuide(host)).text).toBe(TEXT)
+  })
+
+  it('requires a guide signature when the build ships keys', async () => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+    const presetDir = join(dir, 'preset')
+    mkdirSync(presetDir)
+    writeFileSync(join(presetDir, 'trusted-keys.json'), JSON.stringify({
+      schema: 'halo.cli.trust/1',
+      keys: [{ keyId: 'k1', alg: 'ed25519', publicKey: Buffer.from(publicKey.export({ format: 'jwk' }).x as string, 'base64url').toString('base64') }],
+    }))
+    const bytes = packageBytes('1.0.0')
+    const fields = { version: '1.0.0', integrity: buildManifest({ version: '1.0.0' }).integrity as string, archiveSha256: sha256(bytes) }
+    const packageSig = {
+      alg: 'ed25519', keyId: 'k1',
+      value: sign(null, Buffer.from(`halo.cli.sig/1\n${ID}\n1.0.0\n${fields.archiveSha256}\n${fields.integrity}\n`), privateKey).toString('base64'),
+    }
+    const plain = guideOf(TEXT)
+    const guideSig = (revision: number) => ({
+      alg: 'ed25519', keyId: 'k1',
+      value: sign(null, Buffer.from(`halo.cli.guide/1\n${ID}\n1.0.0\n${revision}\n${plain.sha256}\n`), privateKey).toString('base64'),
+    })
+    let guide: unknown = plain
+    const fetchCliCatalog = vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes, { signature: packageSig, guide })])]))
+    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) }, presetDir)
+
+    await catalog.installCliTool({ id: ID, version: '1.0.0' })
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
+
+    guide = { ...plain, revision: 2, signature: guideSig(1) }
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
+
+    guide = { ...plain, revision: 2, signature: guideSig(2) }
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(2)
+    expect((await sessionGuide(host)).text).toBe(TEXT)
+  })
+})

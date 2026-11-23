@@ -447,6 +447,16 @@ a service), and the store stays the only owner of source transport.
   or invalid signature **before** downloading. cli-tools checks again at
   install. Without the file, verification is off and the UI says so. See
   `services/cli-tools/DESIGN.md` → Signatures.
+- **Administrator guides.** A version may carry `guide: {revision, sha256,
+  content, signature}`, the administrator's replacement for the package guide.
+  `parseCliCatalog` checks the revision, the 64 KiB limit and that the text
+  hashes to `sha256`; a malformed one is left out of the status, so the
+  installed version keeps what it had. A version without `guide` clears any
+  earlier override. `catalogStatusOf` passes each version's integrity with
+  it, and cli-tools applies it to the matching installed version (signature
+  checked in the host). `installCliTool` applies the catalog again after the
+  install, so a new version gets its override at once. The text never reaches
+  the renderer.
 - **Renderer view.** `CliCatalog` carries no URL, digest or token. The entry is
   gated on `capabilities.cliTools` (handshake `features.cliTools` and an
   identity provider in this build), per §3.1 the handshake gates the surface,

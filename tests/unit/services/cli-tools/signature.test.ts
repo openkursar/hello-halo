@@ -10,10 +10,12 @@ import { join } from 'path'
 import { CliToolError } from '../../../../src/main/services/cli-tools'
 import {
   assertCatalogSignature,
+  guideSignatureAccepted,
   loadTrustStore,
   parseCatalogSignature,
   parseTrustStore,
   signedBytes,
+  signedGuideBytes,
   type CatalogSignature,
   type SignedFields,
 } from '../../../../src/main/services/cli-tools/signature'
@@ -186,5 +188,59 @@ describe('cli-tools signature: catalog install through the host', () => {
     expect(await host.catalogSignatureMode()).toBe('off')
     const file = writePackage(pkgs)
     expect(await host.installCatalogPackage(file, { ...expectation(file), signature: null })).toMatchObject({ installed: true })
+  })
+})
+
+describe('guide override signatures', () => {
+  // Shared with the registry's Go test (TestGuideMessageAndVector): RFC 8032 test 1 key.
+  const VECTOR_TRUST = parseTrustStore(JSON.stringify({
+    schema: 'halo.cli.trust/1',
+    keys: [{ keyId: 'rfc8032', alg: 'ed25519', publicKey: '11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=' }],
+  }))
+  const VECTOR_FIELDS = {
+    id: 'io.prettier.cli',
+    version: '3.10.1',
+    revision: 2,
+    sha256: '8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4',
+  }
+  const VECTOR_SIG: CatalogSignature = {
+    alg: 'ed25519',
+    keyId: 'rfc8032',
+    value: 'pHlB6VLR0E/M+3c7uOuYaahVp3nLIPWV5RgNal4mYd/+iF5LKA6hyAtpBY7u1hmMI3/sKpkqVfo9/QyR8MDsDw==',
+  }
+
+  it('signs the documented bytes', () => {
+    expect(signedGuideBytes({ ...VECTOR_FIELDS, sha256: VECTOR_FIELDS.sha256.toUpperCase() }).toString('utf-8')).toBe(
+      `halo.cli.guide/1\nio.prettier.cli\n3.10.1\n2\n${VECTOR_FIELDS.sha256}\n`,
+    )
+  })
+
+  it('accepts the cross-language vector and rejects any changed field', () => {
+    expect(VECTOR_TRUST.mode).toBe('on')
+    expect(guideSignatureAccepted(VECTOR_TRUST, VECTOR_FIELDS, VECTOR_SIG)).toBe(true)
+    expect(guideSignatureAccepted(VECTOR_TRUST, { ...VECTOR_FIELDS, revision: 3 }, VECTOR_SIG)).toBe(false)
+    expect(guideSignatureAccepted(VECTOR_TRUST, { ...VECTOR_FIELDS, version: '3.10.2' }, VECTOR_SIG)).toBe(false)
+    expect(guideSignatureAccepted(VECTOR_TRUST, { ...VECTOR_FIELDS, sha256: '0'.repeat(64) }, VECTOR_SIG)).toBe(false)
+    expect(guideSignatureAccepted(VECTOR_TRUST, VECTOR_FIELDS, { ...VECTOR_SIG, keyId: 'other' })).toBe(false)
+    expect(guideSignatureAccepted(VECTOR_TRUST, VECTOR_FIELDS, { ...VECTOR_SIG, value: 'AAAA' })).toBe(false)
+    expect(guideSignatureAccepted(VECTOR_TRUST, VECTOR_FIELDS, null)).toBe(false)
+  })
+
+  it('never accepts a package signature as a guide signature', () => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+    const trust = parseTrustStore(JSON.stringify({
+      schema: 'halo.cli.trust/1',
+      keys: [{ keyId: 'k1', alg: 'ed25519', publicKey: Buffer.from(publicKey.export({ format: 'jwk' }).x as string, 'base64url').toString('base64') }],
+    }))
+    const fields = { id: 'a.b', version: '1.0.0', revision: 1, sha256: 'a'.repeat(64) }
+    const packageSig = sign(null, signedBytes({ id: 'a.b', version: '1.0.0', archiveSha256: 'a'.repeat(64), integrity: '1' }), privateKey)
+    expect(guideSignatureAccepted(trust, fields, { alg: 'ed25519', keyId: 'k1', value: packageSig.toString('base64') })).toBe(false)
+    const guideSig = sign(null, signedGuideBytes(fields), privateKey)
+    expect(guideSignatureAccepted(trust, fields, { alg: 'ed25519', keyId: 'k1', value: guideSig.toString('base64') })).toBe(true)
+  })
+
+  it('follows the trust mode: off accepts anything, broken accepts nothing', () => {
+    expect(guideSignatureAccepted({ mode: 'off', keys: new Map() }, VECTOR_FIELDS, null)).toBe(true)
+    expect(guideSignatureAccepted({ mode: 'broken', keys: new Map() }, VECTOR_FIELDS, VECTOR_SIG)).toBe(false)
   })
 })

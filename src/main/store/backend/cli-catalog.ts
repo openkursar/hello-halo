@@ -11,7 +11,10 @@
  * tools (`applyCatalogStatus`): revocation, delisting of catalog tools it no
  * longer lists, withdrawn versions and available updates. A revoked or
  * delisted tool leaves new executions as soon as this device learns of it;
- * an update is only flagged, never downloaded. Installing re-reads the catalog first and
+ * an update is only flagged, never downloaded. An administrator's guide
+ * override of a version replaces the package guide for new executions once
+ * its digest (and, when the build ships trusted keys, its signature) checks
+ * out; a malformed one is ignored. Installing re-reads the catalog first and
  * refuses a revoked tool or a version the catalog no longer lists, checks the
  * version's signature when the build ships trusted keys, then checks
  * the archive sha256 here and hands the file to cli-tools, which checks the
@@ -29,13 +32,14 @@ import { getAdapter } from '../adapters'
 import { getStoreIdentityToken } from './identity'
 import {
   DEFAULT_ARCHIVE_LIMITS,
+  GUIDE_MAX_BYTES,
   applyCatalogStatus,
   installCatalogPackage,
   parseCatalogSignature,
   readCliToolState,
   verifyCatalogSignature,
 } from '../../services/cli-tools'
-import type { CatalogSignature, CliToolState } from '../../services/cli-tools'
+import type { CatalogGuideOverride, CatalogSignature, CatalogToolStatus, CliToolState } from '../../services/cli-tools'
 import { STORE_NOT_SIGNED_IN } from '../../../shared/store/store-types'
 import type {
   CliCatalog,
@@ -60,6 +64,12 @@ interface CatalogVersionRecord {
   downloadUrl: string
   /** Null when the catalog carries none (or one of an unknown shape). */
   signature: CatalogSignature | null
+  /**
+   * The administrator's guide: null when there is none (the package guide
+   * applies), `'invalid'` when one was sent but failed validation — then this
+   * device leaves the version's guide as it is.
+   */
+  guide: CatalogGuideOverride | null | 'invalid'
 }
 
 interface CatalogToolRecord {
@@ -102,6 +112,20 @@ function readString(value: unknown, max = 256): string | null {
   return typeof value === 'string' && value.length > 0 && value.length <= max ? value : null
 }
 
+function parseGuide(raw: unknown): CatalogGuideOverride | null | 'invalid' {
+  if (raw === undefined || raw === null) return null
+  if (typeof raw !== 'object') return 'invalid'
+  const g = raw as Record<string, unknown>
+  const revision = g.revision
+  const sha256 = g.sha256
+  const content = g.content
+  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 1) return 'invalid'
+  if (typeof sha256 !== 'string' || !SHA256_HEX.test(sha256)) return 'invalid'
+  if (typeof content !== 'string' || Buffer.byteLength(content, 'utf-8') > GUIDE_MAX_BYTES) return 'invalid'
+  if (createHash('sha256').update(content, 'utf-8').digest('hex') !== sha256) return 'invalid'
+  return { revision, sha256, content, signature: parseCatalogSignature(g.signature) }
+}
+
 function parseVersion(raw: unknown): CatalogVersionRecord | null {
   if (!raw || typeof raw !== 'object') return null
   const v = raw as Record<string, unknown>
@@ -134,7 +158,14 @@ function parseVersion(raw: unknown): CatalogVersionRecord | null {
   if (auth === 'none' || auth === 'env-ref' || auth === 'external-login') view.auth = auth
   const publishedAt = readString(v.publishedAt, 64)
   if (publishedAt) view.publishedAt = publishedAt
-  return { view, archiveSha256, integrity, downloadUrl, signature: parseCatalogSignature(v.signature) }
+  return {
+    view,
+    archiveSha256,
+    integrity,
+    downloadUrl,
+    signature: parseCatalogSignature(v.signature),
+    guide: parseGuide(v.guide),
+  }
 }
 
 function parseTool(raw: unknown): CatalogToolRecord | null {
@@ -205,11 +236,28 @@ async function loadCatalog(): Promise<CatalogToolRecord[] | null> {
   const raw = await endpoint.call(endpoint.source, await requireAuth())
   if (raw == null) return null
   const tools = parseCliCatalog(raw)
-  const changed = await applyCatalogStatus(
-    tools.map(tool => ({ id: tool.id, revoked: tool.revoked, versions: tool.versions.map(v => v.view.version) })),
-  )
-  if (changed.length > 0) console.log('[CliCatalog] Catalog status updated for', changed)
+  await applyStatus(tools)
   return tools
+}
+
+/** What `applyCatalogStatus` needs from a parsed catalog; exported for tests. */
+export function catalogStatusOf(tools: CatalogToolRecord[]): CatalogToolStatus[] {
+  return tools.map(tool => {
+    const guides: NonNullable<CatalogToolStatus['guides']> = {}
+    for (const v of tool.versions) {
+      if (v.guide === 'invalid') {
+        console.warn('[CliCatalog] Guide override ignored: malformed', { tool: `${tool.id}@${v.view.version}` })
+        continue
+      }
+      guides[v.view.version] = { integrity: v.integrity, override: v.guide }
+    }
+    return { id: tool.id, revoked: tool.revoked, versions: tool.versions.map(v => v.view.version), guides }
+  })
+}
+
+async function applyStatus(tools: CatalogToolRecord[]): Promise<void> {
+  const changed = await applyCatalogStatus(catalogStatusOf(tools))
+  if (changed.length > 0) console.log('[CliCatalog] Catalog status updated for', changed)
 }
 
 /** The catalog merged with installed state; empty when the store serves none. */
@@ -266,6 +314,8 @@ export async function installCliTool(request: { id: string; version: string }): 
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+  // The version was not installed when the catalog was applied above; give it its guide now.
+  await applyStatus(tools)
   return toView(tool, await readCliToolState())
 }
 

@@ -235,6 +235,22 @@ the meaning of a `halo-` name and the rule not to replay a write whose outcome
 is unknown. The built-in `halo-cli-tools` skill tells the AI to read it from
 `$HALO_CLI_TOOLS_BIN/../TOOLS.md`, so the guide matches the pinned set.
 
+**Administrator guide overrides.** A catalog may replace the package guide of
+one version (`CatalogToolStatus.guides`). `applyCatalogStatus` applies it only
+to an installed `preset` or `catalog` version whose payload integrity equals
+the catalog's, after re-checking the sha256 and the 64 KiB limit. The text is
+stored once per content as `guides/<sha256>.md`; the version record keeps only
+`guideOverride: {revision, sha256}`, never the text. `override: null` clears
+it and the package guide applies again; a version the catalog omits (for
+example a malformed or unsigned override) is left as it is. The pinned lock
+records the override, the view key includes its sha256 only when one is
+pinned (views without one keep their keys), and the view copies the text to
+`views/<viewKey>/guides/<id>.md`, which TOOLS.md names instead of the package
+guide. A running execution therefore keeps the text it started with; the next
+one gets the new revision. Guide files no record or lock refers to are
+deleted after each catalog apply. A missing or altered file is logged and that
+view falls back to the package guide.
+
 Revocation excludes a tool from new pins. It is not credential revocation: a
 tool's authorization is checked when the tool uses its identity, which a
 version pin never freezes.
@@ -412,9 +428,18 @@ caller that skips the store layer is still checked. Presets and user imports
 are not catalog packages and are not signature-checked. The real backend
 sample (key id `halo-test-2026-11`) is a unit-test fixture.
 
+An administrator guide override is signed separately, because it can change
+after the version was approved:
+`"halo.cli.guide/1\n" + id + "\n" + version + "\n" + revision + "\n" + sha256 of the text (lowercase hex) + "\n"`.
+The host (`withAcceptedGuides`) applies the same trust modes: `off` accepts
+it, `on` needs a valid signature from a listed key, `broken` accepts none. A
+refused override is dropped with a log line (no text) and the version keeps
+the guide it had. The registry's Go test and `signature.test.ts` share one
+RFC 8032 vector.
+
 **State compatibility.** All new fields are optional, and `schema` stays 1.
 An older build reads the state, ignores `disabled`, `delisted`, `withdrawn`,
-`catalogUpdate` and `pendingCleanup`, and would treat an `external` version as
+`catalogUpdate`, `guideOverride` and `pendingCleanup`, and would treat an `external` version as
 a broken store version: it fails that tool's pin, not the session. A
 downgrade therefore loses disables, and a registered program stops working
 until the newer build is back.

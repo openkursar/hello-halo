@@ -6,8 +6,10 @@
  *
  *   store/<id>/<version>-<digest12>/   immutable, read-only installed package
  *   staging/<txid>/                    one import transaction; removed on exit
+ *   guides/<sha256>.md                 administrator guide overrides, by content
  *   views/<viewKey>/bin/               launchers for one exact tool set
  *   views/<viewKey>/TOOLS.md           what those launchers are, for the agent
+ *   views/<viewKey>/guides/<id>.md     overrides that view was pinned to (copies)
  *   views/<viewKey>/argv-preload.cjs   argv fix the launchers load (see shims.ts)
  *   locks/<executionId>.json           the tool set an execution is pinned to
  *   state.json                         versions, current choice, revocation
@@ -32,6 +34,7 @@ import {
   validateCredentialBinding,
   type CliCredentialBinding,
 } from './credentials'
+import type { CatalogSignature } from './signature'
 
 /**
  * Where an installed version came from. `external` is a program already on the
@@ -78,6 +81,11 @@ export interface CliToolVersionRecord {
   description?: string
   /** A catalog version the catalog no longer lists. Informational: it stays usable. */
   withdrawn?: boolean
+  /**
+   * The administrator's replacement for the package guide (`guides/<sha256>.md`).
+   * Only preset and catalog versions take one; the text is never kept in state.
+   */
+  guideOverride?: { revision: number; sha256: string }
   /** Present only for `source: 'external'`; `dir` is then empty. */
   external?: CliExternalRecord
 }
@@ -133,12 +141,29 @@ export interface RegisterExternalOptions {
   toolId?: string
 }
 
+/** An administrator's guide for one catalog version, replacing the package guide. */
+export interface CatalogGuideOverride {
+  revision: number
+  /** Lowercase hex sha256 of `content` (UTF-8). */
+  sha256: string
+  content: string
+  /** Checked by the host before the store sees it (see signature.ts). */
+  signature?: CatalogSignature | null
+}
+
 /** Catalog facts about one tool, as `applyCatalogStatus` consumes them. */
 export interface CatalogToolStatus {
   id: string
   revoked: boolean
   /** Approved versions the catalog lists now. */
   versions: string[]
+  /**
+   * Guide state per listed version, keyed by version. `override: null` means
+   * the package guide applies; a version absent here is left as it is.
+   * Applied only to an installed preset or catalog version whose payload
+   * integrity equals `integrity`.
+   */
+  guides?: Record<string, { integrity: string; override: CatalogGuideOverride | null }>
 }
 
 export interface CliToolStoreOptions {
@@ -197,7 +222,7 @@ export interface CliExecutionLock {
   holder?: string
   viewKey: string
   runtimeNodeVersion: string
-  tools: Array<{ id: string; version: string; integrity: string; guide?: string }>
+  tools: Array<{ id: string; version: string; integrity: string; guide?: string; guideOverride?: { revision: number; sha256: string } }>
   commands: ExposedCommand[]
   createdAt: string
 }
@@ -235,6 +260,9 @@ export interface PinnedExecution {
 }
 
 const STATE_MAX_BYTES = 1024 * 1024
+/** Largest administrator guide accepted, in UTF-8 bytes; the store enforces the same. */
+export const GUIDE_MAX_BYTES = 64 * 1024
+const GUIDE_SHA256 = /^[0-9a-f]{64}$/
 /** Same rule as manifest command names: bare, lowercase, never the reserved `halo-` prefix. */
 export const COMMAND_NAME_PATTERN = /^(?!halo-)[a-z0-9][a-z0-9._-]{0,63}$/
 const TOOL_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/
@@ -935,6 +963,7 @@ export class CliToolStore {
             else delete record.withdrawn
           }
         }
+        if (entry?.guides) await this.applyGuides(id, tool, entry.guides)
         const installed = Object.keys(tool.versions).filter(v => v !== EXTERNAL_VERSION)
         const best = entry && !entry.revoked
           ? [...entry.versions].sort(compareVersions).pop()
@@ -950,8 +979,74 @@ export class CliToolStore {
         await this.writeState(state)
         this.log.log('[CliTools] Catalog status applied', { changed })
       }
+      await this.pruneGuides(state)
       return changed
     })
+  }
+
+  /**
+   * Set or clear the administrator guide of each matching installed version.
+   * The text is written once per content and re-checked here; a guide that
+   * does not check out leaves the version as it was.
+   */
+  private async applyGuides(
+    id: string,
+    tool: CliToolRecord,
+    guides: NonNullable<CatalogToolStatus['guides']>,
+  ): Promise<void> {
+    for (const [version, guide] of Object.entries(guides)) {
+      const record = tool.versions[version]
+      if (!record || (record.source !== 'catalog' && record.source !== 'preset')) continue
+      if (record.integrity !== guide.integrity) continue
+      const override = guide.override
+      if (!override) {
+        delete record.guideOverride
+        continue
+      }
+      const bytes = Buffer.byteLength(override.content, 'utf-8')
+      if (!GUIDE_SHA256.test(override.sha256) || !Number.isInteger(override.revision) || override.revision < 1 ||
+        bytes > GUIDE_MAX_BYTES || sha256(override.content) !== override.sha256) {
+        this.log.error('[CliTools] Guide override ignored: it does not match its digest or limits', {
+          tool: `${id}@${version}`, revision: override.revision,
+        })
+        continue
+      }
+      const file = this.path('guides', `${override.sha256}.md`)
+      if (!existsSync(file)) {
+        await fsp.mkdir(this.path('guides'), { recursive: true })
+        await writeFileAtomic(file, override.content)
+      }
+      const current = record.guideOverride
+      if (current?.sha256 !== override.sha256 || current.revision !== override.revision) {
+        record.guideOverride = { revision: override.revision, sha256: override.sha256 }
+      }
+    }
+  }
+
+  /** Delete guide files no version record and no execution lock refers to. */
+  private async pruneGuides(state: CliToolState): Promise<void> {
+    let names: string[]
+    try {
+      names = await fsp.readdir(this.path('guides'))
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw err
+    }
+    const referenced = new Set<string>()
+    for (const tool of Object.values(state.tools)) {
+      for (const record of Object.values(tool.versions)) {
+        if (record.guideOverride) referenced.add(`${record.guideOverride.sha256}.md`)
+      }
+    }
+    for (const lock of await this.listExecutionLocks()) {
+      for (const pinned of lock.tools ?? []) {
+        if (pinned.guideOverride) referenced.add(`${pinned.guideOverride.sha256}.md`)
+      }
+    }
+    for (const name of names) {
+      if (referenced.has(name) || name.includes('.tmp-')) continue
+      await fsp.rm(this.path('guides', name), { force: true })
+    }
   }
 
   /** Re-hash an installed version and compare it with its recorded integrity. */
@@ -1067,7 +1162,13 @@ export class CliToolStore {
       if (toolBlock(tool) !== null || !tool.current) continue
       const record = tool.versions[tool.current]
       if (!record) continue
-      tools.push({ id, version: tool.current, integrity: record.integrity, ...(record.guide ? { guide: record.guide } : {}) })
+      tools.push({
+        id,
+        version: tool.current,
+        integrity: record.integrity,
+        ...(record.guide ? { guide: record.guide } : {}),
+        ...(record.guideOverride ? { guideOverride: { ...record.guideOverride } } : {}),
+      })
       for (const command of record.commands) {
         const conflict = taken.has(command.name) ||
           (options.basePath !== undefined && commandOnPath(command.name, options.basePath, this.platform, [viewsDir]))
@@ -1130,7 +1231,11 @@ export class CliToolStore {
 
   private viewKeyOf(lock: CliExecutionLock, state: CliToolState): string {
     const targets = this.launcherTargets(lock, state)
-    return sha256(JSON.stringify({ v: 3, platform: this.platform, runtime: this.runtimePath, targets })).slice(0, 20)
+    // Only present when an override is pinned, so views without one keep their keys.
+    const guides = lock.tools.filter(t => t.guideOverride).map(t => [t.id, t.guideOverride?.sha256])
+    return sha256(JSON.stringify({
+      v: 3, platform: this.platform, runtime: this.runtimePath, targets, ...(guides.length > 0 ? { guides } : {}),
+    })).slice(0, 20)
   }
 
   /**
@@ -1162,7 +1267,8 @@ export class CliToolStore {
           await fsp.writeFile(path, file.content, { encoding: 'utf-8', mode: file.executable ? 0o755 : 0o644 })
         }
       }
-      await fsp.writeFile(join(tmp, 'TOOLS.md'), this.renderToolsGuide(lock, state), 'utf-8')
+      const overridden = await this.copyGuideOverrides(lock, join(tmp, 'guides'))
+      await fsp.writeFile(join(tmp, 'TOOLS.md'), this.renderToolsGuide(lock, state, viewDir, overridden), 'utf-8')
       await fsp.writeFile(join(tmp, 'view.json'), `${JSON.stringify({ viewKey: lock.viewKey, commands: lock.commands }, null, 2)}\n`)
       if (existsSync(viewDir)) await fsp.rm(viewDir, { recursive: true, force: true })
       await fsp.rename(tmp, viewDir)
@@ -1179,10 +1285,38 @@ export class CliToolStore {
   }
 
   /**
+   * Copy the guide overrides a lock pins into the view, so a later edit never
+   * changes what a running execution reads. A missing or altered file is
+   * logged and that tool falls back to its package guide. Returns the ids copied.
+   */
+  private async copyGuideOverrides(lock: CliExecutionLock, dir: string): Promise<Set<string>> {
+    const copied = new Set<string>()
+    for (const pinned of lock.tools) {
+      if (!pinned.guideOverride) continue
+      let text: string | null = null
+      try {
+        text = await fsp.readFile(this.path('guides', `${pinned.guideOverride.sha256}.md`), 'utf-8')
+      } catch {
+        text = null
+      }
+      if (text === null || sha256(text) !== pinned.guideOverride.sha256) {
+        this.log.error('[CliTools] Guide override unavailable; using the package guide', {
+          tool: `${pinned.id}@${pinned.version}`, revision: pinned.guideOverride.revision,
+        })
+        continue
+      }
+      await fsp.mkdir(dir, { recursive: true })
+      await fsp.writeFile(join(dir, `${pinned.id}.md`), text, 'utf-8')
+      copied.add(pinned.id)
+    }
+    return copied
+  }
+
+  /**
    * The agent-facing index of a view: which commands it has, what they are,
    * and where each tool's guide is. A skill points the agent here.
    */
-  private renderToolsGuide(lock: CliExecutionLock, state: CliToolState): string {
+  private renderToolsGuide(lock: CliExecutionLock, state: CliToolState, viewDir: string, overridden: Set<string>): string {
     const lines = [
       '# Command-line tools in this session',
       '',
@@ -1199,7 +1333,9 @@ export class CliToolStore {
         lines.push(`| \`${command.exposedAs}\` | ${command.toolId} (existing program, not managed by Halo) | - | unknown | unknown | - |`)
         continue
       }
-      const guide = record?.guide ? join(this.path(...record.dir.split('/')), ...record.guide.split('/')) : ''
+      const guide = overridden.has(command.toolId)
+        ? join(viewDir, 'guides', `${command.toolId}.md`)
+        : record?.guide ? join(this.path(...record.dir.split('/')), ...record.guide.split('/')) : ''
       const bound = record !== undefined && sourceMayBind(record.source) && this.bindings.has(command.toolId)
       if (bound) anyBound = true
       const signIn = bound ? 'enterprise sign-in (provided by Halo)' : record?.auth ?? 'unknown'

@@ -3,7 +3,7 @@
  * the bundled runtime. Public surface only; see DESIGN.md.
  */
 
-export { CliToolStore, COMMAND_NAME_PATTERN, EXTERNAL_VERSION, commandOnPath, compareVersions, toolBlock } from './store'
+export { CliToolStore, COMMAND_NAME_PATTERN, EXTERNAL_VERSION, GUIDE_MAX_BYTES, commandOnPath, compareVersions, toolBlock } from './store'
 export {
   CLI_TOOLS_BIN_ENV,
   applyCatalogRevocations,
@@ -28,7 +28,7 @@ export {
   readCliToolState,
 } from './host'
 export type { CatalogPackageExpectation, CliToolsHostOptions, UserPackagePreview } from './host'
-export { parseCatalogSignature, signedBytes, TRUSTED_KEYS_FILE } from './signature'
+export { parseCatalogSignature, signedBytes, signedGuideBytes, guideSignatureAccepted, TRUSTED_KEYS_FILE } from './signature'
 export type { CatalogSignature, TrustMode } from './signature'
 export type {
   CliExecutionEntry,
@@ -39,6 +39,7 @@ export type {
   CliToolStoreOptions,
   CliToolVersionRecord,
   CliExternalRecord,
+  CatalogGuideOverride,
   CatalogToolStatus,
   PackagePreview,
   RegisterExternalOptions,

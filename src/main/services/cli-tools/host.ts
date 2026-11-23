@@ -27,6 +27,7 @@ import type { CliCredentialBinding } from './credentials'
 import {
   TRUSTED_KEYS_FILE,
   assertCatalogSignature,
+  guideSignatureAccepted,
   loadTrustStore,
   type CatalogSignature,
   type TrustMode,
@@ -265,7 +266,36 @@ export async function applyCatalogStatus(catalog: CatalogToolStatus[]): Promise<
   const cliStore = getStore()
   if (!cliStore) return []
   await prepareCliTools()
-  return cliStore.applyCatalogStatus(catalog)
+  return cliStore.applyCatalogStatus(await withAcceptedGuides(catalog))
+}
+
+/**
+ * Drop guide overrides whose signature the build does not accept, under the
+ * same policy as packages (see signature.ts). A dropped version is left as it
+ * is on this device rather than reverted to the package guide.
+ */
+async function withAcceptedGuides(catalog: CatalogToolStatus[]): Promise<CatalogToolStatus[]> {
+  const hasOverride = catalog.some(tool => Object.values(tool.guides ?? {}).some(guide => guide.override))
+  if (!hasOverride) return catalog
+  const trust = await loadTrustStore(trustFile())
+  return catalog.map(tool => {
+    if (!tool.guides) return tool
+    const guides: NonNullable<CatalogToolStatus['guides']> = {}
+    for (const [version, guide] of Object.entries(tool.guides)) {
+      const override = guide.override
+      if (override) {
+        const fields = { id: tool.id, version, revision: override.revision, sha256: override.sha256 }
+        if (!guideSignatureAccepted(trust, fields, override.signature)) {
+          console.warn('[CliTools] Guide override ignored: signature not accepted', {
+            tool: `${tool.id}@${version}`, revision: override.revision, trust: trust.mode,
+          })
+          continue
+        }
+      }
+      guides[version] = guide
+    }
+    return { ...tool, guides }
+  })
 }
 
 function requireStore(): CliToolStore {
