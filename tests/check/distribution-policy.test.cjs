@@ -112,6 +112,11 @@ test('missing unpacked entries fail unless explicitly pruned for the target', as
   assert.equal(isPrunedNativeEntry('resources/dsh-runtime/node_modules/node-pty/src/conpty.h', 'darwin-arm64'), true)
   assert.equal(isPrunedNativeEntry('resources/dsh-runtime/node_modules/node-pty/lib/index.js', 'darwin-arm64'), false)
   assert.equal(isPrunedNativeEntry('node_modules/@hello-halo/agent-sdk/dist/native/halo-sdk.darwin-arm64.node', 'darwin-arm64'), false)
+  const host = `${process.platform}-${process.arch}`
+  const crossTarget = ['darwin-arm64', 'darwin-x64'].find(target => target !== host)
+  assert.equal(isPrunedNativeEntry('node_modules/node-pty/build/Release/spawn-helper', crossTarget), true)
+  assert.equal(isPrunedNativeEntry('node_modules/node-pty/build/Release/spawn-helper', host), false)
+  assert.equal(isPrunedNativeEntry('node_modules/node-pty/lib/index.js', crossTarget), false)
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-unpacked-sentinel-'))
   try {
     const source = path.join(root, 'source')
