@@ -20,6 +20,7 @@ references:
   - tests/e2e/specs/acceptance-collaboration-compaction.spec.ts
   - tests/e2e/specs/acceptance-private-assistant-recovery.spec.ts
   - tests/e2e/specs/acceptance-live-collaboration.spec.ts
+  - src/renderer/components/chat/team-collab/TeamMemberMessage.tsx
 promises:
   conversation-names:
     en: Collaborators created from a space conversation or a digital human’s own chat keep their requested names without a suffix. A duplicate or reserved name does not create another collaborator in that conversation.
@@ -57,6 +58,9 @@ promises:
   reporting-boundary:
     en: Space-conversation collaborators, including nested collaborators, return results and blockers to their requester without digital-human reporting tools or their instructions. Digital-human work retains its existing reporting and activity presentation.
     zh: 空间对话的协作者及递归协作者把成果与阻塞回给请求方，不携带数字人汇报工具及其说明；数字人工作保留原有汇报和活动展示。
+  member-messages:
+    en: In the source conversation, a team member's message reads as one quiet line, like a message from another conversation — who sent it, what about and, wider than a phone, when it arrived — and opens to the full message and the way into the team view. Consecutive messages stay separate lines with no frame around them.
+    zh: 在源对话中，团队成员发来的消息与其他对话发来的消息一样只占安静的一行——谁发的、关于什么，宽于手机屏时还有何时收到——展开后显示完整内容及进入团队视图的入口；连续多条各占一行，外面不加框。
 scenarios:
   - id: teams.collaboration.space-report-boundary
     title:
@@ -408,3 +412,29 @@ scenarios:
     notes:
       en: This checks restoration of one-to-one history without automatic mixing. Explicit team messages and shared blackboard or file content remain legitimate collaboration context. Scripted responses prove routing, persistence and context delivery; they do not assess the quality of a live model's answer.
       zh: 本例验证一对一历史恢复且不自动混入其他成员记录。显式团队消息、共享黑板及文件内容仍可作为合法协作上下文。脚本回复验证消息路由、持久化及上下文传递，不评估真实模型的回答质量。
+  - id: teams.collaboration.member-messages
+    title:
+      en: Read team members' messages as quiet lines
+      zh: 以安静的单行阅读团队成员的消息
+    verifies: [member-messages]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    variants:
+      viewport: ['1280', '390']
+    preconditions:
+      - en: A seeded profile holds a real collaboration bound to a space conversation. After its last reply, one message from another conversation and three from the team (two from its member, one progress notice) are stored in the shape the runtime writes them.
+        zh: 预置配置中有一个绑定到空间对话的真实协作；其最后一条回复之后，按运行时写入的格式存有一条来自另一对话的消息和三条团队消息（两条来自成员、一条进度通知）。
+    steps:
+      - en: Open the conversation and read the lines in the dark and light themes; hover one, open it, then choose its team.
+        zh: 打开对话，在深色和浅色主题下查看这些行；悬停其中一行并展开，再点击其团队。
+    expected:
+      - en: Each team message is one line with the team icon, sender, summary and, at 1280 px, the clock time it arrived (at 390 px the time gives its room to the summary), as tall as the line from another conversation and aligned with it, with no frame and no relative time; the three sit directly under one another and nothing scrolls sideways.
+        zh: 每条团队消息只占一行，含团队图标、发送者、摘要，1280 px 下还有收到的时刻（390 px 下时间让位给摘要），与来自另一对话的那一行等高且对齐，没有边框，也没有相对时间；三行紧挨排列，页面不横向滚动。
+      - en: Hovering shows View without moving anything on the line. Opened, the line shows the full message, "From team" with the team's name and "sent by a team member, not by you"; choosing the team's name opens its task room.
+        zh: 悬停时出现“查看”，行内其他内容不移动。展开后显示完整消息、“来自团队”及团队名称，以及“由团队成员发送，而非您本人”；点击团队名称打开其任务房间。
+    notes:
+      en: The messages are written through the application's own conversation API rather than delivered by a running member, so this checks how the real application presents them, not delivery; delivery into the source chat is covered by teams.collaboration.digital-human-chat and unit tests. The arrival-time format for earlier days and the brief self-opening of a fresh arrival are pinned by unit tests. Dark and light captures, folded and open, are attached for both widths.
+      zh: 消息经应用自身的对话接口写入，而非由运行中的成员投递，因此本例检验真实应用如何呈现，不检验投递；投递到源聊天由 teams.collaboration.digital-human-chat 及单元测试覆盖。较早日期的时间格式以及新到消息短暂自动展开由单元测试固定。两种宽度均附深浅色、收起与展开截图。

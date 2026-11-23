@@ -3,13 +3,14 @@
 import { useEffect, useState } from 'react'
 import { Send, ExternalLink } from 'lucide-react'
 import type { Message } from '../../../types'
-import { useTranslation } from '../../../i18n'
+import { getCurrentLanguage, useTranslation } from '../../../i18n'
 import { useChatStore } from '../../../stores/chat.store'
 import { useAppsStore } from '../../../stores/apps.store'
 import { nativeChatAppId, parseRunSenderKey } from '../../../../shared/apps/im-keys'
 import { navigateToAppChat, navigateToConversation } from '../../../utils/conversation-navigation'
+import { formatRunStart } from '../../../utils/format-time'
 import { readProvenance } from './message-source'
-import { clipSubject, PROCESS_CUE, PROCESS_DETAIL, PROCESS_LINE } from '../process-line'
+import { clipSubject, PROCESS_CUE, PROCESS_DETAIL, PROCESS_LINE, PROCESS_TIME } from '../process-line'
 
 /**
  * A delivery this recent is treated as still unhandled by this conversation's
@@ -60,6 +61,8 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
   }, [isFresh])
 
   if (!provenance) return null
+
+  const sentAt = new Date(message.timestamp).getTime()
 
   // A scheduled run's notice: named by its own title, with nowhere to open.
   const fromRun = parseRunSenderKey(provenance.fromConversationId) !== null
@@ -115,6 +118,9 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
           <span className="min-w-0 truncate text-[13px] text-muted-foreground">{inProcess ? clipSubject(provenance.summary).text : provenance.summary}</span>
         )}
         <span aria-hidden="true" className={PROCESS_CUE}>{isExpanded ? t('Collapse') : t('View')}</span>
+        {Number.isFinite(sentAt) && (
+          <time dateTime={new Date(sentAt).toISOString()} className={PROCESS_TIME}>{formatRunStart(sentAt, Date.now(), getCurrentLanguage())}</time>
+        )}
       </button>
       {body}
     </div>

@@ -10,6 +10,9 @@ export const PROCESS_LINE = 'group/op -mx-1.5 flex w-[calc(100%+0.75rem)] min-h-
 /** The line's "View / Collapse" cue: shown on hover, keyboard focus and touch. */
 export const PROCESS_CUE = 'ml-auto shrink-0 pl-1 text-[11px] opacity-0 transition-opacity group-hover/op:opacity-100 group-focus-visible/op:opacity-100 [@media(hover:none)]:opacity-100'
 
+/** When a delivered line arrived, after the cue; a phone-width line keeps its room for who and what. */
+export const PROCESS_TIME = 'hidden shrink-0 pl-1.5 text-[11px] tabular-nums sm:inline'
+
 /** What a line opens, under its text rather than its icon on wide screens. */
 export const PROCESS_DETAIL = 'mb-2 mt-0.5 min-w-0 sm:ml-[22px]'
 

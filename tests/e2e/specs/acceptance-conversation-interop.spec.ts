@@ -189,6 +189,8 @@ for (const recipient of ['visible', 'cached-background', 'unopened'] as const) {
       await expect(card.getByRole('button').first()).toHaveAttribute('aria-expanded', /^(true|false)$/)
       await expect(card.locator('.border')).toHaveCount(0)
       await expect(card).not.toContainText(/\bago\b/)
+      await expect(card.locator('time')).toHaveText(/\d{1,2}:\d{2}/)
+      expect(await card.locator('time').getAttribute('datetime')).toBe(new Date(delivery.timestamp).toISOString())
       await expect.poll(async () => {
         const state = await window.evaluate(id => (window as unknown as { halo: HaloAPI }).halo.getSessionState(id), target.id)
         return (state.data as { isActive?: boolean })?.isActive

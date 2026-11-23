@@ -25,14 +25,15 @@ export function formatTimeAgo(timestamp: number, t: (s: string, opts?: Record<st
 }
 
 /**
- * When a run started, the one way every run list says it: the time alone for
- * today, the month and day before it otherwise.
+ * When a run started or a message arrived, the one way every list says it: the
+ * time alone for today, the month and day before it otherwise. `locale`
+ * defaults to the system's.
  */
-export function formatRunStart(timestamp: number, now = Date.now()): string {
+export function formatRunStart(timestamp: number, now = Date.now(), locale?: string): string {
   const date = new Date(timestamp)
-  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  const time = date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
   if (new Date(now).toDateString() === date.toDateString()) return time
-  return `${date.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })} ${time}`
+  return `${date.toLocaleDateString(locale, { month: '2-digit', day: '2-digit' })} ${time}`
 }
 
 /** mm:ss for under an hour, h:mm:ss past that — running tasks rarely run long. */

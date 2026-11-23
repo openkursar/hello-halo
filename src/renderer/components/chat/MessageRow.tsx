@@ -149,7 +149,7 @@ export const MessageRow = memo(function MessageRow({
     const endsRun = teamRunPosition === 'single' || teamRunPosition === 'last'
     return (
       <div className={`${endsRun ? 'pb-4 ' : ''}${className}`}>
-        <TeamMemberMessage message={message} runPosition={teamRunPosition} />
+        <TeamMemberMessage message={message} />
       </div>
     )
   }

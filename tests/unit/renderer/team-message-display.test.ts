@@ -2,12 +2,12 @@
  * Where a teammate's message (or another conversation's) is drawn.
  *
  * One that started the AI's work, or that no reply claims (older history, a
- * remote record), is a card of its own exactly as before: it opens itself for
- * a few seconds when fresh. One read while a reply was being written is drawn
- * among that reply's work — or after the reply as its own card when the reply
- * did no work — and never as a thought process of its own.
+ * remote record), is a line of its own: it opens itself for a few seconds when
+ * fresh. One read while a reply was being written is drawn among that reply's
+ * work — or after the reply as its own card when the reply did no work — and
+ * never as a thought process of its own.
  *
- * No DOM here: rows are searched as element trees, cards rendered to markup.
+ * No DOM here: rows are searched as element trees, lines rendered to markup.
  */
 
 import { createElement } from 'react'
@@ -22,6 +22,7 @@ vi.mock('../../../src/renderer/i18n', () => ({
   useTranslation: () => ({
     t: (text: string, values?: Record<string, string>) => text.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values?.[key] ?? ''),
   }),
+  getCurrentLanguage: () => 'de',
 }))
 vi.mock('../../../src/renderer/services/canvas-lifecycle', () => ({ canvasLifecycle: { openTeam: () => {} } }))
 vi.mock('../../../src/renderer/components/chat/MessageItem', () => ({ MessageItem: function MessageItem() { return null } }))
@@ -67,12 +68,12 @@ const team = (fields: Partial<Message> = {}): Message => ({
 const tool = (id: string, seconds: number): Thought => ({ id, type: 'tool_use', content: '', timestamp: at(seconds), toolName: 'Read' })
 
 describe('a teammate message in the transcript', () => {
-  it('that started the work, or that no reply claims, is the team card itself — never a thought process', () => {
+  it('that started the work, or that no reply claims, is the team line itself — never a thought process', () => {
     for (const message of [team(), team({ metadata: { teamId: 'team', teamName: 'Crew' } })]) {
       const tree = nodes(row({ message }))
-      const card = tree.find(node => node.type === TeamMemberMessage)
-      expect(card?.props?.message).toBe(message)
-      expect(card?.props?.inProcess).toBeUndefined()
+      const line = tree.find(node => node.type === TeamMemberMessage)
+      expect(line?.props?.message).toBe(message)
+      expect(line?.props?.inProcess).toBeUndefined()
       expect(tree.some(node => node.type === CollapsedThoughtProcess || node.type === LazyCollapsedThoughtProcess)).toBe(false)
     }
   })
@@ -119,21 +120,46 @@ describe('a teammate message in the transcript', () => {
   })
 })
 
-describe('the team card', () => {
-  it('opens itself while fresh, highlighted, as before', () => {
+describe('the team line', () => {
+  it('opens itself while fresh, with its icon highlighted', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(at(6)))
     try {
       const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team() }))
-      expect(html).toContain('animate-fade-in')
-      // A fresh message lights its dot; an older one keeps it muted.
-      expect(html).toContain('bg-primary')
+      expect(html).toMatch(/<svg[^>]*lucide-users[^>]*text-primary/)
       expect(html).toContain('Details follow')
-      expect(html).toContain('Team: Crew')
+      expect(html).toContain('From team')
+      expect(html).toContain('title="Open team view"')
+      expect(html).toContain('Crew')
       expect(html).toContain('Reviewer')
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('says when it arrived in the app’s language: the time alone today, the month and day before', () => {
+    const time = { hour: '2-digit', minute: '2-digit' } as const
+    const sent = new Date(at(0))
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(at(60)))
+      const today = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team({ timestamp: at(0) }), inProcess: true }))
+      expect(today.toLowerCase()).toContain(`<time datetime="${sent.toISOString().toLowerCase()}"`)
+      expect(today).toContain(`>${sent.toLocaleTimeString('de', time)}</time>`)
+      expect(sent.toLocaleTimeString('de', time)).not.toBe(sent.toLocaleTimeString('en-US', time))
+
+      vi.setSystemTime(new Date(sent.getTime() + 3 * 86_400_000))
+      const earlier = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team({ timestamp: at(0) }) }))
+      expect(earlier).toContain(`>${sent.toLocaleDateString('de', { month: '2-digit', day: '2-digit' })} ${sent.toLocaleTimeString('de', time)}</time>`)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still draws a record whose time cannot be read, without a time', () => {
+    const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team({ timestamp: 'not a time' }) }))
+    expect(html).toContain('>Reviewer<')
+    expect(html).not.toContain('<time')
   })
 
   it('stays a quiet collapsed row inside a reply’s work, even when fresh', () => {
@@ -141,7 +167,6 @@ describe('the team card', () => {
     vi.setSystemTime(new Date(at(6)))
     try {
       const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team(), inProcess: true }))
-      expect(html).not.toContain('animate-fade-in')
       expect(html).not.toContain('Details follow')
       expect(html).toContain('Report: tests pass')
       expect(html).toContain('aria-expanded="false"')
@@ -150,11 +175,19 @@ describe('the team card', () => {
     }
   })
 
-  it('is a plain line inside a reply’s work: who sent it and what about, no box, no age', () => {
+  it('is a plain line with no box, saying who sent it, what about and when', () => {
     const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team({ timestamp: at(0) }), inProcess: true }))
     expect(html).toContain('>Reviewer<')
     expect(html).toContain('>Report: tests pass<')
-    expect(html).not.toMatch(/border|rounded-lg|ago/)
+    expect(html).toContain('<time')
+    expect(html).not.toMatch(/border|rounded-lg/)
+  })
+
+  it('is the same unboxed line when it stands alone, collapsed once settled', () => {
+    const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team({ timestamp: at(0) }) }))
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('<time')
+    expect(html).not.toMatch(/border|rounded-lg|bg-muted|text-primary/)
   })
 
   it('names a notice the runtime wrote for the coordinating AI as team progress, keeping its text for when it is opened', () => {
