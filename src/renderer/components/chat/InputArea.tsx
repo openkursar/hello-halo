@@ -40,7 +40,7 @@ import { isElectron } from '../../api/transport'
 import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { KnowledgeBaseButton } from './KnowledgeBaseButton'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
-import { startDigitalHumanConversation } from '../../utils/conversation-navigation'
+import { continueDigitalHumanConversation } from '../../utils/conversation-navigation'
 import { completeSlashCommand, prefillSkillCommand } from '../../utils/skill-command'
 import type { ImageAttachment } from '../../types'
 import type { FileQueryItem } from '../../../shared/types/artifact'
@@ -961,8 +961,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
    * effect is switching who this message goes to, which the selector chip
    * already shows, so leaving text behind would say it twice.
    *
-   * It always starts a fresh session: "@" is "start talking to X", distinct
-   * from the selector's "open X's existing conversation".
+   * It continues X's latest conversation, like every other way of turning to X.
    */
   const selectDigitalHumanMention = async (appId: string) => {
     const currentCursor = textareaRef.current?.selectionStart ?? content.length
@@ -975,7 +974,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     setContent(`${prefix}${content.slice(match.end)}`)
     handleMentionClose()
 
-    const conversationId = await startDigitalHumanConversation(appId)
+    const conversationId = await continueDigitalHumanConversation(appId)
     if (conversationId) digitalHumanSelector?.onChange(appId, conversationId)
 
     requestAnimationFrame(() => {

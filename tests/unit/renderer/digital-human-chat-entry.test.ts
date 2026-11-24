@@ -113,13 +113,33 @@ describe('Chat with a digital human', () => {
     await expect(navigation.openDigitalHumanChat('analyst', 'space-1')).resolves.toBe(true)
     expect(env.api.imSessionsList).toHaveBeenCalledTimes(2)
     expect(env.api.appSessionCreate).toHaveBeenCalledTimes(1)
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not read existing conversations'), { appId: 'analyst' })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not read existing conversations'), { appId: 'analyst' })
 
     env.api.imSessionsList.mockResolvedValue({ success: true, data: [record('local', 'recent', 500)] })
     await navigation.openDigitalHumanChat('analyst', 'space-1')
     expect(env.api.appSessionCreate).toHaveBeenCalledTimes(1)
     expect(opened()).toBe(buildLocalSessionKey('analyst', 'recent'))
     warn.mockRestore()
+  })
+})
+
+describe('Turning to a digital human from the input (recipient picker, "@" mention)', () => {
+  it('continues its most recent Halo chat instead of starting one', async () => {
+    env.api.imSessionsList.mockResolvedValue({ success: true, data: [record('im', 'wx-1', 900), record('local', 'recent', 500), record('local', 'older', 100)] })
+    const { sessions, navigation } = await load()
+    await sessions.loadAppChatSessions()
+
+    await expect(navigation.continueDigitalHumanConversation('analyst')).resolves.toBe(buildLocalSessionKey('analyst', 'recent'))
+    expect(env.api.appSessionCreate).not.toHaveBeenCalled()
+  })
+
+  it('starts one only when it has no Halo chat', async () => {
+    env.api.imSessionsList.mockResolvedValue({ success: true, data: [record('im', 'wx-1', 900)] })
+    const { sessions, navigation } = await load()
+    await sessions.loadAppChatSessions()
+
+    await expect(navigation.continueDigitalHumanConversation('analyst')).resolves.toBe(buildLocalSessionKey('analyst', 'created'))
+    expect(env.api.appSessionCreate).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -422,7 +422,7 @@ test.describe('digital-human conversation on the chat page', () => {
     })
   }
 
-  test('is usable at phone width: its conversations are in the history sheet, and @ starts a new one', { annotation: { type: 'acceptance', description: "{\"caseId\":\"conversations.read.person-narrow\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
+  test('is usable at phone width: its conversations are in the history sheet, and @ addresses the person', { annotation: { type: 'acceptance', description: "{\"caseId\":\"conversations.read.person-narrow\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
     test.setTimeout(90000)
     const session = await launch({ width: 390, height: 844 })
     try {
@@ -442,7 +442,7 @@ test.describe('digital-human conversation on the chat page', () => {
       await expect(composer).toHaveAttribute('placeholder', new RegExp(seeded.name))
       expect(await window.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0)
 
-      // "@" in the composer starts a new conversation with a digital human.
+      // "@" in the composer turns to a digital human, continuing its latest conversation.
       await composer.fill('@')
       await window.getByText(seeded.name).first().click()
       await expect(composer).toHaveAttribute('placeholder', new RegExp(seeded.name), { timeout: 10000 })

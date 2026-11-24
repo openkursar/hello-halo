@@ -30,7 +30,7 @@ import { ChevronDown, Bot, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { cn } from '../../lib/utils'
-import { startDigitalHumanConversation } from '../../utils/conversation-navigation'
+import { continueDigitalHumanConversation } from '../../utils/conversation-navigation'
 import type { AppStatus } from '../../../shared/apps/app-types'
 
 export interface DigitalHumanSelectorOption {
@@ -45,8 +45,8 @@ export interface DigitalHumanSelectorConfig {
   options: DigitalHumanSelectorOption[]
   /**
    * Switch the active link. `conversationId` targets one specific session of
-   * `appId` (a digital human can have several). This component always passes
-   * the id of a session it just created.
+   * `appId` (a digital human can have several). This component passes its
+   * latest Halo chat, or one it just created when there was none.
    */
   onChange: (appId: string | null, conversationId?: string) => void
   /** Generating or queued — dropdown opens but every option stays disabled. */
@@ -98,7 +98,7 @@ export function DigitalHumanSelector({ current, options, onChange, locked }: Dig
     setOpen(false)
     setCreatingAppId(appId)
     try {
-      const conversationId = await startDigitalHumanConversation(appId)
+      const conversationId = await continueDigitalHumanConversation(appId)
       if (conversationId) onChange(appId, conversationId)
     } finally {
       setCreatingAppId(null)

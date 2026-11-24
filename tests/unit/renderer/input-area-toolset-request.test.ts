@@ -43,7 +43,7 @@ vi.mock('../../../src/renderer/components/chat/KnowledgeBaseButton', () => ({ Kn
 vi.mock('../../../src/renderer/components/chat/DigitalHumanSelector', () => ({ DigitalHumanSelector: () => null }))
 vi.mock('../../../src/renderer/components/chat/cross-conversation', () => ({ ConversationMentionRow: () => null }))
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({ AutomationAvatar: () => null }))
-vi.mock('../../../src/renderer/utils/conversation-navigation', () => ({ startDigitalHumanConversation: vi.fn() }))
+vi.mock('../../../src/renderer/utils/conversation-navigation', () => ({ continueDigitalHumanConversation: vi.fn() }))
 
 import { InputArea } from '../../../src/renderer/components/chat/InputArea'
 

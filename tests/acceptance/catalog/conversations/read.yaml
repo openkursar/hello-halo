@@ -165,8 +165,8 @@ scenarios:
       - en: Use the isolated fixture described by the referenced executable test.
         zh: 使用引用测试中定义的隔离测试资料。
     steps:
-      - en: Open a conversation from the narrow history sheet and use @ to start another with the same person.
-        zh: 从窄屏历史面板打开对话，并用 @ 与同一数字人新建另一对话。
+      - en: Open a conversation from the narrow history sheet and use @ to address the same person.
+        zh: 从窄屏历史面板打开对话，并用 @ 选择同一数字人。
     expected:
       - en: The selected history and usable composer fit the screen with the correct person identity.
         zh: 选定历史和可用输入框适配屏幕，身份正确。

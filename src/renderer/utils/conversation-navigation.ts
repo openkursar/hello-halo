@@ -100,10 +100,10 @@ export function openSkillInComposer(skill: { spaceId: string | null; name: strin
  * or null when the backend refused or the call failed (logged here, so every
  * caller reports a failure the same way).
  *
- * The single place the renderer creates a digital-human session: the input's
- * recipient picker, its "@" mention path, a digital human's "new conversation"
- * action, and a "Chat" button for one without conversations all mean the same
- * thing and must not each evolve their own request.
+ * The single place the renderer creates a digital-human session: a digital
+ * human's "new conversation" action, and every entry point that continues one
+ * (see {@link continueDigitalHumanConversation}) when it has none, all mean the
+ * same thing and must not each evolve their own request.
  */
 export async function startDigitalHumanConversation(appId: string): Promise<string | null> {
   try {
@@ -128,6 +128,21 @@ async function latestDigitalHumanConversation(appId: string): Promise<string | n
 }
 
 /**
+ * The conversation to talk to a digital human in: its most recent Halo chat, or
+ * a new one when it has none. Every way of turning to a digital human — Chat,
+ * the input's recipient picker, an "@" mention — continues it; only an explicit
+ * "new conversation" starts another.
+ */
+export async function continueDigitalHumanConversation(appId: string): Promise<string | null> {
+  const latest = await latestDigitalHumanConversation(appId)
+  if (latest === 'unknown') {
+    // Deliberate: starting one is what these entry points did before they continued the latest.
+    console.warn('[ConversationNavigation] Could not read existing conversations; starting a new one', { appId })
+  }
+  return (latest === 'unknown' ? null : latest) ?? await startDigitalHumanConversation(appId)
+}
+
+/**
  * "Chat" with a digital human: open its most recent conversation on the main
  * board, or start one when it has none. `newConversation` always starts one.
  * Repeat calls for the same digital human while one is still being opened
@@ -143,12 +158,9 @@ export function openDigitalHumanChat(
   const pending = openingChats.get(appId)
   if (pending) return pending
   const opening = (async () => {
-    const latest = newConversation ? null : await latestDigitalHumanConversation(appId)
-    if (latest === 'unknown') {
-      // Deliberate: starting one is what Chat did before it continued the latest.
-      console.warn('[ConversationNavigation] Chat could not read existing conversations; starting a new one', { appId })
-    }
-    const conversationId = (latest === 'unknown' ? null : latest) ?? await startDigitalHumanConversation(appId)
+    const conversationId = newConversation
+      ? await startDigitalHumanConversation(appId)
+      : await continueDigitalHumanConversation(appId)
     if (!conversationId) return false
     navigateToAppChat(appSpaceId, appId, conversationId)
     return true
