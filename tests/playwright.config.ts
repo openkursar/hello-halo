@@ -155,6 +155,12 @@ export default defineConfig({
       use: { actionTimeout: 10000 }
     },
     {
+      // Needs a package built with the cowsay preset in resources/cli-preset.
+      name: 'cli-tools-skill-packaged',
+      testMatch: '**/cli-tools-skill-packaged.spec.ts',
+      use: { actionTimeout: 10000 }
+    },
+    {
       // Needs the preset package plus the local registry stack; see the spec header.
       name: 'cli-tools-lifecycle-packaged',
       testMatch: '**/cli-tools-lifecycle-packaged.spec.ts',
