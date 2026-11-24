@@ -113,6 +113,7 @@ export async function pickPackage(): Promise<CliToolsResult<CliPackagePreviewVie
         archiveBytes: preview.archiveBytes,
         payloadBytes: preview.payloadBytes,
         files: preview.files,
+        skill: preview.skill,
         existing: preview.existing,
         sameVersion: preview.sameVersion,
       },

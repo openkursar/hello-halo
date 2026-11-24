@@ -17,6 +17,7 @@ import {
   toolBlock,
   type CatalogToolStatus,
   type CliExecutionEntry,
+  type CliToolSkillSummary,
   type CliToolState,
   type ImportResult,
   type PackagePreview,
@@ -312,13 +313,15 @@ export async function getCliToolsOverview(): Promise<CliToolsOverview> {
   await prepareCliTools()
   const state = await cliStore.readState()
   const locks = await cliStore.listExecutionLocks()
-  return { available: true, tools: buildToolViews(state, locks), signature, pendingCleanup: state.pendingCleanup?.length ?? 0 }
+  const skills = await cliStore.describeToolSkills(state)
+  return { available: true, tools: buildToolViews(state, locks, skills), signature, pendingCleanup: state.pendingCleanup?.length ?? 0 }
 }
 
 /** Pure projection of state + locks; exported for tests. */
 export function buildToolViews(
   state: CliToolState,
   locks: Array<{ tools: Array<{ id: string; version: string }> }>,
+  skills: Record<string, CliToolSkillSummary> = {},
 ): CliToolView[] {
   const pinned = new Set(locks.flatMap(lock => lock.tools.map(t => `${t.id}@${t.version}`)))
   return Object.entries(state.tools).map(([id, tool]): CliToolView => {
@@ -362,6 +365,7 @@ export function buildToolViews(
       ...(tool.catalogUpdate ? { catalogUpdate: tool.catalogUpdate } : {}),
       hasPreset: Object.values(tool.versions).some(v => v.source === 'preset'),
       commands: current?.commands.map(c => c.name) ?? [],
+      ...(skills[id] ? { skill: { ...skills[id] } } : {}),
       versions,
     }
   }).sort((a, b) => a.name.localeCompare(b.name))

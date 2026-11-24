@@ -20,9 +20,10 @@ call `applyCliToolsEnv`. The module imports no Electron, agent or app code.
 
 Catalog fetch, download and the catalog UI belong to the store module
 (`src/main/store/backend/cli-catalog.ts`), which calls this module's public
-surface to install a verified file and apply revocations. Not part of any
-module yet: user import and a management UI for installed tools. Callers
-depend only on `index.ts`.
+surface to install a verified file and apply revocations. User import and the
+management UI for installed tools reach it through
+`controllers/cli-tools.controller.ts` (see "Local management"). Callers depend
+only on `index.ts`.
 
 ## Package contract (`halo.cli/1`)
 
@@ -232,8 +233,11 @@ including locks without a holder.
 Every view also holds `TOOLS.md`: a table of each command with its tool,
 version, side effects, sign-in method and the absolute path of its guide, plus
 the meaning of a `halo-` name and the rule not to replay a write whose outcome
-is unknown. The built-in `halo-cli-tools` skill tells the AI to read it from
-`$HALO_CLI_TOOLS_BIN/../TOOLS.md`, so the guide matches the pinned set.
+is unknown. Each view also holds one skill per tool (see "Tool skills" below)
+and `view.json`, which lists the view's commands and skills and is written
+last. Until sessions load those skills, the built-in `halo-cli-tools` skill
+tells the AI to read TOOLS.md from `$HALO_CLI_TOOLS_BIN/../TOOLS.md`, so the
+guide matches the pinned set.
 
 **Administrator guide overrides.** A catalog may replace the package guide of
 one version (`CatalogToolStatus.guides`). `applyCatalogStatus` applies it only
@@ -273,6 +277,51 @@ part of the view key, so bound and unbound tool sets get different views, and a
 tool set without a binding keeps the view it had. TOOLS.md marks a bound tool's
 sign-in as "enterprise sign-in (provided by Halo)" and tells the AI to ask the
 user to sign in under Settings rather than handle a credential.
+
+### Tool skills (`skills.ts`)
+
+A tool's AI guidance is a skill that belongs to the tool, not a store skill. For
+every pinned tool that exposes a command, view creation writes
+`views/<viewKey>/skills/<name>/SKILL.md` and records
+`{name, description, toolId, version, source}` in `view.json`. The view key
+format is `v: 4`, so views built before skills existed are rebuilt.
+
+- **Name.** `cli-` plus the tool's first command, lowercased, with runs of
+  other characters folded to `-` and at most 56 characters; tools whose names
+  fold together get `-2`, `-3`, ... in pin order. The name follows the command,
+  not the exposed `halo-` alias.
+- **Frontmatter.** Halo writes only `name` and `description` (JSON-quoted).
+  Nothing from a package or an administrator reaches the frontmatter, so a
+  tool skill cannot pre-approve tools or change how it is loaded.
+- **Description.** The first of: the administrator override's `description`,
+  the package guide's `description`, the manifest `description`, and
+  ``Use the `<command>` command-line tool (<name>).``. Only the `description`
+  key of a guide's frontmatter is read; invalid YAML yields none, and the
+  block is always removed from the body. It is folded to one line and cut to
+  300 characters, the limit the registry enforces.
+- **Body.** The tool's commands, side effects and sign-in (the same text as
+  TOOLS.md), the meaning of a `halo-` alias, the rules (no install or npm, no
+  credentials, no rerun of a write whose outcome is unknown, where to sign in),
+  then the usage text: the administrator override when its body is not empty,
+  otherwise the package guide, otherwise a `--help` hint. A guide is inlined up
+  to 64 KiB; a longer one is cut and the skill names the full file.
+- **Versions.** The registry resolves a tool-level skill and a per-version
+  override into the one guide override each version carries, so the client
+  sees a single text per version. A running execution keeps its view's skill;
+  the next one gets the new text.
+
+`describeToolSkills(state)` gives the management view each tool's skill for its
+current version, and `previewPackage` gives the skill a package would bring.
+`cliSkillEntries(binDir)` is the read-only surface for sessions: given the
+session's `HALO_CLI_TOOLS_BIN`, it reads that view's `view.json` and returns
+skill catalog entries for valid names whose file exists, and nothing on any
+failure.
+
+Loading these skills into sessions is not wired yet. It needs the agent's
+session skill catalog, the DSH skill directories and the digital-human skill
+policy to accept them, which are separate changes in those modules. Codex has
+no session skills, so a Codex session keeps only `HALO_CLI_TOOLS_BIN` and
+TOOLS.md.
 
 ## Host wiring (`host.ts`)
 
@@ -483,7 +532,10 @@ scan. fflate is loaded only when an archive is extracted.
 - **Pinning:** once per session build or terminal open. Reads `state.json`
   and one lock file, checks bounded PATH
   entries (at most 256) for each command, and writes launchers only when a new
-  tool set appears.
+  tool set appears. A new view also reads each tool's guide head (at most
+  72 KiB) for its skill.
+- **Management view:** opening it reads, per tool, at most one administrator
+  text and one guide head to show the current skill.
 - **Verification:** `verifyVersion` re-hashes a version on request only.
 
 ## Known limits

@@ -48,8 +48,21 @@ export interface CliToolView {
   hasPreset: boolean
   /** Commands the current version exposes. */
   commands: string[]
+  /** The skill new tasks get for the current version; absent without one. */
+  skill?: CliToolSkillView
   /** Newest first; the registered program last. */
   versions: CliToolVersionView[]
+}
+
+/**
+ * The skill Halo writes for a tool. `source` names where its description came
+ * from: the administrator, the package guide, the package description, or a
+ * generated fallback.
+ */
+export interface CliToolSkillView {
+  name: string
+  description: string
+  source: 'admin' | 'package' | 'manifest' | 'default'
 }
 
 /** off: no trust file; on: signatures required; broken: trust file unusable, catalog installs refused. */
@@ -88,6 +101,8 @@ export interface CliPackagePreviewView {
   archiveBytes: number
   payloadBytes: number
   files: number
+  /** The skill the package brings before any administrator text. */
+  skill: CliToolSkillView
   /** The tool is installed with a current version from somewhere. */
   existing: { current: string | null; currentSource: CliToolSourceKind | null } | null
   /** `identical`: already installed; `conflict`: same version, different content. */

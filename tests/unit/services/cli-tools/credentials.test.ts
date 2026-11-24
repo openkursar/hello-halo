@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { spawnSync } from 'child_process'
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync, type Dirent } from 'fs'
 import { basename, join } from 'path'
 import { CliToolStore, validateCredentialBinding, type CliCredentialBinding } from '../../../../src/main/services/cli-tools'
 import { makeTempDir, removeTree, writePackage } from './helpers'
@@ -45,10 +45,12 @@ function writeCredential(token: string, expiresAt: number): void {
   writeFileSync(credFile, JSON.stringify({ token, expiresAt }), { mode: 0o600 })
 }
 
-/** Every file of a view, for leak checks. */
+/** Every file of a view, skills included, for leak checks. */
 function viewText(binDir: string): string {
   const viewDir = join(binDir, '..')
-  const files = [...readdirSync(viewDir).filter(f => f !== 'bin').map(f => join(viewDir, f)), ...readdirSync(binDir).map(f => join(binDir, f))]
+  const files = (readdirSync(viewDir, { recursive: true, withFileTypes: true }) as Dirent[])
+    .filter(entry => entry.isFile())
+    .map(entry => join(entry.parentPath, entry.name))
   return files.map(f => readFileSync(f, 'utf-8')).join('\n')
 }
 
@@ -91,6 +93,9 @@ describe.skipIf(process.platform === 'win32')('cli-tools credential binding', ()
     const guide = readFileSync(join(binDir!, '..', 'TOOLS.md'), 'utf-8')
     expect(guide).toContain('enterprise sign-in (provided by Halo)')
     expect(guide).toContain('Never ask for, print, store or pass a credential')
+    const skill = readFileSync(join(binDir!, '..', 'skills', 'cli-tool', 'SKILL.md'), 'utf-8')
+    expect(skill).toContain('- Sign-in: enterprise sign-in (provided by Halo)')
+    expect(skill).toContain('Settings > Enterprise identity')
   })
 
   it('binds a version shipped with the build', async () => {

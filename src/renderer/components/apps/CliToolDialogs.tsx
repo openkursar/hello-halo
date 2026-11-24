@@ -13,7 +13,7 @@ import { useState } from 'react'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
 import { CapabilityDialog } from './CapabilityDialog'
-import { sourceLabel } from './cli-tools-labels'
+import { skillSourceLabel, sourceLabel } from './cli-tools-labels'
 import type { CliExternalPick, CliPackagePreviewView } from '../../../shared/types/cli-tools'
 
 function formatSize(bytes: number): string {
@@ -81,6 +81,13 @@ export function CliImportDialog({ preview, onClose, onConfirm }: {
           <Row label={t('Side effects')}>{sideEffects}</Row>
           <Row label={t('Sign-in')}>{auth}</Row>
           <Row label={t('Size')}>{t('{{archive}} package, {{payload}} unpacked, {{files}} files', { archive: formatSize(preview.archiveBytes), payload: formatSize(preview.payloadBytes), files: preview.files })}</Row>
+          <Row label={t('AI skill')}>
+            <span className="font-mono">{preview.skill.name}</span> · {preview.skill.description}
+            <span className="block text-muted-foreground">{skillSourceLabel(t, preview.skill.source)}</span>
+            {preview.skill.source !== 'package' && (
+              <span className="block text-muted-foreground">{t('The AI picks this tool by this description. Ask the publisher to describe in the package guide when to use it.')}</span>
+            )}
+          </Row>
         </dl>
         {preview.description && <p className="text-xs text-muted-foreground">{preview.description}</p>}
 

@@ -16,7 +16,7 @@ import { useTranslation } from '../../i18n'
 import { useNotificationStore } from '../../stores/notification.store'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { CliImportDialog, CliExternalDialog } from './CliToolDialogs'
-import { cliToolsErrorText, sourceLabel, statusClass, statusLabel } from './cli-tools-labels'
+import { cliToolsErrorText, skillSourceLabel, sourceLabel, statusClass, statusLabel } from './cli-tools-labels'
 import type { RpcResponse } from '../../../shared/rpc/define'
 import type {
   CliExternalPick, CliPackagePreviewView, CliToolsErrorCode, CliToolsOverview, CliToolsResult, CliToolVersionView, CliToolView,
@@ -275,6 +275,16 @@ function CliToolCard({ tool, busy, onSetCurrent, onToggle, onReconfirm, onRemove
         </dd>
         <dt className="text-muted-foreground">{t('Current version')}</dt>
         <dd>{tool.current === null ? '—' : currentView?.source === 'external' ? t('Existing program') : tool.current}{currentView && currentView.source !== 'external' && <span className="text-muted-foreground"> · {sourceLabel(t, currentView.source)}</span>}</dd>
+        {tool.skill && (
+          <>
+            <dt className="text-muted-foreground">{t('AI skill')}</dt>
+            <dd className="min-w-0 break-words" data-testid={`cli-tool-skill-${tool.id}`}>
+              {tool.skill.description}
+              {' · '}
+              <span className="whitespace-nowrap text-muted-foreground">{skillSourceLabel(t, tool.skill.source)}</span>
+            </dd>
+          </>
+        )}
       </dl>
 
       {tool.status === 'revoked' && <p className="mt-2 text-xs text-halo-error">{t('Revoked by your administrator. New tasks can no longer use it.')}</p>}

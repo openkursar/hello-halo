@@ -50,6 +50,9 @@ export type {
   PinCurrentOptions,
   PinnedExecution,
 } from './store'
+export type { CliToolSkillSummary } from './store'
+export { cliSkillEntries, CLI_SKILL_DESCRIPTION_MAX } from './skills'
+export type { CliSkillRecord, CliSkillSource } from './skills'
 export { CliToolError, isCliToolError } from './errors'
 export { validateCredentialBinding } from './credentials'
 export type { CliCredentialBinding } from './credentials'

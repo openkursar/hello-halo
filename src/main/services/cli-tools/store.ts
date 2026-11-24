@@ -10,6 +10,8 @@
  *   views/<viewKey>/bin/               launchers for one exact tool set
  *   views/<viewKey>/TOOLS.md           what those launchers are, for the agent
  *   views/<viewKey>/guides/<id>.md     overrides that view was pinned to (copies)
+ *   views/<viewKey>/skills/<name>/SKILL.md  one skill per tool (see skills.ts)
+ *   views/<viewKey>/view.json          the view's commands and skills; written last
  *   views/<viewKey>/argv-preload.cjs   argv fix the launchers load (see shims.ts)
  *   locks/<executionId>.json           the tool set an execution is pinned to
  *   state.json                         versions, current choice, revocation
@@ -35,6 +37,15 @@ import {
   type CliCredentialBinding,
 } from './credentials'
 import type { CatalogSignature } from './signature'
+import {
+  CLI_SKILL_BODY_MAX_BYTES,
+  assignCliSkillNames,
+  renderCliSkill,
+  resolveSkillDescription,
+  splitGuide,
+  type CliSkillRecord,
+  type CliSkillSource,
+} from './skills'
 
 /**
  * Where an installed version came from. `external` is a program already on the
@@ -129,6 +140,15 @@ export interface PackagePreview {
   archiveBytes: number
   payloadBytes: number
   files: number
+  /** The skill the package would get before any administrator text. */
+  skill: CliToolSkillSummary
+}
+
+/** A tool's skill as the management view and the import preview show it. */
+export interface CliToolSkillSummary {
+  name: string
+  description: string
+  source: CliSkillSource
 }
 
 export interface RegisterExternalOptions {
@@ -319,6 +339,27 @@ const EXECUTION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/
 
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex')
+}
+
+/**
+ * Read at most what a skill can inline, plus room for frontmatter, so a huge
+ * package guide is never loaded whole. `complete` is false when cut short.
+ */
+async function readGuideHead(path: string): Promise<{ text: string; complete: boolean } | null> {
+  const limit = CLI_SKILL_BODY_MAX_BYTES + 8 * 1024
+  let handle: fsp.FileHandle | null = null
+  try {
+    handle = await fsp.open(path, 'r')
+    const buffer = Buffer.alloc(limit + 1)
+    const { bytesRead } = await handle.read(buffer, 0, limit + 1, 0)
+    const complete = bytesRead <= limit
+    const text = buffer.subarray(0, Math.min(bytesRead, limit)).toString('utf-8')
+    return { text: complete ? text : text.replace(/\uFFFD+$/, ''), complete }
+  } catch {
+    return null
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
 }
 
 function lockFileName(executionId: string): string {
@@ -519,6 +560,17 @@ export class CliToolStore {
         await fsp.mkdir(staging, { recursive: true })
         const { archive, manifest, inspection } = await this.stagePackage(archivePath, staging, {})
         const archiveBytes = (await fsp.stat(archivePath)).size
+        const guide = manifest.guide ? await readGuideHead(join(staging, manifest.guide)) : null
+        const command = manifest.commands[0]?.name ?? manifest.id
+        const skill = {
+          name: assignCliSkillNames([{ toolId: manifest.id, command }]).get(manifest.id)!,
+          ...resolveSkillDescription({
+            package: guide ? splitGuide(guide.text).description : undefined,
+            manifest: manifest.description,
+            command,
+            toolName: manifest.name ?? manifest.id,
+          }),
+        }
         return {
           id: manifest.id,
           version: manifest.version,
@@ -534,6 +586,7 @@ export class CliToolStore {
           archiveBytes,
           payloadBytes: inspection.bytes,
           files: inspection.files,
+          skill,
         }
       } finally {
         await setTreeReadOnly(staging, false, this.platform).catch(() => undefined)
@@ -1234,7 +1287,7 @@ export class CliToolStore {
     // Only present when an override is pinned, so views without one keep their keys.
     const guides = lock.tools.filter(t => t.guideOverride).map(t => [t.id, t.guideOverride?.sha256])
     return sha256(JSON.stringify({
-      v: 3, platform: this.platform, runtime: this.runtimePath, targets, ...(guides.length > 0 ? { guides } : {}),
+      v: 4, platform: this.platform, runtime: this.runtimePath, targets, ...(guides.length > 0 ? { guides } : {}),
     })).slice(0, 20)
   }
 
@@ -1268,8 +1321,9 @@ export class CliToolStore {
         }
       }
       const overridden = await this.copyGuideOverrides(lock, join(tmp, 'guides'))
-      await fsp.writeFile(join(tmp, 'TOOLS.md'), this.renderToolsGuide(lock, state, viewDir, overridden), 'utf-8')
-      await fsp.writeFile(join(tmp, 'view.json'), `${JSON.stringify({ viewKey: lock.viewKey, commands: lock.commands }, null, 2)}\n`)
+      await fsp.writeFile(join(tmp, 'TOOLS.md'), this.renderToolsGuide(lock, state, viewDir, new Set(overridden.keys())), 'utf-8')
+      const skills = await this.writeToolSkills(lock, state, join(tmp, 'skills'), viewDir, overridden)
+      await fsp.writeFile(join(tmp, 'view.json'), `${JSON.stringify({ viewKey: lock.viewKey, commands: lock.commands, skills }, null, 2)}\n`)
       if (existsSync(viewDir)) await fsp.rm(viewDir, { recursive: true, force: true })
       await fsp.rename(tmp, viewDir)
       this.log.log('[CliTools] Command view created', { view: lock.viewKey, commands: lock.commands.length })
@@ -1287,10 +1341,11 @@ export class CliToolStore {
   /**
    * Copy the guide overrides a lock pins into the view, so a later edit never
    * changes what a running execution reads. A missing or altered file is
-   * logged and that tool falls back to its package guide. Returns the ids copied.
+   * logged and that tool falls back to its package guide. Returns the texts
+   * copied, by tool id.
    */
-  private async copyGuideOverrides(lock: CliExecutionLock, dir: string): Promise<Set<string>> {
-    const copied = new Set<string>()
+  private async copyGuideOverrides(lock: CliExecutionLock, dir: string): Promise<Map<string, string>> {
+    const copied = new Map<string, string>()
     for (const pinned of lock.tools) {
       if (!pinned.guideOverride) continue
       let text: string | null = null
@@ -1307,14 +1362,124 @@ export class CliToolStore {
       }
       await fsp.mkdir(dir, { recursive: true })
       await fsp.writeFile(join(dir, `${pinned.id}.md`), text, 'utf-8')
-      copied.add(pinned.id)
+      copied.set(pinned.id, text)
     }
     return copied
   }
 
+  /** How a tool signs in, as TOOLS.md and its skill state it. */
+  private signInOf(toolId: string, record: CliToolVersionRecord | undefined): { text: string; enterprise: boolean } {
+    if (!record || record.external) return { text: 'unknown', enterprise: false }
+    const enterprise = sourceMayBind(record.source) && this.bindings.has(toolId)
+    return { text: enterprise ? 'enterprise sign-in (provided by Halo)' : record.auth ?? 'unknown', enterprise }
+  }
+
+  /** Absolute path of a version's package guide, or null when it has none. */
+  private packageGuidePath(record: CliToolVersionRecord): string | null {
+    return record.guide && !record.external ? join(this.path(...record.dir.split('/')), ...record.guide.split('/')) : null
+  }
+
+  /**
+   * Write one skill per pinned tool that exposes a command. The administrator
+   * text the view pinned comes first, then the package guide; the skill is
+   * self-contained, so an agent never needs TOOLS.md or `guides/` to use it.
+   */
+  private async writeToolSkills(
+    lock: CliExecutionLock,
+    state: CliToolState,
+    dir: string,
+    viewDir: string,
+    overridden: Map<string, string>,
+  ): Promise<CliSkillRecord[]> {
+    const pinned = lock.tools.flatMap(tool => {
+      const commands = lock.commands.filter(c => c.toolId === tool.id)
+      return commands.length > 0 ? [{ tool, commands }] : []
+    })
+    const names = assignCliSkillNames(pinned.map(p => ({ toolId: p.tool.id, command: p.commands[0].command })))
+    const records: CliSkillRecord[] = []
+    for (const { tool, commands } of pinned) {
+      const record = state.tools[tool.id]?.versions[tool.version]
+      const name = names.get(tool.id)!
+      const admin = overridden.has(tool.id) ? splitGuide(overridden.get(tool.id)!) : null
+      const packagePath = record ? this.packageGuidePath(record) : null
+      const packageHead = packagePath ? await readGuideHead(packagePath) : null
+      if (packagePath && !packageHead) this.log.error('[CliTools] Package guide unreadable; skill has no usage text', { tool: `${tool.id}@${tool.version}` })
+      const packaged = packageHead ? splitGuide(packageHead.text) : null
+      const toolName = record?.name ?? tool.id
+      const { description, source } = resolveSkillDescription({
+        admin: admin?.description,
+        package: packaged?.description,
+        manifest: record?.description,
+        command: commands[0].command,
+        toolName,
+      })
+      const signIn = this.signInOf(tool.id, record)
+      const usesAdmin = admin !== null && admin.body.trim() !== ''
+      const text = renderCliSkill({
+        name,
+        description,
+        toolId: tool.id,
+        version: tool.version,
+        toolName,
+        commands: commands.map(c => ({ command: c.command, exposedAs: c.exposedAs })),
+        external: record?.external !== undefined,
+        sideEffects: record?.external ? 'unknown' : record?.sideEffects ?? 'unknown',
+        signIn: signIn.text,
+        enterpriseSignIn: signIn.enterprise,
+        ...(usesAdmin
+          ? { guide: admin.body, guidePath: join(viewDir, 'guides', `${tool.id}.md`) }
+          : packaged
+            ? { guide: packaged.body, guidePath: packagePath!, ...(packageHead!.complete ? {} : { guideCut: true }) }
+            : {}),
+      })
+      await fsp.mkdir(join(dir, name), { recursive: true })
+      await fsp.writeFile(join(dir, name, 'SKILL.md'), text, 'utf-8')
+      records.push({ name, description, toolId: tool.id, version: tool.version, source })
+    }
+    return records
+  }
+
+  /**
+   * The skill each tool's current version gets in a new session, for the
+   * management view. Reads at most one administrator text and one package
+   * guide head per tool; names follow pin order over usable tools.
+   */
+  async describeToolSkills(state: CliToolState): Promise<Record<string, CliToolSkillSummary>> {
+    const current = Object.keys(state.tools).sort().flatMap(id => {
+      const tool = state.tools[id]
+      const record = tool.current ? tool.versions[tool.current] : undefined
+      return record && record.commands.length > 0 ? [{ id, tool, record }] : []
+    })
+    const usable = current.filter(c => toolBlock(c.tool) === null)
+    const names = assignCliSkillNames(usable.map(c => ({ toolId: c.id, command: c.record.commands[0].name })))
+    const result: Record<string, CliToolSkillSummary> = {}
+    for (const { id, record } of current) {
+      let admin: string | undefined
+      if (record.guideOverride) {
+        const text = await fsp.readFile(this.path('guides', `${record.guideOverride.sha256}.md`), 'utf-8').catch(() => null)
+        if (text !== null && sha256(text) === record.guideOverride.sha256) admin = splitGuide(text).description
+      }
+      const packagePath = this.packageGuidePath(record)
+      const head = packagePath ? await readGuideHead(packagePath) : null
+      const command = record.commands[0].name
+      result[id] = {
+        name: names.get(id) ?? assignCliSkillNames([{ toolId: id, command }]).get(id)!,
+        ...resolveSkillDescription({
+          admin,
+          package: head ? splitGuide(head.text).description : undefined,
+          manifest: record.description,
+          command,
+          toolName: record.name ?? id,
+        }),
+      }
+    }
+    return result
+  }
+
   /**
    * The agent-facing index of a view: which commands it has, what they are,
-   * and where each tool's guide is. A skill points the agent here.
+   * and where each tool's guide is. Kept beside the tool skills for engines
+   * that cannot load a session's skills.
    */
   private renderToolsGuide(lock: CliExecutionLock, state: CliToolState, viewDir: string, overridden: Set<string>): string {
     const lines = [
@@ -1336,9 +1501,8 @@ export class CliToolStore {
       const guide = overridden.has(command.toolId)
         ? join(viewDir, 'guides', `${command.toolId}.md`)
         : record?.guide ? join(this.path(...record.dir.split('/')), ...record.guide.split('/')) : ''
-      const bound = record !== undefined && sourceMayBind(record.source) && this.bindings.has(command.toolId)
-      if (bound) anyBound = true
-      const signIn = bound ? 'enterprise sign-in (provided by Halo)' : record?.auth ?? 'unknown'
+      const { text: signIn, enterprise } = this.signInOf(command.toolId, record)
+      if (enterprise) anyBound = true
       lines.push(`| \`${command.exposedAs}\` | ${command.toolId} | ${command.version} | ${record?.sideEffects ?? 'unknown'} | ${signIn} | ${guide ? `\`${guide}\`` : '-'} |`)
     }
     if (anyBound) {
