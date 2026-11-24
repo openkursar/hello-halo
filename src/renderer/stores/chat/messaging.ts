@@ -4,7 +4,7 @@
  * The verbs act on the conversation on screen (or the one named) and are
  * carried out by that conversation's backend; see ./backend.
  */
-import type { ChatSlice } from './internal'
+import type { ChatSlice, ImageAttachment } from './internal'
 import { api, createEmptySessionState } from './internal'
 import { selectActiveConversationId } from './active'
 import { conversationKind, backendFor } from './backend'
@@ -47,10 +47,10 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
   // Add a message to the turn that is running. It shows in the queued panel at
   // once and is taken back if the backend could not deliver it. A message may
   // be only the places the user pointed at; the panel then names them.
-  injectMessage: async (conversationId: string, message: string, references?: ContentReference[]) => {
+  injectMessage: async (conversationId: string, message: string, references?: ContentReference[], images?: ImageAttachment[]) => {
     const trimmed = message.trim()
     const pointedAt = references?.length ? references : undefined
-    if (!trimmed && !pointedAt) return false
+    if (!trimmed && !pointedAt && !images?.length) return false
     const queued = messageSummaryText(trimmed, pointedAt)
 
     set((state) => {
@@ -58,13 +58,13 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
       const session = newSessions.get(conversationId) || createEmptySessionState()
       newSessions.set(conversationId, {
         ...session,
-        queuedMessages: [...session.queuedMessages, queued]
+        queuedMessages: [...session.queuedMessages, { summary: queued, ...(images?.length ? { images } : {}) }]
       })
       return { sessions: newSessions }
     })
 
     try {
-      return await backendFor(conversationId).inject({ set, get }, conversationId, trimmed, pointedAt)
+      return await backendFor(conversationId).inject({ set, get }, conversationId, trimmed, pointedAt, images)
     } catch (error) {
       console.error('[ChatStore] injectMessage failed:', error)
       get().dequeueMessage(conversationId, queued)
@@ -75,7 +75,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
   dequeueMessage: (conversationId: string, message: string) => {
     set((state) => {
       const session = state.sessions.get(conversationId)
-      const index = session?.queuedMessages.indexOf(message) ?? -1
+      const index = session?.queuedMessages.findIndex(queued => queued.summary === message) ?? -1
       if (!session || index < 0) return state
       const newSessions = new Map(state.sessions)
       newSessions.set(conversationId, {

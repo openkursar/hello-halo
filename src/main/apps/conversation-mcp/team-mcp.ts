@@ -3,6 +3,7 @@ import { getTeamService, participantName, type ParticipantSource } from '../team
 import { getAppManager } from '../manager'
 import { getActiveTeamRuntime, createCoordinationMcpServer, type TeamMcpContext } from '../runtime/team'
 import { getSpace } from '../../services/space.service'
+import { getConversation } from '../../services/conversation.service'
 import type { ToolsetScope } from '../../services/agent/toolsets'
 import { createDelegatedModelEndpoint } from '../../services/agent'
 import { isSpaceConversationId, nativeChatAppId } from '../../../shared/apps/im-keys'
@@ -99,7 +100,9 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope, source?: () =
       }
       capturedSource = { ...capturedSource, ...await models.prepare(input, scope.modelContext(), check, context.signal) }
     }
-    const work = await service.ensureCollaboration({ owningSpaceId: scope.spaceId, conversationId: scope.conversationId, title: input.prompt })
+    // The team is named after the conversation it serves, not the first collaborator's brief.
+    const title = getConversation(scope.spaceId, scope.conversationId)?.title?.trim() || input.prompt
+    const work = await service.ensureCollaboration({ owningSpaceId: scope.spaceId, conversationId: scope.conversationId, title })
     context.signal?.throwIfAborted()
     check()
     const member = await service.participants.spawn({ teamId: work.team.id, epochId: work.epochId, callerAppId,

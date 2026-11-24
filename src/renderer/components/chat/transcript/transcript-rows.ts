@@ -10,7 +10,7 @@
  */
 
 import type { Message } from '../../../types'
-import { isTeamTranscriptMessage } from '../../../../shared/transcript'
+import { isTeamSystemNotice, isTeamTranscriptMessage } from '../../../../shared/transcript'
 import { messageRowKey, messageRowKeys } from '../../../utils/message-row-key'
 import { arrivedDuring } from './arrivals'
 
@@ -23,7 +23,8 @@ export interface TranscriptRows {
   readonly isGenerating: boolean
   /**
    * Messages drawn as rows. Injected messages are shown on the reply they
-   * follow, and a running turn's empty reply placeholder is not drawn.
+   * follow; a running turn's empty reply is drawn only if it carries injections
+   * not already rendered by the live stream.
    */
   readonly messages: readonly Message[]
   /** React identity of each row (`messageRowKeys`). */
@@ -84,8 +85,9 @@ function inputsFor(source: readonly Message[], index: number): ReplyInputs {
   let contiguous = true
   for (let at = index + 1; at < source.length && isProcessInput(source[at]); at++) {
     const message = source[at]
-    if (arrivedDuring(message, reply)) arrivals.push(message)
-    else if (contiguous && message.source === 'injection') injections.push(message)
+    if (arrivedDuring(message, reply)) {
+      if (!isTeamSystemNotice(message)) arrivals.push(message)
+    } else if (contiguous && message.source === 'injection') injections.push(message)
     else contiguous = false
   }
   return { injections, arrivals }
@@ -123,7 +125,7 @@ function isOwnReply(message: Message | undefined): boolean {
 function openersFor(source: readonly Message[], index: number): Message[] {
   let at = index
   while (at > 0 && isTurnOpener(source[at - 1])) at--
-  return at === index ? [] : source.slice(at, index)
+  return at === index ? [] : source.slice(at, index).filter(message => !isTeamSystemNotice(message))
 }
 
 /**
@@ -169,16 +171,18 @@ function buildRows(source: readonly Message[], isGenerating: boolean): Transcrip
   const attached = attachedArrivals(source)
   for (let i = 0; i < source.length; i++) {
     const message = source[i]
-    if (message.source === 'injection' || attached.has(message) || isAttachedOpener(source, i, isGenerating)) continue
+    if (message.source === 'injection' || attached.has(message) || isAttachedOpener(source, i, isGenerating) || isTeamSystemNotice(message)) continue
+    let hasInjections = false
     if (message.role === 'assistant') {
       const inputs = inputsFor(source, i)
+      hasInjections = inputs.injections.length > 0
       const opened = isOwnReply(message) ? openersFor(source, i) : []
       if (inputs.injections.length) injections.set(message.id, inputs.injections)
       if (inputs.arrivals.length) arrivals.set(message.id, inputs.arrivals)
       if (opened.length) openers.set(message.id, opened)
       if (inputs.injections.length || inputs.arrivals.length || opened.length) attachmentOwners.set(message.id, i)
     }
-    if (isHiddenPlaceholder(message, i, lastPlain, isGenerating)) {
+    if (isHiddenPlaceholder(message, i, lastPlain, isGenerating) && !hasInjections) {
       liveOpeners = openers.get(message.id) ?? liveOpeners
       continue
     }
@@ -255,9 +259,11 @@ export function nextTranscriptRows(prev: TranscriptRows | null, source: readonly
   const attached = attachedArrivals(source, from)
   for (let i = from; i < source.length; i++) {
     const message = source[i]
-    if (message.source === 'injection' || attached.has(message) || isAttachedOpener(source, i, isGenerating)) continue
+    if (message.source === 'injection' || attached.has(message) || isAttachedOpener(source, i, isGenerating) || isTeamSystemNotice(message)) continue
+    let hasInjections = false
     if (message.role === 'assistant') {
       const inputs = inputsFor(source, i)
+      hasInjections = inputs.injections.length > 0
       const opened = isOwnReply(message) ? openersFor(source, i) : []
       if (inputs.injections.length || inputs.arrivals.length || opened.length) {
         own()
@@ -267,7 +273,7 @@ export function nextTranscriptRows(prev: TranscriptRows | null, source: readonly
         attachmentOwners.set(message.id, i)
       }
     }
-    if (isHiddenPlaceholder(message, i, lastPlain, isGenerating)) {
+    if (isHiddenPlaceholder(message, i, lastPlain, isGenerating) && !hasInjections) {
       liveOpeners = openers.get(message.id) ?? liveOpeners
       continue
     }

@@ -13,10 +13,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 const { v2Sessions } = vi.hoisted(() => ({ v2Sessions: new Map<string, any>() }))
-const { writeTrigger, livePreparation, announceLiveInputs } = vi.hoisted(() => ({
+const { writeTrigger, livePreparation, announceLiveInputs, markInputsStopped } = vi.hoisted(() => ({
   writeTrigger: vi.fn(),
+  markInputsStopped: vi.fn(),
   announceLiveInputs: vi.fn(),
-  livePreparation: { handler: undefined as undefined | ((text: string, images?: unknown[]) => unknown) },
+  livePreparation: { handler: undefined as undefined | ((text: string, images?: unknown[]) => unknown), identity: 'owner' },
 }))
 const { rounds, consumers } = vi.hoisted(() => ({
   rounds: new Set<string>(),
@@ -37,7 +38,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   hasActiveAppChatRound: (conversationId: string) => rounds.has(conversationId),
   peekAppChatSink: (conversationId: string) =>
-    conversationId === 'convo-with-sink' ? { writeUserMessage: writeTrigger, announceLiveInputs, getTurnIdentity: () => 'owner', get prepareLiveInput() { return livePreparation.handler } } : undefined,
+    conversationId === 'convo-with-sink' ? { writeUserMessage: writeTrigger, announceLiveInputs, markInputsStopped, getTurnIdentity: () => livePreparation.identity, get prepareLiveInput() { return livePreparation.handler } } : undefined,
   onAppChatRoundChange: (listener: (conversationId: string) => void) => {
     sinkEvents.emit = listener
     return () => {}
@@ -415,13 +416,88 @@ describe('onAppChatConversationChange', () => {
 
 
 describe('live app-chat input preparation', () => {
+  const images = [{ id: 'img', type: 'image' as const, mediaType: 'image/png' as const, data: 'aGVsbG8=' }]
+
+  it('accepts owner images synchronously and records originals, including withdrawal after acceptance', async () => {
+    const send = vi.fn((_content: any, _options: { onWithdrawn: () => void }) => true)
+    liveTurn(CONVO, vi.fn())
+    v2Sessions.get(CONVO).session.sendIntoLiveTurn = send
+    const record = { id: 'image-record', role: 'user', content: '', images }
+    writeTrigger.mockReturnValue(record)
+    livePreparation.handler = vi.fn((text, attachments) => ({ text, images: attachments }))
+    const outcome = injectIntoAppChatWhenLive(CONVO, '', { source: 'injection' }, undefined, images)
+    expect(send).toHaveBeenCalledOnce()
+    expect(await outcome).toBe('delivered')
+    expect(livePreparation.handler).toHaveBeenCalledWith('', images)
+    expect(send.mock.calls[0][0].message.content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'image', source: expect.objectContaining({ data: images[0].data }) }),
+    ]))
+    expect(writeTrigger).toHaveBeenCalledWith('', images, undefined, { source: 'injection' }, undefined)
+    send.mock.calls[0][1].onWithdrawn()
+    expect(markInputsStopped).toHaveBeenCalledWith([record])
+  })
+
+  it('keeps original owner images when preparation replaces them with OCR instructions', () => {
+    const send = vi.fn()
+    liveTurn(CONVO, send)
+    livePreparation.handler = () => ({ text: 'read saved-image.png' })
+    expect(injectIntoAppChat(CONVO, 'look', undefined, undefined, images)).toBe(true)
+    expect(send).toHaveBeenCalledWith('read saved-image.png')
+    expect(writeTrigger).toHaveBeenCalledWith('look', images, undefined, undefined, undefined)
+  })
+
+  it.each(['stopped', 'no_turn'])('returns %s for images waiting on a start without delivery or persistence', async outcome => {
+    const start = beginAppChatTurnStart(CONVO)
+    const prepare = vi.fn(() => ({ text: '' , images }))
+    livePreparation.handler = prepare
+    const pending = injectIntoAppChatWhenLive(CONVO, '', undefined, undefined, images)
+    if (outcome === 'stopped') cancelAppChatTurnStarts(CONVO, 'user')
+    start.end()
+    expect(await pending).toBe(outcome)
+    expect(prepare).not.toHaveBeenCalled()
+    expect(writeTrigger).not.toHaveBeenCalled()
+  })
+
+  it('delivers images held during startup when the owner turn begins', async () => {
+    const start = beginAppChatTurnStart(CONVO)
+    const send = vi.fn()
+    livePreparation.handler = (_text, images) => ({ text: 'prepared', images })
+    const pending = injectIntoAppChatWhenLive(CONVO, '', undefined, undefined, images)
+    liveTurn(CONVO, send)
+    start.end()
+    expect(await pending).toBe('delivered')
+    expect(send).toHaveBeenCalledOnce()
+    expect(writeTrigger).toHaveBeenCalledWith('', images, undefined, undefined, undefined)
+  })
+
+  it('does not merge owner images into a guest turn', async () => {
+    const send = vi.fn()
+    liveTurn(CONVO, send)
+    livePreparation.identity = 'guest:restricted'
+    const prepare = vi.fn(() => ({ text: '', images }))
+    livePreparation.handler = prepare
+    expect(await injectIntoAppChatWhenLive(CONVO, '', undefined, undefined, images)).toBe('refused')
+    expect(prepare).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+    expect(writeTrigger).not.toHaveBeenCalled()
+  })
+
+  it('leaves images with the caller when live preparation cannot accept them', async () => {
+    const send = vi.fn()
+    liveTurn(CONVO, send)
+    livePreparation.handler = () => false
+    expect(await injectIntoAppChatWhenLive(CONVO, '', undefined, undefined, images)).toBe('refused')
+    expect(send).not.toHaveBeenCalled()
+    expect(writeTrigger).not.toHaveBeenCalled()
+  })
+
   beforeEach(() => {
     rounds.clear()
     consumers.clear()
     v2Sessions.clear()
     writeTrigger.mockReset()
   })
-  afterEach(() => { livePreparation.handler = undefined })
+  afterEach(() => { livePreparation.handler = undefined; livePreparation.identity = 'owner' })
 
   it('sends prepared text to the engine while keeping the original content and images in the transcript', () => {
     const send = vi.fn()

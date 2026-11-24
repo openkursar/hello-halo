@@ -1,5 +1,6 @@
 /**
- * A run's shared files, and opening one with the system default application.
+ * A run's shared files, and opening one through the caller's opener (the
+ * canvas) or else with the system default application.
  *
  * Files are opened by the reference they were published under, never by the
  * path in the listing: that path is resolved against THIS machine, while a file
@@ -14,6 +15,9 @@ import { downloadArtifact } from '../../services/artifact-download'
 import { useTranslation } from '../../i18n'
 import { useNotificationStore } from '../../stores/notification.store'
 import type { TeamArtifactOpenFailure } from '../../../shared/apps/team-types'
+
+/** Opens a resolved local copy, e.g. in the canvas, which hands binaries to the system application itself. */
+export type OpenOutput = (path: string, title: string) => void
 
 function baseName(p: string): string {
   const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
@@ -50,7 +54,8 @@ export type ArtifactStatus = 'loading' | 'ready' | 'failed'
 export function useTeamArtifacts(
   teamId: string,
   epochId: string | null | undefined,
-  refreshToken?: string | number
+  refreshToken?: string | number,
+  openInCanvas?: OpenOutput
 ) {
   // basename/ref → the entry it addresses, for callers holding only a ref.
   const [byRef, setByRef] = useState<Map<string, ArtifactEntry>>(new Map())
@@ -63,7 +68,6 @@ export function useTeamArtifacts(
   // reader was about to click would go dead under the pointer.
   const loadedKey = useRef<string | null>(null)
   const key = `${teamId}\u0000${epochId ?? ''}`
-  const { t } = useTranslation()
 
   useEffect(() => {
     let cancelled = false
@@ -126,6 +130,55 @@ export function useTeamArtifacts(
     [byRef]
   )
 
+  const openEntry = useOpenTeamArtifact(teamId, openInCanvas)
+
+  const open = useCallback((ref: string) => {
+    const entry = byRef.get(ref) ?? byRef.get(baseName(ref))
+    if (entry) void openEntry(entry)
+  }, [byRef, openEntry])
+
+  return { has, open, openEntry, status, list }
+}
+
+type ArtifactTarget = Pick<ArtifactEntry, 'name' | 'path' | 'ref' | 'epochId'>
+
+/** Open one shared file of a team, telling the reader in a toast when it cannot be. */
+export function useOpenTeamArtifact(teamId: string, openInCanvas?: OpenOutput) {
+  const { t } = useTranslation()
+  const { resolve, notify } = useResolveTeamArtifact(teamId)
+
+  return useCallback(async (entry: ArtifactTarget) => {
+    // Remote mode has no local application to open into, and the returned path
+    // would name the server's disk — download the bytes instead.
+    if (api.isRemoteMode()) {
+      void downloadArtifact(entry.path)
+      return
+    }
+    const result = await resolve(entry)
+    if (!result) return
+    if (result.revealOnly) {
+      void api.showArtifactInFolder(result.path)
+      notify(t('This file could run a program, so it is shown in its folder instead of being opened.'), 'default')
+      return
+    }
+    if (openInCanvas) openInCanvas(result.path, entry.name)
+    else void api.openArtifact(result.path)
+  }, [resolve, notify, t, openInCanvas])
+}
+
+/** Show one shared file of a team in the system file manager. Desktop only; a teammate's file is shown as its local copy. */
+export function useRevealTeamArtifact(teamId: string) {
+  const { resolve } = useResolveTeamArtifact(teamId)
+  return useCallback(async (entry: ArtifactTarget) => {
+    const result = await resolve(entry)
+    if (result) void api.showArtifactInFolder(result.path)
+  }, [resolve])
+}
+
+/** Resolve a shared file to a local path, or say in a toast why it cannot be. */
+function useResolveTeamArtifact(teamId: string) {
+  const { t } = useTranslation()
+
   const describeFailure = useCallback((reason: TeamArtifactOpenFailure | undefined, owner: string | null | undefined): string => {
     const who = owner ?? t('a teammate')
     switch (reason) {
@@ -151,36 +204,21 @@ export function useTeamArtifacts(
     useNotificationStore.getState().show({ id: 'team-artifact-open', title, variant, duration: 6000 })
   }, [])
 
-  const openEntry = useCallback(async (entry: ArtifactEntry) => {
-    // Remote mode has no local application to open into, and the returned path
-    // would name the server's disk — download the bytes instead.
-    if (api.isRemoteMode()) {
-      void downloadArtifact(entry.path)
-      return
-    }
+  const resolve = useCallback(async (entry: ArtifactTarget): Promise<{ path: string; revealOnly: boolean } | null> => {
     try {
       const res = await api.teamOpenArtifact(teamId, entry.epochId, entry.ref)
       const result = res.success ? res.data : undefined
       if (!result?.ok || !result.path) {
         notify(describeFailure(result?.reason, result?.owner), 'error')
-        return
+        return null
       }
-      if (result.revealOnly) {
-        void api.showArtifactInFolder(result.path)
-        notify(t('This file could run a program, so it is shown in its folder instead of being opened.'), 'default')
-        return
-      }
-      void api.openArtifact(result.path)
+      return { path: result.path, revealOnly: !!result.revealOnly }
     } catch (err) {
-      console.warn('[TeamArtifacts] open failed', { teamId, ref: entry.ref, err })
+      console.warn('[TeamArtifacts] resolve failed', { teamId, ref: entry.ref, err })
       notify(describeFailure('error', null), 'error')
+      return null
     }
-  }, [teamId, describeFailure, notify, t])
+  }, [teamId, describeFailure, notify])
 
-  const open = useCallback((ref: string) => {
-    const entry = byRef.get(ref) ?? byRef.get(baseName(ref))
-    if (entry) void openEntry(entry)
-  }, [byRef, openEntry])
-
-  return { has, open, openEntry, status, list }
+  return { resolve, notify }
 }

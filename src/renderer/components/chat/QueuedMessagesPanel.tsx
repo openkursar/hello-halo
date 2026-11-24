@@ -3,15 +3,15 @@
  *
  * Displayed below StreamingBubble while agent generation is active.
  * Each entry represents a message sent by the user during a running turn;
- * the CC subprocess will deliver it at the next tool round boundary.
- *
- * Disappears automatically when agent:complete clears queuedMessages.
+ * agent:input-arrived replaces it with the accepted input annotation.
  */
 
 import { useTranslation } from '../../i18n'
+import type { QueuedMessage } from '../../types'
+import { MessageImages } from './ImageAttachmentPreview'
 
 interface QueuedMessagesPanelProps {
-  messages: string[]
+  messages: QueuedMessage[]
 }
 
 export function QueuedMessagesPanel({ messages }: QueuedMessagesPanelProps) {
@@ -29,8 +29,12 @@ export function QueuedMessagesPanel({ messages }: QueuedMessagesPanelProps) {
         {messages.map((msg, i) => (
           <div key={i} className="flex items-start gap-1.5 text-xs text-subtle-foreground">
             <span className="mt-px shrink-0 select-none">↳</span>
-            {/* A message of cards that name nothing (an untitled conversation's passage) */}
-            <span className="break-words min-w-0">{msg || t('References')}</span>
+            <div className="min-w-0 flex-1 flex flex-wrap items-center gap-1.5 [&_.h-7]:h-6 [&_.text-foreground]:text-inherit [&_.text-muted-foreground]:text-inherit">
+              {!!msg.images?.length && <MessageImages images={msg.images} presentation="chips" />}
+              {(msg.summary || !msg.images?.length) && (
+                <span className="break-words">{msg.summary || t('References')}</span>
+              )}
+            </div>
           </div>
         ))}
       </div>

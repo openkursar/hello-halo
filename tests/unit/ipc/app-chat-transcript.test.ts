@@ -11,6 +11,7 @@ const env = vi.hoisted(() => ({
   loadChatTranscriptForConversation: vi.fn(),
   loadChatMessageThoughts: vi.fn(),
   respondToEscalation: vi.fn(),
+  injectIntoAppChatWhenLive: vi.fn(),
   engineMetadata: {} as import('../../../src/shared/apps/app-types').AppChatEngineMetadata,
   space: { id: 'space-a', path: '/spaces/a' } as { id: string; path: string } | null,
 }))
@@ -25,6 +26,7 @@ vi.mock('../../../src/main/apps/skill-discovery', () => ({ listAvailableSkills: 
 vi.mock('../../../src/main/apps/runtime', async () => ({
   EscalationAnswerValidationError: (await import('../../../src/main/apps/runtime/errors')).EscalationAnswerValidationError,
   getAppRuntime: () => ({ respondToEscalation: env.respondToEscalation }),
+  injectIntoAppChatWhenLive: env.injectIntoAppChatWhenLive,
   getAppChatConversationId: (appId: string) => `app-chat:${appId}`,
   buildImSessionKey: (appId: string, channel: string, chatType: string, chatId: string) => `app-chat:${appId}:${channel}:${chatType}:${chatId}`,
   loadChatEngineMetadata: () => env.engineMetadata,
@@ -53,6 +55,14 @@ beforeEach(() => {
   env.respondToEscalation.mockReset()
   vi.spyOn(console, 'error').mockImplementation(() => {})
   registerAppHandlers()
+})
+
+it.each(['refused', 'no_turn', 'stopped', 'delivered'])('preserves the injection outcome %s without allowing refused normal-send fallback', async outcome => {
+  env.injectIntoAppChatWhenLive.mockResolvedValue(outcome)
+  const res = await env.handlers.appChatInject({ appId: 'a1', conversationId: 'app-chat:a1', message: 'addition' })
+  expect(res).toEqual(outcome === 'refused'
+    ? { success: false, error: expect.stringContaining('not been sent') }
+    : { success: true, data: { delivered: outcome === 'delivered', ...(outcome === 'stopped' ? { stopped: true } : {}) } })
 })
 
 it('reads the default session when no conversationId is given, passing the paging request', async () => {

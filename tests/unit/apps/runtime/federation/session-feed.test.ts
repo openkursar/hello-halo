@@ -409,6 +409,78 @@ describe('session-feed — multi-replica transcript replication', () => {
     expect(cachedTranscript(h.b).map((m) => m.seq)).toEqual([1, 2, 3])
   })
 
+  const row = (seq: number, role: string, content: string): SerializedHistoryMessage => ({ seq, role, content, ts: 1000 + seq })
+  const contents = (rows: SerializedHistoryMessage[]) => rows.map((m) => `${m.seq}:${m.content}`)
+
+  it('a turn that places its reply among rows published mid-turn re-replicates them', () => {
+    h = makeHarness()
+    h.a.transcripts.set(SESSION_KEY, [row(1, 'user', 'hi'), row(2, 'assistant', 'hello')])
+    h.a.feed.publishOwnedTail(SESSION_KEY)
+
+    // Mid-turn, teammates' messages arrive and are published at the seqs they hold now.
+    h.a.activeSessions.add(SESSION_KEY)
+    h.a.transcripts.set(SESSION_KEY, [
+      row(1, 'user', 'hi'),
+      row(2, 'assistant', 'hello'),
+      row(3, 'user', 'any output?'),
+      row(4, 'user', 'from writer'),
+      row(5, 'user', 'from analyst'),
+      row(6, 'user', 'from analyst'),
+      row(7, 'user', 'from lead'),
+    ])
+    h.a.feed.publishOwnedTail(SESSION_KEY)
+    expect(cachedTranscript(h.b)).toHaveLength(7)
+
+    // The turn ends with its reply before what arrived during it: same row count,
+    // same last row, so only checking the last published row would miss it.
+    h.a.activeSessions.delete(SESSION_KEY)
+    const final = [
+      row(1, 'user', 'hi'),
+      row(2, 'assistant', 'hello'),
+      row(3, 'user', 'any output?'),
+      row(4, 'assistant', 'yes, here it is'),
+      row(5, 'user', 'from writer'),
+      row(6, 'user', 'from analyst'),
+      row(7, 'user', 'from lead'),
+    ]
+    h.a.transcripts.set(SESSION_KEY, final)
+    h.a.feed.retransmitTick()
+    expect(contents(cachedTranscript(h.host))).toEqual(contents(final))
+    expect(contents(cachedTranscript(h.b))).toEqual(contents(final))
+
+    // Settled: nothing more to revise, and later rows still replicate.
+    expect(h.a.feed.publishOwnedTail(SESSION_KEY)).toBe(0)
+    h.a.transcripts.set(SESSION_KEY, [...final, row(8, 'assistant', 'next')])
+    expect(h.a.feed.publishOwnedTail(SESSION_KEY)).toBe(1)
+    expect(contents(cachedTranscript(h.b))).toEqual(contents([...final, row(8, 'assistant', 'next')]))
+  })
+
+  it('a turn that ends with more rows than it published revises the shifted ones and appends the rest', () => {
+    h = makeHarness()
+    h.a.activeSessions.add(SESSION_KEY)
+    h.a.transcripts.set(SESSION_KEY, [row(1, 'user', 'go'), row(2, 'user', 'from writer')])
+    h.a.feed.publishOwnedTail(SESSION_KEY)
+
+    h.a.activeSessions.delete(SESSION_KEY)
+    const final = [row(1, 'user', 'go'), row(2, 'assistant', 'done'), row(3, 'user', 'from writer')]
+    h.a.transcripts.set(SESSION_KEY, final)
+    // Revision of seq 2, then seq 3 appended.
+    expect(h.a.feed.publishOwnedTail(SESSION_KEY)).toBe(2)
+    expect(contents(cachedTranscript(h.b))).toEqual(contents(final))
+  })
+
+  it('a turn whose published rows did not change appends no revisions when it ends', () => {
+    h = makeHarness()
+    h.a.activeSessions.add(SESSION_KEY)
+    h.a.transcripts.set(SESSION_KEY, [row(1, 'user', 'go'), row(2, 'user', 'from writer')])
+    h.a.feed.publishOwnedTail(SESSION_KEY)
+
+    h.a.activeSessions.delete(SESSION_KEY)
+    h.a.transcripts.set(SESSION_KEY, [row(1, 'user', 'go'), row(2, 'user', 'from writer'), row(3, 'assistant', 'done')])
+    expect(h.a.feed.publishOwnedTail(SESSION_KEY)).toBe(1)
+    expect(h.a.store.getMaxSeq(OFFICE, A_FEED_KEY)).toBe(3)
+  })
+
   it('classifies session vs ctrl feed frames', () => {
     h = makeHarness()
     const sessionFrame: FeedSyncFrame = { kind: 'feed-advertise', officeId: OFFICE, feedKey: A_FEED_KEY, upToSeq: 1 }

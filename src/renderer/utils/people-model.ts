@@ -20,8 +20,8 @@ export function ephemeralMemberIds(teams: readonly TeamMembership[]): Set<string
 /**
  * Dedicated team coordinators. They are the person's own digital humans and the
  * only place their model and capabilities can be set, so the directory lists
- * them; but their work arrives through the team, so they are not offered as a
- * direct recipient alongside the digital humans a person addresses themselves.
+ * them, labelled as a team's lead. A person may also talk to one directly, like
+ * any of their digital humans: in its own chat it directs the team.
  */
 export function coordinatorIds(teams: TeamListItem[]): Set<string> {
   return new Set(

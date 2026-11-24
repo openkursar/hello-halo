@@ -5,6 +5,22 @@
  */
 
 import type { AppChatConversationRow } from '../../hooks/useAppChatConversationRows'
+import type { NativeTeamTask } from '../../hooks/useTeamConversationRows'
+import type { TaskStatus } from '../../types'
+
+/** What the hover card shows for a row. `owner` is the digital human or team the row belongs to. */
+export interface RowHoverCard { label: string; owner?: string; note?: string; time?: string; status?: TaskStatus }
+
+/** Words for a row's status dot, for places where the colour alone is not enough. */
+export function taskStatusLabel(status: TaskStatus, t: (s: string) => string): string | undefined {
+  switch (status) {
+    case 'generating': return t('Working')
+    case 'waiting': return t('Needs you')
+    case 'completed-unseen': return t('Done')
+    case 'error': return t('Failed')
+    default: return undefined
+  }
+}
 
 /**
  * Conversation timestamp: clock time for today, weekday-less date beyond it.
@@ -29,6 +45,17 @@ export function formatRowTime(timestamp: string | number, t: (s: string) => stri
   return d.toLocaleDateString(undefined, { year: '2-digit', month: 'numeric', day: 'numeric' })
 }
 
+
+/** Provenance (`note`) appears only for tasks someone else started. */
+export function teamTaskHoverCard(task: NativeTeamTask, t: (s: string, opts?: Record<string, unknown>) => string): RowHoverCard {
+  return {
+    label: task.label || t('New team conversation'),
+    owner: task.teamName,
+    note: task.startedBy ? t('Started by {{name}}', { name: task.startedBy }) : undefined,
+    time: formatRowTime(task.lastActivityAt, t),
+    status: task.waitingForMe ? 'waiting' : task.active ? 'generating' : undefined,
+  }
+}
 
 /**
  * Same shape as conversation.service.ts's generateTitle() ("Chat M-D H:MM"),

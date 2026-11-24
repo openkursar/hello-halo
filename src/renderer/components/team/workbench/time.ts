@@ -6,6 +6,17 @@ export function taskTime(value: unknown): number | null {
   return Number.isFinite(time) ? time : null
 }
 
+/** A length of time in whole minutes, hours and days, the way people say it. */
+export function formatSpan(ms: number, t: (key: string, options?: Record<string, unknown>) => string): string {
+  const minutes = Math.round(ms / 60_000)
+  if (minutes < 1) return t('under a minute')
+  if (minutes < 60) return t('{{count}} min', { count: minutes })
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 ? t('{{hours}} h {{minutes}} min', { hours, minutes: minutes % 60 }) : t('{{count}} h', { count: hours })
+  const days = Math.floor(hours / 24)
+  return hours % 24 ? t('{{days}} d {{hours}} h', { days, hours: hours % 24 }) : t('{{count}} d', { count: days })
+}
+
 export function compareTaskTimes(left: unknown, right: unknown, descending = false): number {
   const a = taskTime(left)
   const b = taskTime(right)

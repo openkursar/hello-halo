@@ -60,11 +60,19 @@ export function openDigitalHumansPage() {
   useAppStore.getState().navigate('apps')
 }
 
-/** Open a digital human's page on its activity thread. */
+/**
+ * Open a digital human's page on its activity thread; an uninstalled one opens
+ * its reinstall / delete page instead, since it has no thread to show.
+ */
 export function openPersonActivity(appId: string) {
-  useAppsPageStore.getState().setInitialAppId(null)
-  useAppsPageStore.getState().setCurrentTab('my-digital-humans')
-  useAppsPageStore.getState().openActivityThread(appId)
+  const page = useAppsPageStore.getState()
+  page.setInitialAppId(null)
+  page.setCurrentTab('my-digital-humans')
+  if (useAppsStore.getState().apps.find(a => a.id === appId)?.status === 'uninstalled') {
+    page.selectApp(appId, 'uninstalled')
+  } else {
+    page.openActivityThread(appId)
+  }
   useAppStore.getState().navigate('apps')
 }
 

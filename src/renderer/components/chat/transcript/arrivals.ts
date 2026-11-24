@@ -10,7 +10,7 @@
  */
 
 import type { LiveInput, Message, Thought } from '../../../types'
-import { isTeamTranscriptMessage } from '../../../../shared/transcript'
+import { isTeamSystemNotice, isTeamTranscriptMessage } from '../../../../shared/transcript'
 import { isSameInputRecord } from '../../../utils/live-inputs'
 
 export interface ArrivalThought extends Thought {
@@ -20,6 +20,11 @@ export interface ArrivalThought extends Thought {
 /** Kinds of record drawn among a reply's work when they join it mid-turn. */
 export function isArrivalRecord(message: Message): boolean {
   return isTeamTranscriptMessage(message) || (message.role === 'system' && message.source === 'cross-conversation')
+}
+
+/** An arrival drawn for people; the runtime's own wakes to a lead are not. */
+export function isShownArrival(message: Message): boolean {
+  return isArrivalRecord(message) && !isTeamSystemNotice(message)
 }
 
 /** Whether `message` was received while `reply` was being written. */
@@ -59,12 +64,12 @@ export function liveArrivals(messages: readonly Message[], inputs: readonly Live
     if (isOpenPlaceholder(message)) placeholder = message.id
     if (isOpenPlaceholder(message) || (message.role === 'user' && message.source !== 'injection')) start = at + 1
   }
-  const announced = inputs.filter(input => isArrivalRecord(input.message)).map(input => input.message)
+  const announced = inputs.filter(input => isShownArrival(input.message)).map(input => input.message)
   const matched = new Set<Message>()
   const result: Message[] = []
   for (let at = from; at < messages.length; at++) {
     const message = messages[at]
-    if (!isArrivalRecord(message)) continue
+    if (!isShownArrival(message)) continue
     const arrival = announced.find(input => !matched.has(input) && isSameInputRecord(message, input))
     if (arrival) matched.add(arrival)
     const replyId = message.metadata?.inputReplyId

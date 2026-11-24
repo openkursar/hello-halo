@@ -74,6 +74,13 @@ describe('pinned environments follow the space’s folder', () => {
     expect(store.getRun('run-b')?.environment?.workDir).toBe('/old/b')
     expect(store.listSpaceWorkDirs('space-a')).toEqual(['/new/a'])
   })
+
+  it('tells which of the given chat sessions have had a turn', () => {
+    const store = storeWithApp()
+    store.pinSessionEnvironment('app-chat:person:team:t1:e1', 'person', environment('space-a', '/a'))
+    expect(store.listPinnedSessions(['app-chat:person:team:t1:e1', 'app-chat:person:team:t1:e2'])).toEqual(new Set(['app-chat:person:team:t1:e1']))
+    expect(store.listPinnedSessions([])).toEqual(new Set())
+  })
 })
 
 describe('a digital human chat whose folder is gone', () => {

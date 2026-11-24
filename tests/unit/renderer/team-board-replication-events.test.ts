@@ -126,6 +126,13 @@ describe('team board reloads', () => {
     useTeamStore.getState().applyTeamUpdated({ teamId: 't', changed: ['status'] })
     expect(env.teamGetDetail).toHaveBeenCalledTimes(1)
     expect(env.teamListEpochs).not.toHaveBeenCalled()
+
+    // Who is working moved: the roster and the task rows follow, the run history does not.
+    useTeamStore.getState().applyTeamUpdated({ teamId: 't', changed: ['status', 'work'], activeEpochIds: [] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(env.teamGetDetail).toHaveBeenCalledTimes(2)
+    expect(env.teamListConversations).toHaveBeenCalledTimes(2)
+    expect(env.teamListEpochs).not.toHaveBeenCalled()
   })
 
   it('indexes members once per detail', () => {

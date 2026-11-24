@@ -38,9 +38,9 @@ export function MemberRail({ detail, selectedAppId, writableAppIds = [], showSum
       : member.owner ? t('Waiting for {{owner}}’s decision', { owner: member.owner }) : t('Waiting for its owner’s decision')
       : member.status === 'error' ? t('Needs attention')
         : member.status === 'working' ? t('Working') : t('On standby')
-  const statusColor = (member: RosterMember) => member.presence === 'offline' ? 'bg-muted-foreground/40'
-    : member.status === 'waiting_user' || member.status === 'error' ? 'bg-halo-warning'
-      : member.status === 'working' ? 'bg-halo-success' : 'bg-muted-foreground/60'
+  const statusTone = (member: RosterMember) => member.presence === 'offline' ? null
+    : member.status === 'waiting_user' || member.status === 'error' ? 'waiting'
+      : member.status === 'working' ? 'working' : null
   const groups = [
     { key: 'busy', label: t('Working'), members: detail.roster.filter(m => m.presence !== 'offline' && m.status === 'working') },
     { key: 'ready', label: t('On standby'), members: detail.roster.filter(m => m.presence !== 'offline' && m.status !== 'working') },
@@ -57,7 +57,7 @@ export function MemberRail({ detail, selectedAppId, writableAppIds = [], showSum
         return <div key={member.appId} className={`group/member min-w-0 rounded-xl border transition-colors ${selected ? 'border-primary/25 bg-primary/5' : 'border-transparent hover:bg-secondary/60'}`} onMouseLeave={hideSoon}>
           <div className="flex min-w-0 items-center">
           <button onClick={() => { setHover(null); onMember(member) }} onMouseEnter={event => show(event.currentTarget, member)} onFocus={event => show(event.currentTarget, member)} onBlur={hideSoon} aria-pressed={selected} aria-describedby={hover?.member.appId === member.appId ? tooltipId : undefined} className="flex min-h-12 min-w-0 flex-1 items-center gap-2 rounded-lg p-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" aria-label={t('View {{name}}’s work in this task', { name: member.memberName })}>
-            <span className="relative shrink-0"><AutomationAvatar name={member.memberName} size={30} /><span aria-hidden="true" className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background ${statusColor(member)}`} /></span>
+            <span className="relative flex shrink-0"><AutomationAvatar name={member.memberName} size={30} />{statusTone(member) && <i aria-hidden="true" data-tone={statusTone(member)} className="avatar-status-dot" />}</span>
             <span className="min-w-0 flex-1"><span className="flex items-center gap-1 text-xs font-medium"><span className="truncate">{member.memberName}</span></span>
               <span className={`mt-0.5 block truncate text-[11px] ${member.presence !== 'offline' && (member.status === 'waiting_user' || member.status === 'error') ? 'text-halo-warning' : 'text-muted-foreground'}`}>{statusLabel(member)}</span>
             </span>

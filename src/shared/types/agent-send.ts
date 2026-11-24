@@ -33,7 +33,13 @@ export interface AgentSendRequest {
 
 export interface AgentInjectRequest {
   conversationId: string
-  /** May be empty when references carry the message. */
+  /** May be empty when images or references carry the message. */
   message: string
   references?: ContentReference[]
+  images?: ImageAttachment[]
+}
+
+export interface AgentInjectResult {
+  /** A live-image limitation must return the draft, not start a second turn. */
+  retryable?: boolean
 }

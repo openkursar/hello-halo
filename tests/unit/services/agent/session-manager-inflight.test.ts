@@ -161,6 +161,17 @@ describe('getOrCreateV2Session in-flight sharing', () => {
     lease.release()
   })
 
+  it('captures image capabilities without retaining credentials or following later selection changes', async () => {
+    createSession.mockResolvedValueOnce(fakeSession('images'))
+    const credentials = { model: 'text-model', supportsVision: false, visionOverride: false, apiKey: 'private-key' }
+    await getOrCreateV2Session('space', 'image-capabilities', { model: 'sdk-model', apiCredentials: credentials, mcpServers: { ocr: {} } })
+    credentials.supportsVision = true
+    credentials.model = 'new-model'
+    expect(v2Sessions.get('image-capabilities')?.imageInput).toEqual({
+      model: 'text-model', supportsVision: false, visionOverride: false, ocrAvailable: true,
+    })
+  })
+
   it('a gated latecomer with DIFFERENT inputs does not share: it waits, then rebuilds on its own options', async () => {
     const conv = 'conv-gate-mismatch'
     const s1 = fakeSession('s1')

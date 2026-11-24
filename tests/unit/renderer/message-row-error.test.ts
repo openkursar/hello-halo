@@ -18,13 +18,13 @@ vi.mock('../../../src/renderer/components/chat/CollapsedThoughtProcess', () => (
   LazyCollapsedThoughtProcess: () => createElement('div', { 'data-process': 'lazy' }, 'Thought process'),
 }))
 vi.mock('../../../src/renderer/components/chat/InjectionAnnotation', () => ({ InjectionAnnotation: () => null }))
-vi.mock('../../../src/renderer/components/chat/ArrivalCard', () => ({ ArrivalCard: () => null }))
+vi.mock('../../../src/renderer/components/chat/ArrivalCard', () => ({ TrailingArrivals: () => null }))
 vi.mock('../../../src/renderer/components/chat/transcript', () => ({ mergeArrivalThoughts: () => [], toArrivalThought: () => null }))
 vi.mock('../../../src/renderer/components/chat/cross-conversation', () => ({
   CrossConversationMessage: () => null, CrossConversationNotice: () => null,
   isCrossConversationMessage: () => false, isCrossConversationNotice: () => false,
 }))
-vi.mock('../../../src/renderer/components/chat/team-collab', () => ({ TeamMemberMessage: () => null, isTeamMessage: () => false }))
+vi.mock('../../../src/renderer/components/chat/team-collab', () => ({ ReplyOpeners: () => null, isTeamMessage: () => false }))
 vi.mock('../../../src/renderer/components/tool/BrowserTaskCard', () => ({ BrowserTaskCard: () => null, isBrowserTool: () => false }))
 vi.mock('../../../src/renderer/components/tool/TerminalTaskCard', () => ({ TerminalTaskCard: () => null, isTerminalTool: () => false }))
 vi.mock('../../../src/renderer/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => createElement('span', null, content) }))

@@ -80,6 +80,13 @@ mkdirSync(join(directory, '.halo', 'temp', '.halo', 'apps', memberAppId, 'sessio
 
 const teamId = 'collab-team'
 const roomId = 'collab-room'
+// The member's report, which is where the conversation leads into the team view.
+addMessage('halo-temp', conversation.id, {
+  role: 'system',
+  source: 'team-message',
+  content: 'Both tiers collected; the differences are in the brief.',
+  metadata: { teamId, epochId: roomId, teamName, fromMemberName: memberName, teamTriggerKind: 'message' },
+})
 teams.insertTeam({
   id: teamId, name: teamName, goal: 'Compare competitors', owningSpaceId: 'halo-temp',
   // A collaboration has no lead app: the space conversation coordinates it.

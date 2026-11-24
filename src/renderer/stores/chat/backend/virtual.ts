@@ -3,8 +3,11 @@
  *
  * The store only tracks their live turn; their transcript belongs to the view
  * that displays it. So the one verb that matters here is ending a turn: there
- * is nothing to reload, the streamed state is simply retired.
+ * is nothing to reload, the streamed state is simply retired. Thoughts of a
+ * local team member's reply are the exception: they are read on demand.
  */
+import { api } from '../internal'
+import type { Thought } from '../internal'
 import { finishedTurnState } from './turn'
 import type { ChatBackend, ConversationRef, BackendContext } from './types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
@@ -39,6 +42,19 @@ async function settleTurn(ctx: BackendContext, ref: ConversationRef, turnId: num
   })
 }
 
+/** A local team member's reply keeps its process in the member's own transcript; a remote member's is not on this machine. */
+async function loadThoughts(_ctx: BackendContext, ref: ConversationRef, messageId: string): Promise<Thought[]> {
+  const team = parseTeamSessionKey(ref.conversationId)
+  if (!team || isRemoteMemberAppId(team.teamId, team.appId)) return []
+  try {
+    const response = await api.appChatMessageThoughts({ appId: team.appId, spaceId: ref.spaceId, conversationId: ref.conversationId, messageId })
+    return response.success && Array.isArray(response.data) ? response.data as Thought[] : []
+  } catch (error) {
+    console.error(`[ChatStore/Virtual] Failed to load thoughts for ${ref.conversationId}/${messageId}:`, error)
+    return []
+  }
+}
+
 export const virtualBackend: ChatBackend = {
   async open() {},
   async refresh() {},
@@ -46,7 +62,7 @@ export const virtualBackend: ChatBackend = {
   async stop(_ctx, conversationId) { return unsupported('stop', conversationId) },
   async inject(_ctx, conversationId) { return unsupported('inject', conversationId) },
   settleTurn,
-  async loadThoughts() { return [] },
+  loadThoughts,
   async loadEarlier() {},
   async loadThrough() {},
 }

@@ -9,8 +9,10 @@ import { useExecutionState } from './useExecutionState'
 import { taskTime } from './time'
 import { TaskTimestamp } from './TaskTimestamp'
 
-export function ExecutionStatus({ teamId, epochId, appId, remote, busy, latestResult, onOpen }: {
+export function ExecutionStatus({ teamId, epochId, appId, remote, busy, latestResult, onOpen, asReply = false, senderName }: {
   teamId: string; epochId: string; appId: string; remote: boolean; busy: boolean; latestResult?: Message; onOpen: () => void
+  /** Draw live work as a reply being written, as in a personal chat; only failures keep the status card. */
+  asReply?: boolean; senderName?: string
 }) {
   const { t } = useTranslation()
   const state = useExecutionState(teamId, epochId, appId, remote)
@@ -24,6 +26,9 @@ export function ExecutionStatus({ teamId, epochId, appId, remote, busy, latestRe
   const pendingTool = last?.type === 'tool_use' && !last.toolResult ? last : undefined
   const executionError = state.live.error || (!state.active ? latestResult?.error : undefined)
   const unavailable = state.failed || (busy && !state.available)
+  if (asReply && !executionError && !unavailable) {
+    return state.active ? <StreamingSection senderName={senderName} textBlockVersion={state.live.textBlockVersion} streamingContent={state.live.streamingContent} isStreaming={state.live.isStreaming} thoughts={state.thoughts} isThinking={state.live.isThinking || (at === null && !state.live.streamingContent)} browserToolCalls={browserTools} showBrowserViewButton={false} /> : null
+  }
   const label = executionError ? t('Failed') : unavailable ? t('Execution details are currently unavailable')
     : state.active ? pendingTool ? t('Executing tool: {{name}}', { name: pendingTool.toolName ?? t('Tool') }) : t('Processing this task')
       : t('Execution ended')

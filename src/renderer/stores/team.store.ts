@@ -161,7 +161,8 @@ export interface TeamState {
 
   // ── Conversations ────────────────────────
   loadConversations: (teamId: string) => Promise<void>
-  openConversation: (teamId: string, title?: string) => Promise<string | null>
+  /** `memberAppId` records which of my members the conversation is held with, so every viewer opens it there. */
+  openConversation: (teamId: string, title?: string, memberAppId?: string) => Promise<string | null>
   renameConversation: (teamId: string, epochId: string, title: string | null) => Promise<boolean>
   archiveConversation: (teamId: string, epochId: string) => Promise<boolean>
   selectConversation: (epochId: string | null) => void
@@ -522,9 +523,9 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     }
   }),
 
-  openConversation: async (teamId, title) => {
+  openConversation: async (teamId, title, memberAppId) => {
     try {
-      const res = await api.teamOpenConversation(teamId, title)
+      const res = await api.teamOpenConversation(teamId, title, memberAppId)
       if (res.success && res.data) {
         const epochId = (res.data as { epochId: string }).epochId
         await get().loadConversations(teamId)
@@ -930,6 +931,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
           // that case refetches below instead of publishing an empty roster,
           // which would read as "this team has no one on this machine".
           localMembers: existing?.localMembers ?? [],
+          roster: existing?.roster ?? [],
           updatedAt: team.updatedAt,
         }
         const teams = existing
@@ -953,11 +955,13 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     // in the lightweight team payload — refetch what the event says changed when
     // this team is shown (everything when it does not say). The session list
     // is office-shared: an epoch opened/renamed/sealed on any node arrives here.
+    // A 'work' pulse moves who is working, which the roster and the task rows
+    // carry; the run history does not change with it.
     if (get().currentTeamId === teamId || get().views[teamId]) {
       const changed = event.changed
-      if (!changed || changed.includes('members') || changed.includes('board')) void get().loadDetail(teamId)
+      if (!changed || changed.includes('members') || changed.includes('board') || changed.includes('work')) void get().loadDetail(teamId)
       if (!changed || changed.includes('epochs')) void get().loadEpochs(teamId)
-      if (!changed || changed.includes('conversations')) void get().loadConversations(teamId)
+      if (!changed || changed.includes('conversations') || changed.includes('work')) void get().loadConversations(teamId)
     }
   },
 

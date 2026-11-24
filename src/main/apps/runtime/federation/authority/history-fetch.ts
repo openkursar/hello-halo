@@ -249,9 +249,8 @@ export function createHistoryService(deps: HistoryServiceDeps): HistoryService {
       return
     }
 
-    // Incremental tail: when the viewer already holds up to sinceSeq, send only
-    // the newer messages. The transcript is append-only so a cached prefix never
-    // changes — this is what turns a full re-pull into a small delta.
+    // Incremental tail: send only messages after sinceSeq. Rows of finished turns
+    // never change, so this turns a full re-pull into a small delta.
     const since = frame.sinceSeq ?? 0
     const tail = since > 0 ? messages.filter((m) => m.seq > since) : messages
     reply(from, frame, { messages: tail })

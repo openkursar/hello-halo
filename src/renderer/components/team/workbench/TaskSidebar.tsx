@@ -65,7 +65,7 @@ export function TaskSidebar({ teamId, roster, tasks, selectedId, isOwner, onSele
             className={`block w-full rounded-xl border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selectedId === task.epochId ? 'border-primary/30 bg-primary/10' : task.waitingUser ? 'border-halo-warning/20 bg-halo-warning/5 hover:bg-halo-warning/10' : 'border-transparent hover:bg-secondary'}`}>
             <span className={`block truncate text-sm ${selectedId === task.epochId ? 'font-medium' : ''}`}>{task.label || t('New task')}</span>
             <span className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              {task.waitingUser ? <AlertCircle size={11} className="shrink-0 text-halo-warning" /> : task.completed ? <CheckCircle2 size={11} className="shrink-0" /> : <Circle size={7} className={`shrink-0 ${task.active ? 'fill-halo-success stroke-halo-success' : 'text-muted-foreground/60'}`} />}
+              {task.waitingUser ? <AlertCircle size={11} className="shrink-0 text-halo-warning" /> : task.completed ? <CheckCircle2 size={11} className="shrink-0" /> : <Circle size={7} className={`shrink-0 ${task.active ? 'fill-primary stroke-primary' : 'text-muted-foreground/60'}`} />}
               <span className={`min-w-0 flex-1 truncate ${task.waitingUser ? 'text-halo-warning' : ''}`}>{task.waitingUser ? waitingLabel(task) : task.completed ? t('Completed') : task.active ? t('Working') : t('Ready')}</span>
               <TaskTimestamp value={task.lastActivityAt} recordId={task.epochId} format="date" className="shrink-0 tabular-nums text-muted-foreground/80" />
             </span>

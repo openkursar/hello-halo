@@ -28,7 +28,7 @@ import { selectActiveConversationId, selectActiveSession } from './chat/active'
 
 export { selectActiveConversationId, selectActiveConversation, selectActiveSession } from './chat/active'
 export { conversationKind, digitalHumanAppId } from './chat/backend'
-export type { ChatState } from './chat/internal'
+export type { ChatState, TeamChatTarget } from './chat/internal'
 export { holdOpenThoughts } from './chat/open-thoughts'
 
 export const useChatStore = create<ChatState>((set, get) => ({

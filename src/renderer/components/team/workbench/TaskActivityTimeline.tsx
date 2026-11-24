@@ -1,62 +1,109 @@
 import { useMemo, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, ArrowUp, Bell, ChevronDown, FileText } from 'lucide-react'
+import { AlertTriangle, ArrowRight, ArrowUp, Bell, Check, ChevronDown, ChevronUp, FileText, Funnel } from 'lucide-react'
 import type { TeamActivity, TeamDetail } from '../../../../shared/apps/team-types'
 import { parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
+import { markdownPreview } from '../../../utils/markdown-preview'
 import { MarkdownRenderer } from '../../chat/MarkdownRenderer'
 import { TaskTimestamp } from './TaskTimestamp'
 import { taskTime } from './time'
-import { activityLevel, taskActivityRows, undeliveredParties, type TaskActivityRow, type TaskMemberReport } from './model'
+import { Popover, PopoverContent, PopoverTrigger } from '../../ui/Popover'
+import { undeliveredParties } from '../../../../shared/apps/team-failures'
+import { activityLevel, filterTaskActivityRows, taskActivityRows, type TaskActivityKind, type TaskActivityRow, type TaskMemberReport } from './model'
 import { UndeliveredNote } from './UndeliveredNote'
 
 function recordIds(rows: TaskActivityRow[]): string[] {
-  return rows.flatMap(row => row.notifications ? row.notifications.map(item => `message:${item.appId}:${item.message.id}`)
-    : row.activities ? row.activities.map(item => `activity:${item.id}`) : [row.id])
+  return rows.flatMap(row => row.activities ? row.activities.map(item => `activity:${item.id}`) : [row.id])
 }
 
-function ActivityContent({ content, attention = false }: { content: string; attention?: boolean }) {
+const CONTENT_TEXT = 'text-[13px] leading-relaxed text-foreground/85 [overflow-wrap:anywhere]'
+
+/**
+ * A record's text: short text in full; longer text as its first lines, opening in place
+ * into the rendered whole, which is only rendered once opened. `full` always shows it whole.
+ */
+export function ActivityContent({ content, attention = false, full = false }: { content: string; attention?: boolean; full?: boolean }) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
+  const details = useRef<HTMLDetailsElement>(null)
   if (attention) return <div className="mt-3 break-words text-sm"><MarkdownRenderer content={content} /></div>
   const text = content.trim()
-  const hasFormatting = /[\r\n]|!\[|\[[^\]]+\]\(|\*\*|__|`|^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>)/.test(text)
-  if (text.length <= 160 && !hasFormatting) return <p className="mt-2 break-words text-xs leading-5 text-foreground/80">{text}</p>
-  return <details className="group/content mt-2" onToggle={event => setExpanded(event.currentTarget.open)}>
-    <summary className="cursor-pointer list-none rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-      <span className="block line-clamp-3 break-words text-xs leading-5 text-foreground/80 group-open/content:hidden">{content.replace(/\s+/g, ' ').trim()}</span>
-      <span className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-primary"><span className="group-open/content:hidden">{t('Read details')}</span><span className="hidden group-open/content:inline">{t('Collapse')}</span><ChevronDown size={12} className="transition-transform group-open/content:rotate-180" /></span>
+  const preview = markdownPreview(text)
+  if (full || (preview.length <= 160 && preview.split('\n').length <= 3)) {
+    return preview === text ? <p className={`mt-2 whitespace-pre-line ${CONTENT_TEXT}`}>{text}</p>
+      : <div className={`mt-2 ${CONTENT_TEXT}`}><MarkdownRenderer content={text} /></div>
+  }
+  const collapse = () => {
+    const element = details.current
+    if (!element) return
+    element.open = false
+    element.scrollIntoView({ block: 'nearest' })
+  }
+  return <details ref={details} className="group/content mt-2" onToggle={event => setExpanded(event.currentTarget.open)}>
+    <summary className="cursor-pointer list-none rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary group-open/content:hidden">
+      <span className={`line-clamp-3 whitespace-pre-line ${CONTENT_TEXT}`}>{preview}</span>
+      <span className="mt-1 inline-flex items-center gap-1 text-xs text-primary">{t('Read details')}<ChevronDown size={12} aria-hidden="true" /></span>
     </summary>
-    <div className="mt-2 max-h-96 overflow-auto overscroll-contain rounded-lg bg-secondary/40 p-3 text-sm [overflow-wrap:anywhere]">{expanded && <MarkdownRenderer content={content} />}</div>
+    {expanded && <>
+      <div className={`max-h-[28rem] overflow-auto overscroll-contain ${CONTENT_TEXT}`}><MarkdownRenderer content={text} /></div>
+      <button type="button" onClick={collapse} className="mt-1 inline-flex items-center gap-1 rounded-md text-xs text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+        {t('Collapse')}<ChevronUp size={12} aria-hidden="true" />
+      </button>
+    </>}
   </details>
 }
 
-export function TaskActivityTimeline({ messages, activities, detail, showEmpty = true, canOpenArtifact, openArtifact, focusActivityId, taskCompleted = false }: {
-  messages: TaskMemberReport[]; activities: TeamActivity[]; detail: TeamDetail; showEmpty?: boolean; focusActivityId?: string; canOpenArtifact?: (ref: string) => boolean; openArtifact: (ref: string) => void; taskCompleted?: boolean
+/** `bare` reads as text, for a toolbar beside tabs. */
+export function KindFilter({ value, onChange, bare = false }: { value: TaskActivityKind | null; onChange: (kind: TaskActivityKind | null) => void; bare?: boolean }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const options: [TaskActivityKind | null, string][] = [[null, t('All types')], ['output', t('Outputs')], ['decision', t('Decision')], ['failed', t('Failed')]]
+  const label = options.find(([kind]) => kind === value)?.[1]
+  return <Popover open={open} onOpenChange={setOpen}>
+    {bare ? <PopoverTrigger ariaLabel={t('Filter by type')} className={`min-h-8 items-center gap-1 rounded-md px-1.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary ${value ? 'text-primary' : 'text-subtle-foreground hover:text-foreground'}`}>
+      <span className="truncate">{label}</span><ChevronDown size={13} className="shrink-0 opacity-70" aria-hidden="true" />
+    </PopoverTrigger> : <PopoverTrigger ariaLabel={t('Filter by type')} className={`min-h-8 w-32 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${value ? 'border-primary/30 bg-primary/5 text-primary' : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
+      <Funnel size={13} className="shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1 truncate text-left">{label}</span><ChevronDown size={12} className="shrink-0 opacity-60" aria-hidden="true" />
+    </PopoverTrigger>}
+    <PopoverContent align="end" className="w-32 py-1">
+      {options.map(([kind, label]) => <button key={kind ?? 'all'} type="button" onClick={() => { onChange(kind); setOpen(false) }} className="flex min-h-8 w-full items-center gap-2 px-3 text-left text-xs hover:bg-secondary/80">
+        <span className="flex-1">{label}</span>{kind === value && <Check size={13} className="text-primary" aria-hidden="true" />}
+      </button>)}
+    </PopoverContent>
+  </Popover>
+}
+
+/** Passing `kind` hides the built-in type filter: the caller places its own (with `onKindChange`) or fixes it. */
+export function TaskActivityTimeline({ messages, activities, detail, showEmpty = true, canOpenArtifact, openArtifact, onOpenMember, focusActivityId, taskCompleted = false, kind: kindProp, onKindChange }: {
+  messages: TaskMemberReport[]; activities: TeamActivity[]; detail: TeamDetail; showEmpty?: boolean; focusActivityId?: string; canOpenArtifact?: (ref: string) => boolean; openArtifact: (ref: string) => void; onOpenMember?: (appId: string) => void; taskCompleted?: boolean
+  kind?: TaskActivityKind | null; onKindChange?: (kind: TaskActivityKind | null) => void
 }) {
   const { t } = useTranslation()
   const liveRows = useMemo(() => taskActivityRows(messages, activities), [messages, activities])
   const [readingRows, setReadingRows] = useState<TaskActivityRow[] | null>(null)
-  const rows = readingRows ?? liveRows
-  const [page, setPage] = useState(0)
+  const [kindState, setKindState] = useState<TaskActivityKind | null>(null)
+  const kind = kindProp !== undefined ? kindProp : kindState
+  const setKind = onKindChange ?? setKindState
+  const rows = useMemo(() => filterTaskActivityRows(readingRows ?? liveRows, kind), [readingRows, liveRows, kind])
   const pendingCount = useMemo(() => {
     if (!readingRows) return 0
     const visible = new Set(recordIds(readingRows))
     return recordIds(liveRows).filter(id => !visible.has(id)).length
   }, [liveRows, readingRows])
-  const preserveReading = () => { if (rows.length) setReadingRows(current => current ?? rows) }
+  const preserveReading = () => { if (liveRows.length) setReadingRows(current => current ?? liveRows) }
   const container = useRef<HTMLDivElement>(null)
   const focused = useRef<string | undefined>()
   useEffect(() => {
     if (!focusActivityId || focused.current === focusActivityId) return
     const target = Array.from(container.current?.querySelectorAll<HTMLElement>('[data-activity-id]') ?? []).find(node => node.dataset.activityId === focusActivityId)
     if (!target) {
-      if (readingRows && liveRows.some(row => row.activities?.some(activity => activity.id === focusActivityId))) setReadingRows(liveRows)
-      const index = rows.findIndex(row => row.activities?.some(activity => activity.id === focusActivityId))
-      if (index >= 0) setPage(Math.floor(index / 50))
+      const holds = (list: TaskActivityRow[]) => list.some(row => row.activities?.some(activity => activity.id === focusActivityId))
+      if (readingRows && holds(liveRows)) setReadingRows(liveRows)
+      if (kind && !holds(rows) && holds(liveRows)) setKind(null)
       return
     }
-    setReadingRows(current => current ?? rows)
+    setReadingRows(current => current ?? liveRows)
     const frame = requestAnimationFrame(() => {
       let parent = target.parentElement
       while (parent && parent !== container.current) {
@@ -70,13 +117,19 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
       focused.current = focusActivityId
     })
     return () => cancelAnimationFrame(frame)
-  }, [focusActivityId, rows, liveRows, readingRows, page])
+  }, [focusActivityId, rows, liveRows, readingRows, kind])
   const members = useMemo(() => new Map(detail.roster.map(member => [member.appId, member])), [detail.roster])
   const names = useMemo(() => new Map(detail.roster.map(member => [member.appId, member.memberName])), [detail.roster])
   const name = (id: string) => parseSpaceCoordinatorAppId(id) ? t('Main chat') : names.get(id) ?? t('Former member')
   const kinds = { message: t('Message'), reply: t('Reply'), task_post: t('Task assigned'), task_update: t('Progress update'), finding: t('Output'), check_set: t('Follow-up scheduled'), check_stop: t('Follow-up stopped'), run_end: t('Task summary'), decision: t('Decision') }
+  const avatar = (appId: string) => {
+    const face = <AutomationAvatar name={name(appId)} size={26} />
+    return onOpenMember && members.has(appId)
+      ? <button type="button" onClick={() => onOpenMember(appId)} title={t('Open {{name}}’s conversation', { name: name(appId) })} className="mt-0.5 shrink-0 rounded-full transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{face}</button>
+      : <span className="mt-0.5 shrink-0">{face}</span>
+  }
   const header = (appId: string, at: number | null, label: string, recordId: string, targetId?: string | null) => <div className="flex items-start gap-2.5">
-    <span className="mt-0.5 shrink-0"><AutomationAvatar name={name(appId)} size={26} /></span>
+    {avatar(appId)}
     <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-5"><span className="max-w-full truncate font-medium text-foreground">{name(appId)}</span>{targetId && <><ArrowRight size={12} className="shrink-0 text-muted-foreground/60" aria-hidden="true" /><span className="max-w-full truncate text-muted-foreground">{name(targetId)}</span></>}</div><p className="text-[11px] text-muted-foreground">{label}</p></div>
     <TaskTimestamp value={at} recordId={recordId} className="shrink-0 text-[11px] tabular-nums text-muted-foreground" />
   </div>
@@ -104,51 +157,38 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
     </article>
   }
   return <div ref={container} className="min-w-0 space-y-3" onPointerDownCapture={preserveReading} onKeyDownCapture={preserveReading} onWheelCapture={preserveReading}>
-    <div className="sticky top-0 z-10 flex min-h-11 items-center bg-background/95 py-1 backdrop-blur-sm">
-      {pendingCount > 0 ? <button onClick={() => {
+    {/* Floats over the records so its arrival never moves what is being read. */}
+    {pendingCount > 0 && <div className="sticky top-[var(--page-sticky-top,0px)] z-10 -mb-3 h-0">
+      <button onClick={() => {
         setReadingRows(liveRows)
-        setPage(0)
         container.current?.scrollIntoView({ block: 'start' })
-      }} className="flex min-h-9 w-full items-center justify-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><ArrowUp size={14} aria-hidden="true" /><span role="status">{t('Show {{count}} new updates', { count: pendingCount })}</span></button>
-        : <span className="text-[11px] text-muted-foreground">{t('Newest first')}</span>}
-    </div>
-    {showEmpty && rows.length === 0 && <p className="py-10 text-center text-sm text-muted-foreground">{t('No activity yet')}</p>}
-    {rows.slice(page * 50, (page + 1) * 50).map((row, index) => {
+      }} className="absolute left-1/2 top-1 flex min-h-9 -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-primary/20 bg-background px-4 py-2 text-xs font-medium text-primary shadow-md hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><ArrowUp size={14} aria-hidden="true" /><span role="status">{t('Show {{count}} new updates', { count: pendingCount })}</span></button>
+    </div>}
+    {kindProp === undefined && liveRows.length > 0 && <div className="flex justify-end"><KindFilter value={kind} onChange={setKind} /></div>}
+    {rows.length === 0 && kind && liveRows.length > 0
+      ? <p className="py-10 text-center text-sm text-muted-foreground">{t('No matching records')} <button type="button" onClick={() => setKind(null)} className="text-primary hover:underline">{t('Clear filters')}</button></p>
+      : showEmpty && rows.length === 0 && <p className="py-10 text-center text-sm text-muted-foreground">{t('No activity yet')}</p>}
+    {rows.map((row, index) => {
       const acts = row.activities
-      const notifications = row.notifications
-      const latestNotification = notifications?.[notifications.length - 1]
       const date = row.at === null ? t('Time unknown') : new Date(row.at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
       const day = row.at === null ? 'unknown' : new Date(row.at).toDateString()
-      const previousAt = index > 0 ? rows[page * 50 + index - 1].at : null
+      const previousAt = index > 0 ? rows[index - 1].at : null
       const previousDate = index > 0 ? previousAt === null ? 'unknown' : new Date(previousAt).toDateString() : null
       return <div key={row.id} className="min-w-0">
-        {day !== previousDate && <div className="mb-3 flex items-center gap-3 pt-2 text-[11px] text-muted-foreground"><span className="h-px flex-1 bg-border" /><span>{date}</span><span className="h-px flex-1 bg-border" /></div>}
-        {notifications?.length && latestNotification ? <details data-system-notification-id={row.id} className="group/notification overflow-hidden rounded-xl border border-border bg-secondary/20">
-          <summary className="flex cursor-pointer list-none items-start gap-2.5 p-3 transition-colors hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
-            <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground"><Bell size={14} aria-hidden="true" /></span>
-            <span className="min-w-0 flex-1">
-              <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs leading-5"><span className="font-medium">{notifications.length === 1 ? t('System notification') : t('{{count}} system notifications', { count: notifications.length })}</span><ArrowRight size={12} className="shrink-0 text-muted-foreground/60" aria-hidden="true" /><span className="max-w-full truncate text-muted-foreground">{name(latestNotification.appId)}</span></span>
-            </span>
-            <TaskTimestamp value={taskTime(latestNotification.message.timestamp)} recordId={row.id} className="mt-0.5 shrink-0 text-[11px] tabular-nums text-muted-foreground" />
-            <ChevronDown size={14} className="mt-0.5 shrink-0 text-muted-foreground -rotate-90 transition-transform group-open/notification:rotate-0" aria-hidden="true" />
-          </summary>
-          <div className="max-h-[32rem] space-y-2 overflow-y-auto overscroll-contain border-t border-border p-2 sm:p-3">{notifications.map(notification => <article key={`${notification.appId}:${notification.message.id}`} data-message-id={notification.message.id} className="min-w-0 rounded-lg border border-border bg-background p-3">
-            <div className="mb-2 flex items-start gap-2">
-              <span className="min-w-0 flex-1 text-xs leading-5"><span className="font-medium">{t('System notification')}</span><ArrowRight size={12} className="mx-1.5 inline text-muted-foreground/60" aria-hidden="true" /><span className="break-words text-muted-foreground">{name(notification.appId)}</span></span>
-              <TaskTimestamp value={taskTime(notification.message.timestamp)} recordId={`${notification.appId}:${notification.message.id}`} className="mt-0.5 shrink-0 text-[11px] tabular-nums text-muted-foreground" />
-            </div>
-            <p className="whitespace-pre-wrap text-xs leading-5 text-foreground/80 [overflow-wrap:anywhere]">{notification.message.content}</p>
-          </article>)}</div>
-        </details> : row.message ? <article className={`rounded-xl border p-3 ${row.message.error ? 'border-halo-warning/40 bg-halo-warning/5' : 'border-border bg-background'}`}>
+        {day !== previousDate && <div className="mb-3 pt-2 text-center text-[11px] text-muted-foreground">{date}</div>}
+        {row.message && row.notice ? <article data-message-id={row.message.id} className="min-w-0 rounded-xl border border-border bg-secondary/20 p-3">
+          <div className="flex items-start gap-2.5">
+            <span className="mt-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground"><Bell size={14} aria-hidden="true" /></span>
+            <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-5"><span className="font-medium text-foreground">{t('System notification')}</span><ArrowRight size={12} className="shrink-0 text-muted-foreground/60" aria-hidden="true" /><span className="max-w-full truncate text-muted-foreground">{name(row.appId ?? '')}</span></div></div>
+            <TaskTimestamp value={row.at} recordId={row.id} className="shrink-0 text-[11px] tabular-nums text-muted-foreground" />
+          </div>
+          <ActivityContent content={row.message.content} />
+        </article> : row.message ? <article className={`rounded-xl border p-3 ${row.message.error ? 'border-halo-warning/40 bg-halo-warning/5' : 'border-border bg-background'}`}>
           {header(row.appId ?? '', row.at, row.message.error ? t('Failed') : t('Member report'), row.id)}
           {row.message.content.trim() && <ActivityContent content={row.message.content} />}
           {row.message.error && <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-halo-warning">{row.message.error}</p>}
-        </article> : acts && (acts.length > 1 && activityLevel(acts[0]) === 'process' ? <details className="group/activity overflow-hidden rounded-xl border border-border bg-secondary/20">
-          <summary className="flex cursor-pointer list-none items-start gap-2.5 p-3 transition-colors hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"><ChevronDown size={14} className="mt-0.5 shrink-0 text-muted-foreground -rotate-90 transition-transform group-open/activity:rotate-0" /><span className="min-w-0 flex-1"><span className="block text-xs font-medium">{t('{{count}} updates', { count: acts.length })} · {kinds[acts[0].kind]}</span><span className="mt-1 block truncate text-[11px] text-muted-foreground">{[...new Set(acts.map(act => name(act.actorAppId)))].join(', ')}</span></span><TaskTimestamp value={acts[acts.length - 1].createdAt} recordId={acts[acts.length - 1].id} className="shrink-0 text-[11px] tabular-nums text-muted-foreground" /></summary>
-          <div className="max-h-[32rem] space-y-2 overflow-y-auto overscroll-contain border-t border-border p-2 sm:p-3">{acts.map(activityCard)}</div>
-        </details> : acts.map(activityCard))}
+        </article> : acts?.map(activityCard)}
       </div>
     })}
-    {rows.length > 50 && <nav className="flex justify-between text-xs text-primary"><button disabled={page === 0} onClick={() => setPage(value => Math.max(0, value - 1))} className="min-h-9 disabled:opacity-40">{t('Newer updates')}</button><button disabled={(page + 1) * 50 >= rows.length} onClick={() => setPage(value => value + 1)} className="min-h-9 disabled:opacity-40">{t('Older updates')}</button></nav>}
   </div>
 }

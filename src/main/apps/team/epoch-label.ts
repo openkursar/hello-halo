@@ -42,10 +42,12 @@ export function conversationKindOf(chatKey: string): TeamConversationKind {
 
 /**
  * Resolve the human label of a conversation epoch:
- *   1. an explicit user-set title always wins;
- *   2. a member direct chat labels as the member's name;
- *   3. an IM chat labels via the injected chat describer (IM session registry);
- *   4. otherwise empty — the renderer shows its own neutral category label.
+ *   1. a collaboration room labels as the space conversation it serves, through
+ *      the injected describer, falling back to its stored title;
+ *   2. an explicit user-set title always wins;
+ *   3. a member direct chat labels as the member's name;
+ *   4. an IM chat labels via the injected chat describer (IM session registry);
+ *   5. otherwise empty — the renderer shows its own neutral category label.
  */
 export function deriveConversationLabel(
   store: TeamStore,
@@ -53,8 +55,12 @@ export function deriveConversationLabel(
   describeChatKey?: (teamId: string, chatKey: string) => string | null,
   members?: TeamMember[]
 ): string {
-  if (epoch.title && epoch.title.trim()) return epoch.title.trim()
   const chatKey = epoch.chatKey ?? ''
+  // The stored title is the name the room got when it opened (older rooms were
+  // named from the first collaborator's brief); the conversation's own title
+  // is what the user knows it by and follows a rename.
+  if (parseSpaceCollabChatKey(chatKey)) return describeChatKey?.(epoch.teamId, chatKey)?.trim() || epoch.title?.trim() || ''
+  if (epoch.title && epoch.title.trim()) return epoch.title.trim()
   if (!chatKey) return ''
 
   const memberAppId = parseMemberChatKey(chatKey)
@@ -62,13 +68,6 @@ export function deriveConversationLabel(
     const member = (members ?? store.listMembersByTeam(epoch.teamId)).find((m) => m.appId === memberAppId)
     return member?.memberName ?? ''
   }
-
-  // A collaboration room always carries an explicit title (the team name, set
-  // at creation), so this is only reached for a legacy/hand-edited row. It must
-  // still not fall into the IM branch below: the describer would be asked about
-  // a key that is not a chat, and any future 'space:' support in
-  // parseTeamChatKey would silently turn the fallback into a wrong label.
-  if (parseSpaceCollabChatKey(chatKey)) return ''
 
   if (!isNativeConversationChatKey(chatKey)) {
     const described = describeChatKey?.(epoch.teamId, chatKey)

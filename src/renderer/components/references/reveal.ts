@@ -156,6 +156,8 @@ export async function revealMessage(conversationId: string, messageId: string, q
     return false
   }
 
+  // A digital human's chat loads its history in pages; the message may be in an older one.
+  if (conversationKind(conversationId) === 'digital-human') await useChatStore.getState().ensureMessageLoaded(conversationId, messageId)
   // The transcript mounts a message from unloaded history and scrolls to it.
   window.dispatchEvent(new CustomEvent('search:navigate-to-message', { detail: { messageId, query: '' } }))
   const element = await waitForElement(`[data-message-id="${CSS.escape(messageId)}"]`, MESSAGE_WAIT_MS)

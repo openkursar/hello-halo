@@ -41,6 +41,8 @@ export interface DigitalHumanSelectorOption {
 export interface DigitalHumanSelectorConfig {
   /** Selected digital human's appId, or null for "Halo" (normal chat). */
   current: string | null
+  /** Identity of the open chat, independent of who can start another chat. */
+  currentName?: string
   options: DigitalHumanSelectorOption[]
   /**
    * Switch the active link. `conversationId` targets one specific session of
@@ -52,7 +54,7 @@ export interface DigitalHumanSelectorConfig {
   locked: boolean
 }
 
-export function DigitalHumanSelector({ current, options, onChange, locked }: DigitalHumanSelectorConfig) {
+export function DigitalHumanSelector({ current, currentName, options, onChange, locked }: DigitalHumanSelectorConfig) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   // Anchored to the viewport (`bottom` measured from the trigger's top edge,
@@ -83,7 +85,7 @@ export function DigitalHumanSelector({ current, options, onChange, locked }: Dig
     setOpen(o => !o)
   }
 
-  const currentOption = options.find(o => o.appId === current) ?? null
+  const name = currentName ?? options.find(o => o.appId === current)?.name
   const [creatingAppId, setCreatingAppId] = useState<string | null>(null)
 
   const handleClear = (e: React.MouseEvent) => {
@@ -121,18 +123,18 @@ export function DigitalHumanSelector({ current, options, onChange, locked }: Dig
           title={
             locked
               ? t('Switch recipient after the current reply finishes')
-              : currentOption ? t('Chatting with {{name}}', { name: currentOption.name }) : t('Chat with a digital human')
+              : name ? t('Chatting with {{name}}', { name }) : t('Chat with a digital human')
           }
         >
           {/* Falls back to a generic label when the selected app is gone
               (uninstalled mid-conversation) — the chip must still render, or
               there is no way left to clear back to Halo. */}
-          {currentOption ? (
-            <AutomationAvatar name={currentOption.name} size={16} />
+          {name ? (
+            <AutomationAvatar name={name} size={16} />
           ) : (
             <Bot className="w-3.5 h-3.5" />
           )}
-          <span className="truncate">{currentOption ? currentOption.name : t('Digital human')}</span>
+          <span className="truncate">{name ?? t('Digital human')}</span>
           <ChevronDown className="w-3 h-3 shrink-0 opacity-60" />
         </button>
 

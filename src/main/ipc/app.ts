@@ -98,6 +98,8 @@ import type { AppListFilter, UninstallOptions, UpgradeStrategy } from '../apps/m
 import type { ActivityQueryOptions, RunQueryOptions, EscalationResponse, AppChatRequest } from '../apps/runtime'
 import { getSpace } from '../services/space.service'
 import { resolveUserInjectTarget } from '../controllers/app-chat-target.controller'
+import type { AppChatInjectRequest } from '../../shared/apps/app-types'
+import { isImageAttachmentInput } from '../../shared/types/image-attachment'
 import { parseTurnReferences, toAppChatRequest } from '../controllers/chat-turn-input'
 import type { ContentReference } from '../../shared/types/content-reference'
 import { broadcastToAll } from '../http/websocket'
@@ -740,17 +742,22 @@ export function registerAppHandlers(): void {
     // was in flight to take it (it ended in the meantime) — the caller then
     // sends the text as a new message — unless `stopped`: the user stopped that
     // turn, and the text goes back to them.
-    appChatInject: async (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }) => {
+    appChatInject: async (input: AppChatInjectRequest) => {
       try {
         const message = typeof input?.message === 'string' ? input.message.trim() : ''
         const references = parseTurnReferences(input?.references)
         if (!references.ok) return { success: false, error: references.error }
-        if ((!message && !references.references) || !input?.conversationId) {
+        if (input?.images !== undefined && (!Array.isArray(input.images) || !input.images.every(isImageAttachmentInput))) {
+          console.warn('[AppIPC] app:chat-inject rejected: invalid images')
+          return { success: false, error: 'Invalid images' }
+        }
+        if ((!message && !references.references && !input?.images?.length) || !input?.conversationId) {
           return { success: false, error: 'Missing conversationId or message' }
         }
         const target = resolveUserInjectTarget(input.appId, input.conversationId)
         if (!target.ok) return { success: false, error: target.error }
-        const outcome = await injectIntoAppChatWhenLive(target.conversationId, message, { source: 'injection' }, references.references)
+        const outcome = await injectIntoAppChatWhenLive(target.conversationId, message, { source: 'injection' }, references.references, input.images)
+        if (outcome === 'refused') return { success: false, error: 'The running turn could not accept this addition. Your message has not been sent.' }
         console.log(`[AppIPC] app:chat-inject: appId=${input.appId} conversationId=${input.conversationId} outcome=${outcome}`)
         return { success: true, data: { delivered: outcome === 'delivered', ...(outcome === 'stopped' ? { stopped: true } : {}) } }
       } catch (error: unknown) {

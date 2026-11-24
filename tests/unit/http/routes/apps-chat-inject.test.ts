@@ -61,11 +61,31 @@ beforeEach(() => {
 })
 
 describe('POST chat/inject', () => {
+  const images = [{ id: 'image-1', type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' }]
+
+  it.each(['delivered', 'no_turn', 'stopped'])('accepts an image-only addition with outcome %s', async outcome => {
+    injectIntoAppChat.mockReturnValue(outcome)
+    await withServer(async post => {
+      const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1', message: '', images })
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ success: true, data: { delivered: outcome === 'delivered', ...(outcome === 'stopped' ? { stopped: true } : {}) } })
+      expect(injectIntoAppChat).toHaveBeenCalledWith('app-chat:app-1', '', { source: 'injection' }, undefined, images)
+    })
+  })
+
+  it.each([null, 'image', [{}], [{ ...images[0], data: '' }], [{ ...images[0], mediaType: 'text/plain' }], [{ ...images[0], url: 'halo-file:///private.png' }]])('rejects malformed image input %j without delivery', async images => {
+    await withServer(async post => {
+      const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1', message: 'look', images })
+      expect(res.status).toBe(400)
+      expect(injectIntoAppChat).not.toHaveBeenCalled()
+    })
+  })
+
   it('adds the message to the running turn of the user\'s own chats, marked as an injection', async () => {
     await withServer(async (post) => {
       const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1', message: '  also this  ' })
       expect(res.body).toEqual({ success: true, data: { delivered: true } })
-      expect(injectIntoAppChat).toHaveBeenCalledWith('app-chat:app-1', 'also this', { source: 'injection' }, undefined)
+      expect(injectIntoAppChat).toHaveBeenCalledWith('app-chat:app-1', 'also this', { source: 'injection' }, undefined, undefined)
 
       await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1:local:direct:abc', message: 'x' })
       expect(injectIntoAppChat.mock.calls[1][0]).toBe('app-chat:app-1:local:direct:abc')
@@ -77,6 +97,17 @@ describe('POST chat/inject', () => {
     await withServer(async (post) => {
       const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1', message: 'late' })
       expect(res.body).toEqual({ success: true, data: { delivered: false } })
+    })
+  })
+
+  it.each(['app-chat:app-1', 'app-chat:app-1:team:t1:e1'])('returns failure, not normal-send fallback, for a refused addition to %s', async conversationId => {
+    team.ready = true
+    injectIntoAppChat.mockReturnValue('refused')
+    await withServer(async post => {
+      const res = await post('/api/apps/app-1/chat/inject', { conversationId, message: '', images })
+      expect(res.body).toEqual({ success: false, error: expect.stringContaining('not been sent') })
+      expect(res.body).not.toHaveProperty('data')
+      expect(sendAppChatMessage).not.toHaveBeenCalled()
     })
   })
 
@@ -106,7 +137,7 @@ describe('POST chat/inject', () => {
     await withServer(async post => {
       const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1:team:t1:e1', message: 'also check this' })
       expect(res.body).toEqual({ success: true, data: { delivered: true } })
-      expect(injectIntoAppChat).toHaveBeenCalledWith('app-chat:app-1:team:t1:e1', 'also check this', { source: 'injection' }, undefined)
+      expect(injectIntoAppChat).toHaveBeenCalledWith('app-chat:app-1:team:t1:e1', 'also check this', { source: 'injection' }, undefined, undefined)
     })
   })
 

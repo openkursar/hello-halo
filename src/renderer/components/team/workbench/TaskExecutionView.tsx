@@ -10,8 +10,8 @@ import { executionTurns } from './model'
 import { TaskTimestamp } from './TaskTimestamp'
 import { useExecutionState } from './useExecutionState'
 
-export function TaskExecutionView({ teamId, epochId, appId, spaceId, remote }: {
-  teamId: string; epochId: string; appId: string; spaceId: string; remote: boolean
+export function TaskExecutionView({ teamId, epochId, appId, spaceId, remote, homepageConversation = false }: {
+  teamId: string; epochId: string; appId: string; spaceId: string; remote: boolean; homepageConversation?: boolean
 }) {
   const { t } = useTranslation()
   const state = useExecutionState(teamId, epochId, appId, remote)
@@ -51,7 +51,7 @@ export function TaskExecutionView({ teamId, epochId, appId, spaceId, remote }: {
     return () => { disposed = true; unsubscribe(); release() }
   }, [teamId, epochId, appId, spaceId, retry, state.active])
   return <div className="min-w-0 space-y-4">
-    <p className="text-xs leading-5 text-muted-foreground">{t('Execution records for this member in this task. Expand a record to inspect the original input, thoughts and tool results.')}</p>
+    <p className="text-xs leading-5 text-muted-foreground">{homepageConversation ? t('Execution records for this member in this conversation. Expand a record to inspect the original input, thoughts and tool results.') : t('Execution records for this member in this task. Expand a record to inspect the original input, thoughts and tool results.')}</p>
     {(failed || state.failed) && <p role="alert" className="text-xs text-halo-warning">{t('Some execution details are unavailable.')} <button onClick={() => setRetry(value => value + 1)} className="underline">{t('Retry')}</button></p>}
     {loading && <p role="status" className="text-sm text-muted-foreground">{t('Loading execution history…')}</p>}
     {state.active && <section className="min-w-0 rounded-xl border border-primary/20 p-3"><h3 className="mb-3 text-sm font-medium">{t('Current execution')}</h3>{state.thoughts.length ? <StreamingSection textBlockVersion={state.live.textBlockVersion} streamingContent={state.live.streamingContent} isStreaming={state.live.isStreaming} thoughts={state.thoughts} isThinking={state.live.isThinking} browserToolCalls={browserTools} showBrowserViewButton={false} /> : <p className="text-xs text-muted-foreground">{t('No execution events received yet')}</p>}</section>}
@@ -69,6 +69,6 @@ export function TaskExecutionView({ teamId, epochId, appId, spaceId, remote }: {
     })}
 
     {turns.length > 30 && <nav className="flex justify-between text-xs text-primary"><button disabled={(page + 1) * 30 >= turns.length} onClick={() => setPage(value => value + 1)} className="min-h-9 disabled:opacity-40">{t('Older executions')}</button><button disabled={page === 0} onClick={() => setPage(value => Math.max(0, value - 1))} className="min-h-9 disabled:opacity-40">{t('Newer executions')}</button></nav>}
-    {!loading && !messages.length && !state.active && <p className="text-sm text-muted-foreground">{t('No execution records in this task yet.')}</p>}
+    {!loading && !messages.length && !state.active && <p className="text-sm text-muted-foreground">{homepageConversation ? t('No execution records in this conversation yet.') : t('No execution records in this task yet.')}</p>}
   </div>
 }

@@ -14,12 +14,15 @@
  */
 import type { ChatState, Conversation, SessionState } from './internal'
 import { EMPTY_SESSION } from './internal'
+import { buildTeamSessionKey } from '../../../shared/apps/im-keys'
 
 type ActiveInput = Pick<ChatState, 'currentSpaceId' | 'spaceStates'>
 
 export function selectActiveConversationId(state: ActiveInput): string | null {
   if (!state.currentSpaceId) return null
   const spaceState = state.spaceStates.get(state.currentSpaceId)
+  const team = spaceState?.selectedTeamChat
+  if (team) return team.appId && team.epochId ? buildTeamSessionKey(team.appId, team.teamId, team.epochId) : null
   return spaceState?.selectedAppChat?.conversationId ?? spaceState?.currentConversationId ?? null
 }
 

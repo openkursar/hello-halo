@@ -23,7 +23,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentInputArrived' | 'hand
       const arrivals = messages.map(message => ({ ...message, clientKey: message.id }))
       const queued = [...session.queuedMessages]
       for (const message of arrivals) {
-        const at = queued.indexOf(messageSummaryText(message.content, message.metadata?.references))
+        const summary = messageSummaryText(message.content, message.metadata?.references)
+        const at = queued.findIndex(pending => pending.summary === summary)
         if (at >= 0) queued.splice(at, 1)
       }
       const sessions = new Map(state.sessions)

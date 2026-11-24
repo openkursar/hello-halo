@@ -62,6 +62,7 @@ import { messageRowKey } from '../../../../src/renderer/utils/message-row-key'
 import type { Conversation, Message } from '../../../../src/renderer/types'
 import type { TranscriptPage } from '../../../../src/shared/types/transcript'
 
+const images: NonNullable<Message['images']> = [{ id: 'image-1', type: 'image', mediaType: 'image/png', data: 'aW1hZ2U=', name: 'image.png' }]
 const SPACE = 'space-1'
 const APP = 'app-1'
 const DH = `app-chat:${APP}`
@@ -116,6 +117,61 @@ beforeEach(() => {
   Object.defineProperty(globalThis, 'document', { value: { hasFocus: () => true }, configurable: true })
 })
 
+describe('pending supplement display', () => {
+  it.each([DH, 'c1'])('retains images until acceptance, even before the response (%s)', async conversationId => {
+    const store = makeStore()
+    let resolve!: (response: { success: true }) => void
+    const request = new Promise<{ success: true }>(done => { resolve = done })
+    const inject = conversationId === DH ? apiMock.appChatInject : apiMock.injectMessage
+    inject.mockReturnValueOnce(request)
+    const pending = store.getState().injectMessage(conversationId, '', undefined, images)
+    expect(store.getState().sessions.get(conversationId)!.queuedMessages).toEqual([{ summary: '', images }])
+
+    store.getState().handleAgentInputArrived({
+      spaceId: SPACE, conversationId, live: true,
+      messages: [m('accepted-image', 'user', '', { source: 'injection', images })],
+    })
+    expect(store.getState().sessions.get(conversationId)!.queuedMessages).toEqual([])
+    expect(store.getState().sessions.get(conversationId)!.liveInputs?.[0].message.images).toEqual(images)
+    resolve({ success: true })
+    expect(await pending).toBe(true)
+    expect(store.getState().sessions.get(conversationId)!.queuedMessages).toEqual([])
+  })
+
+  it('keeps reference-only summaries compatible with arrival removal', async () => {
+    const store = makeStore()
+    const references = [{ id: 'selection', source: { kind: 'terminal' as const, title: 'Output' }, quote: 'selected output' }]
+    await store.getState().injectMessage(DH, '', references)
+    const queued = store.getState().sessions.get(DH)!.queuedMessages
+    expect(queued).toHaveLength(1)
+    expect(queued[0].summary).toContain('Output')
+    expect(queued[0].images).toBeUndefined()
+    store.getState().handleAgentInputArrived({
+      spaceId: SPACE, conversationId: DH, live: true,
+      messages: [m('accepted-reference', 'user', '', { source: 'injection', metadata: { references } })],
+    })
+    expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([])
+  })
+
+  it('dequeues only the first exact summary match and preserves other images', async () => {
+    const store = makeStore()
+    await store.getState().injectMessage(DH, 'same', undefined, images)
+    await store.getState().injectMessage(DH, 'same', undefined, images)
+    await store.getState().injectMessage(DH, 'same suffix', undefined, images)
+    store.getState().dequeueMessage(DH, 'missing')
+    expect(store.getState().sessions.get(DH)!.queuedMessages).toHaveLength(3)
+    store.getState().dequeueMessage(DH, 'same')
+    expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([
+      { summary: 'same', images }, { summary: 'same suffix', images },
+    ])
+    store.getState().handleAgentInputArrived({
+      spaceId: SPACE, conversationId: DH, live: true,
+      messages: [m('accepted', 'user', 'same', { source: 'injection', images })],
+    })
+    expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([{ summary: 'same suffix', images }])
+  })
+})
+
 describe('classifying a conversation id', () => {
   it('tells apart space, chat-board digital-human and other session keys', () => {
     expect(conversationKind('7f3a-uuid')).toBe('space')
@@ -129,6 +185,21 @@ describe('classifying a conversation id', () => {
 })
 
 describe('the conversation on screen', () => {
+  it('selects team tasks without opening a personal transcript or losing the remembered regular conversation', () => {
+    const store = makeStore()
+    store.setState({ spaceStates: new Map([[SPACE, { conversations: [], currentConversationId: 'regular', selectedAppChat: { appId: APP, conversationId: DH } }]]) })
+    store.getState().selectTeamConversation(SPACE, { teamId: 'team', epochId: 'task', appId: APP })
+    expect(selectActiveConversationId(store.getState())).toBe(`app-chat:${APP}:team:team:task`)
+    expect(store.getState().getSpaceState(SPACE).currentConversationId).toBe('regular')
+    expect(store.getState().getSpaceState(SPACE).selectedAppChat).toBeNull()
+    expect(apiMock.appChatTranscript).not.toHaveBeenCalled()
+    store.getState().selectTeamConversation(SPACE, { teamId: 'team', epochId: null })
+    expect(selectActiveConversationId(store.getState())).toBeNull()
+    apiMock.appChatTranscript.mockResolvedValue(page([]))
+    store.getState().selectAppChatConversation(SPACE, APP, DH)
+    expect(store.getState().getSpaceState(SPACE).selectedTeamChat).toBeNull()
+    expect(selectActiveConversationId(store.getState())).toBe(DH)
+  })
   it('is the selected digital human, else the regular conversation, else nothing', () => {
     const store = makeStore()
     expect(selectActiveConversationId(store.getState())).toBeNull()
@@ -459,12 +530,25 @@ describe('a digital-human turn', () => {
     expect(store.getState().sessions.get(DH)!.isGenerating).toBe(false)
   })
 
+  it.each(['delivered', 'ended', 'stopped'])('forwards image-only additions when the digital-human turn is %s', async outcome => {
+    const store = await opened()
+    apiMock.appChatInject.mockResolvedValue({ success: true, data: { delivered: outcome === 'delivered', stopped: outcome === 'stopped' } })
+    expect(await store.getState().injectMessage(DH, '  ', undefined, images)).toBe(outcome !== 'stopped')
+    expect(apiMock.appChatInject).toHaveBeenCalledWith({ appId: APP, conversationId: DH, message: '', images })
+    if (outcome === 'ended') {
+      expect(apiMock.appChatSend).toHaveBeenCalledWith(expect.objectContaining({ message: '', images }))
+    } else {
+      expect(apiMock.appChatSend).not.toHaveBeenCalled()
+    }
+    if (outcome !== 'delivered') expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([])
+  })
+
   it('adds a message to the running turn and lists it as queued', async () => {
     const store = await opened()
     await store.getState().sendMessage('go')
     expect(await store.getState().injectMessage(DH, '  also this  ')).toBe(true)
     expect(apiMock.appChatInject).toHaveBeenCalledWith({ appId: APP, conversationId: DH, message: 'also this' })
-    expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual(['also this'])
+    expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([{ summary: 'also this' }])
   })
 
   it('sends the text as a new message when the turn ended before it could be added', async () => {
@@ -557,6 +641,21 @@ describe('thoughts on demand', () => {
 
     await store.getState().loadMessageThoughts(SPACE, DH, 'session-msg-2')
     expect(apiMock.appChatMessageThoughts).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads a local team member\'s reply from the member\'s own transcript, and nothing for other sessions', async () => {
+    const store = makeStore()
+    const thoughts = [{ id: 't1', type: 'tool_use', content: 'edit', timestamp: 't' }]
+    apiMock.appChatMessageThoughts.mockReset()
+    apiMock.appChatMessageThoughts.mockResolvedValue({ success: true, data: thoughts })
+    const team = `app-chat:${APP}:team:t1:e1`
+
+    expect(await store.getState().loadMessageThoughts(SPACE, team, 'msg-1')).toEqual(thoughts)
+    expect(apiMock.appChatMessageThoughts).toHaveBeenCalledWith({ appId: APP, spaceId: SPACE, conversationId: team, messageId: 'msg-1' })
+
+    apiMock.appChatMessageThoughts.mockClear()
+    expect(await store.getState().loadMessageThoughts(SPACE, `app-chat:${APP}:wecom:direct:someone`, 'msg-1')).toEqual([])
+    expect(apiMock.appChatMessageThoughts).not.toHaveBeenCalled()
   })
 })
 
@@ -722,6 +821,29 @@ describe('space conversations through the same verbs', () => {
     })
     return store
   }
+
+  it.each([true, false])('forwards image-only additions and late-turn fallback (live=%s)', async live => {
+    const store = spaceStore()
+    apiMock.injectMessage.mockResolvedValue({ success: live, error: live ? undefined : 'No active session' })
+    apiMock.sendMessage.mockResolvedValue({ success: true })
+    expect(await store.getState().injectMessage('c1', '', undefined, images)).toBe(true)
+    expect(apiMock.injectMessage).toHaveBeenCalledWith({ conversationId: 'c1', message: '', images })
+    if (live) expect(apiMock.sendMessage).not.toHaveBeenCalled()
+    else {
+      expect(apiMock.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ message: '', images }))
+      expect(store.getState().sessions.get('c1')!.queuedMessages).toEqual([])
+    }
+  })
+
+  it('restores an unsupported live image addition without starting another turn', async () => {
+    const store = spaceStore()
+    store.setState({ sessions: new Map([['c1', { ...createEmptySessionState(), isGenerating: true }]]) })
+    apiMock.injectMessage.mockResolvedValue({ success: false, error: 'Images require OCR in this turn', data: { retryable: false } })
+    expect(await store.getState().injectMessage('c1', 'look', undefined, images)).toBe(false)
+    expect(apiMock.sendMessage).not.toHaveBeenCalled()
+    expect(store.getState().sessions.get('c1')!.queuedMessages).toEqual([])
+    expect(store.getState().sessions.get('c1')!.isGenerating).toBe(true)
+  })
 
   it('sends, stops and injects through the space agent', async () => {
     const store = spaceStore()

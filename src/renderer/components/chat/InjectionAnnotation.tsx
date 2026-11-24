@@ -15,6 +15,7 @@ import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
 import { messageReferences } from '../../../shared/content-reference'
 import { MessageReferenceChips } from '../references'
+import { MessageImages } from './ImageAttachmentPreview'
 
 interface InjectionAnnotationProps {
   messages: Message[]
@@ -36,13 +37,16 @@ export function InjectionAnnotation({ messages }: InjectionAnnotationProps) {
           return (
             <div key={msg.id} className="flex items-start gap-1.5 text-xs text-muted-foreground/60">
               <span className="mt-px shrink-0 select-none">↳</span>
-              <span className="flex min-w-0 flex-col gap-1 break-words">
-                {text.trim() && <span className="whitespace-pre-wrap">{text.trimEnd()}</span>}
-                <MessageReferenceChips references={references} />
+              <div className="flex min-w-0 flex-1 flex-col gap-1 break-words">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5 [&_.h-7]:h-6 [&_.text-foreground]:text-inherit [&_.text-muted-foreground]:text-inherit">
+                  <MessageReferenceChips references={references} className="min-w-0 max-w-full" />
+                  {!!msg.images?.length && <MessageImages images={msg.images} presentation="chips" />}
+                  {text.trim() && <span className="min-w-0 whitespace-pre-wrap">{text.trimEnd()}</span>}
+                </div>
                 {msg.metadata?.inputOutcome === 'stopped' && (
                   <span className="text-[11px] leading-4 text-muted-foreground">{t('Stopped, not handled')}</span>
                 )}
-              </span>
+              </div>
             </div>
           )
         })}

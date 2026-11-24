@@ -1015,6 +1015,10 @@
     "group": "team"
   },
   {
+    "method": "GET",
+    "path": "/api/teams/native-tasks"
+  },
+  {
     "method": "POST",
     "path": "/api/teams",
     "group": "team"
@@ -1060,6 +1064,11 @@
   {
     "method": "GET",
     "path": "/api/teams/:teamId/artifacts",
+    "group": "team"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/outputs",
     "group": "team"
   },
   {

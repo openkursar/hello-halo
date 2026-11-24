@@ -21,10 +21,19 @@ import { detailForTask, ownedTaskMembers } from './workbench/members'
 import { LegacyTeamNotice } from './workbench/LegacyTeamNotice'
 import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import { navigateToConversation } from '../../utils/conversation-navigation'
+import { openPersonTeam } from '../../utils/people-navigation'
+import { TeamDetailPage } from './detail/TeamDetailPage'
 
 const TeamCreateDialog = lazy(() => import('./TeamCreateDialog').then(module => ({ default: module.TeamCreateDialog })))
 
 export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { detail: TeamDetail; onBack?: () => void; spaceEntry?: boolean }) {
+  if (!teamDetail.team.ephemeral && !teamDetail.legacyCoordinator && !(spaceEntry && teamDetail.team.coordinatorConversationId)) {
+    return <TeamDetailPage detail={teamDetail} onBack={onBack} />
+  }
+  return <LegacyTeamView detail={teamDetail} onBack={onBack} spaceEntry={spaceEntry} />
+}
+
+function LegacyTeamView({ detail: teamDetail, onBack, spaceEntry = false }: { detail: TeamDetail; onBack?: () => void; spaceEntry?: boolean }) {
   const { t } = useTranslation()
   const navigationTarget = usePeopleViewStore(state => state.teamTarget)
   const [width, setWidth] = useState(() => window.innerWidth)
@@ -161,7 +170,7 @@ export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { d
       </div>
       {isEphemeral && <span className="hidden shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground sm:inline">{t('Temporary collaboration')}</span>}
       {isEphemeral && !detail.team.savedTeamId && <button disabled={saving} onClick={() => void saveTeam()} className="flex shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-primary hover:bg-secondary disabled:opacity-50"><BookmarkPlus size={13} aria-hidden="true" />{t('Keep this team')}</button>}
-      {isEphemeral && detail.team.savedTeamId && <button onClick={() => void canvasLifecycle.openTeam(detail.team.savedTeamId!)} className="flex min-h-9 shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 text-xs text-primary hover:bg-secondary"><BookmarkPlus size={13} aria-hidden="true" />{t('Open saved team')}</button>}
+      {isEphemeral && detail.team.savedTeamId && <button onClick={() => openPersonTeam({ teamId: detail.team.savedTeamId! })} className="flex min-h-9 shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 text-xs text-primary hover:bg-secondary"><BookmarkPlus size={13} aria-hidden="true" />{t('Open saved team')}</button>}
       {taskSidebar && <button onClick={() => setDrawer('tasks')} aria-label={t('Tasks')} className="rounded-lg p-2 hover:bg-secondary lg:hidden"><PanelLeft size={17} /></button>}
       <button onClick={() => setDrawer('members')} aria-label={t('Members')} className="rounded-lg p-2 hover:bg-secondary xl:hidden"><Users size={17} /></button>
       {!roomOnly && <button onClick={() => { setSettingsMember(null); setDrawer('settings') }} aria-label={t('Team settings')} className="rounded-lg p-2 hover:bg-secondary"><Settings size={17} /></button>}

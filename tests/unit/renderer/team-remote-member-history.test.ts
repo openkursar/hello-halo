@@ -82,7 +82,7 @@ describe('a team member running on another computer', () => {
     expect(new Set(rows.map(row => row.id)).size).toBe(messages.length)
   })
 
-  it('lists a long conversation and its reports in the order they were written', async () => {
+  it('lists a long conversation in the order it was written and its reports newest first', async () => {
     const chat = Array.from({ length: 24 }, (_, i) => wire(i + 1, i % 2 ? 'assistant' : 'user', `m${i + 1}`))
     const room = taskConversationRows((await openRemoteMember(chat)).messages, [], 'epoch', 'remote-member')
     expect(room.map(row => row.message?.content)).toEqual(chat.map(row => row.content))
@@ -90,7 +90,20 @@ describe('a team member running on another computer', () => {
     const work = Array.from({ length: 24 }, (_, i) => wire(i + 1, i % 2 ? 'assistant' : 'system', `w${i + 1}`))
     const { messages } = await openRemoteMember(work)
     const reports = taskActivityRows(taskReportMessages(messages).map(message => ({ appId: 'remote-member', message })), [])
-    expect(reports.map(row => row.message?.content)).toEqual(work.filter(row => row.role === 'assistant').map(row => row.content))
+    expect(reports.map(row => row.message?.content)).toEqual(work.filter(row => row.role === 'assistant').map(row => row.content).reverse())
+  })
+
+  it('places its conversation among its team messages by when each was written', async () => {
+    const at = (seq: number) => Date.parse('2026-10-20T09:00:00.000Z') + seq * 60_000
+    const chat = [1, 2, 3, 4].map(seq => ({ ...wire(seq, seq % 2 ? 'user' : 'assistant', `m${seq}`), ts: at(seq) }))
+    const { messages } = await openRemoteMember(chat)
+    expect(messages[0].timestamp).toBe(new Date(at(1)).toISOString())
+    const message = (id: string, actorAppId: string, targetAppId: string, time: number) =>
+      ({ id, teamId: 'team', epochId: 'epoch', kind: 'message', actorAppId, targetAppId, subject: id, createdAt: time }) as never
+    const rows = taskConversationRows(messages, [message('sent', 'remote-member', 'writer', at(3.5)), message('report', 'writer', 'remote-member', at(4.5))], 'epoch', 'remote-member', [], { compact: true })
+    expect(rows.map(row => row.message?.content ?? row.activities?.map(activity => activity.id).join())).toEqual(['m1', 'm2', 'm3', 'm4', 'report'])
+    const reply = rows[3]
+    expect(reply.message ? reply.dispatches?.map(activity => activity.id) : undefined).toEqual(['sent'])
   })
 
   it('draws an addition it received mid-turn once, and keeps a stop on that row', async () => {

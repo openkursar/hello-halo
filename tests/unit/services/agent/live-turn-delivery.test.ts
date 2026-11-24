@@ -50,12 +50,33 @@ describe('live input acceptance', () => {
     ])
   })
 
+  it('delivers a UI image addition to the SDK and keeps it when unread input is stopped', () => {
+    const send = vi.fn((_message: any, _options: any) => true)
+    const images = [{ id: 'image', type: 'image' as const, mediaType: 'image/png' as const, data: 'aW1hZ2U=' }]
+    state.sessions.set('chat', { spaceId: 'space', imageInput: { model: 'vision', supportsVision: true, ocrAvailable: false }, session: { sendIntoLiveTurn: send } })
+    state.addMessage.mockReturnValueOnce({ id: 'input', content: '', images, source: 'injection' })
+    state.updateMessageById.mockReturnValueOnce({ id: 'input', images, metadata: { inputOutcome: 'stopped' } })
+    injectMessage('chat', '', undefined, images)
+    expect(send.mock.calls[0][0].message.content).toContainEqual({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aW1hZ2U=' } })
+    expect(state.emit).toHaveBeenCalledWith('agent:input-arrived', 'space', 'chat', expect.objectContaining({ messages: [expect.objectContaining({ images })] }))
+    send.mock.calls[0][1].onWithdrawn()
+    expect(state.updateMessageById).toHaveBeenCalledWith('space', 'chat', 'input', { metadata: { inputOutcome: 'stopped' } })
+    expect(state.emit).toHaveBeenCalledWith('agent:input-stopped', 'space', 'chat', { messages: [expect.objectContaining({ images })] })
+  })
+
   it('keeps success after native acceptance when recording fails, avoiding duplicate fallback', () => {
     const send = vi.fn((_message: any, _options: any) => true)
     state.sessions.set('chat', { spaceId: 'space', session: { sendIntoLiveTurn: send } })
     state.addMessage.mockImplementationOnce(() => { throw new Error('disk unavailable') })
     expect(() => injectMessage('chat', 'accepted')).not.toThrow()
     expect(send).toHaveBeenCalledOnce()
+  })
+
+  it('allows normal-send fallback after a non-vision turn ended without OCR', () => {
+    state.running = false
+    state.sessions.set('chat', { spaceId: 'space', imageInput: { model: 'text', supportsVision: false, ocrAvailable: false }, session: {} })
+    expect(() => injectMessage('chat', '', undefined, [{ id: 'i', type: 'image', mediaType: 'image/png', data: 'aA==' }])).toThrow('normal send entry')
+    expect(state.addMessage).not.toHaveBeenCalled()
   })
 
   it('does not persist a refused UI injection, so its normal-send fallback records it once', () => {

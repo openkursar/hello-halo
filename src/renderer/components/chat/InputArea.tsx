@@ -169,7 +169,8 @@ interface InputAreaProps {
    * Called when user submits a message while generation is in progress (mid-turn inject).
    * Resolving false means nothing was added: the text and cards come back.
    */
-  onInject?: (content: string, references?: ContentReference[]) => Promise<void | boolean>
+  onInject?: (content: string, references?: ContentReference[], images?: ImageAttachment[]) => Promise<void | boolean>
+  supportsImageInjection?: boolean
   /** Stop the current generation. Omit for inject-only inputs that cannot stop the
    *  underlying process (e.g. the automation run-detail supplement input); the Stop
    *  button is then hidden. */
@@ -227,6 +228,11 @@ interface InputAreaProps {
    */
   draftKey?: string
   /**
+   * Where the reference cards live when that is not `draftKey`: the key the
+   * page's selection bar adds to, i.e. the conversation's id.
+   */
+  referenceKey?: string
+  /**
    * Conversation goal: the "+" menu row, goal mode, and the shelf above the
    * card. Only the space conversation board sets this, and only for engines
    * that keep goals.
@@ -235,7 +241,7 @@ interface InputAreaProps {
 }
 
 // Draft attachments stay in memory; image data must not fill browser storage.
-// The cards live in the composer-references store under the same key.
+// The cards live in the composer-references store under the reference key.
 interface InputDraft { content: string; images: ImageAttachment[] }
 const inputDrafts = new Map<string, InputDraft>()
 // A failed send can settle after its original input has been replaced.
@@ -266,7 +272,7 @@ interface ImageError {
 }
 
 // Memoized: the composer is large and its parent re-renders on every turn-state change.
-export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, sendSlot, draftKey, slashCommands = [], mentionSpaceId, mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, goal }: InputAreaProps) {
+export const InputArea = memo(function InputArea({ onSend, onInject, supportsImageInjection = true, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, sendSlot, draftKey, referenceKey: referenceKeyProp, slashCommands = [], mentionSpaceId, mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, goal }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -288,18 +294,18 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   const [isFocused, setIsFocused] = useState(false)
   const [images, setImages] = useState<ImageAttachment[]>(() => draftKey ? inputDrafts.get(draftKey)?.images ?? [] : [])
   const [instanceKey] = useState(() => `composer-${++composerInstanceSeq}`)
-  const referenceKey = draftKey ?? instanceKey
+  const referenceKey = referenceKeyProp ?? draftKey ?? instanceKey
   const references = useComposerReferences(referenceKey)
   const writingComment = useHasNewCommentText(referenceKey)
   useEffect(() => {
-    if (draftKey) return
+    if (referenceKey !== instanceKey) return
     return () => { useComposerReferencesStore.getState().take(instanceKey) }
-  }, [draftKey, instanceKey])
+  }, [referenceKey, instanceKey])
   useEffect(() => {
     if (!draftKey) return
     const restore = (draft: InputDraft) => {
       setContent(current => current || draft.content)
-      setImages(current => current.length ? current : draft.images)
+      setImages(current => [...new Map([...draft.images, ...current].map(image => [image.id, image])).values()])
     }
     const listeners = draftRecoverySubscribers.get(draftKey) ?? new Set<(draft: InputDraft) => void>()
     listeners.add(restore)
@@ -1053,7 +1059,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
         const saved = inputDrafts.get(recoveryKey)
         const restored = {
           content: saved?.content || textToSend,
-          images: saved?.images.length ? saved.images : sentImages,
+          images: [...new Map([...sentImages, ...(saved?.images ?? [])].map(image => [image.id, image])).values()],
         }
         inputDrafts.set(recoveryKey, restored)
         useComposerReferencesStore.getState().restore(recoveryKey, sentReferences)
@@ -1068,12 +1074,16 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     }
 
     if (isGenerating && !goalMode) {
-      // Mid-turn inject: text and cards (no images, no thinking toggle)
-      if ((textToSend || referenceCount > 0) && onInject) {
-        trackSend(textToSend, [], true)
+      if (isProcessingImages) return
+      const sentImages = supportsImageInjection ? images : []
+      if ((textToSend || referenceCount > 0 || sentImages.length > 0) && onInject) {
+        trackSend(textToSend, sentImages, true)
         const injected = useComposerReferencesStore.getState().take(referenceKey)
-        handBackIfRefused(onInject(textToSend, injected.length > 0 ? injected : undefined), [], injected, true)
+        const result = onInject(textToSend, injected.length > 0 ? injected : undefined, sentImages.length > 0 ? sentImages : undefined)
+        if (draftKey && supportsImageInjection) inputDrafts.delete(draftKey)
+        handBackIfRefused(result, sentImages, injected, true)
         setContent('')
+        if (supportsImageInjection) setImages([])
         if (draftKey) useChatStore.getState().clearComposerDraft(draftKey)
         handleMentionClose()
         handleSlashClose()
@@ -1232,7 +1242,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     (goalMode
       ? (goal!.canSubmit(content) && !isProcessingImages && !uploading)
       : isGenerating
-        ? ((content.trim().length > 0 || hasReferences) && !!onInject && !uploading)
+        ? ((content.trim().length > 0 || hasReferences || (supportsImageInjection && images.length > 0)) && !!onInject && !isProcessingImages && !uploading)
         : ((content.trim().length > 0 || images.length > 0 || hasReferences) && !isProcessingImages && !uploading)
     )
   const hasImages = images.length > 0

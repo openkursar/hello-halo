@@ -74,6 +74,8 @@ const canvasActions = {
     canvasLifecycle.openContent(content, title, type, language),
   openTerminal: (sessionId: string, title?: string) => canvasLifecycle.openTerminal(sessionId, title),
   openTeam: (teamId: string, title?: string) => canvasLifecycle.openTeam(teamId, title),
+  openTeamTask: (task: { spaceId: string; teamId: string; epochId: string }, title: string, options?: { reveal?: RevealTarget }) =>
+    canvasLifecycle.openTeamTask(task, title, options),
   openChanges: (source: ChangesSource, options?: { reveal?: RevealTarget }) => canvasLifecycle.openChanges(source, options),
   setTabTitle: (tabId: string, title: string) => canvasLifecycle.setTabTitle(tabId, title),
   /** How tabs of `type` reload on the tab bar's Refresh; returns the unregister function. */

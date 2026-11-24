@@ -246,7 +246,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
               {freqLabel && <span className="mx-1">·</span>}
               {freqLabel && <span>{freqLabel}</span>}
             </span>
-            {(runtimeState?.pendingDecisionCount ?? 0) > 0 && <button onClick={handleTabActivity} className="min-h-7 rounded-md bg-halo-warning/10 px-2 text-xs text-halo-warning">{t('{{count}} waiting for you', { count: runtimeState!.pendingDecisionCount })}</button>}
+            {(runtimeState?.pendingDecisionCount ?? 0) > 0 && <button onClick={handleTabActivity} className="min-h-7 rounded-md bg-halo-warning/10 px-2 text-xs text-halo-warning">{t('{{count}} decisions waiting for you', { count: runtimeState!.pendingDecisionCount })}</button>}
             {isPaused && (isRunning || isQueued) && <span className="text-xs text-muted-foreground">{t('Automatic tasks paused')}</span>}
           </div>
           {(nextRunLabel || lastRunLabel || (spaceName && app.spaceId)) && (

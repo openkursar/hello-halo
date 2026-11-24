@@ -8,12 +8,14 @@
  */
 
 import { v2Sessions } from './session-manager'
-import { sendIntoLiveTurn } from './live-turn'
+import { hasLiveTurn, sendIntoLiveTurn } from './live-turn'
 import { emitAgentEvent } from './events'
 import { addMessage, updateMessageById, type Message } from '../conversation.service'
 import { getWorkingDir } from './helpers'
 import { formatReferencesBlock } from './references'
 import type { ContentReference } from '../../../shared/types/content-reference'
+import type { ImageAttachment } from './types'
+import { modelAcceptsImages, prepareNonVisionImageFallback } from './image-attachments'
 
 /**
  * Inject a message into an active V2 session mid-turn.
@@ -23,21 +25,42 @@ import type { ContentReference } from '../../../shared/types/content-reference'
  *
  * Accepted text is consumed at the next model step or an immediate continuation.
  * If the user stops the turn before that, it never runs and its record is marked
- * stopped. Images are not supported by this legacy UI entry.
+ * stopped. Image preparation uses the running session's capabilities.
  *
  * @param conversationId - Target conversation
  * @param message - Message text; may be empty when references carry it
  * @param references - Places the user pointed at, already checked
  * @throws Error if no active V2 session exists for this conversation
  */
-export function injectMessage(conversationId: string, message: string, references?: ContentReference[]): void {
+export function injectMessage(conversationId: string, message: string, references?: ContentReference[], images?: ImageAttachment[]): void {
   const v2SessionInfo = v2Sessions.get(conversationId)
   if (!v2SessionInfo) {
     throw new Error(`No active V2 session for conversation: ${conversationId}`)
   }
   const { spaceId } = v2SessionInfo
 
-  const text = formatReferencesBlock(references, getWorkingDir(spaceId)) + message
+  const workDir = getWorkingDir(spaceId)
+  let text = formatReferencesBlock(references, workDir) + message
+  let engineImages = images
+  if (images?.length) {
+    if (!hasLiveTurn(conversationId)) {
+      throw new Error('The live turn cannot accept input; send this message through the normal send entry')
+    }
+    const capability = v2SessionInfo.imageInput
+    if (!capability || (!modelAcceptsImages(capability) && !capability.ocrAvailable)) {
+      throw Object.assign(new Error('Images cannot be added to this running turn. Send them after the current reply finishes.'), { retryable: false })
+    }
+    const fallback = prepareNonVisionImageFallback({ scope: { spaceId, conversationId, workDir }, credentials: capability, images })
+    if (fallback) {
+      if (fallback.filePaths.length !== images.length) {
+        throw Object.assign(new Error('Could not prepare all attached images. Please try again.'), { retryable: false })
+      }
+      text = fallback.contextBlock + text
+      engineImages = undefined
+    } else if (!modelAcceptsImages(capability)) {
+      throw Object.assign(new Error('Could not prepare attached images. Please try again.'), { retryable: false })
+    }
+  }
   let recorded: Message | undefined
   const onWithdrawn = () => {
     if (!recorded) {
@@ -53,7 +76,7 @@ export function injectMessage(conversationId: string, message: string, reference
     }
     emitAgentEvent('agent:input-stopped', spaceId, conversationId, { messages: [stopped] })
   }
-  if (!sendIntoLiveTurn(conversationId, text, undefined, { onWithdrawn })) {
+  if (!sendIntoLiveTurn(conversationId, text, engineImages, { onWithdrawn })) {
     throw new Error('The live turn cannot accept input; send this message through the normal send entry')
   }
   try {
@@ -62,6 +85,7 @@ export function injectMessage(conversationId: string, message: string, reference
       role: 'user',
       content: message,
       source: 'injection',
+      ...(images?.length ? { images } : {}),
       ...(references && references.length > 0 ? { metadata: { references } } : {}),
     })
     emitAgentEvent('agent:input-arrived', spaceId, conversationId, { messages: [recorded], live: true })

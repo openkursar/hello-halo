@@ -26,6 +26,7 @@ vi.mock('../../../../src/renderer/i18n', () => ({
 // registry only needs a component reference.
 vi.mock('../../../../src/renderer/components/canvas/viewers/TerminalViewer', () => ({ TerminalViewer: () => null }))
 vi.mock('../../../../src/renderer/components/canvas/viewers/TeamViewer', () => ({ TeamViewer: () => null }))
+vi.mock('../../../../src/renderer/components/canvas/viewers/TeamTaskViewer', () => ({ TeamTaskViewer: () => null }))
 vi.mock('../../../../src/renderer/components/goal', () => ({ GoalEditor: () => null }))
 vi.mock('../../../../src/renderer/components/chat/cross-conversation', () => ({ ConversationReferenceLink: () => null }))
 

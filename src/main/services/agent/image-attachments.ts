@@ -39,7 +39,7 @@ const MEDIA_TYPE_EXTENSIONS: Record<ImageMediaType, string> = {
  * matches the renderer input gate and the OpenAI-compat router keep/strip
  * decision: explicit user override > provider-declared flag > id heuristic.
  */
-export function modelAcceptsImages(credentials: ApiCredentials): boolean {
+export function modelAcceptsImages(credentials: Pick<ApiCredentials, 'model' | 'supportsVision' | 'visionOverride'>): boolean {
   return (
     credentials.visionOverride ??
     credentials.supportsVision ??
@@ -105,7 +105,7 @@ export interface NonVisionImageFallback {
  */
 export function prepareNonVisionImageFallback(params: {
   scope: ToolsetScope
-  credentials: ApiCredentials
+  credentials: Pick<ApiCredentials, 'model' | 'supportsVision' | 'visionOverride'>
   images?: ImageAttachment[]
 }): NonVisionImageFallback | null {
   const { scope, credentials, images } = params

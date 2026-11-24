@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { detailForTask, ownedTaskMembers } from '../../../src/renderer/components/team/workbench/members'
-import { spaceCoordinatorAppId, type TeamConversation, type TeamDetail, type EpochBoard } from '../../../src/shared/apps/team-types'
+import { detailForTask, involvedOwnMember, ownedTaskMembers } from '../../../src/renderer/components/team/workbench/members'
+import { spaceCoordinatorAppId, temporaryMemberHandle, type TeamConversation, type TeamDetail, type EpochBoard } from '../../../src/shared/apps/team-types'
 
 const source = spaceCoordinatorAppId('source')
 const members = [
@@ -25,6 +25,13 @@ describe('members in a task view', () => {
     const view = detailForTask(detail, null)
     expect(view.roster.map(m => m.appId)).toEqual(['Alice', 'Lead', 'Bob'])
     expect(ownedTaskMembers(view, []).map(m => m.appId)).toEqual(['Lead', 'Alice'])
+  })
+
+  it('opens someone else\'s task on my member that took part, not the lead', () => {
+    const own = [{ appId: 'Lead' }, { appId: 'Alice' }]
+    expect(involvedOwnMember(own, [{ actorAppId: 'Bob', targetAppId: 'Alice' }], [])).toBe('Alice')
+    expect(involvedOwnMember(own, [], [{ createdByAppId: 'Bob', assigneeAppId: 'Alice' }])).toBe('Alice')
+    expect(involvedOwnMember(own, [{ actorAppId: 'Bob', targetAppId: null }], [])).toBeUndefined()
   })
 })
 
@@ -53,5 +60,14 @@ describe('work-scoped roster projection', () => {
     const task = { epochId: 'work-a', kind: 'native' } as TeamConversation
     expect(detailForTask(detail, task, { ...board, roster: [] }).roster).toEqual([])
     expect(detailForTask(detail, task, { ...board, roster: undefined }).roster).toEqual(detailForTask(detail, task).roster)
+  })
+
+  it('shows a collaborator by its given name, not the handle it is addressed by', () => {
+    const task = { epochId: 'work-a', kind: 'native' } as TeamConversation
+    const named = { appId: 'ba82e662-0000', memberName: temporaryMemberHandle('Reviewer', 'ba82e662-0000'), role: 'Reviewer', isTemporary: true, isLead: false, origin: 'local' }
+    const chosen = { appId: 'c1', memberName: 'Reviewer-ba82e662', role: 'Editor', isLead: false }
+    const scoped = detailForTask(detail, task, { ...board, members: [...board.members, named, chosen], roster: [{ ...named, spaceId: 'space' }, { ...chosen, spaceId: 'space' }] } as unknown as EpochBoard)
+    expect(scoped.roster.map(member => member.memberName)).toEqual(['Reviewer', 'Reviewer-ba82e662'])
+    expect(scoped.members.find(member => member.appId === named.appId)?.memberName).toBe('Reviewer')
   })
 })

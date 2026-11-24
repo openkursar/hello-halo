@@ -50,6 +50,7 @@ export class FeedStore implements IFeedStore {
   private readonly stmtCacheMaxSeq: Database.Statement
   private readonly stmtCacheMinSeq: Database.Statement
   private readonly stmtDeleteCacheFeed: Database.Statement
+  private readonly stmtDeleteCacheAfter: Database.Statement
   private readonly stmtListCacheFeedIds: Database.Statement
   private readonly stmtGetMeta: Database.Statement
   private readonly stmtSetTruncated: Database.Statement
@@ -130,6 +131,7 @@ export class FeedStore implements IFeedStore {
       SELECT COALESCE(MIN(seq), 0) AS m FROM feed_cache WHERE office_id = ? AND feed_id = ?
     `)
     this.stmtDeleteCacheFeed = db.prepare(`DELETE FROM feed_cache WHERE office_id = ? AND feed_id = ?`)
+    this.stmtDeleteCacheAfter = db.prepare(`DELETE FROM feed_cache WHERE office_id = ? AND feed_id = ? AND seq > ?`)
     this.stmtListCacheFeedIds = db.prepare(`
       SELECT DISTINCT feed_id FROM feed_cache WHERE office_id = ?
     `)
@@ -250,6 +252,10 @@ export class FeedStore implements IFeedStore {
 
   deleteCacheFeed(officeId: string, feedId: string): number {
     return this.stmtDeleteCacheFeed.run(officeId, feedId).changes
+  }
+
+  deleteCacheAfter(officeId: string, feedId: string, afterSeq: number): number {
+    return this.stmtDeleteCacheAfter.run(officeId, feedId, afterSeq).changes
   }
 
   listCacheFeedIds(officeId: string): string[] {

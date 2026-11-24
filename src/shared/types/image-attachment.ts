@@ -26,6 +26,19 @@ export interface ImageAttachment {
   url?: string
 }
 
+/** Input attachments carry inline bytes, never a persisted file URL. */
+export function isImageAttachmentInput(value: unknown): value is ImageAttachment {
+  if (!value || typeof value !== 'object') return false
+  const image = value as Record<string, unknown>
+  return typeof image.id === 'string' && image.id.length > 0
+    && image.type === 'image'
+    && ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(image.mediaType as string)
+    && typeof image.data === 'string' && image.data.trim().length > 0
+    && image.url === undefined
+    && (image.name === undefined || typeof image.name === 'string')
+    && (image.size === undefined || (typeof image.size === 'number' && Number.isFinite(image.size) && image.size >= 0))
+}
+
 /** `src` for an image attachment: its file URL, or its inline data. */
 export function imageAttachmentSrc(image: Pick<ImageAttachment, 'url' | 'data' | 'mediaType'>): string {
   return image.url || `data:${image.mediaType};base64,${image.data}`

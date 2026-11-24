@@ -529,6 +529,10 @@
   },
   {
     "method": "GET",
+    "path": "/api/teams/:teamId/outputs"
+  },
+  {
+    "method": "GET",
     "path": "/api/teams/:teamId/conversations"
   },
   {

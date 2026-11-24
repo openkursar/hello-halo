@@ -141,6 +141,7 @@ interface InitTeamServiceDeps {
   describeChatKey?: TeamServiceDeps['describeChatKey']
   getViewerIdentity?: TeamServiceDeps['getViewerIdentity']
   getConversationMember?: TeamServiceDeps['getConversationMember']
+  listAnsweredMembers?: TeamServiceDeps['listAnsweredMembers']
   isConversationBusy?: TeamServiceDeps['isConversationBusy']
 }
 
@@ -170,6 +171,7 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     describeChatKey: deps.describeChatKey,
     getViewerIdentity: deps.getViewerIdentity,
     getConversationMember: deps.getConversationMember,
+    listAnsweredMembers: deps.listAnsweredMembers,
     isConversationBusy: deps.isConversationBusy,
   })
   serviceInstance = service

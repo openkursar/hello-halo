@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../src/renderer/components/chat/ThoughtProcess', () => ({ ThoughtProcess: ({ thoughts, isThinking }: any) => React.createElement('div', { 'data-process': true, 'data-thinking': isThinking }, thoughts.map((thought: any) => thought.arrival?.content ?? thought.id).join(',')) }))
-vi.mock('../../../src/renderer/components/chat/ArrivalCard', () => ({ ArrivalCard: ({ message, inProcess }: any) => React.createElement('section', { 'data-arrival': inProcess ? 'process' : 'card' }, message.content) }))
+vi.mock('../../../src/renderer/components/chat/ArrivalCard', () => ({ TrailingArrivals: ({ arrivals }: any) => React.createElement('section', { 'data-arrival': 'after' }, arrivals.map((message: any) => message.content).join(',')) }))
 vi.mock('../../../src/renderer/components/chat/StreamingBubble', () => ({ StreamingBubble: ({ content }: any) => React.createElement('p', {}, content) }))
 vi.mock('../../../src/renderer/components/chat/MessageRow', () => ({ MessageRow: ({ message }: any) => React.createElement('article', { 'data-source': message.source }, message.content) }))
 vi.mock('../../../src/renderer/components/chat/InjectionAnnotation', () => ({ InjectionAnnotation: ({ messages }: any) => React.createElement('aside', {}, messages.map((message: any) => message.content).join(',')) }))
@@ -84,14 +84,14 @@ describe('live transcript rendering', () => {
     expect(html.match(/data-process/g)).toHaveLength(2)
   })
 
-  it('shows an arrival before any work as its own card after the reply, never as the whole process', () => {
+  it('shows an arrival before any work after the reply, never as the whole process', () => {
     const html = markupWith([], ['team-message'])
     expect(html).toContain('<div data-process="true" data-thinking="true"></div>')
-    expect(html).toContain('<section data-arrival="card">Arrived report</section>')
+    expect(html).toContain('<section data-arrival="after">Arrived report</section>')
     expect(html.indexOf('data-arrival')).toBeGreaterThan(html.indexOf('<p>Checking finished</p>'))
   })
 
-  it('treats the reply after its last split the same: an arrival with no work beside it is a card until work joins it', () => {
+  it('treats the reply after its last split the same: an arrival with no work beside it is drawn after the reply until work joins it', () => {
     const at = (second: number) => `2026-10-13T10:00:0${second}.000Z`
     const render = (thoughtSeconds: number[], isThinking: boolean) => renderToStaticMarkup(React.createElement(StreamingSection, {
       streamingContent: 'Checking finished', isStreaming: true, isThinking, textBlockVersion: 2,
@@ -106,13 +106,13 @@ describe('live transcript rendering', () => {
       const html = render([1, 2], isThinking)
       expect(html).toContain('t1,t2')
       expect(html).not.toMatch(/data-process[^>]*>[^<]*Teammate report/)
-      expect(html).toContain('<section data-arrival="card">Teammate report</section>')
+      expect(html).toContain('<section data-arrival="after">Teammate report</section>')
       expect(html.indexOf('data-arrival')).toBeGreaterThan(html.indexOf('<p> finished</p>'))
     }
     expect(render([1, 2], false).match(/data-process/g)).toHaveLength(1)
 
     const joined = render([1, 2, 6], true)
     expect(joined).toContain('Teammate report,t6')
-    expect(joined).not.toContain('data-arrival="card"')
+    expect(joined).not.toContain('data-arrival="after"')
   })
 })

@@ -10,6 +10,7 @@ story:
 basis: documented
 references:
   - src/renderer/components/team/workbench/DESIGN.md
+  - src/renderer/components/canvas/DESIGN.md
   - src/main/apps/team/DESIGN.md
   - tests/e2e/specs/team-render.spec.ts
 promises:
@@ -31,7 +32,186 @@ promises:
   layout:
     en: The task room and its drawers remain usable in narrow layouts and both themes.
     zh: 任务房间及抽屉在窄屏和两种主题中仍可使用。
+  crew:
+    en: On the Teams page I can see who is on each live task right now and who is talking with whom, without the card resizing as members come and go.
+    zh: 在团队页里我能看到每个进行中任务此刻有谁在做、谁在和谁沟通，成员来去时卡片不会改变高度。
+  outputs:
+    en: From the team page I can find and open every file the team delivered, and get back to the task that produced it.
+    zh: 在团队页里我能找到并打开团队交付的所有文件，并回到产生它的任务。
+  attention:
+    en: On the team page I can see everything waiting on me at once and fix tasks stopped by the same model setting in one step.
+    zh: 在团队页里我能一次看到所有等我处理的事，并一步处理因同一模型设置停下的多个任务。
+  ending:
+    en: On the machine hosting the team I can end unfinished work that nobody is carrying on, including work someone else started, and everyone can tell it was ended by a person rather than finished.
+    zh: 在托管团队的机器上，我能结束没人接着做的未完成任务（包括别人发起的），所有人都能看出它是被人结束的，而不是完成了。
 scenarios:
+  - id: teams.tasks.homepage
+    title:
+      en: Open team conversations from the home conversation list
+      zh: 从首页会话列表打开团队对话
+    verifies: [scope, ownership, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    variants:
+      entry: [desktop, remote-web]
+      width: [wide, narrow]
+    preconditions:
+      - en: A controlled space has personal chats, two team conversations, and a read-only teammate lead.
+        zh: 隔离空间中有个人会话、两条团队对话及仅查看的队友 Lead。
+    steps:
+      - en: Open a team conversation under Digital humans, switch its members near the composer, then switch to a personal chat and return through the old team entry.
+        zh: 在数字人分类打开团队对话，于输入框附近切换成员，再切到个人会话并从旧团队入口返回。
+    expected:
+      - en: Switching members keeps the same conversation with separate member histories and drafts.
+        zh: 切换成员仍在同一对话中，成员记录与草稿各自独立。
+      - en: The homepage and team workbench retain their respective entry points to the same conversation; the homepage shows the members as a left-aligned avatar rail above the composer, followed in the same capsule by the conversation status, with nothing else on that row and nothing inside the composer, switching with one click and lifting the current member with its name shown; read-only members are dimmed after a separator, a large team collapses the rest behind a "+N" entry beside the avatars that opens the all-members panel grouped into needs your attention, working, my digital humans and read-only members (searchable past eight members), ordering stays stable, and a read-only member cannot receive input, while the composer stays in place, locked, with the reason written inside.
+        zh: 首页和团队工作台各自保留进入同一对话的入口；首页在输入框上方以靠左的头像轨道展示成员，对话状态紧随其后同在一个胶囊内，该行没有其他控件，也不在输入框内，单击即可切换，当前成员被托起并显示名字；仅查看成员置灰并以分隔点隔开，成员较多时其余收进头像旁的“+N”入口，点开为全部成员面板，按需要你处理、工作中、我的数字人与仅查看成员分组（超过八人时可搜索），顺序稳定，仅查看成员不能接收输入，但输入框仍在原位，处于锁定状态并写明原因。
+      - en: The canvas remains available and the selector is usable at narrow widths.
+        zh: 画布保留，窄屏下仍能切换成员。
+  - id: teams.tasks.homepage-list-consistency
+    title:
+      en: Use the same list interactions for team and personal conversations
+      zh: 团队会话与个人会话使用一致的列表交互
+    verifies: [scope, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    variants:
+      entry: [desktop, remote-web]
+      width: [wide, narrow]
+    preconditions:
+      - en: A space has both a personal digital-human conversation and a team conversation.
+        zh: 空间中有数字人个人会话与团队会话。
+    steps:
+      - en: Expand each group, select and pin a conversation, and rename it through its more menu.
+        zh: 展开两类分组，选择并置顶会话，再通过更多菜单重命名。
+    expected:
+      - en: Both use consistent spacing, selection, hover and accessible touch controls; only supported actions are offered. Team headers, pinned conversations and compact entries share up to four tightly overlapping member faces from the available list summary, lead first when available, within the same 18px footprint as a personal avatar. There is no backing plate or outer border; only individual face separators follow the theme background. Two faces are centered side by side, three use two above one centered below, one uses a single face and none uses the team initial. No empty cells are shown. Changing the chat recipient does not change the team avatar or open a member picker from it.
+        zh: 两者具有一致的间距、选中、悬停与可访问触控操作，且只展示支持的操作。团队分组、置顶会话及收起入口复用列表摘要中最多四位成员紧密交叠的头像，有 Lead 时排首位，整体与个人头像同为 18px。不显示底板背景或外框，只保留随主题背景变化的单头像分隔线。两位居中并排，三位上二下一且下方居中，一位显示单头像，无成员信息时显示团队首字，不显示空格。切换聊天成员不改变团队头像，头像不打开成员选择器。
+      - en: Personal and team group names start at the same horizontal position using equal-width avatar slots and the same action columns. Both avatars' left edges align with the Digital Humans section label. Nested conversation titles align with these names; status indicators stay in the left gutter without shifting titles. Clicking a team avatar opens that team's details, not a conversation or a group toggle; the name and chevron still expand or collapse the group. The new-conversation button retains its behavior.
+        zh: 个人与团队分组共用等宽头像列和操作列，两类头像左边缘与“数字人”分类标签对齐，名称起点对齐。分组内会话标题与名称左对齐，状态点放在左侧留白，不挤动标题。点击团队头像进入该团队详情，不打开会话或切换分组；名称及箭头仍展开或收起分组，新建会话按钮保持原有行为。
+      - en: Renaming or pinning affects only the chosen conversation and never completes or deletes team work.
+        zh: 重命名或置顶只影响所选会话，不会完成或删除团队工作。
+  - id: teams.tasks.homepage-list-scope
+    title:
+      en: See only my own team conversations on the home list
+      zh: 首页只列出与我相关的团队对话
+    verifies: [scope, ownership]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    variants:
+      entry: [desktop, remote-web]
+    preconditions:
+      - en: A team with two people has a conversation I started, one a teammate started with my digital human, one a teammate started without it, and one waiting on my answer.
+        zh: 两人团队中有我发起的对话、队友与我的数字人发起的对话、队友未涉及我的对话，以及一条等待我回答的对话。
+    steps:
+      - en: Open the home list and expand the team group; hover the teammate-started row.
+        zh: 打开首页列表并展开团队分组，悬停在队友发起的对话上。
+    expected:
+      - en: The list shows my conversations, those waiting on me, and teammate-started ones my digital human took part in within the last 7 days, as one flat list; the unrelated one is absent. Starting a conversation shows who began it in the hover card, and a team with no conversation keeps its header with the new-conversation button. Scrolling to the end loads older ones.
+        zh: 列表平铺展示我发起的、等待我回答的，以及近 7 天内我的数字人参与的队友对话，无关对话不出现；悬停卡片说明发起人；没有对话的团队保留分组头与新建按钮；滚动到底加载更早的对话。
+  - id: teams.tasks.homepage-list-remove
+    title:
+      en: Remove a team conversation from the home list only
+      zh: 仅从首页列表移除团队对话
+    verifies: [scope, lifetime]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    variants:
+      entry: [desktop, remote-web]
+      width: [wide, narrow]
+    preconditions:
+      - en: A pinned team conversation and an ordinary one exist, both visible on the home list.
+        zh: 首页列表中有一条置顶团队对话和一条普通团队对话。
+    steps:
+      - en: Remove each through its more menu and confirm; then let a teammate ask me a new question in one, and reopen the other from the team page.
+        zh: 通过更多菜单分别移除并确认；随后让队友在其中一条向我提新问题，并从团队详情页重新打开另一条。
+    expected:
+      - en: Removal asks for confirmation, drops the row from the list (and its pin) and leaves the task and its history untouched in the team. A new question awaiting me, or my reopening or sending in it, brings the row back; ordinary activity does not. The menu also offers a way to view the task in the team.
+        zh: 移除需确认，行（及置顶）从列表消失，团队中的任务和记录不受影响；出现等待我回答的新问题，或我主动重新打开、发送消息时该行回到列表，普通动态不会让它回来；菜单另提供在团队中查看。
+  - id: teams.tasks.homepage-room-panel
+    title:
+      en: Talk in a team conversation without a pane header
+      zh: 在无面板头部的团队对话中交流
+    verifies: [scope, ownership, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    variants:
+      entry: [desktop, remote-web]
+      width: [wide, narrow]
+    preconditions:
+      - en: A teammate started a conversation in which one of my digital humans took part.
+        zh: 队友发起的对话中有我的一位数字人参与。
+    steps:
+      - en: Open it from the home list, read the top bar, open the all-members panel from the conversation status and follow its bottom-right link, then use the list row's more menu.
+        zh: 从首页列表打开，查看顶栏，从对话状态打开全部成员面板并点击右下角链接，再使用列表行的更多菜单。
+    expected:
+      - en: The top bar (also on narrow screens) carries the conversation title and the pane has no header of its own. The participating digital human is selected by default, and the conversation bar has no menu of its own. The panel link opens Team progress in the canvas beside the chat (not a drawer), even before the board has any task; the list row menu renames the conversation and views it in the team.
+        zh: 顶栏（含窄屏）显示对话标题，面板自身没有头部；默认选中参与的数字人，对话栏没有单独的菜单。面板链接在聊天旁的画布中打开团队进度（而非抽屉），看板尚无任务时也可用；列表行菜单负责重命名和在团队中查看。
+  - id: teams.tasks.homepage-progress
+    title:
+      en: Follow who is doing what without leaving the home conversation
+      zh: 不离开首页对话就能看到谁在做什么
+    verifies: [scope, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    variants:
+      entry: [desktop, remote-web]
+      width: [wide, narrow]
+      theme: [light, dark]
+    preconditions:
+      - en: In a home team conversation the Lead has handed work to two members; one is working, one asks me a question, and a message to a third never arrived.
+        zh: 首页团队对话中 Lead 已把工作交给两位成员：一位工作中，一位向我提问，另有一条发给第三位的消息未送达。
+    steps:
+      - en: Read the conversation bar above the composer, open its panel from the status and from "+N", answer from it, view the failure, then open the full progress, answer the question there, unfold a step, click a step's member and a face in the team scene, open an output from the overview and open its subpages; compare it with the same task's panel on the team page; repeat with nothing to report and at a narrow width.
+        zh: 查看输入框上方的对话条，分别从状态和“+N”打开面板，从面板去回答，查看失败，再打开完整进展，在其中直接回答问题，展开一个步骤，点击步骤成员和团队现场中的头像，从总览打开一份产出并进入各子页；与团队页中同一任务的面板对照；在无可报告状态及窄屏下重复。
+    expected:
+      - en: The member avatars, their "+N" chip, a divider and the conversation status form one capsule; the stream has no progress card. The status shows an icon, a one-line summary (waiting for me, failed, waiting for a decision, working, "Completed · N outputs" or "Team progress") and, when there are board tasks, the done/total count and a bar filled only by done tasks, then a chevron that is always there and opens the panel upward even when there is nothing to report. The status always reads in full with no ellipsis; at narrow widths the bar hides first, then avatars fold into "+N". A working member's avatar has a blue dot at its corner, one waiting for me an orange one and a failed one a red one, in the bar and the panel alike; nothing in the bar animates. The current member's row in the panel is highlighted and member names are not truncated.
+        zh: 成员头像、“+N”、分隔线与对话状态组成一个胶囊，消息流中不再有进展卡片。状态显示图标、一句话摘要（等你处理、失败、等待决策、工作中、“已完成 · N 份成果”或“团队进展”），有看板任务时显示已完成/总任务数和仅按已完成填充的进度条，最后是始终存在的箭头，即使没有可报告的状态也能向上打开面板。状态始终完整显示、不出现省略号：窄屏时进度条先隐藏，再把头像收进“+N”。工作中成员头像右下角为蓝点，等你处理为橙点，失败为红点，对话条与面板一致；对话条上没有任何动画。面板中当前成员所在行高亮，成员名字不被截断。
+      - en: The status and "+N" open the same all-members panel, never on their own. It starts with the team progress and done count, groups members into needs your attention, working, my digital humans and read-only members with what each is doing; "Answer" switches to that member and the question, "View" opens the failure in the collaboration history.
+        zh: 状态与“+N”打开同一个全部成员面板，不会自动弹出。面板顶部为团队进展与完成数，成员按需要你处理、工作中、我的数字人、仅查看分组并显示各自在做什么；“去回答”切到该成员及其问题，“查看”在协作记录中打开失败记录。
+      - en: Under the Lead's reply a single "Sent a message to X" line replaces the per-member dispatch rows, and failed deliveries no longer appear as rows in the stream; they are told in the conversation bar. Expanded, each message's "To X" heading, and with a single recipient also the footer's "View X's conversation", switches to X in the same conversation with that message expanded and in view; X's "Received a message from Lead" line leads back to the Lead the same way. A message from or to the main chat has a plain heading and leads to team progress instead.
+        zh: Lead 回复下方以一行“已发消息给 X”代替逐条派发记录，投递失败不再作为消息流中的行出现，而在对话条上说明。展开后每条消息的“发送给 X”标题（只有一位收件人时还有底部的“查看 X 的对话”）可在同一对话中切到 X，并展开、定位到这条消息；X 那边“收到了 Lead 的消息”同样可切回 Lead。来自或发往主对话的消息标题不可点击，仍进入团队进度。
+      - en: The link at the bottom right of the panel opens Team progress in the canvas, showing a status line, a status line that once done also says how long it took and, when it counts, how much of it waited on people, a bordered brief card whose heading color says the state (faintly tinted amber or red when something needs attention or failed), naming only what needs me, with who is working on what in its footer, questions answered in place with no trip to the chat, the team scene, the subtask timeline, the outputs after it newest first as one column of file rows (beyond six the rest unfold in place), and links to the collaboration record and members, the members page listing the whole roster with each one's concrete work; under its team line and title it reads the same as the team page's task panel. A step's member switches the chat beside to that member; the brief, scene and footer open the member's work in the canvas. Opening it again reuses the same tab. The bar stays readable at narrow widths and in both themes. The team workbench keeps its own activity drawer unchanged.
+        zh: 面板右下角链接在画布中打开“团队进度”：状态行（完成后给出用时，等待时长足够显著时还给出其中等人确认的时长）、带浅色边框、以标题颜色区分状态（需要关注或出错时带淡琥珀或淡红底色）、只点出需要我处理之事并在底栏注明谁在做哪项的简报卡片、原地回答的待确认问题（无需跳回对话）、团队现场、子任务时间轴、其后单列文件行列出的产出（最新在前，超过六个可就地展开其余），以及进入协作记录和成员的入口，成员页列出全部成员及各自的具体工作；团队行与标题之下与团队页中的任务面板一致。点击步骤成员会把旁边的对话切到该成员，简报、现场与底栏则在画布中打开该成员的工作。再次打开复用同一标签页。窄屏和两种主题下对话条仍可读。团队工作台保留原有活动抽屉不变。
+      - en: 'When the Lead ends the work as done, or every subtask is done or rejected with nobody working, waiting or failed, the bar reads "Completed · N outputs" and the progress shows "Completed · took X", the status line opens with a green check, and a result card with a faint border only when there is more to say than the status line: the summary''s opening paragraph in up to three plain lines, an "In this summary" label over a plain list of its sections (fading past four, else its last entry trailing off with "…"), and a footer with the Lead''s avatar and "X''s summary" plus Full text that opens the rendered summary in place when the glance leaves anything out (the closing summary when the Lead ended the work, else the Lead''s last reply when the board settled without it, unless that is a bare acknowledgement), then up to three rejected or unfinished subtasks; the subtask timeline folded until opened and the outputs still after it, the section absent when none are listed; a new message or subtask turns it back to in progress.'
+        zh: Lead 结束工作，或所有子任务均已完成或被拒绝且没有成员在工作、等待或失败时，对话条显示“已完成 · N 份成果”，进度显示“已完成 · 用时 X”，状态行以绿色对钩开头，仅当有状态行之外的内容时才显示浅色细边框的结果卡片：总结开头一段（至多三行纯文本）、“本总结包含”标签及其下的小节列表（超过四项渐隐，否则末项以“…”收尾），底部是 Lead 头像和“X 的总结”，速览没有覆盖全部内容时还有“全文”，可在原处展开渲染后的总结（Lead 结束工作时为收尾总结，看板已收尾但 Lead 未结束工作时为 Lead 的最后一条回复，仅一句确认时不显示）；其后列出至多三个被拒绝或未完成的子任务；子任务时间轴默认收起、点开才展开，产出仍位于其后，没有列出产出时不显示该区域；发出新消息或新增子任务后恢复为进行中。
+  - id: teams.tasks.conversation-entry
+    title:
+      en: Begin a team conversation without task onboarding
+      zh: 不经过任务引导开始团队对话
+    verifies: [scope, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    variants:
+      entry: [desktop, remote-web]
+      width: [wide, narrow]
+    steps:
+      - en: Open a new team conversation and inspect the empty chat before sending.
+        zh: 打开新的团队对话，发送前查看空白聊天界面。
+    expected:
+      - en: The user can chat with the selected member without task creation instructions or a complete-task control.
+        zh: 用户可与选中成员聊天，界面不显示创建任务的引导或完成任务控件。
   - id: teams.tasks.member-draft
     title:
       en: Switch members with different drafts
@@ -99,6 +279,32 @@ scenarios:
     expected:
       - en: Background work cannot reopen the task; explicit reopening retains history.
         zh: 后台事件不能重开任务；主动重开后历史保留。
+  - id: teams.tasks.end-unfinished
+    title:
+      en: End unfinished work by hand and tell it apart from finished work
+      zh: 手动结束未完成任务，并与已完成区分
+    verifies: [ending, lifetime, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: On the machine hosting the team, more than ten tasks stopped partway with nobody on them, one of them started by a teammate; another task was already ended by that teammate; a second machine has joined the team.
+        zh: 在托管团队的机器上，十多个任务停在半路且没人在做，其中一个由队友发起；另有一个任务已被该队友结束；第二台机器已加入该团队。
+    steps:
+      - en: In "Not in progress", view more and then show less; open the teammate's task and end it, then end one of my own; send a new message to an ended task; open the team on the joined machine.
+        zh: 在“未在进行”中查看更多再收起；打开队友发起的任务并结束，再结束一个自己的；给已结束的任务发新消息；在加入方机器上打开团队。
+    expected:
+      - en: '"Not in progress" shows its first ten tasks and opens the rest a step at a time, like Completed; a task there with an open subtask says on its row that no one is carrying it on and on its status line that it stopped partway; one merely left quiet opens its status line with "Idle". Ending asks first; for the teammate''s task the confirmation names who started it. Ending work that waits on others also says it withdraws the confirmations still waiting on someone. Running or finished work, a plain Q&A chat and an IM chat offer no way to end it.'
+        zh: '“未在进行”先显示前十个，其余分步展开，与“已完成”一致；其中还有未完成子任务的任务，行上写明没人继续推进、状态行写明停下了；只是闲置的，状态行以“空闲”开头。结束前先确认；队友发起的任务，确认中写明是谁发起的。结束正在等待他人的任务时，确认中还说明会撤回仍在等人确认的事项。正在运行或已完成的任务、普通问答和 IM 会话都不提供结束入口。'
+      - en: An ended task moves to Completed in gray and says who ended it ("Ended by me", or "Ended by <name>" when someone else ended it; "Ended manually" when that was not recorded), never shows a success summary and is not counted as finished this month. A new message from a person reopens it and clears who ended it.
+        zh: 结束后的任务以灰色移入“已完成”，并写明是谁结束的（“由我结束”；他人结束时显示“由 <名字> 人工结束”；未记录时显示“已人工结束”），不显示成功摘要，也不计入本月完成数。人发新消息会重新打开它，并清除结束人记录。
+      - en: The joined machine offers no way to end tasks, and the service refuses an end request there. Nothing overflows at a narrow width in either theme.
+        zh: 加入方机器不提供结束入口，服务端也拒绝其结束请求。窄屏两种主题下均不溢出。
+    notes:
+      en: Service behavior (recorded ender, work with at least one subtask, all of them done, archived as finished even after it stopped or failed, reopen clearing it, joined-node refusal) is covered by tests/unit/apps/team/conversations-service.test.ts. The bound renderer test covers paging "Not in progress", ending from the status line, the confirmation naming the starter, "Ended by me" and "Ended by <name>" under Completed with no summary, and a narrow width in both themes; it does not yet assert the waiting-on-others wording, the monthly count, reopening by message or the joined machine.
+      zh: 服务端行为（记录结束人、至少有一个子任务且全部完成的工作按完成归档（即使此前已停止或失败）、重开时清除、加入方拒绝）由 tests/unit/apps/team/conversations-service.test.ts 覆盖。已绑定的界面测试覆盖“未在进行”分步展开、从状态行结束、确认中写明发起人、“已完成”中的“由我结束”与“由 <名字> 人工结束”且无摘要，以及两种主题下的窄屏；尚未断言等待他人时的说明、本月完成数、发消息重开和加入方机器。
   - id: teams.tasks.task-switch
     title:
       en: Keep task conversations and activity separate
@@ -147,8 +353,8 @@ scenarios:
         zh: 被拒绝文字回到正确成员输入框。
   - id: teams.tasks.first-send
     title:
-      en: Create a task on its first submitted message
-      zh: 首次发送消息时创建任务
+      en: Save a team conversation on its first submitted message
+      zh: 首次发送消息时保存团队对话
     verifies:
       - scope
     platforms: *a2
@@ -161,11 +367,30 @@ scenarios:
       - en: Use the isolated fixture described by the referenced executable test.
         zh: 使用引用测试中定义的隔离测试资料。
     steps:
-      - en: Open New task, type a title-like message and send.
-        zh: 打开新任务，输入消息并发送。
+      - en: Open a new team conversation, type a message and send.
+        zh: 打开新团队对话，输入消息并发送。
     expected:
-      - en: No task appears before submit and exactly one corresponding task appears after it.
-        zh: 提交前不创建任务，提交后只出现一个对应任务。
+      - en: No conversation appears before submit and exactly one corresponding conversation appears after it.
+        zh: 提交前不出现对话，提交后只出现一个对应对话。
+  - id: teams.tasks.conversation-no-assignment
+    title:
+      en: Starting a conversation does not itself assign board work
+      zh: 创建团队对话本身不分配看板工作
+    verifies: [scope]
+    platforms: *a2
+    profiles: [regression]
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: An isolated team has no assigned board tasks.
+        zh: 隔离团队没有已分配的看板任务。
+    steps:
+      - en: Create a native team conversation without invoking any member or task tool.
+        zh: 创建团队对话，不唤醒成员或调用任务工具。
+    expected:
+      - en: The conversation is retained without inserting a board task; a subsequent member turn may explicitly create work.
+        zh: 对话被保存且不新增看板任务；后续成员执行时可以主动创建工作。
   - id: teams.tasks.rename
     title:
       en: Rename a task consistently
@@ -359,3 +584,86 @@ scenarios:
     notes:
       en: This verifies form admission and request shape. Application creation and persistence are separate backend evidence.
       zh: 验证表单准入和请求形状；应用创建与持久化需要独立后端证据。
+
+  - id: teams.tasks.live-crew
+    title:
+      en: See who is on a task and who is talking
+      zh: 看到谁在做任务、谁在沟通
+    verifies: [crew, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: An isolated renderer fixture provides a standing team with a live task where five members are busy, one is waiting on a decision, and two of them exchanged a message within the last two minutes, plus a finished task.
+        zh: 隔离界面数据提供一个持久团队：一个进行中任务有五位成员在忙、一位在等决定，其中两位在两分钟内互发过消息；另有一个已完成任务。
+    steps:
+      - en: Read the task rows at desktop and narrow widths, then open the live task.
+        zh: 在桌面和窄屏宽度下查看任务行，再打开进行中任务。
+      - en: Deliver a new message between two more members, let two minutes pass, then make one member idle, in both themes and with reduced motion.
+        zh: 在两种主题及减少动态效果下，投递另两位成员之间的新消息，等待两分钟，再让一位成员空闲。
+    expected:
+      - en: The live row shows the waiting member first, at most four faces (three when narrow) and "+N"; the talking pair overlaps and blinks; the finished row shows no one.
+        zh: 进行中任务行先显示等待中的成员，最多四个头像（窄屏三个）加“+N”；沟通中的两人重叠并眨眼；已完成任务行不显示成员。
+      - en: 'The task panel''s team scene groups the talkers, marks the lead by a bold name, lists everyone else on standby, and keeps its height while members join, stop talking or leave; reduced motion shows no sliding or blinking. Once the task is finished, the stage keeps the Lead and everyone who took part, each with a green check, and standby lists only those who took no part. When unfinished work has nobody on it, the scene does not fold: the stage still shows the Lead and those who took part, a check only on those whose part is done and "On standby" under the rest (no checks at all once a person ended it).'
+        zh: 任务面板的团队现场把沟通者聚在一起，以加粗名字标出 Lead，其余成员列为空闲；成员加入、停止沟通或离开时高度不变；减少动态效果时没有滑动和眨眼。任务完成后，现场保留 Lead 和所有参与过的成员（各带绿色对钩），空闲区只列未参与的成员。未完成的工作暂时没人在做时，现场不折叠：仍显示 Lead 和参与过的成员，只有已完成自己部分的带对钩，其余名字下写“待命中”（被人工结束的一律不带对钩）。
+    notes:
+      en: Talking is read from activity the page received while open; talk from before the page opened is out of scope.
+      zh: “沟通中”只依据页面打开期间收到的活动；页面打开前的沟通不在范围内。
+
+  - id: teams.tasks.team-outputs
+    title:
+      en: Open the team's delivered files from the team page
+      zh: 从团队页打开团队交付的文件
+    verifies: [outputs, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A controlled standing team has more than 30 outputs across several tasks and months, including one file declared twice in a task and one published by the main chat, plus a teammate reader who sees only some producers.
+        zh: 隔离的持久团队在多个任务和月份中有超过 30 份产出，其中一份在同一任务里声明过两次、一份由主聊天发布；另有一位只能看到部分发布者的队友读者。
+    steps:
+      - en: On the team page click "N outputs" in the header, scroll to the end, open a file, then open a row's task; repeat at a narrow width, in both themes, and as the teammate reader.
+        zh: 在团队页点击页头的“N 个产出”，滚动到底，打开一份文件，再打开某行的来源任务；在窄屏、两种主题下以及以队友读者身份重复。
+    expected:
+      - en: The header count is a button with a chevron that opens the Outputs panel the way Members opens (docked beside the page when wide, full screen when narrow). The panel reads "Outputs" with the all-time total and lists files newest first under Today, Yesterday, Earlier this week, Earlier this month, then by month; each row shows the file icon and name, who produced it ("Main chat" for the main chat), its task as a link and the time. A file declared twice appears once, at its latest declaration.
+        zh: 页头数量是带箭头的按钮，打开“产出”面板的方式与“成员”一致（宽屏停靠在页面旁，窄屏全屏）。面板标题为“产出”并显示全部时间的总数，按今天、昨天、本周更早、本月更早、再按月份分组，最新在前；每行显示文件图标与名称、发布者（主聊天发布时显示“主聊天”）、来源任务链接和时间。同一任务里声明两次的文件只出现一次，位于最近一次声明处。
+      - en: Further pages load while scrolling without repeats; clicking a row opens the file, clicking the task opens that task; with no outputs the panel says so. The teammate reader sees only files from producers they can see, and the total matches.
+        zh: 滚动时继续加载后续分页且不重复；点击行打开文件，点击任务打开该任务；没有产出时面板给出说明。队友读者只看到其可见发布者的文件，总数一致。
+      - en: Above the list, a search box matches file names (not folder paths), producer names and task titles, and a time menu offers All time, Today, Last 7 days and Last 30 days; the count then reads "N found" for the filtered set, paging still works within it, and with nothing matching the panel offers to clear the filters.
+        zh: 列表上方的搜索框匹配文件名（不含目录路径）、发布者名称和任务标题，时间菜单提供全部时间、今天、近 7 天、近 30 天；筛选后计数显示为“找到 N 个”，分页在筛选结果内照常进行，无匹配时面板提供“清除筛选”。
+      - en: On desktop, hovering a row reveals a "…" button whose menu, like right-clicking the row, offers "Show in Folder", which shows the file in the system file manager (a teammate's file as its fetched local copy, or the same toast as opening when it cannot be fetched). Remote clients show no such menu; clicking a row downloads the file.
+        zh: 桌面端悬停某行时出现“…”按钮，其菜单与右键该行一样提供“在文件夹中显示”，在系统文件管理器中显示该文件（队友的文件显示为取回的本地副本，无法取回时给出与打开相同的提示）。远程客户端没有该菜单，点击行即下载文件。
+    notes:
+      en: The header counts outputs from this month's tasks; the panel total covers all time, so the two can differ.
+      zh: 页头统计本月任务的产出，面板总数涵盖全部时间，两者可能不同。
+
+  - id: teams.tasks.needs-you
+    title:
+      en: Handle several things waiting on me from the team page
+      zh: 在团队页处理多件等我处理的事
+    verifies: [attention, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated renderer fixture has a team where three tasks stopped because the model of two of my own members is no longer available, a fourth task failed for another reason, and one member is waiting on my decision.
+        zh: 隔离界面数据中，团队有三个任务因我自己两位成员的模型失效而停下，第四个任务因其他原因失败，另有一位成员在等我决定。
+    steps:
+      - en: Open the team page, expand the tasks involved in the merged card, then choose Change model; repeat at a narrow width and in both themes.
+        zh: 打开团队页，展开合并卡中涉及的任务，再点击“去更换模型”；在窄屏和两种主题下重复。
+    expected:
+      - en: '"Needs you" counts every task and decision. Tasks stopped on the same model setting become one card that names the cause and the affected members, with Change model and "N tasks involved", which expands in place to one row per task that opens it. Everything else follows as one line each with Reply or View; Reply opens that decision in full in front.'
+        zh: '“需要你处理”的数量按任务与决定逐条计算。因同一模型设置停下的任务合并为一张卡，写明原因与受影响的成员，提供“去更换模型”和“涉及的 N 个任务”，后者原地展开为每个任务一行，点击打开该任务。其余各占一行，提供“回复”或“查看”；“回复”会把该决定以完整卡片置于最前。'
+      - en: With one affected member Change model opens that member's model settings; with several it opens the Members page, which lists them first, tinted, with their stop reason and their own Change model. No text claims the tasks resume by themselves.
+        zh: 只有一位受影响成员时，“去更换模型”打开该成员的模型设置；多位时打开成员页，这些成员排在最前并标红，显示停下原因及各自的“去更换模型”。界面不声称任务会自动继续。
+      - en: Only my own members on this machine are grouped; a teammate's member, an undelivered message or an unrelated failure stays its own line. Nothing overflows at a narrow width in either theme.
+        zh: 只有我自己在本机的成员会被合并；队友的成员、未送达的消息或无关失败各自单独一行。窄屏两种主题下均不溢出。
+    notes:
+      en: Application handlers are replaced. This verifies grouping, ordering and navigation in the renderer, not that changing a model restarts a task. The bound test covers the count, the merged card and its expansion, Reply, and Change model with several affected members; the single-member path and a teammate's member or an undelivered message staying its own line are not yet asserted.
+      zh: 应用处理器被替换；验证界面中的合并、排序与跳转，不证明更换模型后任务会重新开始。已绑定的测试覆盖计数、合并卡片及其展开、“回复”，以及多位受影响成员时的“去更换模型”；单个成员的路径，以及队友成员或未送达消息单独成行，尚未断言。

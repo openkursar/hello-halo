@@ -45,7 +45,8 @@ Three kinds, three backends:
 - `virtual` — `backend/virtual.ts`: every other `app-chat:` key (IM, HTTP, team
   member). Only their live turn is tracked here; the transcript belongs to the
   view that shows it (`ImChatView`, team chat). `settleTurn` retires the streamed
-  state and nothing else. Nothing opens them through the store, so a view that
+  state, plus `loadThoughts` for a local team member's reply (the changes view
+  reads the process from the member's own transcript). Nothing opens them through the store, so a view that
   shows one picks up a turn already running with `recoverRunningTurn` — a read
   made only while the store holds the session as running.
 
@@ -62,7 +63,15 @@ running.
 
 ## The conversation on screen
 
-A space has two pointers: `currentConversationId` (the regular conversation last
+The homepage also selects native team tasks through `selectedTeamChat`, independently
+of a member's transcript. `SpacePage` hosts the team module's task room rather than
+opening its virtual session through `ChatView`. Team selection clears personal
+selection; selecting a regular or personal conversation clears team selection.
+The active session is the selected team's member session, or null before a member
+and task exist, never the hidden regular conversation. Team records remain owned
+by the team view; this adds no transcript backend or execution routing.
+
+For regular and personal conversations, a space has two pointers: `currentConversationId` (the regular conversation last
 opened — kept while a digital human is selected, so switching back lands there)
 and `selectedAppChat`. `selectActiveConversationId` (`active.ts`) is what the page
 shows. Anything that answers "which conversation is the user looking at" — the

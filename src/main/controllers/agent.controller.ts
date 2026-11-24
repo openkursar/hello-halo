@@ -17,7 +17,8 @@ import {
 import type { AgentRequest } from '../services/agent'
 import { analytics } from '../services/analytics/analytics.service'
 import { isReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
-import type { AgentInjectRequest, AgentSendRequest } from '../../shared/types/agent-send'
+import type { AgentInjectRequest, AgentInjectResult, AgentSendRequest } from '../../shared/types/agent-send'
+import { isImageAttachmentInput } from '../../shared/types/image-attachment'
 import { parseCanvasContext, parseTurnReferences } from './chat-turn-input'
 
 export interface ControllerResponse<T = unknown> {
@@ -89,21 +90,26 @@ export async function sendMessage(body: unknown): Promise<ControllerResponse> {
 /**
  * Add a message to the turn a space conversation is running.
  */
-export function injectMessage(body: unknown): ControllerResponse {
+export function injectMessage(body: unknown): ControllerResponse<AgentInjectResult> {
   const fields = (body && typeof body === 'object' ? body : {}) as Partial<Record<keyof AgentInjectRequest, unknown>>
   const references = parseTurnReferences(fields.references)
   if (!references.ok) return { success: false, error: references.error }
+  if (fields.images !== undefined && (!Array.isArray(fields.images) || !fields.images.every(isImageAttachmentInput))) {
+    console.warn('[Agent] Image injection refused: invalid image attachments')
+    return { success: false, error: 'Invalid image attachments', data: { retryable: false } }
+  }
+  const images = Array.isArray(fields.images) && fields.images.length ? fields.images.filter(isImageAttachmentInput) : undefined
   const message = typeof fields.message === 'string' ? fields.message : ''
-  if (typeof fields.conversationId !== 'string' || !fields.conversationId || (!message.trim() && !references.references)) {
+  if (typeof fields.conversationId !== 'string' || !fields.conversationId || (!message.trim() && !references.references && !images)) {
     return { success: false, error: 'Missing required fields: conversationId, message' }
   }
   try {
-    agentInjectMessage(fields.conversationId, message, references.references)
+    agentInjectMessage(fields.conversationId, message, references.references, images)
     return { success: true }
   } catch (error: unknown) {
     const err = error as Error
     console.error('[Agent] inject-message failed:', err)
-    return { success: false, error: err.message }
+    return { success: false, error: err.message, ...('retryable' in err && err.retryable === false ? { data: { retryable: false } } : {}) }
   }
 }
 

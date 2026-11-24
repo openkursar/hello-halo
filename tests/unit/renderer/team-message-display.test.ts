@@ -1,11 +1,11 @@
 /**
  * Where a teammate's message (or another conversation's) is drawn.
  *
- * One that started the AI's work, or that no reply claims (older history, a
- * remote record), is a line of its own: it opens itself for a few seconds when
- * fresh. One read while a reply was being written is drawn among that reply's
- * work — or after the reply as its own card when the reply did no work — and
- * never as a thought process of its own.
+ * A team's message always reads as conversation, never a card of its own: one
+ * that opened a reply is named on its sender line, one that no reply follows is
+ * that same line on its own, and one read while a reply was written is drawn
+ * among that reply's work — or after the reply as the same line when it did no
+ * work — and never as a thought process of its own.
  *
  * No DOM here: rows are searched as element trees, lines rendered to markup.
  */
@@ -31,7 +31,10 @@ vi.mock('../../../src/renderer/components/chat/CollapsedThoughtProcess', () => (
   LazyCollapsedThoughtProcess: function LazyCollapsedThoughtProcess() { return null },
 }))
 vi.mock('../../../src/renderer/components/chat/InjectionAnnotation', () => ({ InjectionAnnotation: () => null }))
-vi.mock('../../../src/renderer/components/chat/ArrivalCard', () => ({ ArrivalCard: function ArrivalCard() { return null } }))
+vi.mock('../../../src/renderer/components/chat/ArrivalCard', () => ({
+  ArrivalCard: function ArrivalCard() { return null },
+  TrailingArrivals: function TrailingArrivals() { return null },
+}))
 vi.mock('../../../src/renderer/components/chat/cross-conversation', () => ({
   CrossConversationMessage: () => null,
   CrossConversationNotice: () => null,
@@ -40,7 +43,7 @@ vi.mock('../../../src/renderer/components/chat/cross-conversation', () => ({
 }))
 
 import { MessageRow } from '../../../src/renderer/components/chat/MessageRow'
-import { ArrivalCard } from '../../../src/renderer/components/chat/ArrivalCard'
+import { TrailingArrivals } from '../../../src/renderer/components/chat/ArrivalCard'
 import { CollapsedThoughtProcess, LazyCollapsedThoughtProcess } from '../../../src/renderer/components/chat/CollapsedThoughtProcess'
 import { TeamMemberMessage } from '../../../src/renderer/components/chat/team-collab/TeamMemberMessage'
 import { ReplyOpeners } from '../../../src/renderer/components/chat/team-collab/ReplyOpeners'
@@ -68,14 +71,17 @@ const team = (fields: Partial<Message> = {}): Message => ({
 const tool = (id: string, seconds: number): Thought => ({ id, type: 'tool_use', content: '', timestamp: at(seconds), toolName: 'Read' })
 
 describe('a teammate message in the transcript', () => {
-  it('that started the work, or that no reply claims, is the team line itself — never a thought process', () => {
+  it('that no reply follows is the received line on its own — never a card or a thought process', () => {
     for (const message of [team(), team({ metadata: { teamId: 'team', teamName: 'Crew' } })]) {
-      const tree = nodes(row({ message }))
-      const line = tree.find(node => node.type === TeamMemberMessage)
-      expect(line?.props?.message).toBe(message)
-      expect(line?.props?.inProcess).toBeUndefined()
+      const tree = nodes(row({ message, senderName: 'Halo' }))
+      const line = tree.find(node => node.type === ReplyOpeners)
+      expect(line?.props?.openers).toEqual([message])
+      expect(line?.props?.senderName).toBe('Halo')
+      expect(tree.some(node => node.type === TeamMemberMessage)).toBe(false)
       expect(tree.some(node => node.type === CollapsedThoughtProcess || node.type === LazyCollapsedThoughtProcess)).toBe(false)
     }
+    const run = [team(), team({ id: 'team-2' })]
+    expect(nodes(row({ message: run[0], openers: run })).find(node => node.type === ReplyOpeners)?.props?.openers).toEqual(run)
   })
 
   it('read while a reply was written joins that reply’s work at the time it arrived', () => {
@@ -99,7 +105,7 @@ describe('a teammate message in the transcript', () => {
 
     const html = renderToStaticMarkup(createElement(ReplyOpeners, { senderName: 'Halo', openers: [opener, team({ id: 'team-2', metadata: { teamId: 'team', teamName: 'Crew', fromMemberName: 'Scout' } })] }))
     expect(html).toContain('Halo')
-    expect(html).toContain('Received reports from Reviewer and 1 more')
+    expect(html).toContain('Received messages from Reviewer and 1 more')
     expect(html).not.toContain('Details follow')
   })
 
@@ -110,13 +116,13 @@ describe('a teammate message in the transcript', () => {
     expect(html).toContain('Details follow')
   })
 
-  it('received by a reply that did no work is drawn after it as its own card', () => {
+  it('received by a reply that did no work is drawn after it', () => {
     const reply: Message = { id: 'reply', role: 'assistant', content: 'Sure', timestamp: at(30) }
     const arrival = team({ id: 'live', metadata: { teamId: 'team', teamName: 'Crew', inputMode: 'live', inputReplyId: 'reply' } })
-    const tree = nodes(row({ message: reply, arrivals: [arrival] }))
+    const tree = nodes(row({ message: reply, arrivals: [arrival], senderName: 'Halo' }))
     expect(tree.some(node => node.type === CollapsedThoughtProcess)).toBe(false)
-    const cards = tree.filter(node => node.type === ArrivalCard)
-    expect(cards.map(node => [node.props?.message, node.props?.inProcess])).toEqual([[arrival, undefined]])
+    const after = tree.find(node => node.type === TrailingArrivals)
+    expect(after?.props).toMatchObject({ arrivals: [arrival], senderName: 'Halo' })
   })
 
   it('received during a reply is not redrawn with each streamed word, and draws its own kind’s line', async () => {
@@ -128,23 +134,19 @@ describe('a teammate message in the transcript', () => {
   })
 })
 
-describe('the team line', () => {
-  it('opens itself while fresh, with its icon highlighted', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date(at(6)))
-    try {
-      const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team() }))
-      expect(html).toMatch(/<svg[^>]*lucide-users[^>]*text-primary/)
-      expect(html).toContain('Details follow')
-      expect(html).toContain('From team')
-      expect(html).toContain('title="Open team view"')
-      expect(html).toContain('Crew')
-      expect(html).toContain('Reviewer')
-    } finally {
-      vi.useRealTimers()
-    }
+describe('arrivals drawn after a reply', () => {
+  it('read one team’s messages as one received line, while another conversation’s keeps its card', async () => {
+    const actual = await vi.importActual<typeof import('../../../src/renderer/components/chat/ArrivalCard')>('../../../src/renderer/components/chat/ArrivalCard')
+    const other: Message = { id: 'other', role: 'system', source: 'cross-conversation', content: 'Hi', timestamp: at(8) }
+    const tree = nodes(actual.TrailingArrivals({ arrivals: [team(), team({ id: 'team-2', metadata: { teamId: 'team', teamName: 'Crew', fromMemberName: 'Scout' } }), other], senderName: 'Halo' }))
+    const lines = tree.filter(node => node.type === ReplyOpeners)
+    expect(lines.map(node => (node.props?.openers as Message[]).map(message => message.id))).toEqual([['team-1', 'team-2']])
+    expect(lines[0].props?.senderName).toBe('Halo')
+    expect(tree.filter(node => node.type === TeamMemberMessage)).toEqual([])
   })
+})
 
+describe('a team message in a reply’s work', () => {
   it('says when it arrived in the app’s language: the time alone today, the month and day before', () => {
     const time = { hour: '2-digit', minute: '2-digit' } as const
     const sent = new Date(at(0))
@@ -170,17 +172,11 @@ describe('the team line', () => {
     expect(html).not.toContain('<time')
   })
 
-  it('stays a quiet collapsed row inside a reply’s work, even when fresh', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date(at(6)))
-    try {
-      const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team(), inProcess: true }))
-      expect(html).not.toContain('Details follow')
-      expect(html).toContain('Report: tests pass')
-      expect(html).toContain('aria-expanded="false"')
-    } finally {
-      vi.useRealTimers()
-    }
+  it('stays a quiet collapsed row', () => {
+    const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team(), inProcess: true }))
+    expect(html).not.toContain('Details follow')
+    expect(html).toContain('Report: tests pass')
+    expect(html).toContain('aria-expanded="false"')
   })
 
   it('is a plain line with no box, saying who sent it, what about and when', () => {
@@ -212,7 +208,6 @@ describe('the team line', () => {
   it('summarizes a record by its stored summary when the content starts with what the member read', () => {
     const html = renderToStaticMarkup(createElement(TeamMemberMessage, {
       message: team({ content: '[Team message from Reviewer]\n\nTests pass', metadata: { teamId: 'team', teamName: 'Crew', summary: 'Tests pass' } }),
-      inProcess: true,
     }))
     expect(html).toContain('Tests pass')
     expect(html).not.toContain('[Team message from Reviewer]')

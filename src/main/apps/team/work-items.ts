@@ -9,6 +9,7 @@ interface TaskColumns {
   task_title?: string | null
   task_created_by?: string | null
   task_entry_app_id?: string | null
+  task_ended_by?: string | null
   task_updated_at?: number | null
 }
 
@@ -16,7 +17,7 @@ export function workItemFromRow(row: TaskColumns): TeamWorkItem | undefined {
   if (!row.task_status) return undefined
   return { id: row.id, teamId: row.team_id, createdAt: row.started_at,
     title: row.task_title ?? null, status: row.task_status,
-    createdBy: row.task_created_by ?? null, entryAppId: row.task_entry_app_id ?? null,
+    createdBy: row.task_created_by ?? null, entryAppId: row.task_entry_app_id ?? null, endedBy: row.task_ended_by ?? null,
     updatedAt: row.task_updated_at ?? row.started_at }
 }
 
@@ -28,7 +29,7 @@ function queries(db: Database.Database) {
       read: db.prepare('SELECT * FROM team_epochs WHERE id = ?'),
       write: db.prepare(`UPDATE team_epochs SET task_status = @status, task_title = @title,
         task_created_by = COALESCE(task_created_by, @createdBy),
-        task_entry_app_id = COALESCE(@entryAppId, task_entry_app_id), task_updated_at = @updatedAt
+        task_entry_app_id = COALESCE(@entryAppId, task_entry_app_id), task_ended_by = @endedBy, task_updated_at = @updatedAt
         WHERE id = @id AND team_id = @teamId AND (task_updated_at IS NULL OR task_updated_at <= @updatedAt)`),
     }
     statements.set(db, cached)
@@ -48,14 +49,16 @@ export function applyWorkItem(db: Database.Database, epoch: TeamEpoch): void {
     item = undefined
   }
   if (!item && readWorkItem(db, epoch.id)) return
-  queries(db).write.run(item ? { ...item, entryAppId: item.entryAppId ?? null } : {
+  queries(db).write.run(item ? { ...item, entryAppId: item.entryAppId ?? null, endedBy: item.endedBy ?? null } : {
     id: epoch.id, teamId: epoch.teamId, title: epoch.title ?? null,
-    status: epoch.endReason === 'completed' ? 'completed' : 'open',
-    createdBy: null, entryAppId: null, updatedAt: epoch.startedAt,
+    status: epoch.endReason === 'completed' || epoch.endReason === 'ended' ? 'completed' : 'open',
+    createdBy: null, entryAppId: null, endedBy: null, updatedAt: epoch.startedAt,
   })
 }
 
-export function updateWorkItem(db: Database.Database, epochId: string, patch: Partial<Pick<TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId'>>): void {
+export function updateWorkItem(db: Database.Database, epochId: string, patch: Partial<Pick<TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId' | 'endedBy'>>): void {
+  // Work that opens again has no one who ended it.
+  if (patch.status === 'open') patch = { ...patch, endedBy: null }
   const current = readWorkItem(db, epochId)
   if (!current) throw new Error(`Task not found for execution: ${epochId}`)
   if (Object.entries(patch).every(([key, value]) => current[key as keyof TeamWorkItem] === value)) return

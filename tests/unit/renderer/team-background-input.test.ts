@@ -30,7 +30,8 @@ vi.mock('../../../src/renderer/components/chat/transcript', () => ({
 }))
 vi.mock('../../../src/renderer/components/chat/useBrowserToolCalls', () => ({ useBrowserToolCalls: () => [] }))
 vi.mock('../../../src/renderer/components/chat/MessageRow', () => ({ MessageRow: () => null }))
-vi.mock('../../../src/renderer/components/chat/InputArea', () => ({ InputArea: () => null }))
+vi.mock('../../../src/renderer/components/chat/InputArea', () => ({ InputArea: () => 'EDITABLE_COMPOSER' }))
+vi.mock('../../../src/renderer/components/references', () => ({ useConversationReferenceScope: () => null }))
 vi.mock('../../../src/renderer/components/chat/CompactNotice', () => ({ CompactNotice: () => null }))
 vi.mock('../../../src/renderer/components/chat/InterruptedBubble', () => ({ InterruptedBubble: () => null }))
 vi.mock('../../../src/renderer/components/chat/StreamingSection', async () => {
@@ -60,6 +61,27 @@ beforeEach(() => {
 })
 
 describe('team input during background work', () => {
+  it.each(['readonly', 'offline'] as const)('keeps member navigation available on a %s surface without an editable composer', mode => {
+    const html = renderToStaticMarkup(createElement(TeamSessionChat, {
+      appId: 'member', spaceId: 'space', teamId: 'team', epochId: 'epoch', isRemote: true,
+      readonly: mode === 'readonly', reachability: mode === 'offline' ? 'offline' : 'online',
+      composerAdjacentSlot: 'MEMBER_NAVIGATION',
+    }))
+    expect(html).toContain('MEMBER_NAVIGATION')
+    expect(html).not.toContain('EDITABLE_COMPOSER')
+  })
+
+  it('does not expose answer controls for a read-only background decision', () => {
+    session.pendingQuestion = { status: 'pending', questions: [] }
+    const html = renderToStaticMarkup(createElement(TeamSessionChat, {
+      appId: 'member', spaceId: 'space', teamId: 'team', epochId: 'epoch', isRemote: true,
+      readonly: true, isBackgroundTurn: () => true,
+    }))
+    expect(html).toContain('Read only')
+    expect(html).not.toContain('OWNER_QUESTION')
+    expect(html).not.toContain('EDITABLE_COMPOSER')
+  })
+
   it('shows the original input while keeping background output, thoughts and captured text hidden', () => {
     const html = render()
     expect(html).toContain('OWNER_ADDITION')

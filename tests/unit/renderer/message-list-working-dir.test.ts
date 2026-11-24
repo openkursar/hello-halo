@@ -8,7 +8,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-vi.mock('../../../src/renderer/i18n', () => ({
+vi.mock('../../../src/renderer/i18n', async (importOriginal) => ({
+  ...await importOriginal<object>(),
   useTranslation: () => ({ t: (text: string) => text }),
   getCurrentLanguage: () => 'en',
 }))

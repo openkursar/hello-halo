@@ -40,6 +40,14 @@ export type AppStatus = 'active' | 'paused' | 'error' | 'needs_login' | 'waiting
  */
 export type RunOutcome = 'useful' | 'noop' | 'error' | 'skipped'
 
+export interface AppChatInjectRequest {
+  appId: string
+  conversationId: string
+  message: string
+  references?: import('../types/content-reference').ContentReference[]
+  images?: import('../types/image-attachment').ImageAttachment[]
+}
+
 /** Engine ownership accompanying a history read, without starting that engine. */
 export interface AppChatEngineMetadata {
   engineId?: import('../types/engine').EngineId

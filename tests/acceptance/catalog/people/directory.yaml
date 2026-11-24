@@ -15,12 +15,15 @@ promises:
   browse:
     en: Search, paging and return navigation preserve list context and include persistent coordinators.
     zh: 搜索、分页和返回保留列表上下文，长期协调者也能找到。
+  recipient:
+    en: Locally owned persistent team members, including automatically created leads, can be selected for personal chats in their workspace. The composer identifies the current person independently of the new-chat candidate list. Temporary collaborators and other people's team members do not gain personal-chat access.
+    zh: 当前空间内自有的长期团队成员，包括自动创建的 Lead，可被选择进行个人聊天。输入框独立于新聊天候选列表显示当前对象身份；临时协作者和他人的团队成员不会因此获得个人私聊入口。
   scale:
     en: Large directories remain bounded and usable at narrow widths.
     zh: 大量数字人时列表仍有限加载，窄屏也可操作。
   live-status:
-    en: A digital human working a team turn reads as working wherever its status shows — the space rail, the people switcher and the directory — and a team lead appears in its space’s rail marked as the team lead, without being offered as a chat recipient.
-    zh: 正在处理团队任务的数字人，在所有显示状态的地方（空间右栏、人员切换条、目录）都显示为工作中；团队 Lead 出现在所在空间的右栏并标为团队 Lead，但不作为聊天收件人提供。
+    en: A digital human working a team turn reads as working wherever its status shows — the space rail, the people switcher and the directory — and a team lead appears in its space’s rail marked as the team lead, without a Chat action there; it stays selectable as a recipient in the composer.
+    zh: 正在处理团队任务的数字人，在所有显示状态的地方（空间右栏、人员切换条、目录）都显示为工作中；团队 Lead 出现在所在空间的右栏并标为团队 Lead，右栏不提供聊天按钮，但在输入框中仍可选为收件人。
   tags:
     en: I can put my own tags on digital humans and MCP servers, filter a list by one tag, find items by a tag through search, and rename or delete a tag across that list; tags stay on this computer and never change the item itself.
     zh: 我能给数字人和 MCP 服务打上自己的标签，按一个标签筛选列表，搜索时能命中标签，并能在该列表内重命名或删除标签；标签只保存在本机，不改变条目本身。
@@ -114,6 +117,30 @@ scenarios:
     expected:
       - en: The correct people appear, search text is retained and pages stay bounded.
         zh: 显示正确数字人，搜索词保留，分页大小受控。
+  - id: people.directory.team-recipient
+    title:
+      en: Start a personal chat with an owned persistent team member
+      zh: 与自有长期团队成员开始个人聊天
+    verifies: [recipient]
+    platforms: *a1
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      entry: [desktop, remote-web]
+      width: [wide, narrow]
+    preconditions:
+      - en: The workspace contains an owned persistent lead and member, a temporary collaborator, and a team peer owned elsewhere.
+        zh: 空间中包含自有长期 Lead 与成员、临时协作者及他人拥有的团队成员。
+    steps:
+      - en: Open a personal chat with each owned persistent member from their details and from the composer recipient picker.
+        zh: 分别从详情和输入框候选菜单打开每位自有长期成员的个人聊天。
+    expected:
+      - en: Each selected person's name and avatar agree between the empty chat and composer; candidate filtering never replaces an available current identity with a generic label.
+        zh: 空会话与输入框显示一致的当前成员姓名和头像，候选过滤不会使已知当前身份退化成通用标签。
+      - en: Temporary collaborators and remote peers are absent from personal-chat candidates, and no team history is copied into the personal chat.
+        zh: 个人聊天候选中不出现临时协作者和他人的成员，团队历史不会复制进个人聊天。
   - id: people.directory.scale
     title:
       en: Browse a large directory on a narrow screen

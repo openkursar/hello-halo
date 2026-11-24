@@ -37,6 +37,9 @@ interface TeamViewPrefsState {
    */
   defaultMemberByTeam: Record<string, string>
   setDefaultMember: (teamId: string, appId: string) => void
+  /** Width the user dragged the team page's docked detail panel to; null follows the window. */
+  detailPanelWidth: number | null
+  setDetailPanelWidth: (width: number | null) => void
 }
 
 export const useTeamViewPrefsStore = create<TeamViewPrefsState>()(
@@ -60,6 +63,8 @@ export const useTeamViewPrefsStore = create<TeamViewPrefsState>()(
             ? state
             : { defaultMemberByTeam: { ...state.defaultMemberByTeam, [teamId]: appId } }
         ),
+      detailPanelWidth: null,
+      setDetailPanelWidth: (width) => set({ detailPanelWidth: width }),
     }),
     {
       name: 'halo-team-view-prefs',
@@ -69,6 +74,7 @@ export const useTeamViewPrefsStore = create<TeamViewPrefsState>()(
         groupsByTeam: state.groupsByTeam,
         skinByTeam: state.skinByTeam,
         defaultMemberByTeam: state.defaultMemberByTeam,
+        detailPanelWidth: state.detailPanelWidth,
       }),
     },
   ),

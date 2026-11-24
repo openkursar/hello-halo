@@ -1,6 +1,8 @@
 /** Digital Team REST API routes. Thin delegation to TeamService. */
-import type { Express, Request, Response } from 'express'
+import type { Express, Request as ExpressRequest, Response } from 'express'
 import { z } from 'zod'
+
+type Request = ExpressRequest<Record<string, string>>
 import { getTeamService, getTeamStore, workMemberPrincipalId } from '../../apps/team'
 import { readTeamMemberHistory } from '../../apps/runtime/app-chat'
 import { getOfficeCredential } from '../auth/middleware'
@@ -166,13 +168,10 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
   // identity owns; seeing PEERS' artifacts requires a board-wide scope (full
   // visibility AND discoverable). Fail-closed: a credential mapping to no member
   // sees nothing. PIN requests (no credential) pass through unchanged.
-  function projectArtifactsForCredential(
-    req: Request,
-    teamId: string,
-    groups: TeamArtifactGroup[],
-  ): TeamArtifactGroup[] {
+  /** The members whose files this caller may see; null means every member's. */
+  function visibleProducers(req: Request, teamId: string): string[] | null {
     const cred = getOfficeCredential(req)
-    if (!cred) return groups
+    if (!cred) return null
     const store = getTeamStore()
     if (!store) return []
     const ownAppIds = resolveOfficeMemberAppIds(teamId, cred.identity)
@@ -185,8 +184,16 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
       const scope = gate.parseScope(member)
       return scope.visibility === 'full' && scope.discoverable
     })
-    if (canSeePeers) return groups
-    return groups.filter((g) => ownAppIds.includes(g.appId))
+    return canSeePeers ? null : ownAppIds
+  }
+
+  function projectArtifactsForCredential(
+    req: Request,
+    teamId: string,
+    groups: TeamArtifactGroup[],
+  ): TeamArtifactGroup[] {
+    const visible = visibleProducers(req, teamId)
+    return visible ? groups.filter((g) => visible.includes(g.appId)) : groups
   }
 
   // GET /api/teams — list teams (optional ?spaceId=)
@@ -197,6 +204,52 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
       const spaceId = typeof req.query.spaceId === 'string' && req.query.spaceId ? req.query.spaceId : undefined
       res.json({ success: true, data: service.listTeamItems(spaceId) })
     } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.get('/api/teams/native-tasks', async (req: Request, res: Response) => {
+    if (getOfficeCredential(req)) {
+      console.warn('[TeamRoutes] Homepage task listing refused for office-scoped credentials')
+      res.status(403).json({ success: false, error: 'Forbidden' })
+      return
+    }
+    try {
+      const service = getServiceOrFail(res)
+      if (!service) return
+      const { spaceId, limit, cursor, epochIds, scope } = req.query
+      if (typeof spaceId !== 'string' || (limit !== undefined && typeof limit !== 'string') ||
+          (cursor !== undefined && typeof cursor !== 'string') ||
+          (epochIds !== undefined && typeof epochIds !== 'string') ||
+          (scope !== undefined && scope !== 'mine')) {
+        console.warn('[TeamRoutes] Homepage task listing refused: invalid query shape')
+        res.status(400).json({ success: false, error: 'Invalid native task query' })
+        return
+      }
+      let parsedEpochIds: string[] | undefined
+      if (epochIds !== undefined) {
+        try {
+          const parsed: unknown = JSON.parse(epochIds as string)
+          if (!Array.isArray(parsed) || parsed.length > 100 ||
+              parsed.some(id => typeof id !== 'string' || !id.trim()) || cursor !== undefined) {
+            throw new Error('Invalid epochIds')
+          }
+          parsedEpochIds = parsed
+        } catch {
+          console.warn('[TeamRoutes] Homepage task listing refused: invalid epochIds query')
+          res.status(400).json({ success: false, error: 'Invalid native task epochIds query' })
+          return
+        }
+      }
+      res.json({ success: true, data: service.listNativeTasks({
+        spaceId,
+        ...(parsedEpochIds !== undefined ? { epochIds: parsedEpochIds } : {}),
+        ...(limit !== undefined ? { limit: Number(limit) } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
+        ...(scope === 'mine' ? { scope } : {}),
+      }) })
+    } catch (error) {
+      console.warn('[TeamRoutes] native task listing failed:', error)
       res.json({ success: false, error: (error as Error).message })
     }
   })
@@ -538,6 +591,32 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
       if (!service) return
       const groups = await service.listArtifacts(req.params.teamId)
       res.json({ success: true, data: projectArtifactsForCredential(req, req.params.teamId, groups) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/teams/:teamId/outputs — every file the team produced, newest first, paged
+  app.get('/api/teams/:teamId/outputs', async (req: Request, res: Response) => {
+    try {
+      if (!officeGateOk(req, res, req.params.teamId)) return
+      const service = getServiceOrFail(res)
+      if (!service) return
+      const offset = Number(req.query.offset)
+      const limit = Number(req.query.limit)
+      const since = typeof req.query.since === 'string' ? Number(req.query.since) : NaN
+      const producers = visibleProducers(req, req.params.teamId) ?? undefined
+      res.json({
+        success: true,
+        data: service.listOutputs(req.params.teamId, {
+          offset: Number.isFinite(offset) ? offset : undefined,
+          limit: Number.isFinite(limit) ? limit : undefined,
+          producers,
+          since: Number.isFinite(since) ? since : undefined,
+          text: typeof req.query.q === 'string' ? req.query.q : undefined,
+          textEpochIds: typeof req.query.epochs === 'string' ? req.query.epochs.split(',').filter(Boolean) : undefined,
+        }),
+      })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

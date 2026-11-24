@@ -238,7 +238,15 @@ reconnect or election.
   rows the manager's cache-first `fetchMemberHistory` reads, so history opens
   locally); only the node that SERVES (the office authority) also keeps the
   verbatim mirror row, because it alone serves feeds onward (joiner↔joiner
-  replication over the star). A node elected later starts its mirror mid-feed
+  replication over the star). Rows of a running turn are provisional: the
+  transcript reader places what arrived during a turn after its reply, so a
+  published row can move to another seq or change until the turn ends. The
+  publisher withholds the trailing reply while the turn runs, and when it ends
+  appends same-seq revisions for every row it published during the turn that
+  changed; consumers upsert by message seq. A turn that ends with fewer rows than
+  it published is not expressible this way, so the cache-first read reconciles
+  with the owner from the cached last reply on (rewriting rows that differ,
+  dropping rows the owner no longer has) after serving the local copy. A node elected later starts its mirror mid-feed
   and announces that floor (`truncatedBeforeSeq`), so a consumer behind it skips
   ahead; the hole this leaves in its history copy is detected by the cache-first
   read and filled from the owner. History is guaranteed readable while the
@@ -351,6 +359,15 @@ IPC/HTTP response already carries `detail` structurally (both routes pass the
 controller's result through unchanged), but the one-time manual "join a team"
 dialog (`TeamJoinDialog.tsx`) does not read it yet and still shows the plain
 generic message on `VERSION_INCOMPATIBLE`.
+
+**Additive changes under one version.** Some changes ride version 4 without a
+bump because an older node tolerates them, only showing less: the `ended` end
+reason (an older node files the task as not completed until its work item
+arrives completed with it), the replicated `firstHumanTurnAt` on an epoch row
+(an older node drops the field and lists that run only where a person wrote
+into it), and the mutable history tail (an older viewer keeps rows a running
+turn later revised until it reads that history afresh). Anything an older node
+could misapply rather than merely under-show needs a bump.
 
 **Refused joins.** A joiner whose join is refused, for any reason, is outside
 the office until a grant (`JoinedOffice.refusal`). Its presence FSM judges

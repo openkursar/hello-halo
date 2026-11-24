@@ -33,6 +33,8 @@ interface SettingsTabProps {
   /** The member whose settings screen is open; null shows the team's own settings. */
   openMemberId: string | null
   onOpenMemberChange: (appId: string | null) => void
+  /** 'page' lays the settings out as grouped cards inside a page that scrolls on its own. */
+  layout?: 'drawer' | 'page'
 }
 
 // ── Helpers ──
@@ -53,7 +55,7 @@ function valueToConfig(value: ScheduleValue): TeamScheduleConfig {
 
 // ── Component ──
 
-export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: SettingsTabProps) {
+export function SettingsTab({ detail, openMemberId, onOpenMemberChange, layout = 'drawer' }: SettingsTabProps) {
   const { t } = useTranslation()
   // A joined office is owned by someone else: settings are read-only here and
   // schedule/triggers (authoritative run config) are hidden entirely.
@@ -73,14 +75,47 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: Settin
     )
   }
 
+  const readOnlyNotice = readOnly && (
+    <p className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs text-muted-foreground">
+      {t('This team is managed by its owner. You are watching it — settings are read-only.')}
+    </p>
+  )
+
+  if (layout === 'page') {
+    return (
+      <div className="space-y-4">
+        {readOnlyNotice}
+        <SettingsGroup>
+          <GoalSection team={detail.team} first readOnly={readOnly} />
+          {!readOnly && <ScheduleSection teamId={detail.team.id} />}
+        </SettingsGroup>
+        <SettingsGroup>
+          <MembersSection detail={detail} readOnly={readOnly} first onOpenMember={onOpenMemberChange} />
+        </SettingsGroup>
+        <SettingsGroup>
+          <Disclosure title={t('Advanced')}>
+            <OfficeSkinSection teamId={detail.team.id} first />
+            <CollaborationSection team={detail.team} readOnly={readOnly} />
+            {!readOnly && (
+              <div className="border-t border-border pt-6">
+                <HttpTriggerCard kind="team" id={detail.team.id} />
+              </div>
+            )}
+          </Disclosure>
+        </SettingsGroup>
+        <SettingsGroup>
+          <Section title={t('Other')} first>
+            {readOnly ? <LeaveSection detail={detail} /> : <DangerSection detail={detail} />}
+          </Section>
+        </SettingsGroup>
+      </div>
+    )
+  }
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto max-w-2xl space-y-6 p-3 sm:p-6">
-        {readOnly && (
-          <p className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs text-muted-foreground">
-            {t('This team is managed by its owner. You are watching it — settings are read-only.')}
-          </p>
-        )}
+        {readOnlyNotice}
         {/* Everyday settings up top (§6.6): name / goal, schedule, members. */}
         <GoalSection team={detail.team} first readOnly={readOnly} />
         {!readOnly && <ScheduleSection teamId={detail.team.id} />}
@@ -290,13 +325,13 @@ function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; re
 
 // ── 3b. Office appearance (client-local view preference) ──
 
-function OfficeSkinSection({ teamId }: { teamId: string }) {
+function OfficeSkinSection({ teamId, first }: { teamId: string; first?: boolean }) {
   const { t } = useTranslation()
   const skin = useOfficeSkin(teamId)
   const setOfficeSkin = useTeamViewPrefsStore(s => s.setOfficeSkin)
 
   return (
-    <Section title={t('Appearance')}>
+    <Section title={t('Appearance')} first={first}>
       <p className="mb-2 text-xs text-muted-foreground/70">
         {t('How this team looks on your screen. Only affects your view.')}
       </p>
@@ -323,9 +358,10 @@ function OfficeSkinSection({ teamId }: { teamId: string }) {
 
 // ── 4. Members ──
 
-function MembersSection({ detail, readOnly, onOpenMember }: {
+function MembersSection({ detail, readOnly, first, onOpenMember }: {
   detail: TeamDetail
   readOnly?: boolean
+  first?: boolean
   onOpenMember: (appId: string) => void
 }) {
   const { t } = useTranslation()
@@ -373,7 +409,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   [allApps, teams, detail.members])
 
   return (
-    <Section title={t('Members')}>
+    <Section title={t('Members')} first={first}>
       <div className="space-y-2">
         {detail.members.map(member => {
           const app = appMap.get(member.appId)
@@ -687,6 +723,10 @@ function LeaveSection({ detail }: { detail: TeamDetail }) {
 }
 
 // ── Shared primitives ──
+
+function SettingsGroup({ children }: { children: React.ReactNode }) {
+  return <section className="space-y-6 rounded-2xl border border-border-soft bg-card p-4 sm:p-5">{children}</section>
+}
 
 function Section({ title, children, first }: { title: string; children: React.ReactNode; first?: boolean }) {
   return (

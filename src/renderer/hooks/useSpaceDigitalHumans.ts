@@ -9,17 +9,15 @@
 import { useEffect, useMemo } from 'react'
 import { useAppsStore } from '../stores/apps.store'
 import { useTeamStore } from '../stores/team.store'
-import { coordinatorIds, ephemeralMemberIds } from '../utils/people-model'
+import { ephemeralMemberIds } from '../utils/people-model'
 import type { InstalledApp } from '../../shared/apps/app-types'
 
 interface Options {
   /** Keep soft-deleted apps, which surfaces still holding their conversations need. */
   includeUninstalled?: boolean
-  /** Keep team coordinators, for surfaces that show people rather than offer recipients. */
-  includeCoordinators?: boolean
 }
 
-export function useSpaceDigitalHumans(spaceId: string | null, { includeUninstalled = false, includeCoordinators = false }: Options = {}): InstalledApp[] {
+export function useSpaceDigitalHumans(spaceId: string | null, { includeUninstalled = false }: Options = {}): InstalledApp[] {
   const apps = useAppsStore(s => s.apps)
   const loadApps = useAppsStore(s => s.loadApps)
   const teams = useTeamStore(s => s.teams)
@@ -32,14 +30,13 @@ export function useSpaceDigitalHumans(spaceId: string | null, { includeUninstall
 
   return useMemo(() => {
     if (!spaceId) return []
-    // Coordinators and ephemeral-collaboration members are team-internal — a
-    // person never addresses them directly.
-    const hidden = new Set([...ephemeralMemberIds(teams), ...(includeCoordinators ? [] : coordinatorIds(teams))])
+    // Temporary collaborators have no standing personal-chat entry.
+    const hidden = ephemeralMemberIds(teams)
     return apps.filter(a =>
       a.spec.type === 'automation'
       && a.spaceId === spaceId
       && (includeUninstalled || a.status !== 'uninstalled')
       && !hidden.has(a.id)
     )
-  }, [apps, teams, spaceId, includeUninstalled, includeCoordinators])
+  }, [apps, teams, spaceId, includeUninstalled])
 }

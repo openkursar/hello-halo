@@ -19,6 +19,7 @@ import { BrowserViewer, BrowserViewerFallback } from './viewers/BrowserViewer'
 import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { TerminalViewer } from './viewers/TerminalViewer'
 import { TeamViewer } from './viewers/TeamViewer'
+import { TeamTaskViewer } from './viewers/TeamTaskViewer'
 
 // Office viewers ship heavy parsers (SheetJS, docx-preview, pdfjs) — lazy
 // chunks keep them out of the startup bundle.
@@ -81,6 +82,7 @@ export const VIEWERS: Record<ContentType, ViewerSpec> = {
   browser: { Component: remote ? RemoteBrowserEntry : BrowserViewer, ownsLoading: true },
   terminal: { Component: TerminalViewer },
   team: { Component: TeamViewer },
+  'team-task': { Component: TeamTaskViewer },
   goal: { Component: GoalEditor },
   changes: { Component: ChangesViewer, bringsFileList: true },
 }

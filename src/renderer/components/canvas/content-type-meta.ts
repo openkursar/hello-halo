@@ -5,7 +5,7 @@
  * until it is listed (`null` for file types, whose icon comes from their extension).
  */
 
-import { Globe, TerminalSquare, GitCompareArrows, Target, Users, type LucideIcon } from 'lucide-react'
+import { Globe, TerminalSquare, GitCompareArrows, ListChecks, Target, Users, type LucideIcon } from 'lucide-react'
 import type { ContentType } from '../../services/canvas-lifecycle'
 
 export interface NonFileContentMeta {
@@ -36,4 +36,5 @@ export const NON_FILE_CONTENT_META: Record<ContentType, NonFileContentMeta | nul
   changes: CHANGES_META,
   goal: { icon: Target, color: 'text-primary' },
   team: { icon: Users, color: 'text-primary' },
+  'team-task': { icon: ListChecks, color: 'text-primary' },
 }

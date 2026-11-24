@@ -93,9 +93,25 @@ describe('sendMessage / injectMessage', () => {
 
   it('injects text, references or both, never nothing', () => {
     expect(injectMessage({ conversationId: 'c', message: '', references: [reference] })).toEqual({ success: true })
-    expect(m.injectMessage).toHaveBeenCalledWith('c', '', [reference])
+    expect(m.injectMessage).toHaveBeenCalledWith('c', '', [reference], undefined)
     expect(injectMessage({ conversationId: 'c', message: '  ' }).success).toBe(false)
     expect(injectMessage({ conversationId: 'c', message: 'x', references: [{}] }).success).toBe(false)
+  })
+
+  it('accepts image-only input and rejects malformed attachments without fallback', () => {
+    const images = [{ id: 'image', type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' }]
+    expect(injectMessage({ conversationId: 'c', message: '', images })).toEqual({ success: true })
+    expect(m.injectMessage).toHaveBeenCalledWith('c', '', undefined, images)
+    m.injectMessage.mockClear()
+    expect(injectMessage({ conversationId: 'c', message: 'text', images: [{}] }))
+      .toMatchObject({ success: false, data: { retryable: false } })
+    expect(m.injectMessage).not.toHaveBeenCalled()
+  })
+
+  it('keeps live-image preparation failures from becoming another turn', () => {
+    m.injectMessage.mockImplementationOnce(() => { throw Object.assign(new Error('No OCR in this turn'), { retryable: false }) })
+    expect(injectMessage({ conversationId: 'c', message: 'x' }))
+      .toEqual({ success: false, error: 'No OCR in this turn', data: { retryable: false } })
   })
 
   it('reports a refused injection', () => {

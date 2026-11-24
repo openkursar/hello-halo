@@ -414,10 +414,10 @@ export interface SerializedThoughtsSummary {
 /** A single serialized transcript message (owner-local shape, transport-opaque). */
 export interface SerializedHistoryMessage {
   /**
-   * 1-based ordinal position in the member's full transcript. The transcript is
-   * append-only and immutable, so this is stable across reads — it is the anchor
-   * a viewer sends back as `sinceSeq` to pull only the tail instead of the whole
-   * transcript every time (the fix for slow full re-pulls).
+   * 1-based ordinal position in the member's full transcript — the anchor a
+   * viewer sends back as `sinceSeq` to pull only the tail. Stable for finished
+   * turns; rows of a running turn may move or change until it ends, so a viewer
+   * re-reads from its last reply.
    */
   seq: number
   role: string

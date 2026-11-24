@@ -42,13 +42,20 @@ export function resolveActiveModelTarget(
 
 export function useActiveModelTarget(): ActiveModelTarget {
   const conversationId = useChatStore(selectActiveConversationId)
-  const appId = conversationId && conversationKind(conversationId) === 'digital-human'
+  const team = useChatStore(s => s.spaceStates.get(s.currentSpaceId ?? '')?.selectedTeamChat)
+  const appId = team?.appId ?? (conversationId && conversationKind(conversationId) === 'digital-human'
     ? digitalHumanAppId(conversationId)
-    : null
+    : null)
 
   // Subscribed by reference so streaming tokens do not re-render the header.
   const conversation = useChatStore(s => !appId && conversationId ? s.conversationCache.get(conversationId) ?? null : null)
   const app = useAppsStore(s => appId ? s.apps.find(a => a.id === appId) : undefined)
 
-  return resolveActiveModelTarget(conversationId, conversation, app)
+  if (team && appId) return {
+    kind: 'digital-human', appId,
+    appName: app ? resolveSpecI18n(app.spec, getCurrentLanguage()).name || appId : appId,
+    modelSourceId: app?.userOverrides.modelSourceId,
+    modelId: app?.userOverrides.modelId,
+  }
+  return resolveActiveModelTarget(team ? null : conversationId, conversation, app)
 }

@@ -29,7 +29,7 @@ vi.mock('../../../src/renderer/components/chat/cross-conversation', () => ({
   isCrossConversationMessage: () => false,
   isCrossConversationNotice: () => false,
 }))
-vi.mock('../../../src/renderer/components/chat/team-collab', () => ({ TeamMemberMessage: () => null, isTeamMessage: () => false }))
+vi.mock('../../../src/renderer/components/chat/team-collab', () => ({ ReplyOpeners: () => null, isTeamMessage: () => false }))
 
 import { MessageRow } from '../../../src/renderer/components/chat/MessageRow'
 import { PushedMessageLabel } from '../../../src/renderer/components/chat/PushedMessageLabel'

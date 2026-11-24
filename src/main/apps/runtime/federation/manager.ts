@@ -52,7 +52,13 @@ import {
   type SerializedHistoryMessage,
 } from './protocol-m2'
 import { createCtrlFeed, type CtrlFeed } from './ctrl-feed'
-import { createSessionFeed, historyCacheKey, isSessionFeedFrame, type SessionFeed } from './session-feed'
+import {
+  createSessionFeed,
+  historyCacheKey,
+  historyRowFingerprint,
+  isSessionFeedFrame,
+  type SessionFeed,
+} from './session-feed'
 import { isFeedSyncFrame, parseFeedIdKey, type FeedSyncFrame } from './log/types'
 import { getFeedStore, type AuthorityStore, type FeedStore } from '../../federation'
 import { REMOTE_WAIT_ABANDONED_REASON, SELF_NODE_ID, type TeamMemberRuntimeStatus, type TeamStatus, type TeamVersionMismatch } from '../../../../shared/apps/team-types'
@@ -457,7 +463,7 @@ export function resolveVersionMismatchDetail(
  * Result of a member-history fetch. `stale` is true only when the messages are a
  * cached copy served because the owner was unreachable (or went silent mid-fetch)
  * — they may be missing the owner's latest messages, and the UI must say so. A
- * live fetch (even one merged with an immutable cached prefix) is not stale.
+ * live fetch (even one merged with a cached prefix of finished turns) is not stale.
  */
 export interface HistoryFetchResult {
   messages: SerializedHistoryMessage[]
@@ -3648,8 +3654,8 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     if (!authority) {
       return Promise.reject(new Error(`artifact: office not present or M2 off office=${params.officeId}`))
     }
-    // No node-level cache: unlike an append-only transcript, an artifact's bytes
-    // can change under a stable ref, so always pull fresh from the owner. The
+    // No node-level cache: an artifact's bytes can change under a stable ref and
+    // nothing reports the change, so always pull fresh from the owner. The
     // viewer's fetch addresses ref.ownerNodeId directly (host) or routes to the
     // host which relays one hop to the true owner (joiner).
     return authority.artifact.fetch(params.ref)
@@ -3702,10 +3708,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       return Promise.reject(new Error(`history: office not present or M2 off office=${params.officeId}`))
     }
 
-    // Node-level persistent cache: a transcript is append-only and immutable per
-    // epoch, so cached rows never invalidate. Serve the span the caller lacks
-    // from the local cache and ask the owner only for the tail beyond it — after
-    // an app restart history opens instantly and the network carries a delta.
+    // Node-level persistent cache: serve the span the caller lacks from the local
+    // cache, then reconcile with the owner from the last reply on — rows before
+    // it belong to finished turns and never change, so after an app restart
+    // history opens instantly and the network carries a short tail.
     const wantSince = params.sinceSeq ?? 0
     const feedStore = resolveFeedStore()
     const cacheKey = historyCacheKey(params.ownerNodeId, params.appId, params.epochId)
@@ -3733,7 +3739,8 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // the copy may then miss their latest rows and the UI says so.
     if (cacheIntact && cachedSpan.length > 0) {
       const stale = ownerUnreachable || noHostRoute
-      if (!stale) refreshHistoryTailInBackground(params, cacheKey, cachedMax)
+      const lastReply = [...cachedSpan].reverse().find((m) => m.role === 'assistant')
+      if (!stale) refreshHistoryTailInBackground(params, cacheKey, lastReply ? lastReply.seq - 1 : wantSince)
       return Promise.resolve({ messages: cachedSpan, stale })
     }
 
@@ -3777,11 +3784,12 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   const historyRefreshInFlight = new Set<string>()
 
   /**
-   * Verify freshness AFTER the local copy was already served: pull the tail
-   * beyond the replica's high-water from the owner, persist it, and signal the
-   * renderer to reload if anything newer landed. Failures are silent — the
-   * replica already painted, and session-feed replication is the primary
-   * freshness channel anyway.
+   * Verify freshness AFTER the local copy was already served: make the replica's
+   * rows above `sinceSeq` match the owner's — rewrite rows that differ, add new
+   * ones, drop ones the owner no longer has — and signal the renderer to reload
+   * if anything changed. A turn may have rewritten rows it already replicated,
+   * so this covers the tail the session feed could not correct. Failures are
+   * silent — the replica already painted.
    */
   function refreshHistoryTailInBackground(
     params: { officeId: string; ownerNodeId: NodeId; appId: string; epochId: string },
@@ -3789,10 +3797,13 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     sinceSeq: number
   ): void {
     const authority = getOfficeAuthority(params.officeId)
-    if (!authority) return
+    const feedStore = resolveFeedStore()
+    if (!authority || !feedStore) return
     const key = `${params.officeId}\u0000${params.appId}\u0000${params.epochId}`
     if (historyRefreshInFlight.has(key)) return
     historyRefreshInFlight.add(key)
+    const readHeld = () => feedStore.listCache(params.officeId, cacheKey, sinceSeq, 50_000)
+    const held = readHeld()
     authority.history
       .fetch({
         ownerNodeId: params.ownerNodeId,
@@ -3802,8 +3813,28 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         ...(sinceSeq > 0 ? { sinceSeq } : {}),
       })
       .then((tail) => {
-        if (tail.length === 0) return
-        writeHistoryCache(params.officeId, cacheKey, tail)
+        // Replication wrote this span meanwhile: what it carried is at least as
+        // new as this answer, and the next open reconciles again.
+        const now = readHeld()
+        if (now.length !== held.length || now.some((row, i) => row.entryJson !== held[i].entryJson)) return
+        const heldBySeq = new Map(held.map((row) => [row.seq, row.entryJson]))
+        const differs = (m: SerializedHistoryMessage) => {
+          const json = heldBySeq.get(m.seq)
+          if (json === undefined) return true
+          try {
+            return historyRowFingerprint(JSON.parse(json) as SerializedHistoryMessage) !== historyRowFingerprint(m)
+          } catch {
+            return true
+          }
+        }
+        const fresh = tail.filter(differs)
+        const ownerMax = tail.reduce((max, m) => Math.max(max, m.seq), sinceSeq)
+        const surplus = held.some((row) => row.seq > ownerMax)
+        if (fresh.length === 0 && !surplus) return
+        feedStore.transaction(() => {
+          for (const m of fresh) feedStore.putCache(params.officeId, cacheKey, m.seq, JSON.stringify(m))
+          if (surplus) feedStore.deleteCacheAfter(params.officeId, cacheKey, ownerMax)
+        })
         notifyMemberHistoryUpdated(params.officeId, params.appId, params.epochId)
       })
       .catch((err: Error) => {

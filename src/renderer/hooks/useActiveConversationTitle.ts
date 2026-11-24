@@ -15,6 +15,7 @@ import { getCurrentLanguage } from '../i18n'
 export function useActiveConversationTitle(): string | undefined {
   const conversationId = useChatStore(selectActiveConversationId)
   const spaceId = useChatStore(s => s.currentSpaceId)
+  const team = useChatStore(s => s.spaceStates.get(s.currentSpaceId ?? '')?.selectedTeamChat)
   const isDigitalHuman = !!conversationId && conversationKind(conversationId) === 'digital-human'
   const appId = isDigitalHuman ? digitalHumanAppId(conversationId) : null
 
@@ -26,6 +27,7 @@ export function useActiveConversationTitle(): string | undefined {
   const app = useAppsStore(s => appId ? s.apps.find(a => a.id === appId) : undefined)
   const rows = useAppChatConversationRows(spaceId, { enabled: isDigitalHuman })
 
+  if (team) return team.label || team.teamName
   if (!isDigitalHuman || !appId) return regularTitle
   const name = app ? resolveSpecI18n(app.spec, getCurrentLanguage()).name || appId : appId
   const row = rows.find(candidate => candidate.id === conversationId)

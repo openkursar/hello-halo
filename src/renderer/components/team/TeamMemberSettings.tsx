@@ -39,9 +39,11 @@ interface TeamMemberSettingsProps {
   detail: TeamDetail
   member: TeamMember
   onBack: () => void
+  /** Only the body, for a host that supplies its own header and scrolling. */
+  embedded?: boolean
 }
 
-export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSettingsProps) {
+export function TeamMemberSettings({ detail, member, onBack, embedded = false }: TeamMemberSettingsProps) {
   const { t } = useTranslation()
   const updateMember = useTeamStore(s => s.updateMember)
   const setCurrentTab = useAppsPageStore(s => s.setCurrentTab)
@@ -71,6 +73,67 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
     { allowEmpty: true },
   )
 
+  const body = (
+    <div className={embedded ? 'space-y-5' : 'mx-auto max-w-2xl space-y-5 p-3 sm:p-6'}>
+      {description && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-foreground">
+            {t('The digital human itself')}
+          </h3>
+          <p className="whitespace-pre-wrap rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm leading-relaxed text-muted-foreground">
+            {description}
+          </p>
+          <p className="text-xs text-muted-foreground/60">
+            {t('Teammates can read this — it is how they tell what this one can do.')}
+          </p>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium text-foreground">
+          {t('Duty in this team')}
+        </h3>
+        {isMine ? (
+          <SystemPromptEditor
+            value={duty}
+            onChange={setDuty}
+            onBlur={saveDuty}
+            onDone={saveDuty}
+            title={t('What {{member}} does in {{team}}', {
+              member: member.memberName,
+              team: detail.team.name,
+            })}
+            className="leading-relaxed"
+            placeholder={t(
+              'For example:\nYou do the coding.\nStart once you have the design and the test cases; write the code and test it yourself.\nWhen you are done, tell "Code Review".\nIf it comes back rejected, fix it and tell them again.'
+            )}
+          />
+        ) : (
+          <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2">
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+              {member.duty?.trim() || t('Nothing written yet.')}
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t('{{owner}} wrote this for their digital human.', { owner: ownerName })}
+            </p>
+          </div>
+        )}
+        <p className="text-xs text-muted-foreground/60">
+          {t('Teammates can read this too, and it is what they go on when handing out work.')}
+        </p>
+      </div>
+
+      {isMine && systemPrompt && <OwnInstructions prompt={systemPrompt} />}
+
+      {isMine && <DelegatedCapabilities teamId={detail.team.id} member={member} />}
+
+      {isMine && <BorrowedWorkRecord teamId={detail.team.id} member={member} />}
+
+      <MemberChecks teamId={detail.team.id} checks={checks} />
+    </div>
+  )
+  if (embedded) return body
+
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex flex-shrink-0 items-center gap-2 border-b border-border px-3 py-2.5 sm:px-4">
@@ -99,63 +162,7 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl space-y-5 p-3 sm:p-6">
-          {description && (
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium text-foreground">
-                {t('The digital human itself')}
-              </h3>
-              <p className="whitespace-pre-wrap rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm leading-relaxed text-muted-foreground">
-                {description}
-              </p>
-              <p className="text-xs text-muted-foreground/60">
-                {t('Teammates can read this — it is how they tell what this one can do.')}
-              </p>
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <h3 className="text-sm font-medium text-foreground">
-              {t('Duty in this team')}
-            </h3>
-            {isMine ? (
-              <SystemPromptEditor
-                value={duty}
-                onChange={setDuty}
-                onBlur={saveDuty}
-                onDone={saveDuty}
-                title={t('What {{member}} does in {{team}}', {
-                  member: member.memberName,
-                  team: detail.team.name,
-                })}
-                className="leading-relaxed"
-                placeholder={t(
-                  'For example:\nYou do the coding.\nStart once you have the design and the test cases; write the code and test it yourself.\nWhen you are done, tell "Code Review".\nIf it comes back rejected, fix it and tell them again.'
-                )}
-              />
-            ) : (
-              <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2">
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-                  {member.duty?.trim() || t('Nothing written yet.')}
-                </p>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {t('{{owner}} wrote this for their digital human.', { owner: ownerName })}
-                </p>
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground/60">
-              {t('Teammates can read this too, and it is what they go on when handing out work.')}
-            </p>
-          </div>
-
-          {isMine && systemPrompt && <OwnInstructions prompt={systemPrompt} />}
-
-          {isMine && <DelegatedCapabilities teamId={detail.team.id} member={member} />}
-
-          {isMine && <BorrowedWorkRecord teamId={detail.team.id} member={member} />}
-
-          <MemberChecks teamId={detail.team.id} checks={checks} />
-        </div>
+        {body}
       </div>
     </div>
   )

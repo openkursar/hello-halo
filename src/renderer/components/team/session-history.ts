@@ -57,7 +57,7 @@ export function peekTeamSessionHistory(appId: string, spaceId: string, teamId: s
   return (sources.get(key) ?? retired.get(key))?.messages ?? null
 }
 
-type HistoryRow = Message & { seq?: number }
+type HistoryRow = Message & { seq?: number; ts?: number }
 
 const REMOTE_ROW_ID = 'remote-seq-'
 /** Wide enough for any seq, so these ids compare as text in seq order. */
@@ -67,15 +67,17 @@ const SEQ_WIDTH = String(Number.MAX_SAFE_INTEGER).length
  * Rows of a member on another computer come as its owner serialized them, with
  * `seq` but no `id`. Every team surface keys and matches messages by id, so such
  * a row takes one derived from its seq: the same on every read, and never an id
- * the owner itself assigns. These rows carry no `timestamp` either, so lists
- * order them by comparing ids as text, hence the padding. Of the owner's
- * metadata only how a reply ended crosses, and only as a value this build knows.
+ * the owner itself assigns, padded so ids compare as text in seq order. Their
+ * time comes as epoch-ms `ts`; surfaces that interleave them with team records
+ * read `timestamp`. Of the owner's metadata only how a reply ended crosses, and
+ * only as a value this build knows.
  */
 function withRowId(row: HistoryRow & { ending?: unknown }): HistoryRow {
   if (row.id) return row
   const { ending: sent, metadata: _metadata, ...rest } = row
   const ending = readReplyEnding(sent)
-  return { ...rest, id: `${REMOTE_ROW_ID}${String(row.seq).padStart(SEQ_WIDTH, '0')}`, ...(ending ? { metadata: { ending } } : {}) }
+  const timestamp = !row.timestamp && typeof row.ts === 'number' && Number.isFinite(row.ts) ? new Date(row.ts).toISOString() : row.timestamp
+  return { ...rest, id: `${REMOTE_ROW_ID}${String(row.seq).padStart(SEQ_WIDTH, '0')}`, ...(timestamp ? { timestamp } : {}), ...(ending ? { metadata: { ending } } : {}) }
 }
 
 const seqOf = (message: Message) => (message as HistoryRow).seq
@@ -142,7 +144,11 @@ export function loadTeamSessionHistory(...args: Parameters<typeof api.teamChatMe
     let result: HistoryResult
     do {
       source.dirty = false
-      const since = source.messages && source.cursor > 1 ? source.cursor - 1 : undefined
+      // A reply keeps its row while what arrives during its turn is stored after
+      // it, so it can still change behind the last row: re-read from it.
+      const lastReply = source.messages?.findLast(message => message.role === 'assistant')
+      const from = Math.min(source.cursor, (lastReply && seqOf(lastReply)) || source.cursor)
+      const since = source.messages && from > 1 ? from - 1 : undefined
       result = await api.teamChatMessages(appId, spaceId, teamId, epochId, since)
       if (!result.success) return result
       const batch = ((result.data ?? []) as HistoryRow[]).map(withRowId)

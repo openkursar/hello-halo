@@ -41,7 +41,7 @@ export function DigitalHumansTab({ onItemsChange }: DigitalHumansTabProps) {
   const { t } = useTranslation()
   const spaceId = useSpaceStore(state => state.currentSpace?.id ?? '')
   const appStates = useAppsStore(s => s.appStates)
-  const digitalHumans = useSpaceDigitalHumans(spaceId, { includeCoordinators: true })
+  const digitalHumans = useSpaceDigitalHumans(spaceId)
   const teams = useTeamStore(s => s.teams)
   const coordinators = useMemo(() => coordinatorIds(teams), [teams])
 
@@ -87,7 +87,7 @@ export function DigitalHumansTab({ onItemsChange }: DigitalHumansTabProps) {
             name={name || app.id}
             description={coordinator ? `${t('Team lead')} · ${status}` : status}
             onClick={() => handleOpenOverview(app.id)}
-            onUse={coordinator ? undefined : () => { if (app.spaceId) void handleOpenChat(app.id, app.spaceId) }}
+            onUse={() => { if (app.spaceId) void handleOpenChat(app.id, app.spaceId) }}
             useLabel={t('Chat')}
           />
         )

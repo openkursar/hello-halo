@@ -326,6 +326,8 @@ export interface FeedStore {
   getCacheMinSeq(officeId: string, feedId: string): number
   /** Drop every cached row of one feed. Returns rows removed. */
   deleteCacheFeed(officeId: string, feedId: string): number
+  /** Drop one feed's cached rows above afterSeq. Returns rows removed. */
+  deleteCacheAfter(officeId: string, feedId: string, afterSeq: number): number
   /** Distinct feed ids with cached rows in an office (replica enumeration). */
   listCacheFeedIds(officeId: string): string[]
 

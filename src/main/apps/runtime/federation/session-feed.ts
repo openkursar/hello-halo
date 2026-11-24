@@ -11,12 +11,17 @@
  * while the authority is online; a copy that is not local is fetched when shown
  * and never reads as "this member said nothing".
  *
- * Mutable-tail contract: the transcript reader merges an in-flight turn's events
- * into a provisional trailing assistant message that keeps changing until the
- * turn ends. The publisher therefore (a) withholds that trailing message while
- * the session is active, and (b) appends a same-seq REVISION entry whenever the
- * last published message changed on disk — consumers upsert by message seq, so
- * every replica converges on the finished form even across races.
+ * Mutable-tail contract: rows of a turn still running are provisional. The
+ * reader merges its events into a trailing assistant message that keeps
+ * changing, and places what arrived during the turn after the reply it arrived
+ * in — so rows already published can move to another seq or change until the
+ * turn ends; earlier turns' rows never change. The publisher therefore (a)
+ * withholds that trailing message while the session is active, and (b) appends
+ * same-seq REVISION entries for published rows that changed on disk: the last
+ * one on every pass, and every row published during the turn once it ends.
+ * Consumers upsert by message seq, so every replica converges on the finished
+ * form. A turn that ends with fewer rows than it published cannot be told this
+ * way; viewers reconcile that tail with the owner when they open the history.
  *
  * Topology: joiners exchange frames only with the office authority (star), so a
  * subscribe for a feed authored elsewhere is served from the authority's mirror.
@@ -96,6 +101,23 @@ const MIRROR_READ_LIMIT = 10_000
  * (manager) and the proactive replication path (this module) write it, so they
  * MUST share this single definition.
  */
+/**
+ * A transcript row's identity for revision detection, shared by the publisher
+ * and the viewer's history reconcile. Excludes `ts`: the reader synthesizes a
+ * timestamp when an event carries none, so it can drift between reads of an
+ * unchanged message and must not count as a content change.
+ */
+export function historyRowFingerprint(msg: SerializedHistoryMessage): string {
+  return JSON.stringify({
+    role: msg.role,
+    content: msg.content,
+    thoughts: msg.thoughts ?? null,
+    thoughtsSummary: msg.thoughtsSummary ?? null,
+    // Only when present, so messages without one keep the fingerprints already published.
+    ...(msg.ending ? { ending: msg.ending } : {}),
+  })
+}
+
 export function historyCacheKey(ownerNodeId: NodeId, appId: string, epochId: string): string {
   return `history\u0000${ownerNodeId}\u0000${appId}\u0000${epochId}`
 }
@@ -368,20 +390,11 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
   const dirtySessions = new Set<string>()
 
   /**
-   * Message identity for revision detection. Excludes `ts`: the reader
-   * synthesizes a timestamp when an event carries none, so it can drift between
-   * reads of an unchanged message and must not count as a content change.
+   * Rows published while their session's turn was running, as published (seq →
+   * fingerprint). Checked again once the turn ends, then forgotten; bounded by
+   * one turn's rows per running session.
    */
-  function msgFingerprint(msg: SerializedHistoryMessage): string {
-    return JSON.stringify({
-      role: msg.role,
-      content: msg.content,
-      thoughts: msg.thoughts ?? null,
-      thoughtsSummary: msg.thoughtsSummary ?? null,
-      // Only when present, so messages without one keep the fingerprints already published.
-      ...(msg.ending ? { ending: msg.ending } : {}),
-    })
-  }
+  const unsettledRows = new Map<string, Map<number, string>>()
 
   // Sessions already reported as carrying an over-ceiling message, so the warning
   // is written once per session rather than on every publish sweep.
@@ -439,8 +452,13 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
     const publishedSeq = typeof lastMsg?.seq === 'number' ? lastMsg.seq : 0
 
     const active = deps.isSessionActive(sessionKey)
-    const messages = deps.readOwnedTranscript(parsed.teamId, parsed.appId, parsed.epochId, publishedSeq)
+    // Once the turn ends, its published rows are read back to be checked.
+    const unsettled = active ? undefined : unsettledRows.get(sessionKey)
+    let readFrom = publishedSeq
+    if (unsettled) for (const seq of unsettled.keys()) readFrom = Math.min(readFrom, seq)
+    const messages = deps.readOwnedTranscript(parsed.teamId, parsed.appId, parsed.epochId, readFrom)
     if (!messages) return 0
+    if (unsettled) unsettledRows.delete(sessionKey)
     // An empty tail after a watermark means nothing new since the last publish:
     // an idle session has therefore completed publishing (clear the marker the
     // idle publish used to clear); an active one still withholds its final form.
@@ -456,25 +474,45 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
       active && messages[messages.length - 1]?.role === 'assistant' ? messages.slice(0, -1) : messages
 
     let appended = 0
-    // Self-heal: if the last published message has since changed on disk (an
-    // active-gate race, or a replica poisoned before the gate existed), append a
-    // revision entry carrying the SAME message seq — consumers upsert their
-    // history cache by that seq, so every replica converges on the final form.
-    if (lastMsg && publishedSeq > 0) {
+    const publish = (msg: SerializedHistoryMessage) => {
+      durableLog.append(feedKey, ENTRY_MSG, msg)
+      appended++
+      if (!active) return
+      let rows = unsettledRows.get(sessionKey)
+      if (!rows) unsettledRows.set(sessionKey, (rows = new Map()))
+      rows.set(msg.seq, historyRowFingerprint(msg))
+    }
+
+    // Compare the forms that are actually PUBLISHED: fingerprinting the on-disk
+    // message against a trimmed replica would differ forever and revise on every
+    // sweep.
+    const settled = unsettled
+      ? publishable
+          .filter((m) => m.seq >= readFrom && m.seq <= publishedSeq)
+          .map((m) => fitPublishedMessage(sessionKey, m))
+      : []
+    const changed = settled.filter((m) => unsettled?.get(m.seq) !== historyRowFingerprint(m))
+    const lastSettled = settled[settled.length - 1]
+    const settledSeqs = new Set(settled.map((m) => m.seq))
+    const shrank = unsettled ? [...unsettled.keys()].some((seq) => !settledSeqs.has(seq)) : false
+    if (changed.length > 0 || shrank) {
+      // The ended turn rewrote rows it had published: revise each, and end on the
+      // highest one still there — the last entry's seq is the watermark.
+      for (const msg of changed) publish(msg)
+      if (lastSettled && changed[changed.length - 1] !== lastSettled) publish(lastSettled)
+    } else if (lastMsg && publishedSeq > 0) {
+      // Self-heal: the last published message changed on disk (an active-gate
+      // race, or a replica poisoned before the gate existed). A revision carries
+      // the SAME message seq; consumers upsert by it and converge.
       const current = publishable.find((m) => m.seq === publishedSeq)
-      // Compare the forms that are actually PUBLISHED. Fingerprinting the on-disk
-      // message against a trimmed replica would differ forever, and this branch
-      // would append a revision on every sweep.
       const currentPublished = current ? fitPublishedMessage(sessionKey, current) : undefined
-      if (currentPublished && msgFingerprint(currentPublished) !== msgFingerprint(lastMsg)) {
-        durableLog.append(feedKey, ENTRY_MSG, currentPublished)
-        appended++
+      if (currentPublished && historyRowFingerprint(currentPublished) !== historyRowFingerprint(lastMsg)) {
+        publish(currentPublished)
       }
     }
     for (const msg of publishable) {
       if (msg.seq <= publishedSeq) continue
-      durableLog.append(feedKey, ENTRY_MSG, fitPublishedMessage(sessionKey, msg))
-      appended++
+      publish(fitPublishedMessage(sessionKey, msg))
     }
     if (appended > 0) {
       servable.set(feedKey, durableLog.latestSeq(feedKey))

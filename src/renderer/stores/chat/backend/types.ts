@@ -56,7 +56,7 @@ export interface ChatBackend {
    * taken back first. Resolves false when that new message was refused, so
    * nothing went out; throws when the message could not be handed over at all.
    */
-  inject(ctx: BackendContext, conversationId: string, message: string, references?: ContentReference[]): Promise<boolean>
+  inject(ctx: BackendContext, conversationId: string, message: string, references?: ContentReference[], images?: ImageAttachment[]): Promise<boolean>
 
   /** Turn ended: replace the streamed turn with its persisted form in one commit. */
   settleTurn(ctx: BackendContext, ref: ConversationRef, turnId: number): Promise<void>

@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import { inputsByReply, nextTranscriptRows, openerOwner, type TranscriptRows } from '../../../src/renderer/components/chat/transcript/transcript-rows'
 import type { Message } from '../../../src/renderer/types'
+import { appendLiveInputs, withoutLiveInputs } from '../../../src/renderer/utils/live-inputs'
 
 let seq = 0
 const message = (fields: Partial<Message>): Message =>
@@ -21,7 +22,8 @@ const injection = () => message({ role: 'user', source: 'injection' })
 function reference(source: readonly Message[], isGenerating: boolean) {
   let display = source.filter(m => m.source !== 'injection')
   if (isGenerating) {
-    display = display.filter((m, i) => !(i === display.length - 1 && m.role === 'assistant' && !m.content))
+    display = display.filter((m, i) => !(i === display.length - 1 && m.role === 'assistant' && !m.content
+      && source.at(-1)?.source !== 'injection'))
   }
   const seen = new Map<string, number>()
   const keys = display.map(m => {
@@ -72,15 +74,61 @@ describe('transcript rows', () => {
     expect(nextTranscriptRows(done, settled, false)).toBe(done)
   })
 
-  it('shows a running turn’s placeholder once the turn ends, and injected messages on their reply', () => {
+  it('keeps a running turn’s placeholder visible for transcript-only injections through turn end', () => {
     const placeholder = reply(undefined, { content: '' })
     const source = [user(), placeholder, injection(), injection()]
     const running = nextTranscriptRows(null, source, true)
     expectMatchesReference(running, source, true)
-    expect(running.messages).not.toContain(placeholder)
+    expect(running.messages).toContain(placeholder)
     const ended = nextTranscriptRows(running, source, false)
     expectMatchesReference(ended, source, false)
     expect(ended.injections.get(placeholder.id)).toHaveLength(2)
+  })
+
+  it.each(['full', 'incremental'] as const)('preserves oversized image injections without duplicating live images (%s)', (mode) => {
+    const olderReply = reply(0.1)
+    const olderInjection = injection()
+    const history = [user(), olderReply, olderInjection, user()]
+    const placeholder = reply(undefined, { content: '' })
+    const started = [...history, placeholder]
+    const before = nextTranscriptRows(null, started, true)
+    const large = message({
+      source: 'injection', content: '', timestamp: '2026-11-05T10:00:00Z',
+      images: [{ id: 'large', type: 'image', mediaType: 'image/png', data: 'A'.repeat(4 * 1024 * 1024 + 4) }],
+    })
+    const normal = message({
+      source: 'injection', content: '', timestamp: '2026-11-05T10:00:01Z',
+      images: [{ id: 'normal', type: 'image', mediaType: 'image/png', data: 'AAAA' }],
+    })
+    const anchor = { textBlockVersion: 0, textOffset: 0 }
+    const overlay = appendLiveInputs([], [large], anchor)
+    expect(overlay).toEqual([])
+    const source = [...started, large]
+    const rows = nextTranscriptRows(mode === 'full' ? null : before, withoutLiveInputs(source, overlay), true)
+    expect(rows.messages).toEqual([...before.messages, placeholder])
+    expect(rows.injections.get(placeholder.id)).toEqual([large])
+    expect(rows.injections.get(placeholder.id)?.[0]).toBe(large)
+    expect(rows.injections.get(placeholder.id)?.[0].images).toBe(large.images)
+    expect(rows.injections.get(olderReply.id)).toEqual([olderInjection])
+    if (mode === 'incremental') expect(rows.keyRows).toBe(before.keyRows)
+
+    const withNormal = appendLiveInputs(overlay, [normal], anchor)
+    expect(withNormal.map(input => input.message)).toEqual([normal])
+    const mixed = nextTranscriptRows(mode === 'full' ? null : rows, withoutLiveInputs([...source, normal], withNormal), true)
+    expect(mixed.messages).toEqual(rows.messages)
+    expect(mixed.injections.get(placeholder.id)).toEqual([large])
+    expect(mixed.source).not.toContain(normal)
+    if (mode === 'incremental') expect(mixed.keyRows).toBe(rows.keyRows)
+
+    const normalOnly = nextTranscriptRows(mode === 'full' ? null : mixed, withoutLiveInputs([...started, normal], withNormal), true)
+    expect(normalOnly.messages).not.toContain(placeholder)
+    expect(normalOnly.injections.has(placeholder.id)).toBe(false)
+    expect(normalOnly.injections.get(olderReply.id)).toEqual([olderInjection])
+    if (mode === 'incremental') expect(normalOnly.keyRows).toBe(mixed.keyRows)
+
+    const settled = nextTranscriptRows(mixed, [...source, normal], false)
+    expect(settled.messages.filter(item => item === placeholder)).toHaveLength(1)
+    expect(settled.injections.get(placeholder.id)).toEqual([large, normal])
   })
 
   it('draws a delivery read mid-turn in the reply it joined, and one that opened a turn on the reply it opened', () => {
@@ -178,6 +226,28 @@ describe('transcript rows', () => {
     const running = nextTranscriptRows(null, source, true)
     expect(running.messages).toEqual([source[0]])
     expect(running.arrivals.get(placeholder.id)).toEqual([live])
+  })
+
+  it('never draws the runtime’s wakes to a lead, while a member’s message and a run start stay', () => {
+    const wake = (teamTriggerKind: string, fields: Partial<Message['metadata']> = {}) =>
+      message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', teamTriggerKind, inputMode: 'turn', ...fields } as Message['metadata'] })
+    const first = reply()
+    const liveReport = wake('member_stopped', { inputMode: 'live', inputReplyId: first.id })
+    const check = wake('periodic_check')
+    const report = wake('member_stopped')
+    const member = wake('team_message')
+    const opened = reply()
+    const source = [user(), first, liveReport, check, report, member, opened]
+    const rows = nextTranscriptRows(null, source, false)
+    expect(rows.messages).toEqual([source[0], first, opened])
+    expect(rows.arrivals.has(first.id)).toBe(false)
+    expect(rows.openers.get(opened.id)).toEqual([member])
+    expect(inputsByReply(source).has(first.id)).toBe(false)
+
+    const unanswered = nextTranscriptRows(null, [user(), reply(), report, wake('run_start', { inputMode: undefined })], false)
+    expect(unanswered.messages.map(m => m.metadata?.teamTriggerKind)).toEqual([undefined, undefined, 'run_start'])
+    const running = nextTranscriptRows(null, [user(), reply(), check, report], true)
+    expect(running.liveOpeners).toEqual([])
   })
 
   it('does not guess ownership for old or incomplete team records', () => {

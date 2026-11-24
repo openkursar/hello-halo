@@ -49,6 +49,14 @@ vi.mock('../../../src/renderer/stores/space.store', () => {
 })
 vi.mock('../../../src/renderer/stores/app-chat-pins.store', () => ({ useAppChatPinsStore: (select: any) => select({ toggleAppChatPin: vi.fn() }) }))
 vi.mock('../../../src/renderer/hooks/useAppChatConversationRows', () => ({ useAppChatConversationRows: () => env.rows }))
+vi.mock('../../../src/renderer/hooks/useTeamConversationRows', () => ({
+  buildTeamRows: () => ({ rows: [], pinned: [] }),
+  useTeamConversationRows: () => ({ tasks: [], teams: [], pins: [], hidden: {}, error: false, loading: false }),
+}))
+vi.mock('../../../src/renderer/components/chat/TeamConversationRow', () => ({ TeamConversationRow: () => null }))
+vi.mock('../../../src/renderer/stores/conversation-list-prefs.store', () => ({
+  useConversationListPrefs: (select: any) => select({ appGroupOpen: {}, setAppGroupOpen: vi.fn() }),
+}))
 vi.mock('../../../src/renderer/components/pulse/TaskStatusDot', () => ({ TaskStatusDot: () => null }))
 vi.mock('../../../src/renderer/services/home-telemetry', () => ({ trackHome: (...args: unknown[]) => env.trackHome(...args) }))
 vi.mock('../../../src/renderer/utils/conversation-navigation', () => ({

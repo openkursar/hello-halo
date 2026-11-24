@@ -1,9 +1,10 @@
 /**
  * Which conversation a chat transcript shows, for the replies inside it: a
  * reply's text becomes a reference to that conversation, and its file
- * mentions become links into that conversation's space. Only the main chat
- * provides it — other transcripts (team rooms, run details) render the same
- * message components but are not the chat beside the canvas.
+ * mentions become links into that conversation's space. Only the chat beside
+ * the canvas provides it — the main chat or a team conversation opened there;
+ * other transcripts (team workbench, run details) render the same message
+ * components but are not that chat.
  */
 
 import { createContext, useContext, useMemo, type ReactNode } from 'react'

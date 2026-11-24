@@ -127,6 +127,14 @@ describe('FeedStore', () => {
       expect(store.listCache(OFFICE, FEED, 1, 10)).toEqual([{ seq: 2, entryJson: '{"a":22}' }])
     })
 
+    it('drops the rows of one feed above a seq', () => {
+      for (const seq of [1, 2, 3]) store.putCache(OFFICE, FEED, seq, '{}')
+      store.putCache(OFFICE, 'other', 3, '{}')
+      expect(store.deleteCacheAfter(OFFICE, FEED, 1)).toBe(2)
+      expect(store.getCacheMaxSeq(OFFICE, FEED)).toBe(1)
+      expect(store.getCacheMaxSeq(OFFICE, 'other')).toBe(3)
+    })
+
     it('enumerates the distinct cached feed ids per office', () => {
       store.putCache(OFFICE, 'node-2\u0000session:k1', 1, '{}')
       store.putCache(OFFICE, 'node-2\u0000session:k1', 2, '{}')

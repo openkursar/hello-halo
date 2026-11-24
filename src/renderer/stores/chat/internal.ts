@@ -19,6 +19,7 @@ import type { ApiRetryEvent } from '../../../shared/types/api-retry'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import type { AgentInputArrivedEvent, AgentInputStoppedEvent } from '../../../shared/types/agent-input'
 import type { LiveInput } from '../../types/live-input'
+import type { QueuedMessage } from '../../types'
 
 // Conversation cache bounds (backend/cache.ts): entries, and estimated heap
 // (one conversation can hold megabytes of inline images or v1 thoughts).
@@ -37,6 +38,16 @@ export interface SendMessageOptions {
   references?: ContentReference[]
 }
 
+export interface TeamChatTarget {
+  teamId: string
+  epochId: string | null
+  appId?: string
+  entryId?: string
+  decision?: boolean
+  label?: string
+  teamName?: string
+}
+
 export interface SpaceState {
   conversations: ConversationMeta[]  // Lightweight metadata, no messages
   currentConversationId: string | null
@@ -51,6 +62,7 @@ export interface SpaceState {
    * same as null.
    */
   selectedAppChat?: { appId: string; conversationId: string } | null
+  selectedTeamChat?: TeamChatTarget | null
 }
 
 // Per-session runtime state (isolated per conversation, persists across space switches)
@@ -77,7 +89,7 @@ export interface SessionState {
   // Pending question from AskUserQuestion tool
   pendingQuestion: PendingQuestion | null
   // Messages queued for mid-turn injection (shown below StreamingBubble during generation)
-  queuedMessages: string[]
+  queuedMessages: QueuedMessage[]
   /** Accepted input placement within this turn; canonical records remain in the transcript. */
   liveInputs?: LiveInput[]
   // Monotonically increasing turn counter — used to detect stale handleAgentComplete callbacks.
@@ -198,6 +210,7 @@ export interface ChatState {
   // Digital-human selection for the main conversation board's input.
   // See SpaceState.selectedAppChat for the field this manages.
   selectAppChatConversation: (spaceId: string, appId: string, conversationId: string) => void
+  selectTeamConversation: (spaceId: string, target: TeamChatTarget) => void
   /**
    * Switch back to the normal (Halo) link. Lands on the space's last active
    * regular conversation (`currentConversationId`, untouched by selection —
@@ -246,7 +259,7 @@ export interface ChatState {
    * Add to the running turn; references may carry the message alone. Resolves
    * false when nothing went out, so the caller can restore the draft.
    */
-  injectMessage: (conversationId: string, message: string, references?: ContentReference[]) => Promise<boolean>
+  injectMessage: (conversationId: string, message: string, references?: ContentReference[], images?: ImageAttachment[]) => Promise<boolean>
   /** Drop a message from the "queued for the running turn" list. */
   dequeueMessage: (conversationId: string, message: string) => void
   /** Empty a conversation's history in place (digital-human default sessions). */

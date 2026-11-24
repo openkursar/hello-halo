@@ -8,7 +8,7 @@
  * is instant and a finished turn settles where it streamed.
  */
 import { api, createEmptySessionState } from '../internal'
-import type { Conversation, Message, Thought } from '../internal'
+import type { Conversation, Message, Thought, ImageAttachment } from '../internal'
 import type { AppChatTranscriptPage } from '../../../../shared/apps/app-types'
 import type { ContentReference } from '../../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../../shared/content-reference'
@@ -258,10 +258,10 @@ async function stop(ctx: BackendContext, conversationId: string): Promise<void> 
   }
 }
 
-async function inject(ctx: BackendContext, conversationId: string, message: string, references?: ContentReference[]): Promise<boolean> {
+async function inject(ctx: BackendContext, conversationId: string, message: string, references?: ContentReference[], images?: ImageAttachment[]): Promise<boolean> {
   const target = resolve(ctx, conversationId)
   if (!target) throw new Error(`No digital human for ${conversationId}`)
-  const response = await api.appChatInject({ appId: target.appId, conversationId, message, ...(references?.length ? { references } : {}) })
+  const response = await api.appChatInject({ appId: target.appId, conversationId, message, ...(references?.length ? { references } : {}), ...(images?.length ? { images } : {}) })
   if (!response.success) throw new Error(response.error || i18n.t('Failed to add message'))
   if (response.data?.delivered !== false) return true
   ctx.get().dequeueMessage(conversationId, messageSummaryText(message, references))
@@ -270,7 +270,7 @@ async function inject(ctx: BackendContext, conversationId: string, message: stri
   if (response.data?.stopped) return false
   // The turn ended between the click and delivery: the text still has to go
   // somewhere, and a fresh turn is where it belongs.
-  return send(ctx, conversationId, { content: message, ...(references?.length ? { options: { references } } : {}) })
+  return send(ctx, conversationId, { content: message, images, ...(references?.length ? { options: { references } } : {}) })
 }
 
 async function settleTurn(ctx: BackendContext, ref: ConversationRef, turnId: number): Promise<void> {

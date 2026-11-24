@@ -27,6 +27,7 @@ import { useChatStore, selectActiveConversationId, conversationKind, digitalHuma
 import { useAppsStore } from '../../stores/apps.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
+import { useCollabMemberViewStore } from '../../stores/collab-member-view.store'
 import { MessageList } from './MessageList'
 import type { MessageListHandle, MessageListProps } from './MessageList'
 import { InputArea } from './InputArea'
@@ -35,7 +36,7 @@ import { GroupSwitchNotice } from '../ai-groups/GroupSwitchNotice'
 import { TokenCostContext } from './token-cost-context'
 import { useActiveGroup } from '../../hooks/useActiveGroup'
 import { useConversationMentionCandidates } from './cross-conversation'
-import { TeamCollabPanel } from './team-collab'
+import { TeamCollabBar, TeamCollabMemberView } from '../team'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import {
@@ -165,6 +166,13 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   }, [isOnboarding])
 
   const messageListRef = useRef<MessageListHandle>(null)
+
+  const collabView = useCollabMemberViewStore(state => state.view)
+  const collabMemberAppId = collabView && collabView.conversationId === activeConversationId ? collabView.appId : null
+  const openCollabMember = useCallback((appId: string) => {
+    if (activeConversationId) useCollabMemberViewStore.getState().open(activeConversationId, appId)
+  }, [activeConversationId])
+  const closeCollabMember = useCollabMemberViewStore(state => state.close)
 
   // Scroll-to-bottom button visibility — driven by MessageList's at-bottom state
   const [showScrollButton, setShowScrollButton] = useState(false)
@@ -333,6 +341,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   const selectedAppId = selectedAppChat?.appId ?? null
   const digitalHumanSelector = useMemo<DigitalHumanSelectorConfig | undefined>(() => currentSpaceId ? {
     current: selectedAppId,
+    currentName: activeAppId === selectedAppId ? activeAppName : undefined,
     options: digitalHumanOptions,
     locked: digitalHumanSelectorLocked,
     onChange: (appId, conversationId) => {
@@ -348,7 +357,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
         selectAppChatConversation(currentSpaceId, appId, conversationId ?? getAppChatConversationId(appId))
       }
     },
-  } : undefined, [currentSpaceId, selectedAppId, digitalHumanOptions, digitalHumanSelectorLocked, clearAppChatSelection, selectAppChatConversation])
+  } : undefined, [currentSpaceId, selectedAppId, activeAppId, activeAppName, digitalHumanOptions, digitalHumanSelectorLocked, clearAppChatSelection, selectAppChatConversation])
 
   const composerEngineId = isGenerating ? engineId : (isDigitalHuman ? activeApp?.userOverrides.engineId : requestedEngine) ?? engineId
   const sendWithGoal = useCallback(
@@ -483,10 +492,10 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
     }
   }, [activeConversationId, stopGeneration])
 
-  const handleInject = useCallback(async (content: string, references?: ContentReference[]) => {
+  const handleInject = useCallback(async (content: string, references?: ContentReference[], images?: ImageAttachment[]) => {
     // Not added: false has the composer put back what it took.
     if (!activeConversationId) return false
-    return injectMessage(activeConversationId, content, references)
+    return injectMessage(activeConversationId, content, references, images)
   }, [activeConversationId, injectMessage])
 
 
@@ -596,6 +605,10 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
         ${isCompact ? 'bg-background/50' : 'bg-background'}
       `}
     >
+      {collabMemberAppId && currentSpaceId && activeConversationId ? (
+        <TeamCollabMemberView spaceId={currentSpaceId} conversationId={activeConversationId} appId={collabMemberAppId}
+          onSelect={openCollabMember} onReturn={closeCollabMember} />
+      ) : <>
       {/* Messages area wrapper - relative for button positioning */}
       <div className="flex-1 relative overflow-hidden">
         {/* MessageList owns the scroll container. This wrapper itself isn't
@@ -656,16 +669,9 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
                 onAnswerQuestion={activeConversationId ? (answers) => answerQuestion(activeConversationId, answers) : undefined}
                 onAtBottomStateChange={handleAtBottomStateChange}
                 onLoadEarlier={hasEarlier ? handleLoadEarlier : undefined}
-                footerExtra={isDigitalHuman
-                  ? (
-                    <>
-                      <TeamCollabPanel conversationId={activeConversationId ?? undefined} />
-                      {realMessages.length > 0 && !isGenerating && activeConversationId
-                        ? <ClearChatControl conversationId={activeConversationId} />
-                        : null}
-                    </>
-                  )
-                  : <TeamCollabPanel conversationId={activeConversationId ?? undefined} />}
+                footerExtra={isDigitalHuman && realMessages.length > 0 && !isGenerating && activeConversationId
+                  ? <ClearChatControl conversationId={activeConversationId} />
+                  : undefined}
               />
             </ConversationReferenceScope>
           )}
@@ -678,8 +684,11 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
         />
       </div>
 
-      {/* Input area */}
+      {currentSpaceId && <div className={`shrink-0 min-w-0 ${isCompact ? 'px-3' : 'px-6'}`}>
+        <div className={isCompact ? '' : 'mx-auto max-w-chat'}><TeamCollabBar spaceId={currentSpaceId} conversationId={activeConversationId ?? undefined} onOpenMember={openCollabMember} /></div>
+      </div>}
       {inputArea}
+      </>}
     </div>
   )
 }

@@ -129,6 +129,11 @@ describe('buildTeamEntry — no per-turn content', () => {
     expect(buildTeamEntry(makeCtx())).toContain('Produce the competitor brief')
   })
 
+  it('tells a standing team member the board covers only this conversation', () => {
+    expect(buildTeamEntry(makeCtx())).toContain('The board covers THIS conversation only')
+    expect(buildTeamEntry(makeCtx({ temporaryCollaboration: true }))).not.toContain('The board covers THIS conversation only')
+  })
+
   // The Entry is baked into the session's system prompt, which is part of the
   // agent session's reuse fingerprint. Anything that changes per turn rebuilds
   // the subprocess on every turn and kills the one still streaming.

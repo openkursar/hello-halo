@@ -15,7 +15,7 @@ import { openOnce } from './backend'
 import { readTransition } from './task-read'
 
 export const createAppChatSelectionSlice: ChatSlice<
-  'getComposerDraft' | 'setComposerDraft' | 'clearComposerDraft' | 'selectAppChatConversation' | 'clearAppChatSelection'
+  'getComposerDraft' | 'setComposerDraft' | 'clearComposerDraft' | 'selectAppChatConversation' | 'clearAppChatSelection' | 'selectTeamConversation'
 > = (set, get) => ({
   getComposerDraft: (conversationId) => get().composerDrafts.get(conversationId) ?? '',
 
@@ -37,12 +37,21 @@ export const createAppChatSelectionSlice: ChatSlice<
     })
   },
 
+  selectTeamConversation: (spaceId, target) => {
+    set(state => {
+      const spaceStates = new Map(state.spaceStates)
+      const existing = spaceStates.get(spaceId) || createEmptySpaceState()
+      spaceStates.set(spaceId, { ...existing, selectedAppChat: null, selectedTeamChat: target })
+      return { spaceStates, pendingPulseNavigation: null, pendingAppChatNavigation: null }
+    })
+  },
+
   selectAppChatConversation: (spaceId, appId, conversationId) => {
     let persistRead: (() => void) | undefined
     set((state: ChatState) => {
       const newSpaceStates = new Map(state.spaceStates)
       const existing = newSpaceStates.get(spaceId) || createEmptySpaceState()
-      newSpaceStates.set(spaceId, { ...existing, selectedAppChat: { appId, conversationId } })
+      newSpaceStates.set(spaceId, { ...existing, selectedTeamChat: null, selectedAppChat: { appId, conversationId } })
       // Same read lifecycle as a regular conversation; the task panel names
       // digital-human items itself, so no title is kept here.
       const read = readTransition(state, conversationId, { spaceId, title: '' })

@@ -99,7 +99,7 @@ export function runStatusDotClass(status: RunStatus): string {
     case 'ok': return 'bg-green-500'
     case 'error': return 'bg-red-500'
     case 'skipped': return 'bg-muted-foreground/30 border border-muted-foreground/40'
-    case 'running': return 'bg-green-500 animate-pulse'
+    case 'running': return 'bg-primary animate-pulse'
     case 'waiting_user': return 'bg-orange-400'
     default: return 'bg-muted-foreground/30'
   }

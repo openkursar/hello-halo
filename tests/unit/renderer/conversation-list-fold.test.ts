@@ -57,6 +57,10 @@ vi.mock('../../../src/renderer/stores/conversation-list-prefs.store', async orig
   return { ...actual, useConversationListPrefs: Object.assign((select: any) => select(store.getState()), store) }
 })
 vi.mock('../../../src/renderer/hooks/useAppChatConversationRows', () => ({ useAppChatConversationRows: () => [] }))
+vi.mock('../../../src/renderer/hooks/useTeamConversationRows', async original => ({
+  ...await original<typeof import('../../../src/renderer/hooks/useTeamConversationRows')>(),
+  useTeamConversationRows: () => ({ tasks: [], teams: [], pins: [], hidden: {}, error: false }),
+}))
 vi.mock('../../../src/renderer/components/chat/conversation-list-panes', () => ({
   ROW_HEIGHT: 32,
   usePaneResize: () => ({ height: 160, dragging: false, handleProps: {} }),
