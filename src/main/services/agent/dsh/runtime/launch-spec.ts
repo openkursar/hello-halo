@@ -17,6 +17,7 @@ import {
   resolveDshShell,
 } from './resolve'
 import { getSkillRoots } from '../../skills'
+import { cliSkillsRoot } from '../../../cli-tools'
 import type { ExternalMcpServer } from '../../mcp/types'
 import type { DshRuntimeLaunchSpec } from '../types'
 
@@ -120,7 +121,10 @@ export function buildDshLaunchSpec(options: DshLaunchOptions): DshRuntimeLaunchS
   // state of a separately installed dsh CLI.
   env.DSH_HOME = path.join(options.runtimeDataDir, 'home')
   env.DSH_CWD = options.workDir
-  env.DSH_SKILL_DIRS = JSON.stringify(getSkillRoots(options.workDir))
+  // The skills of the session's command-line tools live in its pinned view, not
+  // in any skill folder of the user's.
+  const toolSkillsRoot = cliSkillsRoot(options.cliToolsBinDir)
+  env.DSH_SKILL_DIRS = JSON.stringify(toolSkillsRoot ? [...getSkillRoots(options.workDir), toolSkillsRoot] : getSkillRoots(options.workDir))
   if (options.persona) env.DSH_SYSTEM_PROMPT = options.persona
   if (options.contextWindow) env.DSH_CONTEXT_WINDOW = String(options.contextWindow)
   if (options.imageInputModel) {

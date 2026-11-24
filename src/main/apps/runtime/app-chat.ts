@@ -123,7 +123,7 @@ import {
   decideDelegatedTool,
   turnFileExportRefusal,
 } from './delegation-gate'
-import { grantedSkillFolders, inertCommandText, turnSkillAccess, type TurnSkillAccess } from './turn-skills'
+import { allowsToolSkills, grantedSkillFolders, inertCommandText, toolSkillCopies, turnSkillAccess, type TurnSkillAccess } from './turn-skills'
 import { listLoadableSkillCopies } from '../skill-discovery'
 import { allowsCollaboration, allowsBuiltin, allowsCapability, colleagueReach, intersectPolicies, SKILL_TOOL } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
@@ -1230,6 +1230,11 @@ async function runAppChatTurn(
   let applied: ReturnType<typeof applyCapabilityPolicy> | null = null
   let turnSkills: TurnSkillAccess | undefined
   if (delegation) {
+    // The skills of the session's command-line tools load with the shell, not
+    // with the skill list (turn-skills).
+    const toolSkills = toolSkillCopies(sdkOptions.env?.HALO_CLI_TOOLS_BIN)
+    const keepSkillTool = toolSkills.length > 0
+      && allowsToolSkills(delegation.policy, delegation.mode, sdkOptions.disallowedTools ?? [])
     applied = applyCapabilityPolicy(sdkOptions, {
       policy: delegation.policy,
       mode: delegation.mode,
@@ -1242,6 +1247,7 @@ async function runAppChatTurn(
       // human's own IM guest has no such channel.
       alwaysKeep: teamContext || teamToolset ? TEAM_CHANNEL_MCP : undefined,
       keepFileTools: strictFiles,
+      keepSkillTool,
     })
     if (applied.enforced) {
       // A restriction the engine would accept and ignore is worse than one the
@@ -1264,12 +1270,13 @@ async function runAppChatTurn(
       }
       // Which skills this turn may load, measured against what the engine now
       // settles without asking — only where the skill tool exists for it at all.
-      if (allowsBuiltin(delegation.policy, SKILL_TOOL, delegation.mode)) {
-        turnSkills = turnSkillAccess(loadableSkills(), delegation.policy, delegation.mode, {
+      const skillTool = allowsBuiltin(delegation.policy, SKILL_TOOL, delegation.mode)
+      if (skillTool || keepSkillTool) {
+        turnSkills = turnSkillAccess(skillTool ? loadableSkills() : [], delegation.policy, delegation.mode, {
           allowedRules: sdkOptions.allowedTools ?? [],
           disallowed: sdkOptions.disallowedTools ?? [],
           hooked: strictFiles ? [SKILL_TOOL, ...FILE_TOOLS] : [SKILL_TOOL],
-        })
+        }, toolSkills)
       }
     }
     console.log(

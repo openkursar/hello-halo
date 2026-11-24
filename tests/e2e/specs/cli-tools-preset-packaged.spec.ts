@@ -68,7 +68,7 @@ async function startScriptedModel(): Promise<ScriptedModel> {
         res.end('{}')
         return
       }
-      if (body.includes('halo-cli-tools')) model.skillAdvertised = true
+      if (/cli-(tsc|prettier)\b/.test(body)) model.skillAdvertised = true
       const request = JSON.parse(body || '{}') as { stream?: boolean; tools?: Array<{ name: string }>; messages?: Array<{ content: unknown }> }
       const entry = (['auto', 'dh', 'chat'] as const).find(key => body.includes(ENTRIES[key]))
       const id = entry ? `toolu_cli_${entry}` : ''
@@ -248,7 +248,7 @@ for (const sdkEngine of ['halo', 'anthropic', 'dsh'] as const) {
 
         // Guidance reaches the model as a Skill; the profile's shell files are untouched.
         evidence.skillAdvertised = model.skillAdvertised
-        expect.soft(model.skillAdvertised, 'the halo-cli-tools skill is offered to the model').toBe(true)
+        expect.soft(model.skillAdvertised, 'the tools\' own skills are offered to the model').toBe(true)
         const shellAfter = Object.fromEntries(SHELL_FILES.map(name => [name, fs.existsSync(path.join(runtime.home, name))]))
         evidence.shellFiles = { before: shellBefore, after: shellAfter }
         expect.soft(shellAfter, 'no shell startup file is created or removed').toEqual(shellBefore)

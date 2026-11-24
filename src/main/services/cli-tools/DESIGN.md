@@ -235,9 +235,8 @@ version, side effects, sign-in method and the absolute path of its guide, plus
 the meaning of a `halo-` name and the rule not to replay a write whose outcome
 is unknown. Each view also holds one skill per tool (see "Tool skills" below)
 and `view.json`, which lists the view's commands and skills and is written
-last. Until sessions load those skills, the built-in `halo-cli-tools` skill
-tells the AI to read TOOLS.md from `$HALO_CLI_TOOLS_BIN/../TOOLS.md`, so the
-guide matches the pinned set.
+last. Sessions load those skills (below); TOOLS.md remains the guide for an
+engine without session skills.
 
 **Administrator guide overrides.** A catalog may replace the package guide of
 one version (`CatalogToolStatus.guides`). `applyCatalogStatus` applies it only
@@ -317,11 +316,25 @@ session's `HALO_CLI_TOOLS_BIN`, it reads that view's `view.json` and returns
 skill catalog entries for valid names whose file exists, and nothing on any
 failure.
 
-Loading these skills into sessions is not wired yet. It needs the agent's
-session skill catalog, the DSH skill directories and the digital-human skill
-policy to accept them, which are separate changes in those modules. Codex has
-no session skills, so a Codex session keeps only `HALO_CLI_TOOLS_BIN` and
-TOOLS.md.
+`cliSkillsRoot(binDir)` is that view's `skills/` directory. Sessions use these
+two and nothing else:
+
+- **Halo and Claude Code engines.** The agent's session skill catalog
+  (`services/agent/skill-availability.ts`) appends the entries of the session's
+  `HALO_CLI_TOOLS_BIN`. `cli-` names are the host's: a catalog skill of the
+  same name is dropped with a log line, so the tool's skill wins.
+- **DSH.** `DSH_SKILL_DIRS` gets `cliSkillsRoot` after the user and project
+  skill roots. DSH ranks custom roots itself, so a project skill named like a
+  tool skill can still shadow it there.
+- **Delegated turns** (digital humans, teams). A tool skill is not subject to
+  the skill list: it loads when the turn may run commands and does not
+  withhold the shell, including under a policy that grants no skill
+  (`apps/runtime/turn-skills.ts`).
+- **Codex** has no session skills; a Codex session keeps only
+  `HALO_CLI_TOOLS_BIN` and TOOLS.md.
+
+The skill describes only the view the session was started with; a later view
+change reaches the next session.
 
 ## Host wiring (`host.ts`)
 

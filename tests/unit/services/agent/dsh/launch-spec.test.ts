@@ -204,6 +204,18 @@ describe('buildDshLaunchSpec', () => {
     expect(roots.indexOf(path.join('/work', '.agents', 'skills'))).toBeGreaterThan(roots.findIndex((root: string) => root.endsWith(path.join('claude-config', 'skills'))))
   })
 
+  it("adds the skills folder of the session's tool view after every other skill folder", () => {
+    setPlatform('darwin')
+    detectGitBash.mockReturnValue({ found: true, path: '/bin/bash', source: 'system' })
+    const binDir = path.join(dataDir, 'cli', 'views', 'v', 'bin')
+
+    const without = JSON.parse(build().DSH_SKILL_DIRS) as string[]
+    const roots = JSON.parse(build({ cliToolsBinDir: binDir }).DSH_SKILL_DIRS) as string[]
+
+    expect(without).not.toContain(path.join(dataDir, 'cli', 'views', 'v', 'skills'))
+    expect(roots).toEqual([...without, path.join(dataDir, 'cli', 'views', 'v', 'skills')])
+  })
+
   it('carries MCP configuration in the environment, never on the command line', () => {
     // Arguments are visible to any process listing on the machine.
     setPlatform('darwin')

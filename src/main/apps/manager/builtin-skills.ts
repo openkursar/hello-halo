@@ -99,6 +99,17 @@ async function seedSdkSkills(manager: AppManagerService): Promise<void> {
   }
 }
 
+/**
+ * Packages that once shipped and are withdrawn on purpose. An untouched copy is
+ * uninstalled (to the OS trash, with a tombstone); one the user edited, removed
+ * or never migrated stays as it is. A package that merely stops shipping is not
+ * listed here and stays installed.
+ */
+export const RETIRED_BUILTIN_SKILLS: readonly string[] = [
+  // Superseded by the skill each command-line tool carries.
+  'halo-cli-tools',
+]
+
 /** Which skills ship and when each SKILL.md changed — cheap stats, no file reads. */
 function skillsBundleKey(root: string, dirNames: string[]): string {
   return dirNames.map(name => {
@@ -109,7 +120,8 @@ function skillsBundleKey(root: string, dirNames: string[]): string {
 
 /**
  * Install/refresh shipped skills without reviving deletions or replacing edits.
- * Retired packages and their tombstones stay until an explicit user action.
+ * A package that no longer ships, and its tombstone, stay until an explicit
+ * user action, unless it is listed in RETIRED_BUILTIN_SKILLS.
  * Per-skill failures never block the rest of the bundle.
  * Skipped when the shipped set is the one the last complete run applied.
  */
@@ -181,11 +193,33 @@ export async function seedBuiltinSkills(appManager: AppManagerService): Promise<
     }
   }
 
+  let retired = 0
+  for (const name of RETIRED_BUILTIN_SKILLS) {
+    if (dirNames.includes(name)) continue
+    const slug = `${BUILTIN_SKILL_SLUG_PREFIX}${name}`
+    const existing = globalSkills().find(a => a.spec.store?.slug === slug)
+    if (!existing || existing.status === 'uninstalled') continue
+    const own = existing.userOverrides.skill
+    if (!own || own.deleted || own.customized) {
+      console.log('[BuiltinSkills] Kept a retired skill the user changed', { appId: existing.id })
+      continue
+    }
+    try {
+      await appManager.uninstall(existing.id)
+      skillRows = null
+      retired++
+      console.log(`[BuiltinSkills] Retired "${name}"`)
+    } catch (err) {
+      failures++
+      console.warn(`[BuiltinSkills] Failed to retire "${name}":`, err)
+    }
+  }
+
   if (failures === 0 && deferred === 0) markBundleSeeded('builtin-skills', stampKey)
 
   const dt = performance.now() - t0
   console.log(
     `[BuiltinSkills] Done in ${dt.toFixed(1)}ms ` +
-    `(${specs.length} shipped, ${installed} installed, ${refreshed} refreshed)`
+    `(${specs.length} shipped, ${installed} installed, ${refreshed} refreshed, ${retired} retired)`
   )
 }

@@ -134,6 +134,54 @@ describe('creation-time skill availability', () => {
   })
 })
 
+describe("the session's command-line tool skills", () => {
+  let view = ''
+  let env: Record<string, string> = {}
+  const toolSkill = () => ({ name: 'cli-tickets', description: 'Tickets.', source: { kind: 'file', path: join(view, 'skills', 'cli-tickets', 'SKILL.md') } })
+
+  beforeEach(() => {
+    view = mkdtempSync(join(tmpdir(), 'tool-skills-'))
+    mkdirSync(join(view, 'bin'))
+    mkdirSync(join(view, 'skills', 'cli-tickets'), { recursive: true })
+    writeFileSync(join(view, 'skills', 'cli-tickets', 'SKILL.md'), '---\nname: "cli-tickets"\ndescription: "Tickets."\n---\n')
+    writeFileSync(join(view, 'view.json'), JSON.stringify({ skills: [{ name: 'cli-tickets', description: 'Tickets.' }] }))
+    env = { HALO_CLI_TOOLS_BIN: join(view, 'bin') }
+  })
+  afterEach(() => rmSync(view, { recursive: true, force: true }))
+
+  it('appends them to the space catalog', async () => {
+    register(() => catalog)
+    expect(await skills.prepareSessionSkills({ workerGroup: 'space', env })).toEqual({ catalog: [...catalog, toolSkill()] })
+    expect(skills.readReadySessionSkills({ workerGroup: 'space', env })).toEqual([...catalog, toolSkill()])
+  })
+
+  it('lets a tool skill win over a catalog skill of the same name, with one log line', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const shadow: SkillCatalogEntry = { name: 'cli-tickets', description: 'Mine', source: { kind: 'file', path: '/user/skills/cli-tickets/SKILL.md' } }
+    register(() => [...catalog, shadow])
+    expect(await skills.prepareSessionSkills({ workerGroup: 'space', env })).toEqual({ catalog: [...catalog, toolSkill()] })
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it('keeps them without a space and when the catalog cannot be read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await skills.prepareSessionSkills({ env })).toEqual({ catalog: [toolSkill()] })
+    expect(skills.readReadySessionSkills({ env })).toEqual([toolSkill()])
+    expect(skills.readReadySessionSkills({ workerGroup: 'space', env })).toEqual([toolSkill()])
+    register(() => { throw new Error('read failed') })
+    expect(await skills.prepareSessionSkills({ workerGroup: 'space', env })).toEqual({ catalog: [toolSkill()], notice: 'catalog-unavailable' })
+    expect(skills.readReadySessionSkills({ workerGroup: 'space', env })).toEqual([toolSkill()])
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('offers nothing extra without tools or with an unreadable view', async () => {
+    register(() => catalog)
+    expect(await skills.prepareSessionSkills({ workerGroup: 'space', env: {} })).toEqual({ catalog })
+    writeFileSync(join(view, 'view.json'), 'not json')
+    expect(skills.readReadySessionSkills({ workerGroup: 'space', env })).toEqual(catalog)
+  })
+})
+
 describe('Claude Code skill visibility', () => {
   const ccOptions = { cwd: '/work', env: { CLAUDE_CONFIG_DIR: '/cc-user' }, settingSources: ['user', 'project'] }
   const entry = (name: string, path: string): SkillCatalogEntry => ({ name, description: name, source: { kind: 'file', path } })

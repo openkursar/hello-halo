@@ -18,13 +18,20 @@
  * asking — run the tools its `allowed-tools` pre-approve for the rest of the
  * turn, run its own hooks, run itself as a sub-agent — must already be within
  * the policy, or the skill does not load.
+ *
+ * The skill of one of the turn's command-line tools is the exception to the
+ * skill list: it only tells how to run a command the turn already has, so it
+ * loads whenever the turn may run commands, listed or not.
  */
 
+import { readFileSync } from 'fs'
+import { dirname } from 'path'
 import { parse as parseYaml } from 'yaml'
-import { allowsSkill, canonicalBuiltinTool } from '../../../shared/apps/capability-policy'
+import { allowsSkill, canonicalBuiltinTool, resolveBashAccess } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { AvailableSkill } from '../../../shared/apps/app-types'
 import { toSkillDirName } from '../../../shared/skill-naming'
+import { cliSkillEntries } from '../../services/cli-tools'
 
 /** A skill the engine can load for this turn. */
 export interface TurnSkill {
@@ -38,6 +45,8 @@ export interface TurnSkill {
   granted: boolean
   /** Why it may not load here even so, or null */
   refusal: string | null
+  /** The skill of one of the turn's command-line tools */
+  tool?: boolean
 }
 
 export interface TurnSkillAccess {
@@ -63,15 +72,66 @@ export interface SkillCeiling {
   hooked: readonly string[]
 }
 
-/** The skills of this turn: which are granted, and which of those still cannot load. */
+/**
+ * The skills of the command-line tools pinned for a turn, given its
+ * `HALO_CLI_TOOLS_BIN`, read as the other skills are. Halo writes them, so a
+ * skill whose file cannot be read is left out.
+ */
+export function toolSkillCopies(binDir: string | undefined): AvailableSkill[] {
+  const copies: AvailableSkill[] = []
+  for (const entry of cliSkillEntries(binDir)) {
+    try {
+      copies.push({
+        name: entry.name,
+        description: entry.description,
+        scope: 'global',
+        dirName: entry.name,
+        path: dirname(entry.source.path),
+        content: readFileSync(entry.source.path, 'utf-8'),
+      })
+    } catch (error) {
+      console.warn('[AppChat] A command-line tool skill could not be read:', entry.name, (error as Error).message)
+    }
+  }
+  return copies
+}
+
+/**
+ * Whether a turn may load its command-line tools' skills: it may run commands
+ * under the policy, and the session does not withhold the shell altogether.
+ */
+export function allowsToolSkills(
+  policy: CapabilityPolicy | undefined,
+  mode: CapabilityMode,
+  disallowed: readonly string[]
+): boolean {
+  return resolveBashAccess(policy, mode).scope !== 'none'
+    && !disallowed.some(entry => !entry.includes('(') && canonicalBuiltinTool(entry) === 'Bash')
+}
+
+/** Whether any skill of the turn's command-line tools may load. */
+export function grantsToolSkill(access: TurnSkillAccess | undefined): boolean {
+  return !!access?.skills.some(skill => skill.tool && skill.granted)
+}
+
+/**
+ * The skills of this turn: which are granted, and which of those still cannot
+ * load. `toolSkills` are the turn's command-line tool skills; their names are
+ * the host's, so another skill of the same name gives way to them.
+ */
 export function turnSkillAccess(
   available: readonly AvailableSkill[],
   policy: CapabilityPolicy | undefined,
   mode: CapabilityMode,
-  ceiling: SkillCeiling
+  ceiling: SkillCeiling,
+  toolSkills: readonly AvailableSkill[] = []
 ): TurnSkillAccess {
   const allowed = new Set(ceiling.allowedRules.map(normalizeRule))
   const denied = new Set(ceiling.disallowed.filter(entry => !entry.includes('(')).map(canonicalBuiltinTool))
+  const toolNames = new Set(toolSkills.flatMap(skill => [skill.dirName, skill.name]))
+  const others = toolNames.size
+    ? available.filter(skill => !toolNames.has(skill.dirName) && !toolNames.has(skill.name))
+    : available
   const hooked = new Set(ceiling.hooked)
   const covered = (entry: string): boolean => {
     const { tool, content } = parseRule(entry)
@@ -82,14 +142,14 @@ export function turnSkillAccess(
 
   const legacyNames = new Map<string, Set<string>>()
   if (policy?.allowedSkills) {
-    for (const skill of available) {
+    for (const skill of others) {
       const alias = toSkillDirName(skill.dirName)
       const names = legacyNames.get(alias) ?? new Set<string>()
       names.add(skill.dirName)
       legacyNames.set(alias, names)
     }
   }
-  const skills = available.map((skill): TurnSkill => {
+  const skills = others.map((skill): TurnSkill => {
     const exact = policy?.allowedSkills?.includes(skill.dirName)
     const unambiguous = legacyNames.get(toSkillDirName(skill.dirName))?.size === 1
     const granted = allowsSkill(policy, skill.dirName, mode)
@@ -102,6 +162,17 @@ export function turnSkillAccess(
       refusal: granted ? preApprovalRefusal(skill, covered, allowed) : null,
     }
   })
+  const commands = allowsToolSkills(policy, mode, ceiling.disallowed)
+  for (const skill of toolSkills) {
+    skills.push({
+      dirName: skill.dirName,
+      name: skill.name,
+      path: skill.path,
+      granted: commands,
+      refusal: commands ? preApprovalRefusal(skill, covered, allowed) : null,
+      tool: true,
+    })
+  }
   return { skills, grantsUnlisted: mode === 'permissive' && policy?.allowedSkills === undefined }
 }
 

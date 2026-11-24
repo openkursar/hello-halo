@@ -993,6 +993,20 @@ describe('a borrowed turn loads only the skills its owner allowed', () => {
     expect(decideDelegatedTool(conv, 'Read', { file_path: join(root, 'skills/deploy/reference.md') }).allow).toBe(false)
   })
 
+  it('lets a turn whose owner allowed no skill load its command-line tool skills, and nothing else', async () => {
+    const policy = { allowedTools: ['Bash'], allowedSkills: [] as string[] }
+    const tool: AvailableSkill = { ...skillAt('cli-tickets'), path: join(root, 'view', 'skills', 'cli-tickets') }
+    const access = turnSkillAccess(skills, policy, 'strict', {
+      allowedRules: ['TodoWrite', 'Bash'], disallowed: ['WebFetch'], hooked: ['Skill', ...FILE_TOOLS],
+    }, [tool])
+    beginDelegatedTurn(conv, { policy, mode: 'strict', skills: access })
+
+    expect(await hookSays('cli-tickets')).toBe('no objection')
+    expect(await hookSays('weekly-report')).toBe('deny')
+    expect(decideDelegatedTool(conv, 'Skill', { skill: 'cli-tickets' }).allow).toBe(true)
+    expect(decideDelegatedTool(conv, 'Skill', { skill: 'weekly-report' }).allow).toBe(false)
+  })
+
   it('files a refused skill in the owner\'s record under its name', () => {
     const filed: TeamToolAudit[] = []
     guestTurn({ allowedTools: [], allowedSkills: ['weekly-report'] }, entry => filed.push(entry))

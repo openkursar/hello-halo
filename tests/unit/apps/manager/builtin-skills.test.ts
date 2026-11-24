@@ -316,6 +316,55 @@ describe('seedBuiltinSkills', () => {
     expect(deleteApp).not.toHaveBeenCalled()
   })
 
+  it('uninstalls an untouched copy of a retired package once it no longer ships', async () => {
+    writeSkill('kept', '1.0.0')
+    const { manager, uninstall, deleteApp } = createStubManager([
+      {
+        id: 'row-retired',
+        status: 'active',
+        spec: { type: 'skill', version: '1.0.0', store: { slug: 'halo-builtin-skills/halo-cli-tools', install_source: 'bundled' } },
+      },
+    ])
+
+    await seedBuiltinSkills(manager)
+
+    expect(uninstall).toHaveBeenCalledTimes(1)
+    expect(uninstall).toHaveBeenCalledWith('row-retired')
+    expect(deleteApp).not.toHaveBeenCalled()
+  })
+
+  it.each(['customized', 'deleted', 'unmigrated', 'uninstalled'])('keeps a %s copy of a retired package', async condition => {
+    writeSkill('kept', '1.0.0')
+    const userOverrides = condition === 'unmigrated' ? {} : condition === 'uninstalled' ? undefined : { skill: { version: 1 as const, filePath: '/fixture/SKILL.md', [condition]: true } }
+    const { manager, uninstall } = createStubManager([{
+      id: 'row-retired', status: condition === 'uninstalled' ? 'uninstalled' : 'active', ...(userOverrides ? { userOverrides } : {}),
+      spec: { type: 'skill', version: '1.0.0', store: { slug: 'halo-builtin-skills/halo-cli-tools', install_source: 'bundled' } },
+    }])
+
+    await seedBuiltinSkills(manager)
+
+    expect(uninstall).not.toHaveBeenCalled()
+  })
+
+  it('retries a failed retirement on the next launch', async () => {
+    mkdirSync(join(globalThis.__HALO_TEST_DIR__, '.halo'), { recursive: true })
+    writeSkill('kept', '1.0.0')
+    const row = {
+      id: 'row-retired',
+      status: 'active' as AppStatus,
+      spec: { type: 'skill', version: '1.0.0', store: { slug: 'halo-builtin-skills/halo-cli-tools', install_source: 'bundled' } },
+    }
+    const first = createStubManager([{ ...row }])
+    first.uninstall.mockRejectedValueOnce(new Error('trash unavailable'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await seedBuiltinSkills(first.manager)
+    expect(first.uninstall).toHaveBeenCalledTimes(1)
+
+    const second = createStubManager([{ ...row }])
+    await seedBuiltinSkills(second.manager)
+    expect(second.uninstall).toHaveBeenCalledWith('row-retired')
+  })
+
   it('skips GC entirely when the scan finds zero skills', async () => {
     // Root exists but is empty — must never wipe user rows.
     const { manager, uninstall, deleteApp } = createStubManager([

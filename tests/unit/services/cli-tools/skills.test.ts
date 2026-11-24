@@ -7,6 +7,7 @@ import {
   CLI_SKILL_DESCRIPTION_MAX,
   assignCliSkillNames,
   cliSkillEntries,
+  cliSkillsRoot,
   renderCliSkill,
   resolveSkillDescription,
   splitGuide,
@@ -173,5 +174,15 @@ describe('cli-tools skills: entries of a view', () => {
       ],
     }))
     expect(cliSkillEntries(binDir)).toEqual([{ name: 'cli-itsm', description: 'Tickets.', source: { kind: 'file', path } }])
+  })
+})
+
+describe('cli-tools skills: skills folder of a view', () => {
+  it('is the skills folder beside the bin directory, and nothing for a missing or relative path', () => {
+    const bin = join('/', 'cli', 'views', 'abc', 'bin')
+    expect(cliSkillsRoot(bin)).toBe(join('/', 'cli', 'views', 'abc', 'skills'))
+    expect(cliSkillsRoot(undefined)).toBeUndefined()
+    expect(cliSkillsRoot('')).toBeUndefined()
+    expect(cliSkillsRoot('views/abc/bin')).toBeUndefined()
   })
 })

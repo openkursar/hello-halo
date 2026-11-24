@@ -407,7 +407,10 @@ and the retained package together while clearing customization. User edits still
 use `updateSpec`; skill baselines remain their retained packages, not the
 automation-only field-merge original.
 Built-in skill seeding honors deletion/customization/unmigrated records and retains
-packages no longer shipped rather than erasing their tombstones. A shipped skill
+packages no longer shipped rather than erasing their tombstones. Only a package
+named in `RETIRED_BUILTIN_SKILLS` is withdrawn: an untouched copy is uninstalled
+(OS trash plus tombstone); an edited, deleted or unmigrated one is kept, and a
+failed uninstall leaves the bundle stamp unset so the next launch retries. A shipped skill
 whose name a user skill already holds is left to the user. Manager startup never
 touches live skill files; migration belongs to `apps/skills` and is requested-scope only.
 

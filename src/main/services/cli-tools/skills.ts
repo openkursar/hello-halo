@@ -186,13 +186,23 @@ export function renderCliSkill(input: CliSkillInput): string {
 }
 
 /**
+ * The folder holding the tool skills of the command view a session was pinned
+ * to, given the session's `HALO_CLI_TOOLS_BIN`; each skill is a
+ * `cli-<command>/SKILL.md` inside it. Undefined for a path that is not absolute.
+ */
+export function cliSkillsRoot(binDir: string | undefined): string | undefined {
+  return binDir && isAbsolute(binDir) ? join(dirname(binDir), 'skills') : undefined
+}
+
+/**
  * The tool skills of the command view a session was pinned to, given the
  * session's `HALO_CLI_TOOLS_BIN`. Reads only that view's `view.json`; a
  * missing or unreadable view yields no skills.
  */
 export function cliSkillEntries(binDir: string | undefined): SkillCatalogEntry[] {
-  if (!binDir || !isAbsolute(binDir)) return []
-  const viewDir = dirname(binDir)
+  const root = cliSkillsRoot(binDir)
+  if (!root) return []
+  const viewDir = dirname(root)
   let skills: unknown
   try {
     skills = (JSON.parse(readFileSync(join(viewDir, 'view.json'), 'utf-8')) as { skills?: unknown }).skills
@@ -203,7 +213,7 @@ export function cliSkillEntries(binDir: string | undefined): SkillCatalogEntry[]
   const entries: SkillCatalogEntry[] = []
   for (const skill of skills as Array<Partial<CliSkillRecord>>) {
     if (typeof skill?.name !== 'string' || !SKILL_NAME.test(skill.name) || typeof skill.description !== 'string') continue
-    const path = join(viewDir, 'skills', skill.name, 'SKILL.md')
+    const path = join(root, skill.name, 'SKILL.md')
     if (!existsSync(path)) continue
     entries.push({ name: skill.name, description: skill.description, source: { kind: 'file', path } })
   }
