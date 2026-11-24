@@ -3,7 +3,6 @@ import type { TFunction } from 'i18next'
 import { BookmarkPlus, ChevronRight } from 'lucide-react'
 import type { TeamConversation, TeamDetail } from '../../../shared/apps/team-types'
 import { useTranslation } from '../../i18n'
-import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import { useTeamStore } from '../../stores/team.store'
 import { openPersonTeam } from '../../utils/people-navigation'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
@@ -58,7 +57,7 @@ export function KeepTeam({ team }: { team: TeamDetail['team'] }) {
   }
   const action = 'flex shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-xs text-primary hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50'
   return team.savedTeamId
-    ? <button onClick={() => void canvasLifecycle.openTeam(team.savedTeamId!)} className={action}>{t('Open saved team')}<ChevronRight size={12} aria-hidden="true" /></button>
+    ? <button onClick={() => openPersonTeam({ teamId: team.savedTeamId! })} className={action}>{t('Open saved team')}<ChevronRight size={12} aria-hidden="true" /></button>
     : <button disabled={saving} onClick={() => void keep()} className={action}><BookmarkPlus size={13} aria-hidden="true" />{t('Keep this team')}</button>
 }
 

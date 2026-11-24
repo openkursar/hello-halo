@@ -768,6 +768,21 @@ describe('TeamStore', () => {
       expect(store.getEpochById('epoch-1')!.startedAt).toBe(1000)
     })
 
+    it('carries a person\u2019s first turn into a run across replicas, keeping the earliest and never clearing it', () => {
+      store.insertTeam(makeTeam())
+      store.insertEpoch(makeEpoch({ lifecycle: 'run' }))
+      expect(store.markRunHumanTurn('epoch-1', 5000)).toBe(true)
+      expect(store.markRunHumanTurn('epoch-1', 6000)).toBe(false)
+      const stamped = store.getEpochById('epoch-1')!
+      expect(stamped.firstHumanTurnAt).toBe(5000)
+      store.upsertEpoch({ ...stamped, firstHumanTurnAt: 4000 })
+      expect(store.getEpochById('epoch-1')!.firstHumanTurnAt).toBe(4000)
+      store.upsertEpoch({ ...stamped, firstHumanTurnAt: null })
+      expect(store.getEpochById('epoch-1')!.firstHumanTurnAt).toBe(4000)
+      store.upsertEpoch({ ...stamped, id: 'replica', firstHumanTurnAt: 7000 })
+      expect(store.getEpochById('replica')!.firstHumanTurnAt).toBe(7000)
+    })
+
     it('cannot revive cleared context with a delayed replica but accepts explicit completed-task resume', () => {
       store.insertTeam(makeTeam())
       store.insertEpoch(makeEpoch())

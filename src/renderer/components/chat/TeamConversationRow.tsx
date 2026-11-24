@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Pin, Pencil, EllipsisVertical, Trash2, ExternalLink } from 'lucide-react'
+import { Pin, Pencil, EllipsisVertical, EyeOff, ExternalLink } from 'lucide-react'
 import { ConversationGroupHeader } from './ConversationGroupHeader'
 import { openPersonTeam } from '../../utils/people-navigation'
 import { api } from '../../api'
@@ -31,7 +31,7 @@ export function TeamConversationRow({ row, spaceId, onToggle, onRefresh, onSelec
   const selected = useChatStore(s => s.spaceStates.get(spaceId)?.selectedTeamChat)
   const togglePin = useTeamChatPinsStore(s => s.togglePin)
   const hide = useTeamChatHiddenStore(s => s.hide)
-  const [confirming, setConfirming] = useState(false)
+  const restoreTeam = useTeamChatHiddenStore(s => s.restoreTeam)
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
@@ -40,7 +40,7 @@ export function TeamConversationRow({ row, spaceId, onToggle, onRefresh, onSelec
   const menuRef = useRef<HTMLDivElement>(null)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    if (!menuPosition) { setConfirming(false); return }
+    if (!menuPosition) return
     const close = (event: MouseEvent) => {
       if (!menuRef.current?.contains(event.target as Node) && !menuButtonRef.current?.contains(event.target as Node)) setMenuPosition(null)
     }
@@ -65,6 +65,9 @@ export function TeamConversationRow({ row, spaceId, onToggle, onRefresh, onSelec
     } finally { setBusy(false) }
   }
   if (row.type === 'team-retry') return <button type="button" onClick={onRefresh} className="w-full px-3 py-2 text-xs text-muted-foreground hover:bg-secondary">{t('Retry')}</button>
+  if (row.type === 'team-hidden') return <button type="button" onClick={() => restoreTeam(spaceId, row.teamId)} className="flex w-full items-center gap-1.5 rounded-sm py-1 pl-9 pr-1.5 text-left text-xs text-faint-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+    {t('Show {{count}} removed', { count: row.count })}
+  </button>
   if (row.type === 'team-header') {
     const toggle = () => onToggle(row.teamId, !row.collapsed)
     return <ConversationGroupHeader
@@ -108,17 +111,12 @@ export function TeamConversationRow({ row, spaceId, onToggle, onRefresh, onSelec
       </div>}
     </div>
     {menuPosition && createPortal(<div ref={menuRef} role="menu" onMouseDown={event => event.stopPropagation()} className="fixed z-[9999] min-w-[160px] max-w-[240px] bg-popover border border-border rounded-lg shadow-lg py-1" style={{ top: menuPosition.top, left: menuPosition.left, transform: 'translateX(-100%)' }}>
-      {confirming ? <div className="px-3 py-2">
-        <p className="text-xs text-muted-foreground mb-2">{t('Remove from this list? The task stays in the team.')}</p>
-        <div className="flex items-center justify-end gap-2">
-          <button type="button" onClick={() => setConfirming(false)} className="px-2 py-0.5 text-xs text-muted-foreground hover:bg-secondary rounded transition-colors">{t('Cancel')}</button>
-          <button type="button" onClick={remove} className="px-2 py-0.5 text-xs text-destructive hover:bg-destructive/10 rounded transition-colors">{t('Confirm')}</button>
-        </div>
-      </div> : <>
+      <>
         <button type="button" role="menuitem" disabled={busy} onClick={() => { setTitle(task.label); setMenuPosition(null); setEditing(true) }} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-secondary transition-colors"><Pencil className="w-3.5 h-3.5" /><span>{t('Rename')}</span></button>
         <button type="button" role="menuitem" onClick={() => { setMenuPosition(null); openPersonTeam({ teamId: task.teamId, epochId: task.epochId }); onSelected?.() }} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-secondary transition-colors"><ExternalLink className="w-3.5 h-3.5" /><span>{t('View in team')}</span></button>
-        <button type="button" role="menuitem" onClick={() => setConfirming(true)} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="w-3.5 h-3.5" /><span>{t('Delete')}</span></button>
-      </>}
+        {/* Only this list forgets it, and the team's row offers it back, so no confirmation is asked. */}
+        <button type="button" role="menuitem" onClick={remove} title={t('The task stays in the team')} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-secondary transition-colors"><EyeOff className="w-3.5 h-3.5" /><span>{t('Remove from list')}</span></button>
+      </>
     </div>, document.body)}
     {failed && <p role="alert" className="px-2 py-1 text-xs text-destructive">{t('Could not update conversation. Please try again.')}</p>}
   </div>

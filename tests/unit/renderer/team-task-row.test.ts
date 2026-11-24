@@ -39,11 +39,13 @@ describe('task row', () => {
     expect(row({ completed: true, artifactCount: 3 })).toMatch(/<span class="hidden [^"]*sm:block">just now<\/span><\/button>$/)
   })
 
-  it('leads with a check once done, a spinner while running and a dot otherwise', () => {
+  it('leads with a check once done, a still blue dot while running and a dot otherwise', () => {
     expect(row({ completed: true })).toContain('data-done=""')
-    expect(row({ active: true })).toContain('animate-spin')
+    const running = row({ active: true })
+    expect(running).toContain('bg-primary')
+    expect(running).not.toContain('animate-')
     const idle = row({})
-    expect(idle).not.toContain('animate-spin')
+    expect(idle).not.toContain('bg-primary')
     expect(idle).not.toContain('<svg')
   })
 

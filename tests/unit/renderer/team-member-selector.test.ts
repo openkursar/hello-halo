@@ -60,12 +60,12 @@ describe('task member navigation', () => {
     expect(html).toMatch(/aria-pressed="true" aria-label="own-b · You can message it"/)
     expect(html).toContain('aria-label="actual-lead · Team lead · You can message it"')
     expect(html).toContain('aria-label="remote · Read-only"')
-    expect(html.match(/aria-hidden="true" class="avatar-lock-badge"/g)).toHaveLength(2)
+    expect(html.match(/aria-hidden="true" data-lock=""/g)).toHaveLength(2)
     expect(html).not.toMatch(/member-rail-more[^>]*>(?:<span>)?\+/)
   })
   it('locks each read-only avatar itself, a read-only lead and selected member included', () => {
     const items = render(roster, 'remote', { ownedAppIds: ['own-a', 'own-b'] }).split('data-rail-item=""').slice(1)
-    const locked = (name: string) => items.find(item => item.includes(`data-avatar="${name}"`))!.includes('avatar-lock-badge')
+    const locked = (name: string) => items.find(item => item.includes(`data-avatar="${name}"`))!.includes('data-lock=""')
     expect(['actual-lead', 'own-b', 'own-a', 'remote', 'coordinator'].map(locked)).toEqual([true, false, false, true, true])
   })
   it('ends the rail with the members toggle, and sets the status beside it to open team progress', () => {

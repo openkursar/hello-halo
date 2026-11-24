@@ -42,7 +42,7 @@ export function PersonTeamWork({ appId }: { appId: string }) {
     const refresh = (data: unknown) => {
       const event = data as { teamId?: string; changed?: TeamUpdatedChange[] } | null
       if (!event?.teamId || !shown.has(event.teamId)) return
-      if (event.changed && !event.changed.includes('members')) return
+      if (event.changed && !event.changed.includes('members') && !event.changed.includes('work')) return
       if (!timer) timer = setTimeout(() => { timer = undefined; setRevision(value => value + 1) }, 500)
     }
     const off = [api.onTeamPresence(refresh), api.onTeamUpdated(refresh)]

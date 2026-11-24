@@ -108,6 +108,40 @@ describe('team conversation metadata', () => {
     expect(env.api.teamListNativeTasks).toHaveBeenCalledTimes(12)
   })
 
+  it('re-reads as far as the person has scrolled on a refresh instead of shrinking back to the first page', async () => {
+    env.api.teamListNativeTasks.mockImplementation(async ({ cursor, limit }: { cursor?: string; limit: number }) => {
+      const start = Number(cursor ?? 0)
+      return page(Array.from({ length: limit }, (_, i) => task(`e-${start + i}`)), String(start + limit))
+    })
+    const runner = mount(() => useTeamConversationRows('s')); await runner.settle()
+    for (let i = 0; i < 2; i++) { runner.result.loadMore(); await runner.settle() }
+    expect(runner.result.tasks).toHaveLength(150)
+    env.api.teamListNativeTasks.mockClear()
+    emit(); await vi.advanceTimersByTimeAsync(250); await runner.settle()
+    expect(runner.result.tasks).toHaveLength(150)
+    expect(runner.result.cursor).toBe('150')
+    expect(env.api.teamListNativeTasks.mock.calls.map(([options]: any) => options.cursor)).toEqual([undefined, '50', '100'])
+  })
+
+  it('marks rows from a work pulse in place without reading the page again', async () => {
+    env.api.teamListNativeTasks.mockResolvedValue(page([task('a'), task('b')]))
+    const runner = mount(() => useTeamConversationRows('s')); await runner.settle()
+    env.api.teamListNativeTasks.mockClear()
+    const pulse = (activeEpochIds: string[]) => env.listeners.forEach(listener => listener({ teamId: 't', changed: ['status', 'work'], activeEpochIds }))
+    pulse(['b']); await runner.settle()
+    expect(runner.result.tasks.map(item => [item.epochId, item.active])).toEqual([['a', false], ['b', true]])
+    const before = runner.result.tasks
+    pulse(['b']); await runner.settle()
+    expect(runner.result.tasks).toBe(before)
+    pulse([]); await runner.settle()
+    expect(runner.result.tasks.map(item => item.active)).toEqual([false, false])
+    await vi.advanceTimersByTimeAsync(250)
+    expect(env.api.teamListNativeTasks).not.toHaveBeenCalled()
+    env.listeners.forEach(listener => listener({ teamId: 't', changed: ['status', 'work'] }))
+    await vi.advanceTimersByTimeAsync(250); await runner.settle()
+    expect(env.api.teamListNativeTasks).toHaveBeenCalledTimes(1)
+  })
+
   it('coalesces event bursts at 250ms and performs only one trailing refresh during an in-flight page', async () => {
     const pending = deferred<ReturnType<typeof page>>()
     env.api.teamListNativeTasks.mockReturnValueOnce(pending.promise)
@@ -258,10 +292,12 @@ describe('buildTeamRows', () => {
     expect(new Set(keys).size).toBe(keys.length)
     expect(buildTeamRows(tasks, teams, pins, () => false).rows.every(row => row.type === 'team-header')).toBe(true)
   })
-  it('skips removed tasks but keeps the empty group header', () => {
+  it('skips removed tasks, keeps the empty group header and offers them back under an open group', () => {
     const result = buildTeamRows([task('a'), task('b')], [{ id: 't', name: 'Crew' }], [], () => true, { 'team:t:a': { waiting: false } })
-    expect(result.rows.map(row => row.key)).toEqual(['team:t', 'team:t:b'])
-    expect(buildTeamRows([task('a')], [{ id: 't', name: 'Crew' }], [], () => true, { 'team:t:a': { waiting: false } }).rows.map(row => row.key)).toEqual(['team:t'])
+    expect(result.rows.map(row => row.key)).toEqual(['team:t', 'team:t:b', 'team-hidden:t'])
+    expect(result.rows.at(-1)).toMatchObject({ type: 'team-hidden', teamId: 't', count: 1 })
+    expect(buildTeamRows([task('a')], [{ id: 't', name: 'Crew' }], [], () => true, { 'team:t:a': { waiting: false } }).rows.map(row => row.key)).toEqual(['team:t', 'team-hidden:t'])
+    expect(buildTeamRows([task('a')], [{ id: 't', name: 'Crew' }], [], () => false, { 'team:t:a': { waiting: false } }).rows.map(row => row.key)).toEqual(['team:t'])
   })
   it('hands the visible tasks waiting state to the hidden store', async () => {
     env.api.teamListNativeTasks.mockResolvedValue(page([{ ...task('a'), waitingForMe: true }, task('b')]))

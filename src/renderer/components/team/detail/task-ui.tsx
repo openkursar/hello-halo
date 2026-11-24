@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, memo, type ReactNode } from 'react'
 import { CheckCircle2, ChevronDown, ChevronRight, MinusCircle } from 'lucide-react'
 import type { TFunction } from 'i18next'
 import type { RosterMember, TeamActivity, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
@@ -12,6 +12,7 @@ import { RowCrew } from './crew-ui'
 import { taskState, type TaskFact, type TaskStateKey } from './status'
 
 const STATE_DOT: Partial<Record<TaskStateKey, string>> = {
+  running: 'bg-primary',
   waiting_user: 'bg-halo-warning',
   waiting_member: 'bg-halo-warning',
   error: 'bg-halo-error',
@@ -116,11 +117,10 @@ export const PILL_SECONDARY = 'inline-flex h-8 items-center rounded-full bg-seco
 /** A secondary action on a tinted "needs you" card. */
 export const PILL_ON_TINT = 'inline-flex h-8 items-center rounded-full bg-background px-3.5 text-[13px] text-foreground transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary'
 
-/** A task's state at a glance: a spinner while it runs, a check once done (a dash when a person ended it unfinished), else a dot. */
+/** A task's state at a glance: a check once done (a dash when a person ended it unfinished), else a static dot, so a long list never repaints on its own. */
 export function StateIcon({ state, ended = false, className = '' }: { state: TaskStateKey; ended?: boolean; className?: string }) {
   return <span aria-hidden="true" className={`grid size-[18px] shrink-0 place-items-center ${className}`}>
-    {state === 'running' ? <i className="size-[13px] animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
-      : state === 'done' && ended ? <MinusCircle size={16} data-done="" className="text-faint-foreground" />
+    {state === 'done' && ended ? <MinusCircle size={16} data-done="" className="text-faint-foreground" />
       : state === 'done' ? <CheckCircle2 size={16} data-done="" className="text-halo-success" />
         : <i className={`size-2 rounded-full ${STATE_DOT[state]}`} />}
   </span>
@@ -132,10 +132,26 @@ export function taskTitle(detail: TeamDetail, task: TeamConversation, t: TFuncti
   return task.label || t('New task')
 }
 
+type TaskRowProps = {
+  detail: TeamDetail; task: TeamConversation; selected?: boolean
+  /** `recent` is this task's own recent exchanges, so another task's talk does not redraw this row. */
+  crew?: { recent: readonly TeamActivity[]; cap: number; size: number }
+  onOpen: (epochId: string) => void
+}
+
+/**
+ * A row reads the team's roster, pending questions and name, never its activity
+ * buffer, so a new exchange elsewhere in the team leaves it alone.
+ */
+function sameRow(previous: TaskRowProps, next: TaskRowProps): boolean {
+  return previous.task === next.task && previous.selected === next.selected && previous.onOpen === next.onOpen
+    && previous.detail.team === next.detail.team && previous.detail.roster === next.detail.roster
+    && previous.detail.pendingEscalations === next.detail.pendingEscalations
+    && previous.crew?.recent === next.crew?.recent && previous.crew?.cap === next.crew?.cap && previous.crew?.size === next.crew?.size
+}
+
 /** One task: name, the one fact that matters most, what it produced, when it last moved and, given `crew`, who is on it now. */
-export function TaskRow({ detail, task, selected = false, crew, onOpen }: {
-  detail: TeamDetail; task: TeamConversation; selected?: boolean; crew?: { recent: readonly TeamActivity[]; cap: number; size: number }; onOpen: () => void
-}) {
+export const TaskRow = memo(function TaskRow({ detail, task, selected = false, crew, onOpen }: TaskRowProps) {
   const { t } = useTranslation()
   const state = taskState(detail, task)
   const title = taskTitle(detail, task, t)
@@ -153,7 +169,7 @@ export function TaskRow({ detail, task, selected = false, crew, onOpen }: {
   const line = [origin, fact, counts, time].filter(Boolean).join(' · ')
   const tone = state.fact.kind === 'stalled' ? 'text-muted-foreground' : STATE_TONE[state.key] ?? ''
   const parts = [origin, fact && <span className={tone}>{fact}</span>, counts].filter(Boolean)
-  return <button onClick={onOpen} aria-current={selected ? 'true' : undefined} className={`task-row relative -mx-3 flex w-[calc(100%+24px)] items-center gap-3 rounded-[10px] px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selected ? 'bg-secondary' : 'hover:bg-secondary/60'}`}>
+  return <button onClick={() => onOpen(task.epochId)} aria-current={selected ? 'true' : undefined} className={`task-row relative -mx-3 flex w-[calc(100%+24px)] items-center gap-3 rounded-[10px] px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selected ? 'bg-secondary' : 'hover:bg-secondary/60'}`}>
     <StateIcon state={state.key} ended={state.fact.kind === 'ended'} />
     <span className="min-w-0 flex-1">
       <span className="block truncate text-[13.5px] font-medium text-foreground">{title}</span>
@@ -166,7 +182,7 @@ export function TaskRow({ detail, task, selected = false, crew, onOpen }: {
     {crew && <RowCrew detail={detail} task={task} recent={crew.recent} cap={crew.cap} size={crew.size} />}
     <span className="hidden min-w-[4.5rem] shrink-0 whitespace-nowrap text-right text-xs tabular-nums text-faint-foreground sm:block">{time}</span>
   </button>
-}
+}, sameRow)
 
 /** The way into the members' conversations, counting their exchanges. */
 export function MemberConversationsLink({ count, onOpen, className = '' }: { count: number; onOpen: () => void; className?: string }) {

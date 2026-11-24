@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, ChevronRight, Loader2, MoreHorizontal, Play, Plus, Settings, Square, UserPlus } from 'lucide-react'
+import { ArrowLeft, ChevronRight, Loader2, MoreHorizontal, Pause, Play, Plus, Settings, UserPlus } from 'lucide-react'
 import type { TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import type { TeamTaskViewMemory } from '../../../services/canvas-lifecycle'
 import { useTranslation } from '../../../i18n'
@@ -162,8 +162,8 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
       <UserPlus size={14} aria-hidden="true" />{!compact && t('Invite')}
     </button>, hostOwner ? t('Only {{owner}}, the team owner, can invite members', { owner: hostOwner }) : t('Only the team owner can invite members'))}
     {stoppable
-      ? <button onClick={() => void pause()} disabled={pausing} aria-label={compact ? t('Stop') : undefined} title={t('Stops the work in progress. The team, its tasks and its settings stay.')} className={SECONDARY_ACTION}>
-        {pausing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Square size={12} fill="currentColor" aria-hidden="true" />}{!compact && t('Stop')}
+      ? <button onClick={() => void pause()} disabled={pausing} aria-label={compact ? t('Pause team') : undefined} title={t('Pauses everything the team is working on. Tasks stay open and pick up again with a new message; to close one task for good, open it and choose End task.')} className={SECONDARY_ACTION}>
+        {pausing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Pause size={13} aria-hidden="true" />}{!compact && t('Pause team')}
       </button>
       : showRun && ownerOnly(<button onClick={() => void run()} disabled={joined || starting} aria-label={compact ? t('Run') : undefined} title={joined ? undefined : t('Run toward the team goal now')} className={SECONDARY_ACTION}>
         {starting ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}{!compact && t('Run')}
@@ -183,7 +183,7 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
         {menuItem(startTask, <Plus size={14} />, <>{t('Start task')}<span aria-hidden="true"> ↗</span></>, !taskSpaceId)}
         {menuItem(() => setInviteOpen(true), <UserPlus size={14} />, t('Invite'), joined)}
         {stoppable
-          ? menuItem(() => void pause(), pausing ? <Loader2 size={14} className="animate-spin" /> : <Square size={11} fill="currentColor" />, t('Stop'), pausing)
+          ? menuItem(() => void pause(), pausing ? <Loader2 size={14} className="animate-spin" /> : <Pause size={13} />, t('Pause team'), pausing)
           : showRun && menuItem(() => void run(), starting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />, t('Run'), joined || starting)}
         {menuItem(() => showPage('settings'), <Settings size={14} />, t('Team settings'))}
         {joined && <p className="px-2.5 pb-1.5 pt-1 text-xs leading-5 text-subtle-foreground">{hostOwner ? t('Only {{owner}}, the team owner, can invite members or run the team', { owner: hostOwner }) : t('Only the team owner can invite members or run the team')}</p>}
@@ -233,7 +233,7 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
       <main ref={attachMain} onScroll={event => onScroll(event.currentTarget.scrollTop)} className="relative min-w-0 flex-1 overflow-y-auto">
         {page
           ? <>
-            <div className={`sticky top-0 z-20 flex h-12 items-center gap-2 bg-background/90 px-3 backdrop-blur sm:px-4 ${condensed ? 'shadow-[0_1px_0_hsl(var(--border)/0.5)]' : ''}`}>
+            <div className={`sticky top-0 z-20 flex h-12 items-center gap-2 bg-background px-3 sm:px-4 ${condensed ? 'shadow-[0_1px_0_hsl(var(--border)/0.5)]' : ''}`}>
               <button onClick={() => showPage(null)} className="inline-flex h-8 min-w-0 items-center gap-1.5 rounded-full px-2 text-[13px] text-subtle-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
                 <ArrowLeft size={16} className="shrink-0" aria-hidden="true" /><span className="truncate">{team.name}</span>
               </button>
@@ -255,7 +255,7 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
           : <>
             {!split && <>
               <div className="sticky top-0 z-20 h-12">
-                <div className={`flex h-12 items-center justify-between gap-2 bg-background/90 px-3 backdrop-blur transition-[visibility] duration-200 sm:px-4 ${condensed ? 'invisible' : ''}`}>
+                <div className={`flex h-12 items-center justify-between gap-2 bg-background px-3 transition-[visibility] duration-200 sm:px-4 ${condensed ? 'invisible' : ''}`}>
                   {back}
                   {!wide && actions}
                 </div>

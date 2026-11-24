@@ -106,7 +106,7 @@ export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memor
     if (!taskSpaceId) return
     openTeamConversation(taskSpaceId, { teamId: detail.team.id, epochId: task.epochId, teamName: detail.team.name, label: task.label, appId: drill && owned.includes(drill) ? drill : undefined })
   }
-  const endTask = useEndTask(detail.team.id, task.epochId, task.createdByMe ? undefined : task.startedBy, overview.stateKey === 'waiting_member')
+  const endTask = useEndTask(detail.team.id, task.epochId, task.createdByMe ? undefined : task.startedBy, overview.stateKey === 'waiting_member' || overview.stateKey === 'waiting_user')
   // Team work that is not running, waiting on others included, can be closed by hand, on the team's host only.
   // A plain chat has nothing to stop, and an IM chat cannot be picked up again after ending: its next message
   // starts a new session.
@@ -174,6 +174,7 @@ function useEndTask(teamId: string, epochId: string, startedBy: string | undefin
       : t('Members will stop working on it. Its outputs and record are kept, and sending it a new message picks it up again.')
     const confirmed = await showConfirm({
       title: t('End this task?'),
+      // Every question still open on the task, yours included, is withdrawn on ending it.
       message: waitingOnOthers ? `${message} ${t('Confirmations still waiting on someone are withdrawn.')}` : message,
       confirmLabel: t('End task'),
       cancelLabel: t('Cancel'),

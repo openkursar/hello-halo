@@ -117,9 +117,14 @@ export function doneThisMonth(detail: TeamDetail, tasks: readonly TeamConversati
   return tasks.filter(task => isTeamWork(task) && !task.endedManually && taskState(detail, task).key === 'done' && (task.finishedAt ?? task.lastActivityAt) >= monthStart)
 }
 
+/** The state of every task at once, for a list that reads each one several times. */
+export function taskStates(detail: TeamDetail, tasks: readonly TeamConversation[]): Map<string, TaskState> {
+  return new Map(tasks.map(task => [task.epochId, taskState(detail, task)]))
+}
+
 /** Tasks most in need of attention first, then most recent. */
-export function sortByState(detail: TeamDetail, tasks: readonly TeamConversation[]): TeamConversation[] {
-  const priority = new Map(tasks.map(task => [task.epochId, taskState(detail, task).priority]))
+export function sortByState(detail: TeamDetail, tasks: readonly TeamConversation[], states?: ReadonlyMap<string, TaskState>): TeamConversation[] {
+  const priority = new Map(tasks.map(task => [task.epochId, (states?.get(task.epochId) ?? taskState(detail, task)).priority]))
   return [...tasks].sort((a, b) => priority.get(a.epochId)! - priority.get(b.epochId)! || b.lastActivityAt - a.lastActivityAt)
 }
 

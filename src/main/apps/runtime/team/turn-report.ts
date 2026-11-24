@@ -214,15 +214,20 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
    * A member asked by a teammate that ended its turn without writing back has
    * still answered: its closing text is the answer. Without this the asker's
    * subtask stays open forever and the task reads as stalled.
+   *
+   * A turn that raised a decision for a person has not answered: the closing
+   * text is that question, and filing it as a reply would settle the asker's
+   * subtask while the person is still being waited on.
    */
   function recordUnsentReply(input: NoteTurnEndedInput, startedAt: number | undefined): void {
     const { appId, teamId, epochId, requestFromAppId } = input
     const text = input.finalReply?.trim()
     if (!deps.recordReply || input.fate.kind !== 'ended' || input.triggerKind !== 'message'
       || !requestFromAppId || requestFromAppId === appId || !text || startedAt === undefined) return
-    const answered = (acts.get(memberKey(epochId, appId)) ?? []).some((a) => a.at >= startedAt
-      && (a.kind === 'finding' || (a.kind === 'message' && a.targetAppId === requestFromAppId)))
-    if (answered) return
+    const inTurn = (acts.get(memberKey(epochId, appId)) ?? []).filter((a) => a.at >= startedAt)
+    const answered = inTurn.some((a) => a.kind === 'finding' || (a.kind === 'message' && a.targetAppId === requestFromAppId))
+    const askedAPerson = inTurn.some((a) => a.kind === 'decision')
+    if (answered || askedAPerson) return
     deps.recordReply({
       teamId, epochId, kind: 'reply', actorAppId: appId, targetAppId: requestFromAppId,
       subject: toActivitySubject(text), body: text,

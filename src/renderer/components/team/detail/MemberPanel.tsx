@@ -56,7 +56,7 @@ export function MemberPanel({ detail, member, tasks, taskSpaceId, docked, owned,
           <SectionHeading title={t('Tasks it is in')} count={related.length} />
           {related.length
             ? <>
-              {shown.map(task => <TaskRow key={task.epochId} detail={detail} task={task} onOpen={() => onOpenTask(task.epochId)} />)}
+              {shown.map(task => <TaskRow key={task.epochId} detail={detail} task={task} onOpen={onOpenTask} />)}
               {related.length > TASK_LIMIT && <MoreToggle up={allTasks} onClick={() => setAllTasks(value => !value)}>
                 {allTasks ? t('Show less') : t('Show {{count}} more', { count: related.length - TASK_LIMIT })}
               </MoreToggle>}

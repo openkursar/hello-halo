@@ -1,12 +1,12 @@
-import { useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { CalendarClock, Check, ChevronDown, Loader2, Search, X } from 'lucide-react'
-import type { TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
+import type { TeamActivity, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { useTeamStore } from '../../../stores/team.store'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/Popover'
 import { useRecentTalk } from './crew-ui'
 import { NeedsYou } from './NeedsYou'
-import { isMoving, isTeamWork, needsUser, sortByState, taskState } from './status'
+import { isMoving, isTeamWork, needsUser, sortByState, taskStates } from './status'
 import { matchesSource, MoreToggle, sourceLabel, StateIcon, TaskRow, taskTitle, type TaskSource } from './task-ui'
 
 export interface TaskFilters { query: string; source: TaskSource | 'all' }
@@ -23,6 +23,26 @@ type Fold = 'yours' | 'moving' | 'others' | 'stopped' | 'done' | 'chats'
 const OPEN_BY_DEFAULT: Record<Fold, boolean> = { yours: true, moving: true, others: true, stopped: true, done: true, chats: false }
 /** Sections the user folded, kept per team for this session. */
 const folds = new Map<string, Record<Fold, boolean>>()
+const NO_TALK: readonly TeamActivity[] = []
+
+/**
+ * Recent exchanges split by task. A task whose own exchanges did not change keeps
+ * the same array, so its row is not redrawn by talk in another task.
+ */
+function useTalkByTask(recent: readonly TeamActivity[]): ReadonlyMap<string, readonly TeamActivity[]> {
+  const previous = useRef<ReadonlyMap<string, readonly TeamActivity[]>>(new Map())
+  return useMemo(() => {
+    const next = new Map<string, TeamActivity[]>()
+    for (const activity of recent) next.set(activity.epochId, [...(next.get(activity.epochId) ?? []), activity])
+    const kept = new Map<string, readonly TeamActivity[]>()
+    for (const [epochId, list] of next) {
+      const old = previous.current.get(epochId)
+      kept.set(epochId, old && old.length === list.length && old.every((row, index) => row === list[index]) ? old : list)
+    }
+    previous.current = kept
+    return kept
+  }, [recent])
+}
 
 function useFolds(teamId: string) {
   const [, refresh] = useReducer((count: number) => count + 1, 0)
@@ -52,16 +72,18 @@ export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters,
   const [sourceOpen, setSourceOpen] = useState(false)
   const query = filters.query.trim().toLocaleLowerCase()
   const pending = useMemo(() => [...(detail.pendingEscalations ?? [])].sort((a, b) => (a.entry?.ts ?? 0) - (b.entry?.ts ?? 0)), [detail.pendingEscalations])
+  // Each task's state is read for the attention board, the sort and the grouping; work it out once.
+  const states = useMemo(() => taskStates(detail, tasks), [detail, tasks])
   const attention = useMemo(() => tasks.filter(task => {
-    const key = taskState(detail, task).key
+    const key = states.get(task.epochId)!.key
     if (key === 'waiting_user') return !pending.some(item => item.epochId === task.epochId)
     return key === 'error' && (task.createdByMe || task.involvedMe)
-  }), [pending, detail, tasks])
+  }), [pending, states, tasks])
   const filtered = useMemo(() => tasks.filter(task => matchesSource(task, filters.source)
     && (!query || [taskTitle(detail, task, t), task.label, task.workItemId, task.epochId].some(value => value?.toLocaleLowerCase().includes(query)))
   ), [detail, filters.source, query, tasks, t])
   const groups = useMemo(() => {
-    const sorted = sortByState(detail, filtered)
+    const sorted = sortByState(detail, filtered, states)
     const yours: TeamConversation[] = []
     const moving: TeamConversation[] = []
     const others: TeamConversation[] = []
@@ -70,7 +92,7 @@ export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters,
     const chats: TeamConversation[] = []
     let chatRunning = false
     for (const task of sorted) {
-      const key = taskState(detail, task).key
+      const key = states.get(task.epochId)!.key
       if (!isTeamWork(task) && !needsUser(key)) {
         chats.push(task)
         chatRunning ||= isMoving(key)
@@ -82,12 +104,18 @@ export function TaskList({ wide, detail, tasks, taskSpaceId, filters, onFilters,
     }
     done.sort((a, b) => (b.finishedAt ?? b.lastActivityAt) - (a.finishedAt ?? a.lastActivityAt))
     return { sorted, yours, moving, others, stopped, done, chats, chatRunning }
-  }, [detail, filtered])
+  }, [detail, filtered, states])
   const searching = query !== ''
   const filtering = searching || filters.source !== 'all'
-  const recent = useRecentTalk(detail.activities)
-  const crew = useMemo(() => ({ recent, cap: wide ? 4 : 3, size: wide ? 24 : 22 }), [recent, wide])
-  const rows = (items: TeamConversation[]) => items.map(task => <TaskRow key={task.epochId} detail={detail} task={task} selected={selectedId === task.epochId} crew={crew} onOpen={() => onOpenTask(task.epochId)} />)
+  const talk = useTalkByTask(useRecentTalk(detail.activities))
+  const cap = wide ? 4 : 3
+  const size = wide ? 24 : 22
+  // One opener for every row, so a memoised row is not redrawn for a new closure.
+  const latestOpen = useRef(onOpenTask)
+  latestOpen.current = onOpenTask
+  const openTask = useCallback((epochId: string) => latestOpen.current(epochId), [])
+  const rows = (items: TeamConversation[]) => items.map(task => <TaskRow key={task.epochId} detail={detail} task={task} selected={selectedId === task.epochId}
+    crew={{ recent: talk.get(task.epochId) ?? NO_TALK, cap, size }} onOpen={openTask} />)
 
   if (!tasks.length && !loading && !error) return <EmptyTeam onOpenSettings={onOpenSettings} />
 

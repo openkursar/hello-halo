@@ -443,11 +443,10 @@ export interface TeamStore {
   listRecentActivityByEpoch(teamId: string, epochId: string, limit: number): TeamActivity[]
   /** Acts of an epoch created strictly after `sinceCreatedAt`, oldest first. */
   listActivityByEpochSince(teamId: string, epochId: string, sinceCreatedAt: number): TeamActivity[]
-  /** Messages, replies and findings of the given epochs, oldest first: what settles delegated work. */
+  /** Messages, replies and findings of the given epochs, oldest first, each body cut to its opening line: what settles delegated work. */
   listExchangesByEpochs(teamId: string, epochIds: string[]): TeamActivity[]
   /** Whole records, oldest first and without bodies, of those given epochs that hold any failure. */
   listActivityOfFailedEpochs(teamId: string, epochIds: string[]): TeamActivity[]
-  /** Every act of a team, across epochs — the replication snapshot's source. */
   /** Conversations people started here, and runs a person has since written into. */
   listNativeTaskEpochs(spaceId: string, localAppIds: string[], limit: number, cursor?: { at: number; id: string }, epochIds?: string[], scope?: NativeTaskScope): TeamEpoch[]
   /** `detailed` adds output counts and participants, which only a team's own task list shows. */
@@ -464,6 +463,7 @@ export interface TeamStore {
     rows: Array<{ epochId: string; appId: string; ref: string; at: number }>
     total: number
   }
+  /** Every act of a team, across epochs — the replication snapshot's source. */
   listActivityByTeam(teamId: string): TeamActivity[]
   /**
    * How many acts an epoch holds, without loading them. Lets a bounded reader

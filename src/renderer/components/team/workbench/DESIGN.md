@@ -52,7 +52,7 @@ progress", "Waiting on others", every other open task under "Not in progress" (n
 what all of them share, as work merely left quiet sits there too; each row says why it
 stopped), "Completed"
 (newest finished first, its rows dimmed so finished work stays quieter than live work) and
-plain chats under "Q&A", folded by default with a spinner on its heading while one runs.
+plain chats under "Q&A", folded by default with a blue dot on its heading while one runs.
 "Not in progress" and "Completed" show ten rows and open twenty more a step ("View N more",
 "View N earlier") until "Show less"; folds are kept per team for the session. A search
 lists every match in one run without groups. The source menu groups its choices: all; mine,
@@ -151,15 +151,17 @@ replaces it with that task. Opening a task from its list always starts at the ov
 homepage, so its panel only says so and its members offer no way on. Task rows say
 where work nobody here started came from (the run's trigger, the IM app), then on the
 same line under the title what it produced, its subtasks and when it last moved;
-finished or quiet work leaves its state to the leading icon and its group: a spinner
-while it runs (slowed, not stopped, under reduced motion), a green check once done, a
-dot when waiting, failed or quiet. Rows are parted by spacing alone. At the end of a live
+finished or quiet work leaves its state to the leading icon and its group: a blue dot
+while it runs, a green check once done, a dot when waiting, failed or quiet. Nothing in
+the list moves on its own: with rendering on the CPU (Windows runs without GPU
+acceleration, VDI streams every changed pixel) a long list of spinners and blinking
+faces costs every frame. Rows are parted by spacing alone. At the end of a live
 row sit the members on it now (`detail/crew`: working on it, waiting on a decision, or
 stopped by a failure), with members needing the user first; at most four at 24px (three
 at 22px when narrow), the rest as "+N"; hovering them lists everyone with their state
 and who is talking to whom, a talking member's state naming its partners ("Talking with
 Lead"), never a bare "teammates". Two members who wrote to each other in this task within the
-last two minutes overlap and blink (eyes only, never a turned head); "talking" is read
+last two minutes overlap; "talking" is read
 from the live activity buffer the page already holds, so talk from before the page
 opened is not shown. Members who took part (`participantAppIds`, projected only for a
 team's own task list; it counts team activity and every local member that had a turn of
@@ -388,7 +390,7 @@ Activity groups are newest first by their latest record; expanded groups and
 conversation coordination previews retain chronological order. Interacting with
 the activity history holds its visible records steady; newly arriving records
 are revealed through an explicit update button instead of shifting the reader.
-The workbench room and drawer share one task board read; live events merge into that board.
+Every place observing one task (the homepage conversation, its canvas progress, the team page's panel, a temporary team's bar) keeps its own `useTaskBoard`, but their board and roster reads for the same team and epoch are shared while in flight, so one team event costs one read; live events merge into each board.
 The transcript trigger carries team origin and correlation; display routing uses
 that provenance only, never message text. Invalid timestamps retain their records
 with an unknown-time label and sort after dated records. Activity loads member reports on demand with

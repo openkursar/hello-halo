@@ -299,6 +299,12 @@ export interface TeamEpoch {
    * to `startedAt` for rows written before migration v11.
    */
   lastActivityAt?: number
+  /**
+   * When a person first wrote into a run epoch; from then on the run is listed
+   * beside conversations. Null for runs nobody has written into and for
+   * conversation epochs. Replicated so every node lists the same runs.
+   */
+  firstHumanTurnAt?: number | null
 }
 
 // ── Periodic checks (member-level recurring wake, scoped to one epoch) ──
@@ -1059,9 +1065,10 @@ export interface CollabSummary {
  * What a `team:updated` changed, so a listener reloads only that. 'status' is
  * the office row alone (carried on the event); 'members' the roster, members and
  * edges; 'board' the open board's tasks, findings, activity and checks; 'epochs'
- * the run history; 'conversations' the task list.
+ * the run history; 'conversations' the task list; 'work' who is working where
+ * (members' busy state and which tasks are active), with membership unchanged.
  */
-export type TeamUpdatedChange = 'status' | 'members' | 'board' | 'epochs' | 'conversations'
+export type TeamUpdatedChange = 'status' | 'members' | 'board' | 'epochs' | 'conversations' | 'work'
 
 export interface TeamUpdatedEvent {
   teamId: string
@@ -1075,6 +1082,12 @@ export interface TeamUpdatedEvent {
    * alone resets a working office back to idle — prefer this when present.
    */
   liveStatus?: TeamStatus
+  /**
+   * On a 'work' change: every open epoch some member is serving right now, so
+   * a task list can mark its rows without reading the team again. Absent on
+   * every other change, and on nodes that do not run the members themselves.
+   */
+  activeEpochIds?: string[]
   removed?: boolean
   /**
    * Why the office left this node's list. Only set for a removal the user did NOT

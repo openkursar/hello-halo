@@ -549,7 +549,7 @@ export function ChatHistoryPanel() {
   }
 
   const renderListItem = (_index: number, item: HistoryItem) => {
-    if (item.type === 'team-header' || item.type === 'team-item' || item.type === 'team-retry') return <TeamConversationRow
+    if (item.type === 'team-header' || item.type === 'team-item' || item.type === 'team-retry' || item.type === 'team-hidden') return <TeamConversationRow
       row={item} spaceId={currentSpaceId ?? ''} onToggle={(id, open) => setGroupOpen(currentSpaceId ?? '', `team:${id}`, !open)}
       onRefresh={teamList.refresh} onSelected={handleClose} />
     if (item.type === 'header') {

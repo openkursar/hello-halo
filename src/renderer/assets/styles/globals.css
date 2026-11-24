@@ -754,13 +754,17 @@ html.platform-desktop body::after {
 }
 
 /* A member's state at the corner of its avatar, sized as a share of the avatar so
-   it keeps one proportion at every size; the ring takes the surface behind it. */
+   it keeps one proportion at every size, rounded to whole pixels so it stays a
+   circle wherever it lands; the ring takes the surface behind it. */
 .avatar-status-dot {
   position: absolute;
   right: 0;
   bottom: 0;
+  /* Browsers without round() (older Safari/Firefox on the web client) keep the plain size. */
   width: 25%;
   height: 25%;
+  width: round(25%, 1px);
+  height: round(25%, 1px);
   border-radius: 9999px;
   background: hsl(var(--primary));
   box-shadow: 0 0 0 1.5px var(--avatar-dot-ring, hsl(var(--background)));
@@ -802,25 +806,6 @@ html.platform-desktop body::after {
 
 [data-team-scene] .avatar-status-dot[data-tone="done"][data-size="small"]::after {
   inset: 8%;
-}
-
-/* Read-only: a light veil with a lock over the face; the status dot is drawn after it
-   so it stays on top. */
-.avatar-lock-badge {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9999px;
-  background: rgb(0 0 0 / .28);
-  color: #fff;
-}
-
-.avatar-lock-badge svg {
-  width: 46%;
-  height: 46%;
-  filter: drop-shadow(0 1px 1px rgb(0 0 0 / .25));
 }
 
 .member-rail-name {

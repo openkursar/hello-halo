@@ -109,7 +109,8 @@ describe('row crew', () => {
     const recent = [message('a', 'lead', 1_000)]
     const html = renderToStaticMarkup(createElement(RowCrew, { detail, task: task(), recent, cap: 3, size: 22 }))
     expect(html).toContain('+2')
-    expect(html.match(/avatar-blink/g)).toHaveLength(2)
+    expect(html.match(/-ml-\[5px\]/g)).toHaveLength(1)
+    expect(html).not.toContain('avatar-blink')
     expect(html).toContain('A · Talking with LEAD')
     expect(html).toContain('LEAD · Talking with A')
     expect(html).toContain('D · Working')

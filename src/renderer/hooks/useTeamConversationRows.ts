@@ -16,6 +16,8 @@ export type TeamListRow =
   | { type: 'team-header'; key: string; teamId: string; name: string; collapsed: boolean; avatar: TeamAvatarFaces }
   | { type: 'team-item'; key: string; task: NativeTeamTask; standalone: boolean; starred: boolean; avatar: TeamAvatarFaces }
   | { type: 'team-retry'; key: string }
+  /** Tasks of this team the person removed from the list, with the way back. */
+  | { type: 'team-hidden'; key: string; teamId: string; count: number }
 
 const EMPTY_PINS: string[] = []
 const EMPTY_HIDDEN: Record<string, HiddenTeamChat> = {}
@@ -36,11 +38,11 @@ export function teamAvatarFaces(roster: readonly TeamRosterFace[]): TeamAvatarFa
 export function buildTeamRows(tasks: NativeTeamTask[], teams: TeamSummary[], pins: string[], isOpen: (id: string) => boolean, hidden: Record<string, HiddenTeamChat> = EMPTY_HIDDEN) {
   const pinned: TeamListRow[] = []
   const rows: TeamListRow[] = []
-  const groups = new Map(teams.map(team => [team.id, { name: team.name, avatar: teamAvatarFaces(team.roster ?? []), tasks: [] as NativeTeamTask[] }]))
+  const groups = new Map(teams.map(team => [team.id, { name: team.name, avatar: teamAvatarFaces(team.roster ?? []), tasks: [] as NativeTeamTask[], hidden: 0 }]))
   for (const task of tasks) {
-    if (hidden[teamTaskKey(task.teamId, task.epochId)]) continue
-    const group = groups.get(task.teamId) ?? { name: task.teamName, avatar: EMPTY_FACES, tasks: [] }
-    group.tasks.push(task)
+    const group = groups.get(task.teamId) ?? { name: task.teamName, avatar: EMPTY_FACES, tasks: [], hidden: 0 }
+    if (hidden[teamTaskKey(task.teamId, task.epochId)]) group.hidden++
+    else group.tasks.push(task)
     groups.set(task.teamId, group)
   }
   for (const [teamId, group] of groups) {
@@ -53,6 +55,7 @@ export function buildTeamRows(tasks: NativeTeamTask[], teams: TeamSummary[], pin
       if (starred) pinned.push(row)
       else if (!collapsed) rows.push(row)
     }
+    if (!collapsed && group.hidden > 0) rows.push({ type: 'team-hidden', key: `team-hidden:${teamId}`, teamId, count: group.hidden })
   }
   return { rows, pinned }
 }
@@ -89,9 +92,18 @@ export function useTeamConversationRows(spaceId: string | null | undefined, enab
       try {
         const keys = useTeamChatPinsStore.getState().pinned[spaceId] ?? []
         const epochIds = keys.map(key => key.slice(key.lastIndexOf(':') + 1))
-        const result = await api.teamListNativeTasks({ spaceId, limit: PAGE_SIZE, scope: 'mine', ...(more && cursor ? { cursor } : {}) })
-        if (!result.success || !result.data) throw new Error(result.error || 'Team task list unavailable')
-        if (disposed) return
+        // A refresh re-reads as far as the person has scrolled, so the list
+        // neither shrinks back to the first page nor loses its place.
+        const loaded = more ? 0 : tasks.length
+        const items: NativeTeamTask[] = []
+        let next: string | null = more ? cursor : null
+        do {
+          const page = await api.teamListNativeTasks({ spaceId, limit: PAGE_SIZE, scope: 'mine', ...(next ? { cursor: next } : {}) })
+          if (!page.success || !page.data) throw new Error(page.error || 'Team task list unavailable')
+          if (disposed) return
+          items.push(...page.data.items)
+          next = page.data.nextCursor
+        } while (!more && next && items.length < loaded)
         if (!more) {
           const resolved: NativeTeamTask[] = []
           for (let offset = 0; offset < epochIds.length; offset += 100) {
@@ -103,9 +115,9 @@ export function useTeamConversationRows(spaceId: string | null | undefined, enab
           pinnedTasks = resolved
         }
         const merged = new Map((more ? tasks : []).map(task => [teamTaskKey(task.teamId, task.epochId), task]))
-        for (const task of result.data.items) merged.set(teamTaskKey(task.teamId, task.epochId), task)
+        for (const task of items) merged.set(teamTaskKey(task.teamId, task.epochId), task)
         tasks = [...merged.values()]
-        cursor = result.data.nextCursor
+        cursor = next
         taskError = false
         publish(false)
       } catch (error) {
@@ -154,7 +166,21 @@ export function useTeamConversationRows(spaceId: string | null | undefined, enab
       if (!event.removed && (!event.changed || event.changed.includes('members')) && summaryTimer === undefined) {
         summaryTimer = setTimeout(() => { summaryTimer = undefined; void loadTeams() }, 250)
       }
-      if (!event.changed || event.changed.some(change => change === 'conversations' || change === 'epochs' || change === 'status')) schedule()
+      // A work pulse carries who is being served; the rows take it in place.
+      // A pulse without that list, or any other change, re-reads the page.
+      if (event.changed?.includes('work') && event.changed.every(change => change === 'work' || change === 'status') && event.activeEpochIds && !event.removed) {
+        const active = new Set(event.activeEpochIds)
+        const mark = (task: NativeTeamTask) => task.teamId !== event.teamId || task.active === active.has(task.epochId) ? task : { ...task, active: active.has(task.epochId) }
+        const nextTasks = tasks.map(mark)
+        const nextPinned = pinnedTasks.map(mark)
+        if (nextTasks.some((task, index) => task !== tasks[index]) || nextPinned.some((task, index) => task !== pinnedTasks[index])) {
+          tasks = nextTasks
+          pinnedTasks = nextPinned
+          publish(inFlight)
+        }
+        return
+      }
+      if (!event.changed || event.changed.some(change => change === 'conversations' || change === 'epochs' || change === 'status' || change === 'work')) schedule()
     })
     return () => { disposed = true; clearTimeout(timer); clearTimeout(summaryTimer); off(); commands.current = { more: () => {}, refresh: () => {} } }
   }, [spaceId, enabled])

@@ -3,7 +3,7 @@ import type { TFunction } from 'i18next'
 import type { RosterMember, TeamActivity, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { formatTimeAgo } from '../../../utils/format-time'
-import { blinkDelay, orderCrew, partnersOf, pastCrew, recentTalk, rowGroups, talkExpiry, talkLinks, taskCrew, type CrewState } from './crew'
+import { orderCrew, partnersOf, pastCrew, recentTalk, rowGroups, talkExpiry, talkLinks, taskCrew, type CrewState } from './crew'
 import { MemberFace } from './member-ui'
 import type { MemberStateKey } from './status'
 
@@ -67,7 +67,6 @@ export function RowCrew({ detail, task, recent, cap, size }: { detail: TeamDetai
     {shown.length > 0 && <span aria-hidden="true" className="flex items-center gap-3">
       {rowGroups(shown, links).map(group => <span key={group[0].appId} className="flex items-center">
         {group.map((entry, index) => <MemberFace key={entry.appId} name={name(entry.appId)} state={CREW_FACE[entry.state]} size={size}
-          blink={group.length > 1 && entry.state === 'working' ? blinkDelay(entry.appId) : undefined}
           className={group.length > 1 ? `rounded-full ring-2 ring-background ${index ? '-ml-[5px]' : ''}` : ''} />)}
       </span>)}
       {hidden > 0 && <span className={`${MORE_CHIP} bg-primary/10 text-primary`}>+{hidden}</span>}
@@ -75,7 +74,7 @@ export function RowCrew({ detail, task, recent, cap, size }: { detail: TeamDetai
     {shown.length > 0 && past.length > 0 && <span aria-hidden="true" className="mx-[3px] h-4 w-px shrink-0 bg-border" />}
     {past.length > 0 && <span aria-hidden="true" className="flex items-center">
       {pastShown.map((appId, index) => <MemberFace key={appId} name={name(appId)} state="idle" size={finished ? size : size - 2}
-        className={`rounded-full ring-2 ring-background ${index ? '-ml-[7px]' : ''} ${finished ? '' : 'opacity-50 saturate-[.4]'}`} />)}
+        className={`rounded-full ring-2 ring-background ${index ? '-ml-[7px]' : ''} ${finished ? '' : 'opacity-50'}`} />)}
       {pastHidden > 0 && <span className={`${MORE_CHIP} -ml-[7px] bg-secondary text-subtle-foreground ring-2 ring-background`}>+{pastHidden}</span>}
     </span>}
     <span aria-hidden="true" className="absolute right-0 top-[calc(100%+6px)] z-10 hidden w-[260px] rounded-xl border border-border bg-background px-3 py-2.5 text-xs shadow-lg group-hover/crew:block">

@@ -107,7 +107,7 @@ DELETE /api/teams/<teamId>/checks/<checkId>                        Stop one peri
 GET    /api/teams/<teamId>/conversations                           List a team's conversations (its tasks and chats), newest first
      curl -s "$HALO_API_URL/api/teams/<teamId>/conversations" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
      # out: {success:true,data:[{epochId,teamId,kind:"native"|"im"|"member"|"run"|"collab",label,readonly,completed,memberAppId?,channel?,summary?,startedAt,lastActivityAt,active?,waitingUser?,endedManually?,endedBy?}]}
-     # note: Each one has its own context; a member message, transcript read or stop names one by epochId. completed:true means it has ended (finished or archived); endedManually:true means a person ended it by hand before every subtask was done, and endedBy names who. active:true means a member is working in it right now.
+     # note: Each one has its own context; a member message, transcript read or stop names one by epochId. completed:true means it has ended (finished or archived); endedManually:true means a person ended it by hand before every board subtask was done, and endedBy names who. active:true means a member is working in it right now.
 
 POST   /api/teams/<teamId>/conversations                           Open a new team conversation
      # note: reversible — can be undone or corrected afterward.
@@ -133,7 +133,7 @@ DELETE /api/teams/<teamId>/conversations/<epochId>                 Archive (clos
      !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
      curl -sX DELETE "$HALO_API_URL/api/teams/<teamId>/conversations/<epochId>" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true}
-     # note: Only on the node hosting the team. Work with at least one subtask, all of them done, is archived as finished; anything else (including work with no subtasks) is recorded as ended by a person. The conversation stays in run history (GET /api/teams/:teamId/epochs); a person's new message reopens it.
+     # note: Only on the node hosting the team. Work with at least one board subtask, all of them done, is archived as finished; anything else (including work with no board subtasks) is recorded as ended by a person. The conversation stays in run history (GET /api/teams/:teamId/epochs); a person's new message reopens it.
 
 GET    /api/teams/<teamId>/detail                                  Get a team with members, edges, roster status, board and decisions
      curl -s "$HALO_API_URL/api/teams/<teamId>/detail" -H "Authorization: Bearer $HALO_API_TOKEN"

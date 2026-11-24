@@ -948,7 +948,7 @@ export const ConversationList = memo(function ConversationList({
     onToggle={(id, open) => toggleAppCollapsed(`team:${id}`, open)} onRefresh={teamList.refresh}
     onHover={showHoverCard} onHoverEnd={hideHoverCard} compact={compact} />
   const renderListRow = (row: ConversationRow) => {
-    if (row.type === 'team-header' || row.type === 'team-item' || row.type === 'team-retry') return renderTeamRow(row)
+    if (row.type === 'team-header' || row.type === 'team-item' || row.type === 'team-retry' || row.type === 'team-hidden') return renderTeamRow(row)
     if (row.type === 'dh-header') return renderDigitalHumanHeader(row)
     if (row.type === 'dh-item') return renderAppChatItem(row.row, row.standalone)
     return renderConversationItem(row.conversation)
@@ -983,7 +983,7 @@ export const ConversationList = memo(function ConversationList({
             ...(conversationsOpen ? conversationRows : []),
           ].map(row => {
             if (row.type === 'team-item') return renderTeamRow(row, true)
-            if (row.type === 'dh-header' || row.type === 'team-header' || row.type === 'team-retry') return null
+            if (row.type === 'dh-header' || row.type === 'team-header' || row.type === 'team-retry' || row.type === 'team-hidden') return null
             const isAppChat = row.type === 'dh-item'
             const id = isAppChat ? row.row.id : row.conversation.id
             const active = isAppChat

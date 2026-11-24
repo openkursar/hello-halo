@@ -225,6 +225,9 @@ function rowToActivity(row: TeamActivityRow): TeamActivity {
   }
 }
 
+/** Enough of a message to hold its first non-empty line. */
+const EXCHANGE_OPENING_CHARS = 600
+
 function rowToEpoch(row: TeamEpochRow): TeamEpoch {
   return {
     id: row.id,
@@ -239,6 +242,7 @@ function rowToEpoch(row: TeamEpochRow): TeamEpoch {
     outcome: (row.outcome as TeamEpoch['outcome'] | undefined) ?? null,
     triggerType: (row.trigger_type as TeamEpoch['triggerType'] | undefined) ?? 'manual',
     lastActivityAt: row.last_activity_at ?? row.started_at,
+    firstHumanTurnAt: row.first_human_turn_at ?? null,
   }
 }
 
@@ -579,10 +583,10 @@ export class TeamStore implements ITeamStore {
     this.stmtInsertEpoch = db.prepare(`
       INSERT INTO team_epochs (
         id, team_id, started_at, ended_at, end_reason, summary, trigger_type, lifecycle, chat_key, title, outcome,
-        last_activity_at
+        last_activity_at, first_human_turn_at
       ) VALUES (
         @id, @team_id, @started_at, @ended_at, @end_reason, @summary, @trigger_type, @lifecycle, @chat_key, @title, @outcome,
-        @last_activity_at
+        @last_activity_at, @first_human_turn_at
       )
     `)
     this.stmtGetEpochById = db.prepare(`SELECT * FROM team_epochs WHERE id = ?`)
@@ -1113,6 +1117,7 @@ export class TeamStore implements ITeamStore {
             title: null,
             outcome: null,
             last_activity_at: now,
+            first_human_turn_at: null,
           })
         }
       }
@@ -1437,9 +1442,16 @@ export class TeamStore implements ITeamStore {
     return (this.stmtListActivityByEpochSince.all(teamId, epochId, sinceCreatedAt) as TeamActivityRow[]).map(rowToActivity)
   }
 
+  /**
+   * The exchanges of the given epochs with each body cut to its opening: the
+   * reader names the work from a message's first line, and a whole report is
+   * paid for on every list refresh otherwise.
+   */
   listExchangesByEpochs(teamId: string, epochIds: string[]): TeamActivity[] {
     if (!epochIds.length) return []
-    return (this.db.prepare(`SELECT * FROM team_activity
+    return (this.db.prepare(`SELECT id, team_id, epoch_id, kind, actor_app_id, target_app_id, subject,
+        substr(body, 1, ${EXCHANGE_OPENING_CHARS}) AS body, ref_id, correlation_id, status, created_at
+      FROM team_activity
       WHERE team_id = ? AND epoch_id IN (SELECT value FROM json_each(?)) AND kind IN ('message', 'reply', 'finding')
       ORDER BY created_at ASC, rowid ASC`).all(teamId, JSON.stringify(epochIds)) as TeamActivityRow[]).map(rowToActivity)
   }
@@ -1687,6 +1699,7 @@ export class TeamStore implements ITeamStore {
       title: epoch.title ?? null,
       outcome: epoch.outcome ?? null,
       last_activity_at: epoch.lastActivityAt ?? epoch.startedAt,
+      first_human_turn_at: epoch.firstHumanTurnAt ?? null,
     })
     applyWorkItem(this.db, epoch)
   }
@@ -1755,7 +1768,8 @@ export class TeamStore implements ITeamStore {
                ended_at = @ended_at, end_reason = @end_reason, summary = @summary,
                title = @title, outcome = @outcome, chat_key = @chat_key,
                lifecycle = @lifecycle,
-               last_activity_at = MAX(COALESCE(last_activity_at, 0), @last_activity_at)
+               last_activity_at = MAX(COALESCE(last_activity_at, 0), @last_activity_at),
+               first_human_turn_at = MIN(COALESCE(first_human_turn_at, @first_human_turn_at), COALESCE(@first_human_turn_at, first_human_turn_at))
          WHERE id = @id`
       )
       .run({
@@ -1774,6 +1788,9 @@ export class TeamStore implements ITeamStore {
         // both sides stamp it: a node serving its own member's turn must not have
         // that erased by an authority row that predates it.
         last_activity_at: epoch.lastActivityAt ?? epoch.startedAt,
+        // Both sides may stamp a person's first turn; the earliest stands and a
+        // null from a peer never clears it.
+        first_human_turn_at: epoch.firstHumanTurnAt ?? null,
       })
     applyWorkItem(this.db, epoch)
   }

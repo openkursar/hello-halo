@@ -6,7 +6,7 @@ vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text
 vi.mock('../../../src/renderer/api', () => ({ api: {} }))
 vi.mock('../../../src/renderer/utils/people-navigation', () => ({ openPersonTeam: vi.fn() }))
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({ AutomationAvatar: ({ name, size }: any) => createElement('span', { 'data-avatar': name, 'data-size': size }) }))
-vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: (select: any) => select({ spaceStates: new Map() }) }))
+vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: (select: any) => select({ spaceStates: new Map(), getSession: () => ({ isGenerating: false }) }) }))
 vi.mock('../../../src/renderer/stores/team-chat-pins.store', () => ({ useTeamChatPinsStore: (select: any) => select({ togglePin: () => {} }) }))
 vi.mock('../../../src/renderer/utils/team-conversation-navigation', () => ({ openTeamConversation: () => true }))
 vi.mock('../../../src/renderer/utils/conversation-navigation', () => ({ navigateToConversation: () => {} }))
@@ -24,10 +24,10 @@ vi.mock('../../../src/renderer/components/references', () => ({ ConversationRefe
 import { TeamConversationRow } from '../../../src/renderer/components/chat/TeamConversationRow'
 import { TaskRoom } from '../../../src/renderer/components/team/workbench/TaskRoom'
 
-const detail: any = { team: { id: 'team' }, roster: [{ appId: 'member', memberName: 'Member' }], pendingEscalations: [] }
+const detail: any = { team: { id: 'team' }, roster: [{ appId: 'member', memberName: 'Member' }], pendingEscalations: [], tasks: [], findings: [], activities: [] }
 const task: any = { teamId: 'team', epochId: 'epoch', label: 'Discussion', kind: 'native' }
 const room = (homepageConversation: boolean, selectedTask: any = null) => renderToStaticMarkup(createElement(TaskRoom, {
-  homepageConversation, detail, task: selectedTask, selectedAppId: 'member', tasks: [], boardState: {} as any,
+  homepageConversation, detail, task: selectedTask, selectedAppId: 'member', tasks: [], boardState: { board: null, activities: [], failed: false, retry: () => {} } as any,
   onSelectMember: () => {}, onCreated: () => {}, onActivity: () => {}, onTask: () => {}, onExecution: () => {},
 }))
 const row = (value: any, compact = false) => renderToStaticMarkup(createElement(TeamConversationRow, {
@@ -35,25 +35,26 @@ const row = (value: any, compact = false) => renderToStaticMarkup(createElement(
 }))
 
 describe('homepage team conversation presentation', () => {
-  it('uses the same four-member grid for headers, pins and compact rows', () => {
+  it('uses the same four-member grid for headers and pins, and only a status mark in the folded list', () => {
     const avatarNames = ['Lead', 'Writer', 'Analyst', 'Researcher']
     const avatar = { names: avatarNames, overflow: 0 }
     const values = [
       row({ type: 'team-header', teamId: 'team', name: 'Crew', collapsed: false, avatar }),
       row({ type: 'team-item', task: { ...task, teamName: 'Crew' }, standalone: true, avatar }),
-      row({ type: 'team-item', task: { ...task, teamName: 'Crew' }, avatar }, true),
     ]
+    expect(row({ type: 'team-item', task: { ...task, teamName: 'Crew' }, avatar }, true)).not.toContain('data-avatar=')
     for (const html of values) {
       expect(html.match(/data-avatar=/g)).toHaveLength(4)
       for (const name of avatarNames) expect(html).toContain(`data-avatar="${name}"`)
       expect(html.indexOf('data-avatar="Lead"')).toBeLessThan(html.indexOf('data-avatar="Writer"'))
       expect(html.match(/data-size="12"/g)).toHaveLength(4)
-      expect(html.match(/ring-1 ring-background/g)).toHaveLength(4)
-      expect(html).toContain('left:0;top:0;z-index:0')
-      expect(html).toContain('left:6px;top:0;z-index:1')
-      expect(html).toContain('left:0;top:6px;z-index:2')
-      expect(html).toContain('left:6px;top:6px;z-index:3')
-      expect(html).toContain('h-[18px] w-[18px]')
+      // Each face is ringed in the page background so overlapping faces stay apart.
+      expect(html.match(/box-shadow:0 0 0 1px hsl\(var\(--background\)\)/g)).toHaveLength(4)
+      expect(html).toContain('left:0;top:0;width:12px;height:12px;z-index:0')
+      expect(html).toContain('left:6px;top:0;width:12px;height:12px;z-index:1')
+      expect(html).toContain('left:0;top:6px;width:12px;height:12px;z-index:2')
+      expect(html).toContain('left:6px;top:6px;width:12px;height:12px;z-index:3')
+      expect(html).toContain('width:18px;height:18px')
       expect(html).not.toContain('bg-muted')
       expect(html).not.toContain('ring-inset')
       expect(html).not.toContain('lucide-users')
@@ -62,11 +63,12 @@ describe('homepage team conversation presentation', () => {
   it.each([2, 3])('centers %i members without creating empty avatar cells', count => {
     const html = row({ type: 'team-header', teamId: 'team', name: 'Crew', collapsed: false, avatar: { names: ['Lead', 'Writer', 'Analyst'].slice(0, count), overflow: 0 } })
     expect(html.match(/data-avatar=/g)).toHaveLength(count)
-    expect(html).toContain('h-[18px] w-[18px]')
+    expect(html).toContain('width:18px;height:18px')
     expect(html.match(/data-size="12"/g)).toHaveLength(count)
-    if (count === 3) expect(html).toContain('left:3px;top:6px;z-index:2')
+    if (count === 3) expect(html).toContain('left:3px;top:6px;width:12px;height:12px;z-index:2')
     else {
-      expect(html).toContain('w-[18px] h-3')
+      // Two faces sit on one row: the group is one face tall, with nothing below.
+      expect(html).toContain('width:18px;height:12px')
       expect(html).not.toContain('top:6px')
     }
   })
@@ -74,7 +76,7 @@ describe('homepage team conversation presentation', () => {
     const names = ['Lead', 'Writer', 'Analyst', 'Researcher']
     const html = row({ type: 'team-header', teamId: 'team', name: 'Crew', collapsed: false, avatar: { names, overflow } })
     expect(html.match(/data-avatar=/g)).toHaveLength(4)
-    expect(html.match(/ring-1 ring-background/g)).toHaveLength(4)
+    expect(html.match(/box-shadow:0 0 0 1px/g)).toHaveLength(4)
     expect(html.match(/bg-foreground\/30/g)).toHaveLength(1)
     expect(html.indexOf('data-avatar="Researcher"')).toBeLessThan(html.indexOf('bg-foreground/30'))
     expect(html).toContain(`>${label}</span>`)
@@ -86,7 +88,7 @@ describe('homepage team conversation presentation', () => {
     expect(html).toContain('>+3</span>')
     expect(html).toContain('bg-border')
     expect(html).not.toContain('bg-foreground/30')
-    expect(html).toContain('w-[18px] h-3')
+    expect(html).toContain('width:18px;height:12px')
   })
   it('uses one member face or the team initial without introducing an extra control', () => {
     const header = { type: 'team-header', teamId: 'team', name: 'Crew', collapsed: false }

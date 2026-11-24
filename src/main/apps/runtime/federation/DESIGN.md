@@ -360,6 +360,15 @@ controller's result through unchanged), but the one-time manual "join a team"
 dialog (`TeamJoinDialog.tsx`) does not read it yet and still shows the plain
 generic message on `VERSION_INCOMPATIBLE`.
 
+**Additive changes under one version.** Some changes ride version 4 without a
+bump because an older node tolerates them, only showing less: the `ended` end
+reason (an older node files the task as not completed until its work item
+arrives completed with it), the replicated `firstHumanTurnAt` on an epoch row
+(an older node drops the field and lists that run only where a person wrote
+into it), and the mutable history tail (an older viewer keeps rows a running
+turn later revised until it reads that history afresh). Anything an older node
+could misapply rather than merely under-show needs a bump.
+
 **Refused joins.** A joiner whose join is refused, for any reason, is outside
 the office until a grant (`JoinedOffice.refusal`). Its presence FSM judges
 nobody meanwhile — an office that refuses us goes silent, and that silence must

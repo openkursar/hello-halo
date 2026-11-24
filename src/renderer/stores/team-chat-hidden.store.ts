@@ -26,6 +26,8 @@ interface TeamChatHiddenState {
   hidden: Record<string, HiddenByKey>
   hide: (spaceId: string, key: string, waiting: boolean) => void
   restore: (spaceId: string, key: string) => void
+  /** Put every task of one team removed from this space's list back. */
+  restoreTeam: (spaceId: string, teamId: string) => void
   reconcile: (spaceId: string, waitingNow: ReadonlyMap<string, boolean>) => void
 }
 
@@ -40,6 +42,12 @@ export const useTeamChatHiddenStore = create<TeamChatHiddenState>()(persist((set
     if (!current?.[key]) return state
     const { [key]: _removed, ...rest } = current
     return { hidden: { ...state.hidden, [spaceId]: rest } }
+  }),
+  restoreTeam: (spaceId, teamId) => set(state => {
+    const current = state.hidden[spaceId]
+    const prefix = `team:${teamId}:`
+    if (!current || !Object.keys(current).some(key => key.startsWith(prefix))) return state
+    return { hidden: { ...state.hidden, [spaceId]: Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(prefix))) } }
   }),
   reconcile: (spaceId, waitingNow) => set(state => {
     const current = state.hidden[spaceId]

@@ -954,11 +954,13 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     // in the lightweight team payload — refetch what the event says changed when
     // this team is shown (everything when it does not say). The session list
     // is office-shared: an epoch opened/renamed/sealed on any node arrives here.
+    // A 'work' pulse moves who is working, which the roster and the task rows
+    // carry; the run history does not change with it.
     if (get().currentTeamId === teamId || get().views[teamId]) {
       const changed = event.changed
-      if (!changed || changed.includes('members') || changed.includes('board')) void get().loadDetail(teamId)
+      if (!changed || changed.includes('members') || changed.includes('board') || changed.includes('work')) void get().loadDetail(teamId)
       if (!changed || changed.includes('epochs')) void get().loadEpochs(teamId)
-      if (!changed || changed.includes('conversations')) void get().loadConversations(teamId)
+      if (!changed || changed.includes('conversations') || changed.includes('work')) void get().loadConversations(teamId)
     }
   },
 

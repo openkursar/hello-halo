@@ -2212,6 +2212,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   function renameConversation(teamId: string, epochId: string, title: string | null): void {
     requireTeam(teamId)
+    const epoch = store.getEpochById(epochId)
+    // A collaboration room is named after the space conversation it serves; rename that conversation instead.
+    if (epoch && conversationKindOf(epoch.chatKey ?? '') === 'collab') throw new Error('A collaboration room takes the name of its conversation')
     requireRuntime().renameConversationEpoch(teamId, epochId, title)
   }
 
@@ -2222,9 +2225,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const epoch = store.getEpochById(epochId)
     if (!epoch || epoch.teamId !== teamId) throw new Error('Task not found in this team')
     if (epoch.endedAt !== null && (epoch.endReason === 'completed' || epoch.endReason === 'ended')) return
-    // Work judged finished as the task list does, at least one subtask and all of them done, is filed as
-    // finished, even when it was stopped or failed before; anything else was ended by a person unfinished.
-    const subtasks = settleSubtasks(team, store.getSubtaskStats(teamId, [epochId]), busyByEpochOf(team, store.listMembersByTeam(teamId))).get(epochId)
+    // Only the board decides a stored end state: at least one subtask and all of them done files the work as
+    // finished, even when it was stopped or failed before. Work handed out by message alone has no such record,
+    // so it is ended by a person unfinished; the list may still read it as done from the exchanges themselves.
+    const subtasks = store.getSubtaskStats(teamId, [epochId]).subtasks.get(epochId)
     const reason = subtasks && subtasks.done > 0 && !subtasks.open ? 'completed' : 'ended'
     store.updateWorkItem(epochId, { status: 'completed', ...(reason === 'ended' ? { endedBy: deps.getViewerIdentity?.() ?? null } : {}) })
     await requireRuntime().sealConversationEpoch(teamId, epochId, reason)

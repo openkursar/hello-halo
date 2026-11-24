@@ -22,8 +22,9 @@ published refs and imports no Halo application code.
 The homepage reads `listNativeTasks({ spaceId, limit, cursor })`: a bounded,
 recency-ordered page of native conversation metadata for persistent teams. A run
 joins it once a person has written into it: the first human turn stamps the epoch's
-`first_human_turn_at` (schema v27) and emits a team update, and the list query and
-its partial index share one predicate. IM chats are answered in their IM app, so
+`first_human_turn_at` (schema v27), publishes the epoch row so replicas carry the
+stamp (earliest wins, a null never clears it) and emits a team update; the list
+query and its partial index share one predicate. IM chats are answered in their IM app, so
 their projection stays read-only; runs are writable in place. Hosted teams use their owning space; joined teams qualify through a local member
 installed in that space. The cursor is scoped to that space and ordered by last
 activity plus epoch id. Page projection reads only selected-epoch statistics,
@@ -477,9 +478,12 @@ Malformed business metadata cannot abort application of an otherwise valid epoch
 replication record.
 
 Resource sealing (`stopped`) preserves the task and can resume its existing
-context. Explicit archival completes the task and ends its execution; work that
-had not finished is sealed `ended` (a person closed it unfinished) so the list can
-tell it apart from finished work, and `task_ended_by` keeps the viewer identity
+context. Explicit archival completes the task and ends its execution. Only the
+board decides the stored end: at least one board subtask with all of them done
+seals `completed`; anything else is sealed `ended` (a person closed it unfinished)
+so the list can tell it apart from finished work. Work handed out by message alone
+is read as done by the list from the exchanges, but that reading is a projection
+and never written as an end state. `task_ended_by` keeps the viewer identity
 of who closed it (cleared whenever the task opens again). Only the hosting node
 archives: a joined node refuses, since its seal would never reach the host, and
 office-member credentials cannot reach the archive route. Only a human request

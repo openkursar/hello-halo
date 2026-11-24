@@ -13,11 +13,9 @@ export const MEMBER_FACT_TONE: Record<MemberStateKey, string> = {
   offline: 'text-faint-foreground',
 }
 
-/** `blink` is a talking member's blink delay, so each keeps its own beat. */
-export function MemberFace({ name, state, size, blink, className = '' }: { name: string; state: MemberStateKey; size: number; blink?: string; className?: string }) {
+export function MemberFace({ name, state, size, className = '' }: { name: string; state: MemberStateKey; size: number; className?: string }) {
   const tone = DOT_TONE[state]
-  return <span style={blink ? { ['--blink-delay' as string]: blink } : undefined}
-    className={`relative flex shrink-0 ${state === 'offline' ? 'opacity-50 grayscale-[.5]' : ''} ${blink ? 'avatar-blink' : ''} ${className}`}>
+  return <span className={`relative flex shrink-0 ${state === 'offline' ? 'opacity-50' : ''} ${className}`}>
     <AutomationAvatar name={name} size={size} />
     {tone && <i aria-hidden="true" data-tone={tone} className="avatar-status-dot" />}
   </span>

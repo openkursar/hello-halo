@@ -1,7 +1,9 @@
 /**
  * From the space conversation that coordinates it, a collaboration shows as
  * that conversation's single room — before and after it is kept as a team.
- * The Teams page shows a kept team's full workbench.
+ * The Teams page shows a kept team as its team page, where work is watched and
+ * conversations open on the homepage; only a legacy-coordinated team keeps the
+ * old workbench.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -53,6 +55,11 @@ vi.mock('../../../src/renderer/components/team/workbench/MemberRail', async () =
   const { createElement } = await import('react')
   return { MemberRail: () => createElement('aside', { 'data-member-rail': true }) }
 })
+vi.mock('../../../src/renderer/components/team/detail/TeamDetailPage', async () => {
+  const { createElement } = await import('react')
+  return { TeamDetailPage: () => createElement('section', { 'data-team-page': true }) }
+})
+vi.mock('../../../src/renderer/utils/people-navigation', () => ({ openPersonTeam: () => {} }))
 vi.mock('../../../src/renderer/components/team/workbench/TeamActivityDrawer', () => ({ TeamActivityDrawer: () => null }))
 vi.mock('../../../src/renderer/components/team/workbench/WorkbenchDrawer', () => ({ WorkbenchDrawer: () => null }))
 vi.mock('../../../src/renderer/components/team/workbench/useTaskBoard', () => ({ useTaskBoard: () => ({ board: view.board, activities: [], failed: false, retry: () => {} }) }))
@@ -63,13 +70,13 @@ vi.mock('../../../src/renderer/components/team/workbench/model', () => ({
 
 const { TeamView } = await import('../../../src/renderer/components/team/TeamView')
 
-const detail = (team: { ephemeral?: boolean; coordinatorConversationId?: string | null; savedTeamId?: string }) => ({
+const detail = (team: { ephemeral?: boolean; coordinatorConversationId?: string | null; savedTeamId?: string }, legacyCoordinator = false) => ({
   team: { id: 'team', name: 'Crew', goal: '', hostNodeId: null, ...team },
-  members: [], roster: [], pendingEscalations: [],
+  members: [], roster: [], pendingEscalations: [], ...(legacyCoordinator ? { legacyCoordinator: true } : {}),
 }) as never
 
-const render = (team: Parameters<typeof detail>[0], spaceEntry: boolean) =>
-  renderToStaticMarkup(createElement(TeamView, { detail: detail(team), spaceEntry }))
+const render = (team: Parameters<typeof detail>[0], spaceEntry: boolean, legacyCoordinator = false) =>
+  renderToStaticMarkup(createElement(TeamView, { detail: detail(team, legacyCoordinator), spaceEntry }))
 
 describe('team view opened from a space conversation', () => {
   it('shows a temporary collaboration as its single room', () => {
@@ -90,18 +97,23 @@ describe('team view opened from a space conversation', () => {
     expect(html).toContain('data-member-rail')
   })
 
-  it('shows a team that no space conversation coordinates as the full workbench', () => {
+  it('shows a team that no space conversation coordinates as its team page', () => {
     const html = render({ ephemeral: false, coordinatorConversationId: null }, true)
-    expect(html).toContain('data-room="standalone"')
-    expect(html).not.toContain('Team conversations are on the home page.')
-    expect(html).toContain('data-task-sidebar')
-    expect(html).toContain('Team settings')
+    expect(html).toContain('data-team-page')
+    expect(html).not.toContain('data-room=')
+    expect(html).not.toContain('data-task-sidebar')
   })
 
-  it('shows a kept collaboration as the full workbench on the Teams page', () => {
+  it('shows a kept collaboration as its team page on the Teams page', () => {
     const html = render({ ephemeral: false, coordinatorConversationId: 'conv' }, false)
+    expect(html).toContain('data-team-page')
+    expect(html).not.toContain('data-room=')
+  })
+
+  it('keeps the full workbench for a team still run by a legacy coordinator', () => {
+    const html = render({ ephemeral: false, coordinatorConversationId: null }, false, true)
+    expect(html).not.toContain('data-team-page')
     expect(html).toContain('data-room="standalone"')
-    expect(html).not.toContain('Team conversations are on the home page.')
     expect(html).toContain('data-task-sidebar')
     expect(html).toContain('Team settings')
   })
@@ -114,7 +126,7 @@ it('projects the selected work participants into the room on desktop and narrow 
   try {
     for (const width of [1600, 375]) {
       vi.stubGlobal('window', { innerWidth: width, addEventListener: () => {}, removeEventListener: () => {} })
-      const html = render({ ephemeral: false }, false)
+      const html = render({ ephemeral: false }, false, true)
       expect(html).toContain('data-participants="temporary"')
       expect(html).toContain('data-selected="temporary"')
       expect(html).not.toContain('View team goal')

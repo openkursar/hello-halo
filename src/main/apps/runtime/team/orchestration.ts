@@ -33,6 +33,8 @@ import type {
   EpochOutcome,
   TeamMemberRuntimeStatus,
   TeamStatus,
+  TeamUpdatedChange,
+  TeamUpdatedEvent,
   RosterBusyEntry,
 } from '../../../../shared/apps/team-types'
 import type { TeamStore } from '../../team'
@@ -447,7 +449,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       // Fires after the turn that scheduled it — by then the store may be gone
       // (shutdown, team dissolved). A missed pulse is not worth an unhandled throw.
       try {
-        emitTeamUpdated(teamId)
+        emitTeamUpdated(teamId, ['status', 'work'])
       } catch (err) {
         console.error(`${LOG_TAG} coalesced status push failed:`, err)
       }
@@ -1641,8 +1643,12 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       return false
     }
     store.touchEpoch(epochId, Date.now())
-    // A run a person has written into joins their conversations from then on.
-    if (fromHuman && epoch.lifecycle === 'run' && store.markRunHumanTurn(epochId, Date.now())) emitTeamUpdated(teamId)
+    // A run a person has written into joins their conversations from then on,
+    // on every node: the stamp travels with the epoch row.
+    if (fromHuman && epoch.lifecycle === 'run' && store.markRunHumanTurn(epochId, Date.now())) {
+      publishEpoch(epochId)
+      emitTeamUpdated(teamId)
+    }
     const reopeningTask = epoch.workItem?.status === 'completed'
     if (reopeningTask) store.updateWorkItem(epochId, { status: 'open' })
     // Resume activity without changing the identity of this work.
@@ -1924,12 +1930,16 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
    * card and the member avatars can never disagree about who is working.
    */
   function hasWorkingMember(teamId: string): boolean {
+    return activeEpochIds(teamId).length > 0
+  }
+
+  /** Every open epoch some member is serving right now. */
+  function activeEpochIds(teamId: string): string[] {
+    const active: string[] = []
     for (const epochId of knownEpochs.get(teamId) ?? []) {
-      for (const member of listWorkMembers(store, teamId, epochId)) {
-        if (isSessionOccupied(buildTeamSessionKey(member.appId, teamId, epochId))) return true
-      }
+      if (listWorkMembers(store, teamId, epochId).some(member => isSessionOccupied(buildTeamSessionKey(member.appId, teamId, epochId)))) active.push(epochId)
     }
-    return false
+    return active
   }
 
   /**
@@ -1977,15 +1987,21 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     return member ? teamMemberAddress(member) : appId
   }
 
-  function emitTeamUpdated(teamId: string): void {
+  /**
+   * Absent `changed` tells listeners to reload everything. A member-status pulse
+   * says 'status' + 'work' and carries the epochs being served, so a task list
+   * marks its rows in place instead of reading the team again every few hundred
+   * milliseconds; membership, board and run history are untouched by it.
+   */
+  function emitTeamUpdated(teamId: string, changed?: TeamUpdatedChange[]): void {
     const team = store.getTeamById(teamId)
     // `team.status` is the persisted run status; `liveStatus` is what the card
     // shows. Without it a push would reset a working office back to idle, since
     // the row it carries knows nothing about turns run outside its own run.
-    const payload = team
-      ? { teamId, team, liveStatus: observableStatus(teamId) }
+    const payload: TeamUpdatedEvent = team
+      ? { teamId, team, liveStatus: observableStatus(teamId), ...(changed ? { changed } : {}), ...(changed?.includes('work') ? { activeEpochIds: activeEpochIds(teamId) } : {}) }
       : { teamId, removed: true }
-    broadcastToAll(TEAM_EVENTS.updated, payload)
+    broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
     sendToRenderer(TEAM_EVENTS.updated, payload)
   }
 

@@ -540,6 +540,7 @@ describe('a member that answered nobody', () => {
   it.each([
     ['messaged the asker', [{ kind: 'message', targetAppId: LEAD }]],
     ['shared a finding', [{ kind: 'finding' }]],
+    ['raised a decision for a person', [{ kind: 'decision' }]],
   ])('files nothing for a member that %s', (_label, acts) => {
     const { report, recordReply } = setup()
     runTurn(report, 'app-writer', acts, asked)

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
-import { Loader2, MinusCircle, Square } from 'lucide-react'
+import { ChevronRight, Loader2, MinusCircle, Square } from 'lucide-react'
 import type { TeamActivity, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
@@ -16,7 +16,7 @@ import type { TaskActivityData } from '../workbench/useTaskActivity'
 import { isExchange } from './crew'
 import { DecisionCard, type HeldDecisions } from './DecisionCard'
 import { isLive, isTeamWork, taskState, type TaskStateKey } from './status'
-import { endedText, MemberConversationsLink, MoreToggle, PILL_SECONDARY, sourceLabel, taskOrigin, taskSource } from './task-ui'
+import { endedText, MemberConversationsLink, MoreToggle, sourceLabel, taskOrigin, taskSource } from './task-ui'
 import { DECISION_ANCHOR, STEPS_HIDDEN_KEY, stepsHidden, TaskSteps } from './TaskSteps'
 import { TeamScene } from './TeamScene'
 
@@ -198,7 +198,9 @@ function Brief({ detail, task, data, progress, stateKey, onOpenMember, onContinu
     const text = open.length === 1 ? t('Stopped at “{{step}}”; no one has carried it on since.', { step: open[0].title })
       : open.length > 1 ? t('{{count}} subtasks left; no one has carried it on since.', { count: open.length })
         : t('Stopped partway; no one has carried it on since.')
-    items.push(<BriefItem key="stalled" text={text} action={onContinue && <button onClick={onContinue} className={PILL_SECONDARY}>{t('Continue in conversation')}</button>} />)
+    items.push(<BriefItem key="stalled" text={<>{text}{onContinue && <button onClick={onContinue} className="ml-1 inline-flex items-center gap-0.5 whitespace-nowrap rounded text-subtle-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+      {t('Continue in conversation')}<ChevronRight size={13} aria-hidden="true" />
+    </button>}</>} />)
   }
   if (!items.length) items.push(<p key="calm">{stateKey === 'idle' ? t('Nothing is running right now.') : t('Going normally, nothing needs you.')}</p>)
   const footer = working.length > 0 ? <WorkingFooter working={working} roster={roster} onOpenMember={onOpenMember} />

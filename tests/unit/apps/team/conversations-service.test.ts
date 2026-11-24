@@ -27,7 +27,7 @@ import { MIGRATION_NAMESPACE, migrations } from '../../../../src/main/apps/team/
 import { createTeamService } from '../../../../src/main/apps/team/service'
 import type { TeamServiceDeps, PendingEscalationRecord } from '../../../../src/main/apps/team/service'
 import type { Team, TeamMember, TeamEpoch, RosterBusyEntry, EpochEndReason } from '../../../../src/shared/apps/team-types'
-import { nativeConversationChatKey, memberChatKey } from '../../../../src/shared/apps/im-keys'
+import { nativeConversationChatKey, memberChatKey, spaceCollabChatKey } from '../../../../src/shared/apps/im-keys'
 
 const SPACE = 'space-a'
 const TEAM_ID = 'team-1'
@@ -454,6 +454,19 @@ describe('TeamService — conversations + pending escalations', () => {
     expect(svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.label).toBe('B')
   })
 
+  it('refuses to rename a collaboration room, which takes its conversation\u2019s name', async () => {
+    const svc = build()
+    store.insertEpoch({
+      id: 'room', teamId: TEAM_ID, startedAt: 1, endedAt: null, endReason: null, summary: null,
+      lifecycle: 'conversation', chatKey: spaceCollabChatKey('conv-1'), title: 'First brief',
+    })
+    expect(() => svc.renameConversation(TEAM_ID, 'room', 'My name')).toThrow('conversation')
+    expect(store.getEpochById('room')?.title).toBe('First brief')
+    const { epochId } = await svc.openConversation(TEAM_ID)
+    svc.renameConversation(TEAM_ID, epochId, 'Renamed')
+    expect(store.getEpochById(epochId)?.title).toBe('Renamed')
+  })
+
   it('archiveConversation retains a completed task in the list', async () => {
     const svc = build()
     const { epochId } = await svc.openConversation(TEAM_ID)
@@ -520,7 +533,7 @@ describe('TeamService — conversations + pending escalations', () => {
     expect(store.getEpochById('open-stopped')).toMatchObject({ endReason: 'ended', workItem: { endedBy: 'me' } })
   })
 
-  it('archiving work handed out by message settles it the way the list does', async () => {
+  it('archiving work handed out by message alone records it as ended by hand, whether or not it was answered', async () => {
     const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
     const message = (epochId: string, id: string, actorAppId: string, targetAppId: string, createdAt: number) => store.insertActivity({
       id, teamId: TEAM_ID, epochId, kind: 'message', actorAppId, targetAppId, subject: 'Draft', body: null,
@@ -533,8 +546,20 @@ describe('TeamService — conversations + pending escalations', () => {
     message(waiting, 'ask-2', LEAD_APP, MEMBER_APP, 100)
     await svc.archiveConversation(TEAM_ID, answered)
     await svc.archiveConversation(TEAM_ID, waiting)
-    expect(store.getEpochById(answered)?.endReason).toBe('completed')
+    expect(store.getEpochById(answered)).toMatchObject({ endReason: 'ended', workItem: { endedBy: 'me' } })
     expect(store.getEpochById(waiting)).toMatchObject({ endReason: 'ended', workItem: { endedBy: 'me' } })
+  })
+
+  it('reads exchanges for settling with each body cut to its opening, not the whole report', async () => {
+    const svc = build()
+    const { epochId } = await svc.openConversation(TEAM_ID, 'Long')
+    store.insertActivity({
+      id: 'report', teamId: TEAM_ID, epochId, kind: 'finding', actorAppId: MEMBER_APP, targetAppId: null, subject: 'Report',
+      body: `Reviewed everything.\n\n${'x'.repeat(5000)}`, refId: null, correlationId: null, status: 'ok', createdAt: 100,
+    })
+    const [row] = store.listExchangesByEpochs(TEAM_ID, [epochId])
+    expect(row.body?.startsWith('Reviewed everything.')).toBe(true)
+    expect(row.body!.length).toBeLessThan(1000)
   })
 
   it('on a joined office, names the host owner who ended a task and refuses to end one locally', async () => {

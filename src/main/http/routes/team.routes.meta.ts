@@ -125,7 +125,7 @@ export const MODULE: RouteModuleMeta = {
       group: 'team',
       summary: 'List a team\'s conversations (its tasks and chats), newest first',
       returns: '{success:true,data:[{epochId,teamId,kind:"native"|"im"|"member"|"run"|"collab",label,readonly,completed,memberAppId?,channel?,summary?,startedAt,lastActivityAt,active?,waitingUser?,endedManually?,endedBy?}]}',
-      notes: 'Each one has its own context; a member message, transcript read or stop names one by epochId. completed:true means it has ended (finished or archived); endedManually:true means a person ended it by hand before every subtask was done, and endedBy names who. active:true means a member is working in it right now.',
+      notes: 'Each one has its own context; a member message, transcript read or stop names one by epochId. completed:true means it has ended (finished or archived); endedManually:true means a person ended it by hand before every board subtask was done, and endedBy names who. active:true means a member is working in it right now.',
     },
     'POST /api/teams/:teamId/conversations': {
       expose: 'ai',
@@ -150,7 +150,7 @@ export const MODULE: RouteModuleMeta = {
       group: 'team',
       summary: 'Archive (close) a team conversation',
       returns: '{success:true}',
-      notes: 'Only on the node hosting the team. Work with at least one subtask, all of them done, is archived as finished; anything else (including work with no subtasks) is recorded as ended by a person. The conversation stays in run history (GET /api/teams/:teamId/epochs); a person\'s new message reopens it.',
+      notes: 'Only on the node hosting the team. Work with at least one board subtask, all of them done, is archived as finished; anything else (including work with no board subtasks) is recorded as ended by a person. The conversation stays in run history (GET /api/teams/:teamId/epochs); a person\'s new message reopens it.',
       impact: 'irreversible',
     },
     'GET /api/teams/:teamId/epochs': {

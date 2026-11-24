@@ -90,7 +90,7 @@ export function DigitalHumansTab({ onItemsChange }: DigitalHumansTabProps) {
             name={name || app.id}
             description={coordinator ? `${t('Team lead')} · ${status}` : status}
             onClick={() => handleOpenOverview(app.id)}
-            onUse={coordinator ? undefined : () => { if (app.spaceId) void handleOpenChat(app.id, app.spaceId) }}
+            onUse={() => { if (app.spaceId) void handleOpenChat(app.id, app.spaceId) }}
             useLabel={t('Chat')}
           />
         )

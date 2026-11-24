@@ -192,7 +192,8 @@ export function TaskMemberSelector({ roster, selectedAppId, ownedAppIds, waiting
           className={`member-rail-item z-[1] flex h-[34px] shrink-0 items-center rounded-full p-[5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${entering(member.appId) ? 'animate-member-rail-enter' : ''}`}>
           <span className="member-rail-avatar relative flex shrink-0 rounded-full">
             <AutomationAvatar name={member.memberName} size={24} />
-            {readOnly && <i aria-hidden="true" className="avatar-lock-badge"><Lock strokeWidth={3} /></i>}
+            {/* Read-only: a light veil with a lock over the face; the status dot is drawn after it so it stays on top. */}
+            {readOnly && <i aria-hidden="true" data-lock="" className="absolute inset-0 flex items-center justify-center rounded-full bg-black/[.28] text-white"><Lock strokeWidth={3} className="h-[46%] w-[46%] drop-shadow-sm" /></i>}
             {state && <i aria-hidden="true" data-tone={state} className="avatar-status-dot" />}
             {onAnswer && state === 'waiting' && !selected && <span aria-hidden="true" className="member-rail-ask">{t('Needs your answer')}</span>}
           </span>
