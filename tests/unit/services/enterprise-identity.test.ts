@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -303,5 +303,185 @@ describe('enterprise identity: tool bindings', () => {
       { toolId: 'npm.gitbeaker', env: 'GITBEAKER_TOKEN', file: join('/data/ei', 'code-host.json'), staticEnv: { GITBEAKER_HOST: 'http://h' } },
       { toolId: 'npm.mailer', env: 'MAIL_TOKEN', file: join('/data/ei', 'mail.json') },
     ])
+  })
+})
+
+/** Provider that can resume a session from authorization it still holds. */
+class RestoringProvider extends FakeProvider {
+  restoreCalls: string[] = []
+  restoreResult: EnterpriseSession | 'renewal-required' | null = null
+  restoreError: Error | null = null
+  restoreGate: Promise<void> | null = null
+  async restore(methodId: string) {
+    this.restoreCalls.push(methodId)
+    if (this.restoreGate) await this.restoreGate
+    if (this.restoreError) throw this.restoreError
+    return this.restoreResult
+  }
+}
+
+describe('enterprise identity: resuming a sign-in after launch', () => {
+  let marker: string
+  let restoring: RestoringProvider
+  let clock: number
+
+  const writeMarker = (methodId = 'cloud') =>
+    writeFileSync(marker, JSON.stringify({ methodId, account: { id: 'u1', displayName: 'User One' } }))
+  const launch = (overrides: Partial<ConstructorParameters<typeof EnterpriseIdentityService>[0]> = {}) =>
+    newService({ loadProvider: async () => restoring, sessionMarkerFile: marker, ...overrides })
+
+  beforeEach(() => {
+    marker = join(dir, 'enterprise-identity-session.json')
+    restoring = new RestoringProvider()
+    provider = restoring
+    clock = Date.now()
+  })
+
+  it('remembers a sign-in without any credential, and forgets it on sign-out', async () => {
+    const service = launch()
+    await signIn(service)
+    const saved = readFileSync(marker, 'utf-8')
+    expect(JSON.parse(saved)).toEqual({ methodId: 'cloud', account: { id: 'u1', displayName: 'User One' } })
+    expect(saved).not.toContain('secret')
+    expect(statSync(marker).mode & 0o777).toBe(0o600)
+    await service.signOut()
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  it('keeps the marker when the session runs out', async () => {
+    const service = launch()
+    await signIn(service, 'cloud', session({ expiresAt: Date.now() + 40 }))
+    await sleep(80)
+    expect((await service.getState()).status).toBe('expired')
+    expect(existsSync(marker)).toBe(true)
+  })
+
+  it('does nothing without a marker', async () => {
+    await launch().restoreSession()
+    expect(restoring.restoreCalls).toEqual([])
+  })
+
+  it('resumes the last method and issues credentials as a scan would', async () => {
+    writeMarker()
+    restoring.restoreResult = session()
+    const service = launch()
+    await service.restoreSession()
+    expect(restoring.restoreCalls).toEqual(['cloud'])
+    const state = await service.getState()
+    expect(state).toMatchObject({ status: 'ready', methodId: 'cloud', account: { id: 'u1' } })
+    expect(state.boundTools.every(t => t.active)).toBe(true)
+    expect(existsSync(cred('code-host'))).toBe(true)
+  })
+
+  it('shows the ended account when a new sign-in is required, keeping the marker', async () => {
+    writeMarker()
+    restoring.restoreResult = 'renewal-required'
+    const service = launch()
+    await service.restoreSession()
+    expect(await service.getState()).toMatchObject({ status: 'expired', methodId: 'cloud', account: { id: 'u1', displayName: 'User One' } })
+    expect(existsSync(marker)).toBe(true)
+    expect(existsSync(credDir)).toBe(false)
+  })
+
+  it('forgets the marker when no authorization is left', async () => {
+    writeMarker()
+    const service = launch()
+    await service.restoreSession()
+    expect((await service.getState()).status).toBe('signed-out')
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  it('forgets a marker for a method the build no longer offers, or one it cannot read', async () => {
+    writeMarker('gone')
+    await launch().restoreSession()
+    expect(restoring.restoreCalls).toEqual([])
+    expect(existsSync(marker)).toBe(false)
+
+    writeFileSync(marker, '{not json')
+    await launch().restoreSession()
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  it('stays signed out when the service is unreachable and retries on a state read after the wait', async () => {
+    writeMarker()
+    restoring.restoreError = new Error('offline')
+    const service = launch({ now: () => clock, restoreRetryMs: 1000 })
+    await service.restoreSession()
+    expect((await service.getState()).status).toBe('signed-out')
+    expect(restoring.restoreCalls).toHaveLength(1)
+    expect(existsSync(marker)).toBe(true)
+
+    clock += 500
+    await service.getState()
+    expect(restoring.restoreCalls).toHaveLength(1)
+
+    clock += 600
+    restoring.restoreError = null
+    restoring.restoreResult = session()
+    expect((await service.getState()).status).toBe('ready')
+    expect(restoring.restoreCalls).toHaveLength(2)
+  })
+
+  it('answers a state read within its wait while a restore is still under way', async () => {
+    writeMarker()
+    let release!: () => void
+    restoring.restoreGate = new Promise<void>(resolve => { release = resolve })
+    restoring.restoreResult = session()
+    const service = launch({ restoreWaitMs: 20 })
+    const work = service.restoreSession()
+    expect((await service.getState()).status).toBe('signed-out')
+    release()
+    await work
+    expect((await service.getState()).status).toBe('ready')
+  })
+
+  it('runs one restore at a time', async () => {
+    writeMarker()
+    restoring.restoreResult = session()
+    const service = launch()
+    await Promise.all([service.restoreSession(), service.restoreSession()])
+    expect(restoring.restoreCalls).toHaveLength(1)
+  })
+
+  it('lets a sign-out during a restore win: no session, no marker, no credential', async () => {
+    writeMarker()
+    let release!: () => void
+    restoring.restoreGate = new Promise<void>(resolve => { release = resolve })
+    restoring.restoreResult = session()
+    const service = launch()
+    const work = service.restoreSession()
+    await sleep(5)
+    const out = service.signOut()
+    release()
+    await work
+    expect((await out).status).toBe('signed-out')
+    expect(restoring.signOuts).toBe(1)
+    expect(existsSync(marker)).toBe(false)
+    expect(existsSync(credDir)).toBe(false)
+  })
+
+  it('finishes a restore under way before starting a scan', async () => {
+    writeMarker()
+    let release!: () => void
+    restoring.restoreGate = new Promise<void>(resolve => { release = resolve })
+    restoring.restoreResult = session({ accountId: 'restored' })
+    const service = launch({ restoreWaitMs: 5 })
+    const work = service.restoreSession()
+    const begun = service.beginLogin('esb')
+    release()
+    await work
+    const state = await begun
+    expect(state.status).toBe('ready')
+    expect(state.account?.id).toBe('restored')
+    expect(state.flow?.methodId).toBe('esb')
+  })
+
+  it('ignores the marker when the provider cannot restore', async () => {
+    writeMarker()
+    provider = new FakeProvider()
+    const service = newService({ sessionMarkerFile: marker })
+    await service.restoreSession()
+    expect((await service.getState()).status).toBe('signed-out')
+    expect(existsSync(marker)).toBe(true)
   })
 })

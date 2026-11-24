@@ -17,6 +17,8 @@ export type { EnterpriseIdentityServiceOptions, EnterpriseToolBindingConfig, Too
 export interface EnterpriseIdentityHostOptions {
   /** Directory for the current credentials, e.g. `<userData>/enterprise-identity`. */
   credentialDir: string
+  /** File naming the method and account of a sign-in to resume after launch; outside `credentialDir`. */
+  sessionMarkerFile: string
 }
 
 const UNAVAILABLE: EnterpriseIdentityState = { status: 'unavailable', methods: [], capabilities: [], boundTools: [] }
@@ -27,14 +29,18 @@ let leftovers: Promise<void> = Promise.resolve()
 
 /**
  * Records where credentials live. In a build with enterprise identity it also
- * removes credentials a previous process left behind (the session is never
- * kept across launches). The provider is loaded on first use.
+ * removes credentials a previous process left behind and, when the user had
+ * not signed out, resumes that sign-in in the background (the provider loads
+ * only then; otherwise on first use).
  */
 export function initEnterpriseIdentity(options: EnterpriseIdentityHostOptions): void {
   hostOptions = options
-  if (getEnterpriseIdentityConfig()) {
-    leftovers = fsp.rm(options.credentialDir, { recursive: true, force: true }).catch(() => undefined)
-  }
+  if (!getEnterpriseIdentityConfig()) return
+  leftovers = fsp.rm(options.credentialDir, { recursive: true, force: true }).catch(() => undefined)
+  void fsp.access(options.sessionMarkerFile).then(
+    () => getService()?.restoreSession(),
+    () => undefined,
+  ).catch(err => console.error('[EnterpriseIdentity] Restore after launch failed', { message: err instanceof Error ? err.message : String(err) }))
 }
 
 /** Bindings for the CLI tool store; empty when the build has no enterprise identity. */
@@ -68,6 +74,7 @@ function getService(): EnterpriseIdentityService | null {
     credentialDir: hostOptions.credentialDir,
     loadProvider: () => loadProvider(config.provider),
     ready: leftovers,
+    sessionMarkerFile: hostOptions.sessionMarkerFile,
   })
   return service
 }

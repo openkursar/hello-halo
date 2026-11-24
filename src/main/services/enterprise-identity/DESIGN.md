@@ -7,7 +7,7 @@ tools it ships, or installs from its enterprise catalog, can reach internal
 services. This module owns that sign-in on the client:
 
 - the QR flow (start, wait for scan and confirmation, cancel, code expiry);
-- the session's lifetime (sign-out, session expiry);
+- the session's lifetime (sign-out, session expiry, resuming it after launch);
 - short-lived per-audience tool credentials derived from the session, and
   handing them to bound tools' processes only.
 
@@ -61,6 +61,23 @@ cannot ask for one.
    capability the session has, the provider issues a credential.
 5. Closing the dialog cancels the attempt; nothing polls in the background.
 
+## Resuming after launch
+
+`<userData>/enterprise-identity-session.json` = `{ methodId, account }`, file
+0600, written like a credential. It names the method and account of the last
+sign-in the user did not end, never a proof or credential. Every confirmed
+session writes it; sign-out removes it; session expiry keeps it.
+
+At start, a configured build that finds the file calls the provider's optional
+`restore(methodId)` in the background. A returned session is handled like a
+confirmed one (credentials issued); `null` removes the file; `renewal-required`
+shows the account as `expired`; a throw (service unreachable) is retried on a
+later state request after `restoreRetryMs` (5 min). A state request waits at
+most `restoreWaitMs` (3 s) for a restore under way; sign-in and sign-out wait
+for it to finish. A result that arrives after the session or attempt changed is
+dropped. An unreadable file, or one naming a method the provider no longer
+offers, is removed. Providers without `restore` behave as before.
+
 ## Credentials on disk
 
 `<userData>/enterprise-identity/<audience>.json` = `{ token, expiresAt }`,
@@ -79,7 +96,8 @@ no view is rebuilt and a running task picks up the change on its next call.
 Withdrawal: sign-out removes the directory, then asks the provider to end the
 session; session expiry removes the directory, keeps the account for display
 as `expired`, and tells the provider; app quit removes it synchronously; app
-start removes leftovers (the session is never kept across launches). A
+start removes leftover credential files (only a restored session issues new
+ones). A
 generation counter drops a credential that arrives after the session changed.
 A refused credential sets `lastError: 'credential-failed'` and leaves the tool
 without one.
@@ -92,8 +110,10 @@ the AI's API manual. No call carries a proof, ticket or credential.
 
 ## Cost
 
-Nothing at startup beyond recording a path (and, only in a configured build,
-an async removal of leftovers). The provider loads when Settings first asks.
+Nothing at startup beyond recording paths. Only in a configured build: an
+async removal of leftovers and, when the session file exists, loading the
+provider and one background `restore`. Otherwise the provider loads when
+Settings first asks.
 Polling happens only while the dialog is open. Timers exist only while signed
 in (one for the session end, one per renewing credential) and are `unref`ed.
 
@@ -105,7 +125,8 @@ in (one for the session end, one per renewing credential) and are `unref`ed.
 - A bound tool's own child processes inherit the variable.
 - Revocation at the service takes effect when the service rejects the token;
   the client learns of it only through the tool's error.
-- The session is memory-only; every app start needs a new scan.
+- Without a provider `restore`, or once the service no longer honours the
+  authorization this computer holds, an app start needs a new scan.
 - Bindings are build configuration only; catalog-delivered bindings are not
   supported yet.
 - Only QR methods exist; the provider decides the actual protocol.

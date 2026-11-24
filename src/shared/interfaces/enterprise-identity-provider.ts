@@ -52,4 +52,12 @@ export interface EnterpriseIdentityProvider {
   issueCredential(audience: string): Promise<EnterpriseToolCredential>
   /** End the session at the identity service and withdraw its credentials. */
   signOut(): Promise<void>
+  /**
+   * Resumes a session of `methodId` from authorization this computer still
+   * holds, without asking the user. `null`: none is held any more;
+   * `'renewal-required'`: the user has to sign in again. Throws when the
+   * service cannot be reached. Halo calls it after launch only for the method
+   * of the last sign-in the user did not end.
+   */
+  restore?(methodId: string): Promise<EnterpriseSession | 'renewal-required' | null>
 }

@@ -271,7 +271,8 @@ test.describe('Enterprise identity with Halo', () => {
 
       // ---- Sign-out from Settings: the file goes, the next call is rejected, the server revoked the token.
       await navigateToSettings(window)
-      await window.getByRole('button', { name: 'Sign out', exact: true }).click()
+      await window.getByTestId('enterprise-identity-section').getByRole('button', { name: 'Sign out', exact: true }).click()
+      await window.getByRole('alertdialog').getByRole('button', { name: 'Sign out', exact: true }).click()
       await expect(window.getByTestId('enterprise-identity-status')).toHaveAttribute('data-status', 'signed-out')
       expect(fs.existsSync(credentialFile)).toBe(false)
       const afterSignOut = await shell(window, GB_CALL)

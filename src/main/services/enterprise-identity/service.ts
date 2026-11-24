@@ -43,6 +43,15 @@ export interface EnterpriseIdentityServiceOptions {
   loadProvider: () => Promise<EnterpriseIdentityProvider | null>
   /** Finishes before the first credential is written (removal of leftovers). */
   ready?: Promise<void>
+  /**
+   * Remembers, without any credential, the method and account of a sign-in
+   * the user has not ended, so the next launch can resume it.
+   */
+  sessionMarkerFile?: string
+  /** Wait before another restore after the service could not be reached. */
+  restoreRetryMs?: number
+  /** Longest a state read waits for a restore under way. */
+  restoreWaitMs?: number
   now?: () => number
   /** Pause between two provider checks of a pending sign-in. */
   pollIntervalMs?: number
@@ -87,6 +96,11 @@ interface ActiveSession extends EnterpriseSession {
   methodId: string
 }
 
+interface SessionMarker {
+  methodId: string
+  account: EnterpriseIdentityAccount
+}
+
 interface ActiveFlow extends EnterpriseLoginStart {
   methodId: string
   phase: 'waiting' | 'scanned'
@@ -101,6 +115,9 @@ export class EnterpriseIdentityService {
   private readonly credentialDir: string
   private readonly loadProvider: () => Promise<EnterpriseIdentityProvider | null>
   private readonly ready: Promise<void>
+  private readonly sessionMarkerFile: string | null
+  private readonly restoreRetryMs: number
+  private readonly restoreWaitMs: number
   private readonly now: () => number
   private readonly pollIntervalMs: number
   private readonly pollWaitMs: number
@@ -121,12 +138,18 @@ export class EnterpriseIdentityService {
   private readonly refreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Bumped whenever the session changes, so a late credential is never written for an old one. */
   private generation = 0
+  private restoring: Promise<void> | null = null
+  /** Epoch ms after which a state read retries a restore that could not reach the service; 0 = none due. */
+  private restoreRetryAt = 0
 
   constructor(options: EnterpriseIdentityServiceOptions) {
     this.bindings = usableBindings(options.bindings)
     this.credentialDir = options.credentialDir
     this.loadProvider = options.loadProvider
     this.ready = options.ready ?? Promise.resolve()
+    this.sessionMarkerFile = options.sessionMarkerFile ?? null
+    this.restoreRetryMs = options.restoreRetryMs ?? 5 * 60_000
+    this.restoreWaitMs = options.restoreWaitMs ?? 3000
     this.now = options.now ?? Date.now
     this.pollIntervalMs = options.pollIntervalMs ?? 1500
     this.pollWaitMs = options.pollWaitMs ?? 25_000
@@ -186,12 +209,26 @@ export class EnterpriseIdentityService {
 
   async getState(): Promise<EnterpriseIdentityState> {
     await this.getProvider()
+    if (!this.restoring && this.restoreRetryAt !== 0 && this.now() >= this.restoreRetryAt && !this.session && !this.flow) {
+      void this.restoreSession()
+    }
+    if (this.restoring) await this.waitAtMost(this.restoring, this.restoreWaitMs)
     return this.snapshot()
+  }
+
+  /**
+   * Resumes the last sign-in the user did not end, from authorization the
+   * provider still holds. Never asks the user; one attempt at a time.
+   */
+  restoreSession(): Promise<void> {
+    this.restoring ??= this.runRestore().finally(() => { this.restoring = null })
+    return this.restoring
   }
 
   async beginLogin(methodId: string): Promise<EnterpriseIdentityState> {
     const provider = await this.getProvider()
     if (!provider) throw new Error('Enterprise identity is not available in this build')
+    if (this.restoring) await this.restoring
     if (!this.methods().some(m => m.id === methodId)) throw new Error('Unknown sign-in method')
     if (this.flow) await this.cancelLogin(this.flow.flowId)
     const start = await provider.beginLogin(methodId)
@@ -283,14 +320,17 @@ export class EnterpriseIdentityService {
 
   async signOut(): Promise<EnterpriseIdentityState> {
     const provider = await this.getProvider()
+    if (this.restoring) await this.restoring
     if (this.flow) await this.cancelLogin(this.flow.flowId)
     const had = this.session !== null || this.endedAccount !== null
     this.generation++
     this.session = null
     this.endedAccount = null
     this.lastError = undefined
+    this.restoreRetryAt = 0
     this.clearTimers()
     await this.removeCredentials()
+    await this.removeMarker()
     if (provider && had) {
       try {
         await provider.signOut()
@@ -337,10 +377,108 @@ export class EnterpriseIdentityService {
     }
     this.endedAccount = null
     this.lastError = undefined
+    this.restoreRetryAt = 0
     this.armSessionTimer(generation)
     this.log.log('[EnterpriseIdentity] Signed in', { method: methodId, capabilities: this.session.capabilities.length })
+    await this.writeMarker({ methodId, account: { id: this.session.accountId, displayName: this.session.displayName } })
     const audiences = new Set(this.bindings.filter(b => this.session!.capabilities.includes(b.capability)).map(b => b.audience))
     for (const audience of audiences) await this.issue(audience, generation)
+  }
+
+  private async runRestore(): Promise<void> {
+    const marker = await this.readMarker()
+    if (!marker) return
+    const provider = await this.getProvider()
+    if (!provider?.restore || this.session || this.flow) return
+    const methodId = marker.methodId
+    if (!this.methods().some(m => m.id === methodId)) {
+      this.log.log('[EnterpriseIdentity] Last sign-in method is no longer offered; not restoring', { method: methodId })
+      await this.removeMarker()
+      return
+    }
+    const generation = this.generation
+    let result: EnterpriseSession | 'renewal-required' | null
+    try {
+      result = await provider.restore(methodId)
+    } catch (err) {
+      this.restoreRetryAt = this.now() + this.restoreRetryMs
+      this.log.error('[EnterpriseIdentity] Sign-in could not be restored; will retry later', { method: methodId, message: err instanceof Error ? err.message : String(err) })
+      return
+    }
+    this.restoreRetryAt = 0
+    if (generation !== this.generation || this.session || this.flow) {
+      this.log.log('[EnterpriseIdentity] Restore result dropped: sign-in changed meanwhile', { method: methodId })
+      return
+    }
+    if (result === null) {
+      this.log.log('[EnterpriseIdentity] No authorization left to restore', { method: methodId })
+      await this.removeMarker()
+      return
+    }
+    if (result === 'renewal-required') {
+      this.endedAccount = { account: marker.account, methodId }
+      this.log.log('[EnterpriseIdentity] Restore needs a new sign-in', { method: methodId })
+      return
+    }
+    try {
+      await this.establish(result, methodId)
+      this.log.log('[EnterpriseIdentity] Sign-in restored', { method: methodId })
+    } catch (err) {
+      this.log.error('[EnterpriseIdentity] Restored session refused', { method: methodId, message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  private async readMarker(): Promise<SessionMarker | null> {
+    if (!this.sessionMarkerFile) return null
+    let raw: string
+    try {
+      raw = await fsp.readFile(this.sessionMarkerFile, 'utf8')
+    } catch {
+      return null
+    }
+    try {
+      const value = JSON.parse(raw) as Partial<SessionMarker>
+      if (isString(value?.methodId) && isString(value.account?.id)) {
+        return {
+          methodId: value.methodId,
+          account: { id: value.account.id, displayName: isString(value.account.displayName) ? value.account.displayName : value.account.id },
+        }
+      }
+    } catch {
+      // Unreadable marker: treated as none below.
+    }
+    this.log.error('[EnterpriseIdentity] Sign-in marker unreadable; removed')
+    await this.removeMarker()
+    return null
+  }
+
+  private async writeMarker(marker: SessionMarker): Promise<void> {
+    if (!this.sessionMarkerFile) return
+    const tmp = `${this.sessionMarkerFile}.${process.pid}.${Date.now().toString(36)}.tmp`
+    try {
+      await fsp.writeFile(tmp, JSON.stringify(marker), { mode: 0o600 })
+      await fsp.rename(tmp, this.sessionMarkerFile)
+    } catch (err) {
+      await fsp.rm(tmp, { force: true }).catch(() => undefined)
+      this.log.error('[EnterpriseIdentity] Sign-in marker not saved; the next launch will ask to sign in', { message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  private async removeMarker(): Promise<void> {
+    if (!this.sessionMarkerFile) return
+    await fsp.rm(this.sessionMarkerFile, { force: true }).catch(err => {
+      this.log.error('[EnterpriseIdentity] Sign-in marker could not be removed', { message: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
+  private async waitAtMost(work: Promise<void>, ms: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<void>(resolve => {
+      timer = setTimeout(resolve, ms)
+      timer.unref?.()
+    })
+    await Promise.race([work, timeout])
+    if (timer) clearTimeout(timer)
   }
 
   private armSessionTimer(generation: number): void {

@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, LogOut, QrCode, ShieldCheck } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import type { EnterpriseIdentityMethod, EnterpriseIdentityState } from '../../../shared/types/enterprise-identity'
 import { EnterpriseIdentityScanDialog } from './EnterpriseIdentityScanDialog'
 import { unwrapIdentity } from './enterprise-identity-result'
@@ -26,6 +27,7 @@ export function EnterpriseIdentitySection({ onAvailabilityChange }: EnterpriseId
   const [scanMethod, setScanMethod] = useState<EnterpriseIdentityMethod | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { showConfirm, DialogComponent: SignOutConfirm } = useConfirmDialog()
 
   const refresh = useCallback(async () => {
     try {
@@ -51,6 +53,14 @@ export function EnterpriseIdentitySection({ onAvailabilityChange }: EnterpriseId
   useEffect(() => { onAvailabilityChange?.(available) }, [available, onAvailabilityChange])
 
   const signOut = useCallback(async () => {
+    const confirmed = await showConfirm({
+      title: t('Sign out of your company account?'),
+      message: t('Company tools lose access right away, including in running tasks. Next time you will need to scan the code to sign in again.'),
+      confirmLabel: t('Sign out'),
+      cancelLabel: t('Cancel'),
+      variant: 'warning',
+    })
+    if (!confirmed) return
     setBusy(true)
     setError(null)
     try {
@@ -60,7 +70,7 @@ export function EnterpriseIdentitySection({ onAvailabilityChange }: EnterpriseId
     } finally {
       setBusy(false)
     }
-  }, [])
+  }, [showConfirm, t])
 
   const closeDialog = useCallback(() => {
     setScanMethod(null)
@@ -169,6 +179,7 @@ export function EnterpriseIdentitySection({ onAvailabilityChange }: EnterpriseId
           onStateChange={setState}
         />
       )}
+      {SignOutConfirm}
     </section>
   )
 }

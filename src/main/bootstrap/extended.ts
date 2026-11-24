@@ -1508,8 +1508,11 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
  */
 export function initializeExtendedServices(): void {
   void initializeSdkRuntime().catch(error => console.error('[Bootstrap] SDK worker prewarm failed:', error))
-  // Paths only; the provider is loaded when Settings first asks for the state.
-  initEnterpriseIdentity({ credentialDir: join(app.getPath('userData'), 'enterprise-identity') })
+  // Paths only, unless a sign-in the user did not end is to be resumed in the background.
+  initEnterpriseIdentity({
+    credentialDir: join(app.getPath('userData'), 'enterprise-identity'),
+    sessionMarkerFile: join(app.getPath('userData'), 'enterprise-identity-session.json'),
+  })
   // Paths only; the store is read when a session or terminal first asks for tools.
   initCliTools({
     root: join(app.getPath('userData'), 'cli'),
