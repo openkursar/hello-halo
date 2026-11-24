@@ -10,7 +10,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Virtuoso } from 'react-virtuoso'
-import { X, EllipsisVertical, Pin, Pencil, Trash2, History } from 'lucide-react'
+import { X, EllipsisVertical, Pin, Pencil, Plus, Trash2, History } from 'lucide-react'
 import type { ConversationMeta } from '../../types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -21,6 +21,7 @@ import { useAppChatConversationRows, type AppChatConversationRow } from '../../h
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
 import { appChatSessionLabel } from './conversation-row-format'
 import { trackHome } from '../../services/home-telemetry'
+import { openDigitalHumanChat } from '../../utils/conversation-navigation'
 
 /** One line of the list: a section heading, a space conversation, or a digital human's. */
 type HistoryItem =
@@ -227,6 +228,14 @@ export function ChatHistoryPanel() {
   const handleSelectAppChat = (row: AppChatConversationRow) => {
     if (row.uninstalled || !currentSpaceId) return
     useChatStore.getState().selectAppChatConversation(currentSpaceId, row.appId, row.id)
+    handleClose()
+  }
+
+  // The sidebar's per-person "+", which this sheet stands in for at phone width.
+  const handleNewAppChat = (row: AppChatConversationRow) => {
+    if (!currentSpaceId) return
+    trackHome('home.conversation.create', { surface: 'dh_menu' })
+    void openDigitalHumanChat(row.appId, currentSpaceId, { newConversation: true })
     handleClose()
   }
 
@@ -493,8 +502,18 @@ export function ChatHistoryPanel() {
               {isMenuOpen && (
                 <div
                   ref={menuRef}
-                  className="absolute right-0 top-full mt-1 z-[9999] min-w-[150px] bg-popover border border-border rounded-lg shadow-lg py-1"
+                  className="absolute right-0 top-full mt-1 z-[9999] w-max min-w-[150px] max-w-[calc(100vw-2rem)] bg-popover border border-border rounded-lg shadow-lg py-1"
                 >
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleNewAppChat(row)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-secondary transition-colors"
+                  >
+                    <Plus className="w-4 h-4 shrink-0" />
+                    <span className="min-w-0 truncate">{t('New conversation with {{name}}', { name: row.digitalHumanName })}</span>
+                  </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation()

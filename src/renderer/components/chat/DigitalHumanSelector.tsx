@@ -17,11 +17,10 @@
  * input toolbar's `overflow-x-auto` row, which clips any child positioned
  * with `absolute` — a portal is the only way to escape that.
  *
- * Picking a digital human here — same as @-mentioning one in the input —
- * always starts a fresh session (`appSessionCreate`): this control is for
- * starting a conversation, not resuming one. Resuming an existing session
- * happens by clicking its row in the left conversation list, which already
- * carries a specific conversationId.
+ * Picking a digital human here, like @-mentioning one in the input, continues
+ * its latest Halo chat, or starts one when it has none
+ * (`continueDigitalHumanConversation`). Only its own "new conversation" in the
+ * conversation lists starts another.
  */
 
 import { useState, useRef, useEffect } from 'react'

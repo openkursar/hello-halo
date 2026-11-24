@@ -12,8 +12,8 @@
  *
  * One row per conversation that actually exists — the app's legacy default
  * session once it has been used, plus every local session (each created
- * explicitly: a new conversation with the digital human, picking it in the
- * input, or its Chat while it had no conversation).
+ * explicitly: a new conversation with the digital human, or turning to it by
+ * Chat, the input's picker or "@" while it had no conversation).
  * A digital human with no conversations contributes no rows.
  */
 

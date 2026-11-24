@@ -165,11 +165,13 @@ scenarios:
       - en: Use the isolated fixture described by the referenced executable test.
         zh: 使用引用测试中定义的隔离测试资料。
     steps:
-      - en: Open a conversation from the narrow history sheet and use @ to address the same person.
-        zh: 从窄屏历史面板打开对话，并用 @ 选择同一数字人。
+      - en: Open a conversation from the narrow history sheet, start another with the same person from its row in the sheet, and use @ to address the person.
+        zh: 从窄屏历史面板打开对话，在面板中该对话的菜单里与同一数字人新建对话，并用 @ 选择该数字人。
     expected:
       - en: The selected history and usable composer fit the screen with the correct person identity.
         zh: 选定历史和可用输入框适配屏幕，身份正确。
+      - en: The new conversation opens empty and is listed in the sheet beside the earlier one; @ continues it instead of starting another.
+        zh: 新对话打开时为空，并与先前的对话一同列在面板中；@ 继续该对话，不会再新建。
   - id: conversations.read.person-pagination
     title:
       en: Read old digital-human history in bounded pages
