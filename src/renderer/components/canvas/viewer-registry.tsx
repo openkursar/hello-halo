@@ -19,7 +19,6 @@ import { BrowserViewer, BrowserViewerFallback } from './viewers/BrowserViewer'
 import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { TerminalViewer } from './viewers/TerminalViewer'
 import { TeamViewer } from './viewers/TeamViewer'
-import { TeamTaskViewer } from './viewers/TeamTaskViewer'
 
 // Office viewers ship heavy parsers (SheetJS, docx-preview, pdfjs) — lazy
 // chunks keep them out of the startup bundle.
@@ -29,6 +28,8 @@ const PdfViewer = lazy(() => import('./viewers/PdfViewer'))
 const PptxViewer = lazy(() => import('./viewers/PptxViewer'))
 // The changes view carries the merge editor and is opened on demand.
 const ChangesViewer = lazy(() => import('./viewers/changes/ChangesViewer'))
+// A team's progress brings the task panel with it; it loads when such a tab first opens.
+const TeamTaskViewer = lazy(() => import('./viewers/TeamTaskViewer').then(module => ({ default: module.TeamTaskViewer })))
 
 /** Everything the host hands a viewer; each viewer takes the part it needs. */
 export interface ViewerProps {

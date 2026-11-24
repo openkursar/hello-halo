@@ -1,4 +1,5 @@
 import type { RosterMember, TeamActivity, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
+import { isFailedActivity } from '../../../../shared/apps/team-failures'
 import { taskTime } from '../workbench/time'
 import { taskDecisions } from './status'
 
@@ -22,8 +23,6 @@ export interface CrewLink {
 
 /** Members count as talking while their latest message to each other is this recent. */
 export const TALK_WINDOW = 2 * 60_000
-
-const FAILURES = new Set(['error', 'timeout', 'undelivered'])
 
 /** Who is on a listed task right now, read from what the list already holds; finished work has no one on it. */
 export function taskCrew(detail: TeamDetail, task: TeamConversation): CrewEntry[] {
@@ -69,7 +68,7 @@ export function isExchange(activity: TeamActivity): boolean {
 export function recentTalk(activities: readonly TeamActivity[], now: number): TeamActivity[] {
   return activities.filter(activity => {
     if (!isExchange(activity)) return false
-    if (FAILURES.has(activity.status ?? '')) return false
+    if (isFailedActivity(activity)) return false
     const at = taskTime(activity.createdAt)
     return at !== null && now - at <= TALK_WINDOW
   })

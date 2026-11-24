@@ -519,12 +519,20 @@ describe('a member that answered nobody', () => {
   const FINAL = 'Done: three salty snacks reviewed.\n\nDetails follow.'
   const asked = { appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } as const, requestFromAppId: LEAD, finalReply: FINAL, correlationId: 'corr-1' }
 
-  function setup(opts?: { sealed?: boolean }) {
+  function setup(opts?: { sealed?: boolean; pendingDecision?: boolean }) {
     const { bus } = makeBus()
     const recordReply = vi.fn()
-    const report = createTurnReport({ store: makeStore(LOCAL_TEAM, opts), bus, recordReply })
-    return { report, recordReply }
+    const hasPendingDecision = vi.fn(() => opts?.pendingDecision === true)
+    const report = createTurnReport({ store: makeStore(LOCAL_TEAM, opts), bus, recordReply, hasPendingDecision })
+    return { report, recordReply, hasPendingDecision }
   }
+
+  it('files nothing for a member still waiting on a person\u2019s decision raised in an earlier turn', () => {
+    const { report, recordReply, hasPendingDecision } = setup({ pendingDecision: true })
+    runTurn(report, 'app-writer', [], asked)
+    expect(hasPendingDecision).toHaveBeenCalledWith('app-writer', TEAM, EPOCH)
+    expect(recordReply).not.toHaveBeenCalled()
+  })
 
   it('has its closing text filed as its answer to the asker', () => {
     const { report, recordReply } = setup()

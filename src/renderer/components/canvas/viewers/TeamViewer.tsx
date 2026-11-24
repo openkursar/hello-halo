@@ -10,8 +10,9 @@ export function TeamViewer({ tab }: { tab: TabState }) {
   const { t } = useTranslation()
   const { closeTab } = useCanvasActions()
   const teamId = tab.teamId
-  // Its own view of the tab's team: never moves the Teams page selection.
-  useEffect(() => (teamId ? useTeamStore.getState().retainTeamView(teamId) : undefined), [teamId])
+  // Its own view of the tab's team: never moves the Teams page selection. The page
+  // lists every member's work, so it keeps the team-wide roster live.
+  useEffect(() => (teamId ? useTeamStore.getState().retainTeamView(teamId, { teamRoster: true }) : undefined), [teamId])
   const detail = useTeamStore(state => (teamId ? state.views[teamId]?.detail ?? null : null))
   const loading = useTeamStore(state => (teamId ? state.views[teamId]?.isLoadingDetail ?? true : false))
   const error = useTeamStore(state => (teamId ? state.views[teamId]?.error ?? null : null))

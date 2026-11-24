@@ -78,6 +78,10 @@ const detail = (team: { ephemeral?: boolean; coordinatorConversationId?: string 
 const render = (team: Parameters<typeof detail>[0], spaceEntry: boolean, legacyCoordinator = false) =>
   renderToStaticMarkup(createElement(TeamView, { detail: detail(team, legacyCoordinator), spaceEntry }))
 
+// The team page loads on first use; render once to start it, then the page is in.
+render({ ephemeral: false, coordinatorConversationId: null }, false)
+await new Promise(resolve => setTimeout(resolve, 0))
+
 describe('team view opened from a space conversation', () => {
   it('shows a temporary collaboration as its single room', () => {
     const html = render({ ephemeral: true, coordinatorConversationId: 'conv' }, true)

@@ -11,6 +11,11 @@ export function undeliveredParties(activity: TeamActivity): { senderAppId: strin
     : { senderAppId: activity.actorAppId, recipientAppId: activity.targetAppId }
 }
 
+/** A record whose act did not go through: a message never delivered, or a turn that failed or ran out of time. */
+export function isFailedActivity(activity: Pick<TeamActivity, 'status'>): boolean {
+  return activity.status === 'undelivered' || activity.status === 'error' || activity.status === 'timeout'
+}
+
 function timeOf(value: unknown): number {
   if (typeof value !== 'number' && typeof value !== 'string') return 0
   if (typeof value === 'string' && !value.trim()) return 0

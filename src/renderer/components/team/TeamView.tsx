@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Info, Settings, Users, PanelLeft, UserPlus, Play, Pause, BookmarkPlus } from 'lucide-react'
+import { ArrowLeft, Info, Settings, Users, PanelLeft, UserPlus, Play, Pause, BookmarkPlus, Loader2 } from 'lucide-react'
 import { type RosterMember, type TeamDetail } from '../../../shared/apps/team-types'
 import { useTeamStore, useTeamView, useSelectTeamTask } from '../../stores/team.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -22,15 +22,23 @@ import { LegacyTeamNotice } from './workbench/LegacyTeamNotice'
 import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import { navigateToConversation } from '../../utils/conversation-navigation'
 import { openPersonTeam } from '../../utils/people-navigation'
-import { TeamDetailPage } from './detail/TeamDetailPage'
 
 const TeamCreateDialog = lazy(() => import('./TeamCreateDialog').then(module => ({ default: module.TeamCreateDialog })))
+// The team page is a screen of its own; it loads when a team is first opened, not with the canvas.
+const TeamDetailPage = lazy(() => import('./detail/TeamDetailPage').then(module => ({ default: module.TeamDetailPage })))
 
 export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { detail: TeamDetail; onBack?: () => void; spaceEntry?: boolean }) {
   if (!teamDetail.team.ephemeral && !teamDetail.legacyCoordinator && !(spaceEntry && teamDetail.team.coordinatorConversationId)) {
-    return <TeamDetailPage detail={teamDetail} onBack={onBack} />
+    return <Suspense fallback={<TeamPageLoading />}>
+      <TeamDetailPage detail={teamDetail} onBack={onBack} />
+    </Suspense>
   }
   return <LegacyTeamView detail={teamDetail} onBack={onBack} spaceEntry={spaceEntry} />
+}
+
+function TeamPageLoading() {
+  const { t } = useTranslation()
+  return <div className="flex h-full items-center justify-center"><Loader2 className="animate-spin text-muted-foreground" aria-label={t('Loading team')} /></div>
 }
 
 function LegacyTeamView({ detail: teamDetail, onBack, spaceEntry = false }: { detail: TeamDetail; onBack?: () => void; spaceEntry?: boolean }) {

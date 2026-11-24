@@ -227,6 +227,12 @@ function rowToActivity(row: TeamActivityRow): TeamActivity {
 
 /** Enough of a message to hold its first non-empty line. */
 const EXCHANGE_OPENING_CHARS = 600
+/**
+ * The most recent exchanges per epoch that settle delegated work. A conversation
+ * that ran longer settles from its latest exchanges; older asks it leaves out were
+ * long since answered or are named by the board.
+ */
+const EXCHANGES_PER_EPOCH = 300
 
 function rowToEpoch(row: TeamEpochRow): TeamEpoch {
   return {
@@ -1449,11 +1455,14 @@ export class TeamStore implements ITeamStore {
    */
   listExchangesByEpochs(teamId: string, epochIds: string[]): TeamActivity[] {
     if (!epochIds.length) return []
-    return (this.db.prepare(`SELECT id, team_id, epoch_id, kind, actor_app_id, target_app_id, subject,
-        substr(body, 1, ${EXCHANGE_OPENING_CHARS}) AS body, ref_id, correlation_id, status, created_at
-      FROM team_activity
-      WHERE team_id = ? AND epoch_id IN (SELECT value FROM json_each(?)) AND kind IN ('message', 'reply', 'finding')
-      ORDER BY created_at ASC, rowid ASC`).all(teamId, JSON.stringify(epochIds)) as TeamActivityRow[]).map(rowToActivity)
+    return (this.db.prepare(`SELECT id, team_id, epoch_id, kind, actor_app_id, target_app_id, subject, body, ref_id, correlation_id, status, created_at
+      FROM (SELECT id, team_id, epoch_id, kind, actor_app_id, target_app_id, subject,
+          substr(body, 1, ${EXCHANGE_OPENING_CHARS}) AS body, ref_id, correlation_id, status, created_at, rowid AS row_order,
+          ROW_NUMBER() OVER (PARTITION BY epoch_id ORDER BY created_at DESC, rowid DESC) AS recency
+        FROM team_activity
+        WHERE team_id = ? AND epoch_id IN (SELECT value FROM json_each(?)) AND kind IN ('message', 'reply', 'finding'))
+      WHERE recency <= ${EXCHANGES_PER_EPOCH}
+      ORDER BY created_at ASC, row_order ASC`).all(teamId, JSON.stringify(epochIds)) as TeamActivityRow[]).map(rowToActivity)
   }
 
   /** Whole records of the given epochs that hold any failure, without bodies; epochs without one are skipped. */
@@ -1526,7 +1535,8 @@ export class TeamStore implements ITeamStore {
     teamwork: Set<string>
     participants: Map<string, string[]>
   } {
-    const scope = epochIds === undefined ? '' : ' AND epoch_id IN (SELECT value FROM json_each(@epochs))'
+    const scopeOf = (column: string) => epochIds === undefined ? '' : ` AND ${column} IN (SELECT value FROM json_each(@epochs))`
+    const scope = scopeOf('epoch_id')
     const bindings = { teamId, own: JSON.stringify(ownAppIds), ...(epochIds === undefined ? {} : { epochs: JSON.stringify(epochIds) }) }
     const involved = ownAppIds.length ? this.db.prepare(`SELECT DISTINCT epoch_id FROM team_activity
       WHERE team_id = @teamId ${scope} AND (actor_app_id IN (SELECT value FROM json_each(@own)) OR target_app_id IN (SELECT value FROM json_each(@own)))
@@ -1540,7 +1550,7 @@ export class TeamStore implements ITeamStore {
       FROM team_activity request
       JOIN team_members member ON member.team_id = request.team_id AND member.app_id = request.actor_app_id
       JOIN team_epochs epoch ON epoch.team_id = request.team_id AND epoch.id = request.epoch_id
-      WHERE request.team_id = @teamId ${scope.replaceAll('epoch_id', 'request.epoch_id')} AND request.kind = 'decision' AND request.status = 'escalation'
+      WHERE request.team_id = @teamId ${scopeOf('request.epoch_id')} AND request.kind = 'decision' AND request.status = 'escalation'
         AND request.ref_id IS NOT NULL
         AND COALESCE(epoch.task_status, 'open') = 'open'
         AND NOT EXISTS (

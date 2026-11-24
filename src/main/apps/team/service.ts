@@ -2036,9 +2036,14 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   function settleSubtasks(team: Team, { subtasks, teamwork }: SubtaskStats, busyByEpoch: Map<string, Set<string>>): Map<string, { done: number; open: number }> {
     const settled = new Map(subtasks)
     const delegated = [...teamwork].filter(epochId => !subtasks.has(epochId))
-    const messages = store.listExchangesByEpochs(team.id, delegated)
+    const byEpoch = new Map<string, TeamActivity[]>()
+    for (const row of store.listExchangesByEpochs(team.id, delegated)) {
+      const list = byEpoch.get(row.epochId)
+      if (list) list.push(row)
+      else byEpoch.set(row.epochId, [row])
+    }
     for (const epochId of delegated) {
-      const rows = delegatedTasks({ teamId: team.id, epochId, leadAppId: team.leadAppId ?? null, activities: messages.filter(row => row.epochId === epochId), busyAppIds: busyByEpoch.get(epochId) ?? new Set() })
+      const rows = delegatedTasks({ teamId: team.id, epochId, leadAppId: team.leadAppId ?? null, activities: byEpoch.get(epochId) ?? [], busyAppIds: busyByEpoch.get(epochId) ?? new Set() })
       const done = rows.filter(row => row.status === 'done').length
       if (rows.length) settled.set(epochId, { done, open: rows.length - done })
     }

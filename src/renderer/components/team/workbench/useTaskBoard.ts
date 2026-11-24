@@ -8,8 +8,9 @@ const ROSTER_REFRESH_MS = 200
 
 /**
  * The same task is observed from several places at once (the homepage
- * conversation, its progress on the canvas, the team page); every one of them
- * answers the same team event, so one read per task serves them all.
+ * conversation, its progress on the canvas, the team page), and each answers the
+ * same team event. A board or roster read already in flight for that task is
+ * joined rather than repeated; reads that do not overlap still each go out.
  */
 const sharedReads = new Map<string, Promise<unknown>>()
 function shared<T>(key: string, run: () => Promise<T>): Promise<T> {

@@ -835,10 +835,10 @@ export const ConversationList = memo(function ConversationList({
     )
   }, [editingId, editingTitle, currentConversationId, selectedAppChat, selectedTeamChat, conversationStatuses, menuOpenId, t])
 
-  // Render a single digital-human conversation row. Uninstalled digital
-  // humans fade out and become non-interactive rather than disappearing —
-  // reinstalling the app restores the row automatically since it's derived
-  // live from the apps list each render.
+  // Render a single digital-human conversation row. An uninstalled digital
+  // human's row fades and no longer opens its chat rather than disappearing;
+  // its avatar still leads to the person's page. Reinstalling the app restores
+  // the row automatically since it's derived live from the apps list each render.
   const renderAppChatItem = useCallback((row: AppChatConversationRow, standalone: boolean) => {
     const isActive = row.id === selectedAppChat?.conversationId && !selectedTeamChat
     const isEditing = editingId === row.id

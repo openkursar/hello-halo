@@ -41,6 +41,20 @@ function sourceOf(scope: SpaceTeamMcpScope): ParticipantSource {
   }
 }
 
+/**
+ * The team is named after the conversation it serves, not the first
+ * collaborator's brief. Naming is a courtesy: a conversation that cannot be read
+ * must not keep a collaborator from starting, so a failed read falls back.
+ */
+function conversationTitle(spaceId: string, conversationId: string): string {
+  try {
+    return getConversation(spaceId, conversationId)?.title?.trim() ?? ''
+  } catch (error) {
+    console.warn('[TeamMcp] Conversation title unavailable; naming the team from the brief', { spaceId, conversationId, error })
+    return ''
+  }
+}
+
 /** The source conversation fixes scope; neither a group nor a goal is a model argument. */
 export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope, source?: () => ParticipantSource, requestId?: () => string) {
   const callerAppId = spaceCoordinatorAppId(scope.conversationId)
@@ -100,8 +114,7 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope, source?: () =
       }
       capturedSource = { ...capturedSource, ...await models.prepare(input, scope.modelContext(), check, context.signal) }
     }
-    // The team is named after the conversation it serves, not the first collaborator's brief.
-    const title = getConversation(scope.spaceId, scope.conversationId)?.title?.trim() || input.prompt
+    const title = conversationTitle(scope.spaceId, scope.conversationId) || input.prompt
     const work = await service.ensureCollaboration({ owningSpaceId: scope.spaceId, conversationId: scope.conversationId, title })
     context.signal?.throwIfAborted()
     check()

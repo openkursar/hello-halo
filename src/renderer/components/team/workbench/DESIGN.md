@@ -391,6 +391,7 @@ conversation coordination previews retain chronological order. Interacting with
 the activity history holds its visible records steady; newly arriving records
 are revealed through an explicit update button instead of shifting the reader.
 Every place observing one task (the homepage conversation, its canvas progress, the team page's panel, a temporary team's bar) keeps its own `useTaskBoard`, but their board and roster reads for the same team and epoch are shared while in flight, so one team event costs one read; live events merge into each board.
+A work pulse (`team:updated` with `changed` of only `status`/`work` and `activeEpochIds`) is taken in place: task rows mark `active` from the list, and a surface showing one task (the homepage conversation, canvas progress, a temporary team's bar) takes who is working from that task's roster, which its `useTaskBoard` re-reads on the pulse; the homepage conversation renders its room from that board roster for this reason. Only a surface listing every member's work, the team page, holds its view with `retainTeamView(teamId, { teamRoster: true })` and re-reads the team detail on a pulse; neither re-reads the task list or the run history. A pulse without the list (a joined node, an older host) reloads as before.
 The transcript trigger carries team origin and correlation; display routing uses
 that provenance only, never message text. Invalid timestamps retain their records
 with an unknown-time label and sort after dated records. Activity loads member reports on demand with

@@ -3323,6 +3323,7 @@
   "Show {{count}} more folders_other": "顯示另外 {{count}} 個資料夾",
   "Show {{count}} new updates_one": "顯示 {{count}} 則新更新",
   "Show {{count}} new updates_other": "顯示 {{count}} 則新更新",
+  "Show {{count}} removed_one": "顯示已移除的 {{count}} 個",
   "Show {{count}} removed_other": "顯示已移除的 {{count}} 個",
   "Show a full-resolution still": "顯示全解析度靜態畫面",
   "Show all": "顯示全部",

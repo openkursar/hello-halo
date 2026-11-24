@@ -33,7 +33,11 @@ function useTalkByTask(recent: readonly TeamActivity[]): ReadonlyMap<string, rea
   const previous = useRef<ReadonlyMap<string, readonly TeamActivity[]>>(new Map())
   return useMemo(() => {
     const next = new Map<string, TeamActivity[]>()
-    for (const activity of recent) next.set(activity.epochId, [...(next.get(activity.epochId) ?? []), activity])
+    for (const activity of recent) {
+      const list = next.get(activity.epochId)
+      if (list) list.push(activity)
+      else next.set(activity.epochId, [activity])
+    }
     const kept = new Map<string, readonly TeamActivity[]>()
     for (const [epochId, list] of next) {
       const old = previous.current.get(epochId)

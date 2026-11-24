@@ -96,12 +96,6 @@ const MAX_PUBLISHED_MESSAGE_BYTES = 256 * 1024
 const MIRROR_READ_LIMIT = 10_000
 
 /**
- * Stable feed_cache key for one member's transcript in one epoch — the rows the
- * manager's cache-first fetchMemberHistory reads. Both the on-demand pull path
- * (manager) and the proactive replication path (this module) write it, so they
- * MUST share this single definition.
- */
-/**
  * A transcript row's identity for revision detection, shared by the publisher
  * and the viewer's history reconcile. Excludes `ts`: the reader synthesizes a
  * timestamp when an event carries none, so it can drift between reads of an
@@ -118,6 +112,12 @@ export function historyRowFingerprint(msg: SerializedHistoryMessage): string {
   })
 }
 
+/**
+ * Stable feed_cache key for one member's transcript in one epoch — the rows the
+ * manager's cache-first fetchMemberHistory reads. Both the on-demand pull path
+ * (manager) and the proactive replication path (this module) write it, so they
+ * MUST share this single definition.
+ */
 export function historyCacheKey(ownerNodeId: NodeId, appId: string, epochId: string): string {
   return `history\u0000${ownerNodeId}\u0000${appId}\u0000${epochId}`
 }

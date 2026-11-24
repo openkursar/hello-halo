@@ -1927,16 +1927,26 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
    * card and the member avatars can never disagree about who is working.
    */
   function hasWorkingMember(teamId: string): boolean {
-    return activeEpochIds(teamId).length > 0
+    for (const epochId of knownEpochs.get(teamId) ?? []) {
+      for (const member of listWorkMembers(store, teamId, epochId)) {
+        if (isSessionOccupied(buildTeamSessionKey(member.appId, teamId, epochId))) return true
+      }
+    }
+    return false
   }
 
-  /** Every open epoch some member is serving right now. */
+  /**
+   * The epochs a task list marks as active, read the way the team service's
+   * conversation list reads them on the hosting node: turns in flight, working
+   * temporary collaborators, and members holding a session on the epoch.
+   */
   function activeEpochIds(teamId: string): string[] {
-    const active: string[] = []
+    const active = new Set(getActiveEpochIds(teamId))
+    for (const [epochId, state] of store.getParticipantWorkStates?.(teamId) ?? []) if (state.active) active.add(epochId)
     for (const epochId of knownEpochs.get(teamId) ?? []) {
-      if (listWorkMembers(store, teamId, epochId).some(member => isSessionOccupied(buildTeamSessionKey(member.appId, teamId, epochId)))) active.push(epochId)
+      if (listWorkMembers(store, teamId, epochId).some(member => isSessionOccupied(buildTeamSessionKey(member.appId, teamId, epochId)))) active.add(epochId)
     }
-    return active
+    return [...active]
   }
 
   /**
@@ -1996,7 +2006,12 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     // shows. Without it a push would reset a working office back to idle, since
     // the row it carries knows nothing about turns run outside its own run.
     const payload: TeamUpdatedEvent = team
-      ? { teamId, team, liveStatus: observableStatus(teamId), ...(changed ? { changed } : {}), ...(changed?.includes('work') ? { activeEpochIds: activeEpochIds(teamId) } : {}) }
+      ? {
+        teamId, team, liveStatus: observableStatus(teamId), ...(changed ? { changed } : {}),
+        // Only the hosting node runs the work it lists; a joined node reads the host's
+        // projection, so its pulse carries no list and listeners reload instead.
+        ...(changed?.includes('work') && team.hostNodeId == null ? { activeEpochIds: activeEpochIds(teamId) } : {}),
+      }
       : { teamId, removed: true }
     broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
     sendToRenderer(TEAM_EVENTS.updated, payload)

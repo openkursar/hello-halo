@@ -39,8 +39,11 @@ function TeamConversationRoom({ spaceId, target, teamDetail }: { spaceId: string
   const loading = useTeamView(view => view.isLoadingConversations)
   const error = useTeamView(view => view.conversationsError)
   const task = conversations.find(item => item.epochId === target.epochId) ?? null
-  const detail = useMemo(() => detailForTask(teamDetail, task), [teamDetail, task])
-  const board = useTaskBoard(detail, task?.epochId ?? null)
+  const baseDetail = useMemo(() => detailForTask(teamDetail, task), [teamDetail, task])
+  const board = useTaskBoard(baseDetail, task?.epochId ?? null)
+  // Who is working comes from this task's roster, which the board re-reads on every work pulse;
+  // the team's own detail is not read again for it.
+  const detail = useMemo(() => detailForTask(teamDetail, task, board.board), [teamDetail, task, board.board])
   const { openTeamTask } = useCanvasActions()
   const [room, setRoom] = useState({ epochId: target.epochId, key: 0 })
   const promoting = useRef<string | null>(null)

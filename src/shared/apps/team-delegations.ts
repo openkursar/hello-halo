@@ -1,10 +1,10 @@
 import type { BlackboardTask, TeamActivity } from './team-types'
+import { isFailedActivity } from './team-failures'
 
 const PREFIX = 'delegation:'
 
 export const isDelegatedTask = (task: BlackboardTask) => task.id.startsWith(PREFIX)
 
-const FAILED = new Set(['undelivered', 'error', 'timeout'])
 
 /** One coordinator's latest ask, whether it arrived, and this member's latest answer or failure after it. */
 interface Ask { askedAt: number; delivered: boolean; answeredAt: number; failedAt: number }
@@ -59,7 +59,7 @@ export function delegatedTasks({ teamId, epochId, leadAppId, activities, busyApp
     const target = activity.targetAppId
     if (activity.kind !== 'message' || !coordinators.has(activity.actorAppId) || !target || coordinators.has(target)) continue
     const at = timeOf(activity.createdAt)!
-    const delivered = !FAILED.has(activity.status ?? '')
+    const delivered = !isFailedActivity(activity)
     let row = byMember.get(target)
     if (!row) byMember.set(target, row = { first: activity, firstAt: at, asks: new Map(), answer: null, answeredAt: -1 })
     const ask = row.asks.get(activity.actorAppId)
@@ -72,7 +72,7 @@ export function delegatedTasks({ teamId, epochId, leadAppId, activities, busyApp
     if (!row || at < row.firstAt) continue
     const asks = activity.kind === 'finding' ? [...row.asks.values()] : [row.asks.get(activity.targetAppId ?? '')].filter((ask): ask is Ask => !!ask)
     if (!asks.length) continue
-    if (FAILED.has(activity.status ?? '')) {
+    if (isFailedActivity(activity)) {
       for (const ask of asks) ask.failedAt = Math.max(ask.failedAt, at)
       continue
     }

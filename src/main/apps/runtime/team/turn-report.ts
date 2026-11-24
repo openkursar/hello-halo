@@ -63,6 +63,8 @@ export interface TurnReportDeps {
   onPendingSettled?(teamId: string, epochId: string): void
   /** Files a member's closing words as its answer when it wrote back to nobody. */
   recordReply?(input: PostActivityInput): void
+  /** Whether the member still waits on a person's decision in this task, raised in any turn. */
+  hasPendingDecision?(appId: string, teamId: string, epochId: string): boolean
 }
 
 /** One act a member filed, kept only long enough to describe the turn it fell in. */
@@ -215,9 +217,10 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
    * still answered: its closing text is the answer. Without this the asker's
    * subtask stays open forever and the task reads as stalled.
    *
-   * A turn that raised a decision for a person has not answered: the closing
-   * text is that question, and filing it as a reply would settle the asker's
-   * subtask while the person is still being waited on.
+   * A member that raised a decision for a person has not answered: its closing
+   * text is that question or a wait on it, and filing it as a reply would settle
+   * the asker's subtask while the person is still being waited on. That holds
+   * whether the question went out in this turn or an earlier one still open.
    */
   function recordUnsentReply(input: NoteTurnEndedInput, startedAt: number | undefined): void {
     const { appId, teamId, epochId, requestFromAppId } = input
@@ -226,7 +229,7 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
       || !requestFromAppId || requestFromAppId === appId || !text || startedAt === undefined) return
     const inTurn = (acts.get(memberKey(epochId, appId)) ?? []).filter((a) => a.at >= startedAt)
     const answered = inTurn.some((a) => a.kind === 'finding' || (a.kind === 'message' && a.targetAppId === requestFromAppId))
-    const askedAPerson = inTurn.some((a) => a.kind === 'decision')
+    const askedAPerson = inTurn.some((a) => a.kind === 'decision') || deps.hasPendingDecision?.(appId, teamId, epochId) === true
     if (answered || askedAPerson) return
     deps.recordReply({
       teamId, epochId, kind: 'reply', actorAppId: appId, targetAppId: requestFromAppId,

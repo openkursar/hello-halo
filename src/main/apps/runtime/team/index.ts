@@ -506,6 +506,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     requestAllowed: requestId => getTeamService()?.participants.requestAllowed(requestId) ?? true,
     onPendingSettled: (teamId, epochId) => orchestration?.notePendingWorkChanged(teamId, epochId),
     recordReply: input => { board?.postActivity(input) },
+    hasPendingDecision: (appId, teamId, epochId) => deps.hasPendingEscalation?.(appId, teamId, epochId) ?? false,
   })
 
   orchestration = createOrchestration({

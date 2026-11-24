@@ -204,8 +204,13 @@ export interface TeamState {
   /** Remove flows older than FLOW_TTL_MS (called on a timer after each message). */
   expireFlows: () => void
 
-  /** Keep `teamId`'s view loaded and live until the returned release is called (ref-counted). */
-  retainTeamView: (teamId: string) => () => void
+  /**
+   * Keep `teamId`'s view loaded and live until the returned release is called (ref-counted).
+   * `teamRoster`: this surface lists every member's work from the team-wide roster
+   * (the team page), so a work pulse re-reads it; surfaces showing one task read
+   * that task's roster through `useTaskBoard` instead.
+   */
+  retainTeamView: (teamId: string, options?: { teamRoster?: boolean }) => () => void
   /** Select a task inside a team view (the Teams page selection is `selectConversation`). */
   selectViewConversation: (teamId: string, epochId: string | null) => void
 
@@ -338,6 +343,20 @@ function patchView(teamId: string, patch: Partial<TeamViewData>): void {
 }
 
 const viewHolders = new Map<string, number>()
+/** Holders that list every member's work from the team-wide roster (the team page), by team. */
+const teamRosterHolders = new Map<string, number>()
+
+/** Mark which tasks someone is serving right now, from a work pulse, without reading the list again. */
+function markActive(conversations: TeamConversation[], active: ReadonlySet<string>): TeamConversation[] {
+  let changed = false
+  const next = conversations.map(item => {
+    const now = active.has(item.epochId)
+    if (!!item.active === now) return item
+    changed = true
+    return { ...item, active: now }
+  })
+  return changed ? next : conversations
+}
 
 /** In-flight list requests, by space ('' = every space). */
 const teamListRequests = new Map<string, Promise<void>>()
@@ -955,10 +974,25 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     // in the lightweight team payload — refetch what the event says changed when
     // this team is shown (everything when it does not say). The session list
     // is office-shared: an epoch opened/renamed/sealed on any node arrives here.
-    // A 'work' pulse moves who is working, which the roster and the task rows
-    // carry; the run history does not change with it.
     if (get().currentTeamId === teamId || get().views[teamId]) {
       const changed = event.changed
+      // A work pulse only moves who is working. Its task rows take the active
+      // epochs it carries; a surface showing one task re-reads that task's roster
+      // through useTaskBoard. Only the team page, which lists every member's work
+      // from the team-wide roster, still reads the team again for it.
+      if (changed?.includes('work') && changed.every(change => change === 'work' || change === 'status') && event.activeEpochIds) {
+        const active = new Set(event.activeEpochIds)
+        set(s => {
+          const flat = s.currentTeamId === teamId ? markActive(s.conversations, active) : s.conversations
+          const view = s.views[teamId]
+          const viewed = view ? markActive(view.conversations, active) : undefined
+          if (flat === s.conversations && (!view || viewed === view.conversations)) return {}
+          return { conversations: flat, ...(view && viewed !== view.conversations ? { views: { ...s.views, [teamId]: { ...view, conversations: viewed! } } } : {}) }
+        })
+        if (get().currentTeamId === teamId || teamRosterHolders.has(teamId)) void get().loadDetail(teamId)
+        return
+      }
+      // A work pulse without its list (a joined node, an older host) reads the roster and the tasks again.
       if (!changed || changed.includes('members') || changed.includes('board') || changed.includes('work')) void get().loadDetail(teamId)
       if (!changed || changed.includes('epochs')) void get().loadEpochs(teamId)
       if (!changed || changed.includes('conversations') || changed.includes('work')) void get().loadConversations(teamId)
@@ -993,9 +1027,11 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     })
   },
 
-  retainTeamView: (teamId) => {
+  retainTeamView: (teamId, options) => {
     const holders = viewHolders.get(teamId) ?? 0
     viewHolders.set(teamId, holders + 1)
+    const teamRoster = options?.teamRoster === true
+    if (teamRoster) teamRosterHolders.set(teamId, (teamRosterHolders.get(teamId) ?? 0) + 1)
     if (holders === 0) {
       const selectedConversationId = useTeamViewPrefsStore.getState().taskByTeam[teamId] ?? null
       set(s => ({ views: { ...s.views, [teamId]: s.views[teamId] ?? { ...EMPTY_VIEW, isLoadingDetail: true, selectedConversationId } } }))
@@ -1007,6 +1043,11 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     return () => {
       if (released) return
       released = true
+      if (teamRoster) {
+        const rosterRemaining = (teamRosterHolders.get(teamId) ?? 1) - 1
+        if (rosterRemaining > 0) teamRosterHolders.set(teamId, rosterRemaining)
+        else teamRosterHolders.delete(teamId)
+      }
       const remaining = (viewHolders.get(teamId) ?? 1) - 1
       if (remaining > 0) {
         viewHolders.set(teamId, remaining)

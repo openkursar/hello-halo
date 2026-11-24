@@ -3,6 +3,7 @@ import { inputsByReply } from '../../chat/transcript'
 import type { Message, Thought } from '../../../types'
 import type { ActivityEntry } from '../../../../shared/apps/app-types'
 import type { BlackboardFinding, BlackboardTask, RosterMember, TeamActivity, TeamConversation } from '../../../../shared/apps/team-types'
+import { isFailedActivity } from '../../../../shared/apps/team-failures'
 
 export type TaskGroup = 'attention' | 'involved' | 'mine' | 'other' | 'reception' | 'automatic'
 export const taskGroups: TaskGroup[] = ['attention', 'mine', 'involved', 'other', 'reception', 'automatic']
@@ -138,7 +139,7 @@ export function taskActivityRows(reports: TaskMemberReport[], activities: TeamAc
 export type TaskActivityKind = 'output' | 'decision' | 'failed'
 
 function activityKind(activity: TeamActivity): TaskActivityKind | null {
-  if (['undelivered', 'timeout', 'error'].includes(activity.status ?? '')) return 'failed'
+  if (isFailedActivity(activity)) return 'failed'
   if (activity.kind === 'decision') return 'decision'
   if (activity.kind === 'finding' || activity.kind === 'run_end') return 'output'
   return null

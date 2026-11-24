@@ -16,7 +16,7 @@ vi.mock('../../../../src/main/apps/runtime/team', async () => ({
   createCoordinationMcpServer: (await import('../../../../src/main/apps/runtime/team/team-tools')).createCoordinationMcpServer,
   getActiveTeamRuntime: () => runtimeRef.current,
 }))
-vi.mock('../../../../src/main/services/space.service', () => ({ getSpace: () => spaceRef }))
+vi.mock('../../../../src/main/services/space.service', () => ({ getSpace: () => spaceRef, hasSpace: () => true }))
 vi.mock('../../../../src/main/apps/manager', () => ({ getAppManager: () => null }))
 vi.mock('../../../../src/main/http/websocket', () => ({ broadcastToAll: vi.fn() }))
 vi.mock('../../../../src/main/foundation/window.service', () => ({ sendToRenderer: vi.fn() }))

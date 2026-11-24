@@ -127,12 +127,46 @@ describe('team board reloads', () => {
     expect(env.teamGetDetail).toHaveBeenCalledTimes(1)
     expect(env.teamListEpochs).not.toHaveBeenCalled()
 
-    // Who is working moved: the roster and the task rows follow, the run history does not.
+    // Who is working moved: the task rows take the active list in place and the team page
+    // re-reads its roster; the task list and the run history are not read again.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    useTeamStore.setState({ conversations: [{ epochId: 'e1', active: false }, { epochId: 'e2', active: true }] as never })
+    useTeamStore.getState().applyTeamUpdated({ teamId: 't', changed: ['status', 'work'], activeEpochIds: ['e1'] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(useTeamStore.getState().conversations.map(item => [item.epochId, item.active])).toEqual([['e1', true], ['e2', false]])
+    expect(env.teamGetDetail).toHaveBeenCalledTimes(2)
+    expect(env.teamListConversations).toHaveBeenCalledTimes(1)
+    expect(env.teamListEpochs).not.toHaveBeenCalled()
+
+    // A pulse without the list (a joined node) reads the roster and the tasks again.
+    useTeamStore.getState().applyTeamUpdated({ teamId: 't', changed: ['status', 'work'] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(env.teamGetDetail).toHaveBeenCalledTimes(3)
+    expect(env.teamListConversations).toHaveBeenCalledTimes(2)
+  })
+
+  it('takes a work pulse in place on a surface that shows one task, reading nothing again', async () => {
+    useTeamStore.setState({ currentTeamId: null })
+    const release = useTeamStore.getState().retainTeamView('t')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    useTeamStore.setState(s => ({ views: { ...s.views, t: { ...s.views.t, conversations: [{ epochId: 'e1', active: false }] as never } } }))
+    env.teamGetDetail.mockClear(); env.teamListConversations.mockClear(); env.teamListEpochs.mockClear()
+    useTeamStore.getState().applyTeamUpdated({ teamId: 't', changed: ['status', 'work'], activeEpochIds: ['e1'] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(useTeamStore.getState().views.t.conversations[0].active).toBe(true)
+    expect(env.teamGetDetail).not.toHaveBeenCalled()
+    expect(env.teamListConversations).not.toHaveBeenCalled()
+    expect(env.teamListEpochs).not.toHaveBeenCalled()
+    release()
+
+    const page = useTeamStore.getState().retainTeamView('t', { teamRoster: true })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    env.teamGetDetail.mockClear(); env.teamListConversations.mockClear()
     useTeamStore.getState().applyTeamUpdated({ teamId: 't', changed: ['status', 'work'], activeEpochIds: [] })
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(env.teamGetDetail).toHaveBeenCalledTimes(2)
-    expect(env.teamListConversations).toHaveBeenCalledTimes(2)
-    expect(env.teamListEpochs).not.toHaveBeenCalled()
+    expect(env.teamGetDetail).toHaveBeenCalledTimes(1)
+    expect(env.teamListConversations).not.toHaveBeenCalled()
+    page()
   })
 
   it('indexes members once per detail', () => {
