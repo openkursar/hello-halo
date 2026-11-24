@@ -22,8 +22,8 @@ export function TeamList({ onNewTeam, onJoinOffice }: { onNewTeam: () => void; o
         {!teams.length && !error && <div className="mb-6 rounded-2xl border border-border bg-secondary/20 px-5 py-8 text-center sm:py-10"><span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-background text-primary"><Users size={23} /></span><h2 className="text-base font-medium">{t('Bring your digital humans together')}</h2><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">{t('Create a team to work on tasks together, or join an existing team.')}</p></div>}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {teams.map(team => {
-            const members = team.roster.slice(0, 5)
-            const remaining = team.roster.length - members.length
+            const members = team.localMembers.slice(0, 5)
+            const remaining = Math.max(0, team.memberCount - members.length)
             const working = team.status === 'running'
             const attention = team.status === 'waiting_user' || team.hasWaitingUser || team.status === 'error'
             return <button key={team.id} onClick={() => select(team.id)} className="group flex min-h-48 min-w-0 flex-col rounded-xl border border-border bg-card p-5 text-left transition-colors hover:border-primary/40 hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">

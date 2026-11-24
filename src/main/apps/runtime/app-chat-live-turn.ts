@@ -395,11 +395,10 @@ export function injectIntoAppChat(
   conversationId: string,
   text: string,
   provenance?: TranscriptProvenance,
-  references?: ContentReference[],
-  images?: ImageAttachment[]
+  references?: ContentReference[]
 ): boolean {
   const engineText = references && references.length > 0 ? formatReferencesBlock(references, undefined) + text : text
-  const prepared = prepareLiveInput(conversationId, engineText, images)
+  const prepared = prepareLiveInput(conversationId, engineText)
   let recorded: TranscriptMessage | undefined
   // The person's own words: a stop before they were read voids them, marked where they stand.
   const onWithdrawn = (): void => {
@@ -413,8 +412,8 @@ export function injectIntoAppChat(
   // here, so this ordering costs the reader nothing.
   try {
     const sink = peekAppChatSink(conversationId)
-    recorded = provenance || references || images
-      ? sink?.writeUserMessage(text, images, undefined, provenance, references)
+    recorded = provenance || references
+      ? sink?.writeUserMessage(text, undefined, undefined, provenance, references)
       : sink?.writeUserMessage(text)
     if (recorded) sink?.announceLiveInputs?.([recorded])
   } catch (err) {
@@ -431,16 +430,15 @@ export function injectIntoAppChat(
  * What became of a person's addition: added to the running turn, left for a
  * turn of its own because nothing is in flight, or held back because the turn
  * it was meant for was stopped — the person stopped it, so the text goes back
- * to them rather than starting work they just halted. A refusal while work is
- * still live also returns the addition to its author, never to a new turn.
+ * to them rather than starting work they just halted.
  */
-export type AppChatAdditionOutcome = 'delivered' | 'no_turn' | 'stopped' | 'refused'
+export type AppChatAdditionOutcome = 'delivered' | 'no_turn' | 'stopped'
 
-const ownerAdditions = createTurnGate<{ text: string; provenance?: TranscriptProvenance; references?: ContentReference[]; images?: ImageAttachment[] }>({
+const ownerAdditions = createTurnGate<{ text: string; provenance?: TranscriptProvenance; references?: ContentReference[] }>({
   isBusy: isAppChatConversationGenerating,
   getJobIdentity: () => 'owner',
   getActiveIdentity: getAppChatTurnIdentity,
-  deliverMidTurn: (key, message) => injectIntoAppChat(key, message.text, message.provenance, message.references, message.images),
+  deliverMidTurn: (key, message) => injectIntoAppChat(key, message.text, message.provenance, message.references),
   dispatch: async () => { throw new Error('An addition requires a live turn') },
 })
 
@@ -458,8 +456,7 @@ export async function injectIntoAppChatWhenLive(
   conversationId: string,
   text: string,
   provenance?: TranscriptProvenance,
-  references?: ContentReference[],
-  images?: ImageAttachment[]
+  references?: ContentReference[]
 ): Promise<AppChatAdditionOutcome> {
   if (!hasLiveTurn(conversationId) && isAppChatConversationGenerating(conversationId)) {
     console.log(`${LOG_TAG} Waiting for the turn of ${conversationId} to begin before adding to it`)
@@ -483,7 +480,7 @@ export async function injectIntoAppChatWhenLive(
       return 'stopped'
     }
   }
-  return ownerAdditions.tryDeliverLive(conversationId, { text, provenance, references, images })
+  return ownerAdditions.tryDeliverLive(conversationId, { text, provenance, references })
     ? 'delivered'
-    : isAppChatConversationGenerating(conversationId) ? 'refused' : 'no_turn'
+    : 'no_turn'
 }

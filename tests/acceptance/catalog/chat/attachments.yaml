@@ -178,40 +178,6 @@ scenarios:
         zh: 工具读取的是指定文件，回复可对应文件内容。
     requirements:
       - halo-sdk
-  - id: chat.attachments.live-image
-    title:
-      en: Add images while a reply is running
-      zh: 回复进行时附加图片
-    verifies:
-      - image
-    platforms: *a1
-    profiles:
-      - regression
-    evidence: app-e2e
-    mode: scripted
-    automation: planned
-    preconditions:
-      - en: A vision-capable scripted model is running a controllable tool in an isolated chat.
-        zh: 隔离对话中，支持图片的脚本化模型正在执行可控制的工具。
-    steps:
-      - en: Add an image with or without text and submit before allowing the tool to finish.
-        zh: 在工具结束前附加图片，可带文字或仅图片，然后发送。
-    expected:
-      - en: The next model request receives the image; the composer clears it, pending and accepted additions show compact icon-and-name chips before the text, and the appended record retains them after reload. Clicking a chip opens that image in the viewer; images are not expanded inline.
-        zh: 下一模型请求收到图片；输入框清空已发送图片，等待接收和已接收的附加消息均在文字前显示图标加名称的小胶囊，重新打开后仍保留。点击胶囊可查看对应图片，不在附加区直接展开大图。
-      - en: A refused addition restores its attachments alongside any newly attached images without interrupting the running reply; a turn that has already ended uses the normal-send fallback with all attachments.
-        zh: 附加被拒绝时恢复原附件并保留之后新加的图片，且不中断当前回复；原轮次已经结束时，正常发送回退携带全部附件。
-    variants:
-      surface:
-        - space
-        - digital-human
-        - local-team
-      content:
-        - image-only
-        - image-and-text
-    notes:
-      en: Composer, transport, engine handoff and record boundaries have unit coverage; the complete application journey still needs executable acceptance coverage. Automation run-detail inputs and remote-team injection are not extended.
-      zh: 输入框、传输、引擎交接及记录边界已有单测；完整应用流程仍缺可执行验收。自动运行详情输入框及远程团队附加不在扩展范围。
   - id: chat.attachments.remove
     title:
       en: Remove an attachment before sending

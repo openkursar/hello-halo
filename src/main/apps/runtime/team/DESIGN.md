@@ -225,10 +225,7 @@ Bootstrap owns cross-module subscriptions and disposes them before their stores.
   notices merge into a following turn. A lead on another machine gets a
   15-second coalescing window instead, because its busyness is not visible here
   and an older build runs each notice as a turn of its own. Completed tasks are
-  checked before handoff and again before a deferred turn starts. A member that
-  was asked by a teammate, ended normally and wrote back to nobody (no message to
-  the asker, no finding) has its closing text filed as an `ok` `reply` activity to
-  the asker (`recordReply`), so the asker's delegated subtask can settle. Only failed
+  checked before handoff and again before a deferred turn starts. Only failed
   handoffs have retry timers.
   An ending carries the origin of the turn it describes, and only a guest's
   travels on: a notice reporting what a guest's request produced wakes the lead
@@ -436,8 +433,7 @@ the notice is delivered, at the time each notice is handed to the mailbox.
 
 This deliberately accepts a bounded duplicate of an explicitly sent result for
 coordination context; it does not convert a final reply into another team message
-or suppress any member-ending notice. The one record it adds is the `reply`
-activity above for a member that answered nobody: a board entry, never a wake. The report explicitly says that excerpts
+or suppress any member-ending notice. The report explicitly says that excerpts
 are not addressed to the lead and do not prove the requester received a reply.
 They are neither instructions nor a claim that the task is complete. Human
 conversations do not participate, and absent trigger origin defaults to human.

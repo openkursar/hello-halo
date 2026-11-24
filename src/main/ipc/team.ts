@@ -12,7 +12,6 @@ import type { TeamService } from '../apps/team'
 import type { OfficeScope } from '../apps/federation/index'
 import type {
   CreateTeamInput,
-  TeamListNativeTasksInput,
   UpdateTeamInput,
   TeamMemberInput,
   UpdateTeamMemberInput,
@@ -20,7 +19,6 @@ import type {
   ProposedMember,
   TeamRunTrigger,
   TeamTriggerInput,
-  TeamOutputFilter,
 } from '../../shared/apps/team-types'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 
@@ -49,10 +47,6 @@ async function handle<T>(label: string, fn: (service: TeamService) => Promise<T>
 }
 
 export function registerTeamIpc(): void {
-  ipcMain.handle(TEAM_IPC.listNativeTasks, async (_e, input: TeamListNativeTasksInput) =>
-    handle('team:list-native-tasks', (s) => s.listNativeTasks(input))
-  )
-
   ipcMain.handle(TEAM_IPC.list, async (_e, spaceId?: string) =>
     handle('team:list', (s) => s.listTeamItems(spaceId))
   )
@@ -137,12 +131,6 @@ export function registerTeamIpc(): void {
 
   ipcMain.handle(TEAM_IPC.listArtifacts, async (_e, teamId: string) =>
     handle('team:list-artifacts', (s) => s.listArtifacts(teamId))
-  )
-
-  ipcMain.handle(TEAM_IPC.listOutputs, async (_e, input: { teamId: string; offset?: number; limit?: number } & TeamOutputFilter) =>
-    handle('team:list-outputs', (s) => s.listOutputs(input.teamId, {
-      offset: input.offset, limit: input.limit, since: input.since, text: input.text, textEpochIds: input.textEpochIds,
-    }))
   )
 
   // ── team:chat-messages — a member's team-channel chat history for ONE run ──

@@ -19,36 +19,6 @@ Publication ownership rules are supplied by the engine-independent
 facade. The team store remains authoritative; the library stores no mirror of
 published refs and imports no Halo application code.
 
-The homepage reads `listNativeTasks({ spaceId, limit, cursor })`: a bounded,
-recency-ordered page of native conversation metadata for persistent teams. A run
-joins it once a person has written into it: the first human turn stamps the epoch's
-`first_human_turn_at` (schema v27), publishes the epoch row so replicas carry the
-stamp (earliest wins, a null never clears it) and emits a team update; the list
-query and its partial index share one predicate. IM chats are answered in their IM app, so
-their projection stays read-only; runs are writable in place. Hosted teams use their owning space; joined teams qualify through a local member
-installed in that space. The cursor is scoped to that space and ordered by last
-activity plus epoch id. Page projection reads only selected-epoch statistics,
-without transcripts or artifact counts. This is separate from the workbench's
-complete per-team list. IPC and remote HTTP expose the same service contract.
-
-Optional `epochIds` resolves persisted pins independently of the recency page,
-using the identical local/joined, native, non-ephemeral scope. It accepts at most
-100 nonempty string IDs, cannot accompany a cursor, and returns `nextCursor: null`.
-An empty array resolves nothing; missing or out-of-scope IDs are omitted. The
-normal bounded limit still applies (default 30, maximum 100); pin refreshes use
-`limit: 100`. HTTP encodes `epochIds` as a JSON query array. Filtering occurs in
-SQL before the candidate limit, so old pins do not require scanning recent pages.
-
-`scope: 'mine'` narrows the recency page to what concerns the viewer, again in
-SQL before the candidate limit so other people's tasks cannot crowd a page. A
-task qualifies when the viewer started it (`task_created_by`), a decision awaits
-the viewer on it (ids taken from the in-memory pending list), it predates
-creator tracking in a team with no other person's members, or one of the
-viewer's digital humans took part and it moved within the last 7 days. Running
-tasks fall inside that window because a turn stamps `last_activity_at` on entry.
-`startedBy` carries the starter's display name when the entry member belongs to
-someone else. Pin lookups by `epochIds` are never scoped.
-
 The store does not execute agents, route messages or own transport handlers.
 Business rules live in the service; live coordination belongs to `runtime/team`.
 
@@ -309,10 +279,7 @@ logged), written through on every change.
   (`spaceCoordinatorAppId(conversationId)`, `shared/apps/team-types`), which
   also occupies a member row (`member_name = 'coordinator'`, `is_lead`,
   `is_system_coordinator`, `ai_provisioned = 0` so dissolve never tries to
-  uninstall an app that does not exist). It is named, once, after the space
-  conversation's title, falling back to the first collaborator's brief when the
-  conversation has none; the name is also the collaboration room's label.
-  Consequences the code keeps:
+  uninstall an app that does not exist). Consequences the code keeps:
   - the sentinel has no app record, so anything keyed on "the app's space"
     reads the team's `owning_space_id` for it instead (`listArtifacts`, and the
     runtime's `createMemberWorkDirResolver`).
@@ -345,13 +312,6 @@ logged), written through on every change.
   - Published outputs are projected from findings and task results, independently
     of the current roster. Removing a publisher cannot hide its earlier files;
     opening still requires a known local producer or the existing owner fetch.
-    `listOutputs` pages the same projection team-wide (one row per epoch and
-    ref, at its latest declaration, newest first) for the team page's Outputs
-    panel; a narrow reader is filtered to its visible producers in SQL so
-    totals and pages stay consistent. Time (`since`) and text filters also
-    apply in SQL after the latest-declaration grouping; text matches the
-    ref's file name and member names, while task titles, derived in the
-    renderer, arrive as `textEpochIds`.
   - The first `spawn_agent` lazily ensures the conversation's scope, then adds
     a participant. The host captures the source model, engine and effective
     permissions; the model supplies only its assignment and optional name or
@@ -483,16 +443,8 @@ Malformed business metadata cannot abort application of an otherwise valid epoch
 replication record.
 
 Resource sealing (`stopped`) preserves the task and can resume its existing
-context. Explicit archival completes the task and ends its execution. Only the
-board decides the stored end: at least one board subtask with all of them done
-seals `completed`; anything else is sealed `ended` (a person closed it unfinished)
-so the list can tell it apart from finished work. Work handed out by message alone
-is read as done by the list from the exchanges, but that reading is a projection
-and never written as an end state. `task_ended_by` keeps the viewer identity
-of who closed it (cleared whenever the task opens again). Only the hosting node
-archives: a joined node refuses, since its seal would never reach the host, and
-office-member credentials cannot reach the archive route. Only a human request
-may reopen a completed task; a background wake cannot unarchive it.
+context. Explicit archival completes the task and ends its execution. Only a
+human request may reopen a completed task; a background wake cannot unarchive it.
 IM `/clear` uses a distinct terminal `cleared` reason: the next inbound message
 creates a fresh epoch and model context. Looking up a task never wakes it.
 Creating a native task always creates a unique chat key, including when an entry

@@ -27,9 +27,18 @@ interface BaseOption {
   url: string
 }
 
+/** Navigate to Settings and scroll to the Remote Access section. */
+function openRemoteSettings() {
+  useAppStore.getState().navigate('settings')
+  // The settings page renders all sections in one scroll container; defer the
+  // scroll until after the view switch has mounted the target section.
+  setTimeout(() => {
+    document.getElementById('remote')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, 100)
+}
+
 export function HttpTriggerCard({ kind, id }: HttpTriggerCardProps) {
   const { t } = useTranslation()
-  const openRemoteSettings = useAppStore(state => state.openRemoteAccessSettings)
   const [expanded, setExpanded] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [status, setStatus] = useState<RemoteAccessStatus | null>(null)

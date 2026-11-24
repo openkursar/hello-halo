@@ -44,7 +44,6 @@ const getOpenConversationEpoch = vi.fn<[string, string], { id: string } | null>(
 const listEpochsByTeam = vi.fn<[string], Array<{ id: string }>>()
 const getTeamById = vi.fn<[string], { leadAppId: string | null; ephemeral?: boolean } | null>()
 const listEpochs = vi.fn<[string], unknown[]>()
-const listNativeTasks = vi.fn()
 const getTeamDetail = vi.fn<[string], unknown>()
 const getEpochRoster = vi.fn<[string, string], unknown>()
 const getEpochBoard = vi.fn<[string, string], unknown>()
@@ -52,7 +51,6 @@ const sendToMember = vi.fn<[unknown], Promise<unknown>>()
 const stopMember = vi.fn<[unknown], Promise<unknown>>()
 const listConversations = vi.fn<[string], unknown[]>()
 const listArtifacts = vi.fn<[string, string?], Promise<unknown[]>>()
-const listOutputs = vi.fn<[string, { offset?: number; limit?: number; producers?: string[] }?], unknown>()
 
 vi.mock('../../../../src/main/apps/team', async () => ({
   workMemberPrincipalId: (await vi.importActual<typeof import('../../../../src/main/apps/team/work-members')>('../../../../src/main/apps/team/work-members')).workMemberPrincipalId,
@@ -60,7 +58,6 @@ vi.mock('../../../../src/main/apps/team', async () => ({
     getTeam: (teamId: string) => getTeamById(teamId),
     openTeamDetail: async (teamId: string) => getTeamDetail(teamId),
     listEpochs: (teamId: string) => listEpochs(teamId),
-    listNativeTasks: (input: unknown) => listNativeTasks(input),
     getTeamDetail: (teamId: string) => getTeamDetail(teamId),
     getEpochRoster: (teamId: string, epochId: string) => getEpochRoster(teamId, epochId),
     getEpochBoard: (teamId: string, epochId: string) => getEpochBoard(teamId, epochId),
@@ -68,7 +65,6 @@ vi.mock('../../../../src/main/apps/team', async () => ({
     stopMember: (input: unknown) => stopMember(input),
     listConversations: (teamId: string) => listConversations(teamId),
     listArtifacts: (teamId: string, epochId?: string) => listArtifacts(teamId, epochId),
-    listOutputs: (teamId: string, page?: { offset?: number; limit?: number; producers?: string[] }) => listOutputs(teamId, page),
   }),
   getTeamStore: () => ({
     listMembersByTeam: (teamId: string) => listMembersByTeam(teamId),
@@ -235,71 +231,6 @@ async function expectConversationRequired(res: Response, listed: boolean): Promi
   }
 }
 
-describe('GET /api/teams/native-tasks', () => {
-  it('delegates the bounded space query without resolving a team ID', async () => {
-    const page = { items: [{ epochId: 'task-1', teamId: 'team-1' }], nextCursor: 'next' }
-    listNativeTasks.mockReturnValueOnce(page)
-    await withServer(buildApp(null), async base => {
-      const response = await fetch(`${base}/api/teams/native-tasks?spaceId=space-1&limit=20&cursor=previous`)
-      expect(response.status).toBe(200)
-      expect(await response.json()).toEqual({ success: true, data: page })
-    })
-    expect(listNativeTasks).toHaveBeenCalledWith({ spaceId: 'space-1', limit: 20, cursor: 'previous' })
-    expect(getTeamById).not.toHaveBeenCalled()
-  })
-
-  it.each([{ epochIds: ['old-task', 'missing'] }, { epochIds: [] }])('passes JSON exact IDs $epochIds to the scoped service', async ({ epochIds }) => {
-    const page = { items: [], nextCursor: null }
-    listNativeTasks.mockReturnValueOnce(page)
-    await withServer(buildApp(null), async base => {
-      const query = new URLSearchParams({ spaceId: 'space-1', epochIds: JSON.stringify(epochIds), limit: '100' })
-      const response = await fetch(`${base}/api/teams/native-tasks?${query}`)
-      expect(await response.json()).toEqual({ success: true, data: page })
-    })
-    expect(listNativeTasks).toHaveBeenCalledWith({ spaceId: 'space-1', epochIds, limit: 100 })
-  })
-
-  it.each(['broken', 'null', '{}', '"task"', '[1]', '[""]', '["  "]', JSON.stringify(Array(101).fill('task'))])(
-    'rejects invalid JSON exact IDs %s', async epochIds => {
-      await withServer(buildApp(null), async base => {
-        const query = new URLSearchParams({ spaceId: 'space-1', epochIds })
-        const response = await fetch(`${base}/api/teams/native-tasks?${query}`)
-        expect(response.status).toBe(400)
-        expect((await response.json()).success).toBe(false)
-      })
-      expect(listNativeTasks).not.toHaveBeenCalled()
-    },
-  )
-
-  it('rejects office credentials before enumerating local tasks', async () => {
-    await withServer(buildApp('X'), async base => {
-      const response = await fetch(`${base}/api/teams/native-tasks?spaceId=space-1`)
-      expect(response.status).toBe(403)
-      expect(await response.json()).toEqual({ success: false, error: 'Forbidden' })
-    })
-    expect(listNativeTasks).not.toHaveBeenCalled()
-  })
-
-  it.each(['', '?spaceId=a&spaceId=b', '?spaceId=a&limit=1&limit=2', '?spaceId=a&cursor=x&cursor=y', '?spaceId=a&epochIds=[]&epochIds=[]', '?spaceId=a&epochIds=[]&cursor='])(
-    'rejects malformed query %s', async query => {
-      await withServer(buildApp(null), async base => {
-        const response = await fetch(`${base}/api/teams/native-tasks${query}`)
-        expect(response.status).toBe(400)
-        expect((await response.json()).success).toBe(false)
-      })
-      expect(listNativeTasks).not.toHaveBeenCalled()
-    },
-  )
-
-  it('reports service validation errors without claiming success', async () => {
-    listNativeTasks.mockImplementationOnce(() => { throw new Error('Invalid native task cursor') })
-    await withServer(buildApp(null), async base => {
-      const response = await fetch(`${base}/api/teams/native-tasks?spaceId=a&cursor=invalid`)
-      expect(await response.json()).toEqual({ success: false, error: 'Invalid native task cursor' })
-    })
-  })
-})
-
 // ── Cross-office isolation ────────────────────────────────────────────────
 
 describe('cross-office isolation on team read routes', () => {
@@ -340,7 +271,6 @@ describe('cross-office isolation on team read routes', () => {
       '/api/teams/Y/epochs/e1/board',
       '/api/teams/Y/epochs/e1/roster',
       '/api/teams/Y/epochs/e1/artifacts',
-      '/api/teams/Y/outputs',
     ]
     await withServer(buildApp('X'), async (base) => {
       for (const p of paths) {
@@ -657,36 +587,6 @@ describe('GET /api/teams/:teamId/artifacts scope projection', () => {
       const body = await res.json()
       expect(body.data).toEqual([])
     })
-  })
-})
-
-describe('GET /api/teams/:teamId/outputs', () => {
-  it('passes the page through and lists every producer for the owner', async () => {
-    listOutputs.mockReturnValue({ outputs: [], total: 0 })
-    await withServer(buildApp(null), async (base) => {
-      const body = await (await fetch(`${base}/api/teams/X/outputs?offset=30&limit=30`)).json()
-      expect(body).toEqual({ success: true, data: { outputs: [], total: 0 } })
-    })
-    expect(listOutputs).toHaveBeenLastCalledWith('X', { offset: 30, limit: 30, producers: undefined })
-  })
-
-  it('passes the time and text filters through', async () => {
-    listOutputs.mockReturnValue({ outputs: [], total: 0 })
-    await withServer(buildApp(null), async (base) => {
-      expect((await fetch(`${base}/api/teams/X/outputs?since=1000&q=plan&epochs=e1,e2`)).status).toBe(200)
-    })
-    expect(listOutputs).toHaveBeenLastCalledWith('X', expect.objectContaining({ since: 1000, text: 'plan', textEpochIds: ['e1', 'e2'] }))
-  })
-
-  it('narrows a narrow reader to its own files before paging, so the total is its own', async () => {
-    listMembersByTeam.mockReturnValue([
-      { appId: 'member-self', memberIdentity: 'id-reader', scopeJson: JSON.stringify({ visibility: 'assigned', discoverable: false }) },
-    ])
-    listOutputs.mockReturnValue({ outputs: [], total: 0 })
-    await withServer(buildApp('X'), async (base) => {
-      expect((await fetch(`${base}/api/teams/X/outputs`)).status).toBe(200)
-    })
-    expect(listOutputs).toHaveBeenLastCalledWith('X', { offset: undefined, limit: undefined, producers: ['member-self'] })
   })
 })
 

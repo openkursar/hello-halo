@@ -22,15 +22,9 @@ import { TaskStatusDot } from '../pulse/TaskStatusDot'
 import { appChatSessionLabel } from './conversation-row-format'
 import { trackHome } from '../../services/home-telemetry'
 import { openDigitalHumanChat } from '../../utils/conversation-navigation'
-import { buildTeamRows, useTeamConversationRows, type TeamListRow } from '../../hooks/useTeamConversationRows'
-import { TeamConversationRow } from './TeamConversationRow'
-import { useConversationListPrefs } from '../../stores/conversation-list-prefs.store'
-
-const EMPTY_GROUPS: Record<string, boolean> = {}
 
 /** One line of the list: a section heading, a space conversation, or a digital human's. */
 type HistoryItem =
-  | TeamListRow
   | { type: 'header'; key: string; label: string }
   | { type: 'conversation'; key: string; conversation: ConversationMeta }
   | { type: 'digital-human'; key: string; row: AppChatConversationRow }
@@ -80,11 +74,11 @@ export function ChatHistoryPanel() {
   // The regular conversation is not "current" while a digital human is on screen.
   const currentConversationId = useChatStore(state => {
     const spaceState = state.spaceStates.get(state.currentSpaceId ?? '')
-    return spaceState?.selectedAppChat || spaceState?.selectedTeamChat ? undefined : spaceState?.currentConversationId ?? undefined
+    return spaceState?.selectedAppChat ? undefined : spaceState?.currentConversationId ?? undefined
   })
   const selectedAppChatId = useChatStore(state => {
     const spaceState = state.spaceStates.get(state.currentSpaceId ?? '')
-    return spaceState?.selectedTeamChat ? undefined : spaceState?.selectedAppChat?.conversationId
+    return spaceState?.selectedAppChat?.conversationId
   })
   const currentSpaceId = useChatStore(state => state.currentSpaceId)
   const currentSpace = useSpaceStore(state => state.currentSpace)
@@ -96,31 +90,17 @@ export function ChatHistoryPanel() {
   // Only read while the list is open; the sidebar keeps its own copy warm.
   const appChatRows = useAppChatConversationRows(currentSpaceId, { enabled: isExpanded })
   const toggleAppChatPin = useAppChatPinsStore(s => s.toggleAppChatPin)
-  const teamList = useTeamConversationRows(currentSpaceId, isExpanded)
-  const selectedTeamChat = useChatStore(s => s.spaceStates.get(currentSpaceId ?? '')?.selectedTeamChat)
-  const groups = useConversationListPrefs(s => s.appGroupOpen[currentSpaceId ?? '']) ?? EMPTY_GROUPS
-  const setGroupOpen = useConversationListPrefs(s => s.setAppGroupOpen)
-  const teamRows = useMemo(() => buildTeamRows(teamList.tasks, teamList.teams, teamList.pins,
-    id => groups[`team:${id}`] ?? selectedTeamChat?.teamId === id, teamList.hidden), [teamList.tasks, teamList.teams, teamList.pins, teamList.hidden, groups, selectedTeamChat?.teamId])
   const historyItems = useMemo<HistoryItem[]>(() => {
     const conversationItems: HistoryItem[] = conversations.map(conversation => ({ type: 'conversation', key: conversation.id, conversation }))
-    if (appChatRows.length === 0 && teamRows.rows.length === 0 && !teamList.error && !teamList.loading) return conversationItems
-    const pinned: HistoryItem[] = [
-      ...conversationItems.filter(item => item.type === 'conversation' && item.conversation.starred),
-      ...sortDigitalHumanRows(appChatRows.filter(row => row.starred)).map((row): HistoryItem => ({ type: 'digital-human', key: row.id, row })),
-      ...teamRows.pinned,
-    ]
+    if (appChatRows.length === 0) return conversationItems
     return [
-      ...(pinned.length ? [{ type: 'header' as const, key: 'header:pinned', label: t('Pinned') }, ...pinned] : []),
       { type: 'header', key: 'header:digital-humans', label: t('Digital Humans') },
-      ...sortDigitalHumanRows(appChatRows.filter(row => !row.starred)).map((row): HistoryItem => ({ type: 'digital-human', key: row.id, row })),
-      ...teamRows.rows,
-      ...(teamList.error ? [{ type: 'team-retry' as const, key: 'team:retry' }] : []),
+      ...sortDigitalHumanRows(appChatRows).map((row): HistoryItem => ({ type: 'digital-human', key: row.id, row })),
       ...(conversationItems.length > 0 ? [{ type: 'header', key: 'header:conversations', label: t('Conversations') } as HistoryItem] : []),
-      ...conversationItems.filter(item => item.type === 'conversation' && !item.conversation.starred),
+      ...conversationItems,
     ]
-  }, [conversations, appChatRows, teamRows, teamList.error, teamList.loading, t])
-  const totalCount = conversations.length + appChatRows.length + teamList.tasks.length
+  }, [conversations, appChatRows, t])
+  const totalCount = conversations.length + appChatRows.length
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
@@ -568,9 +548,6 @@ export function ChatHistoryPanel() {
   }
 
   const renderListItem = (_index: number, item: HistoryItem) => {
-    if (item.type === 'team-header' || item.type === 'team-item' || item.type === 'team-retry' || item.type === 'team-hidden') return <TeamConversationRow
-      row={item} spaceId={currentSpaceId ?? ''} onToggle={(id, open) => setGroupOpen(currentSpaceId ?? '', `team:${id}`, !open)}
-      onRefresh={teamList.refresh} onSelected={handleClose} />
     if (item.type === 'header') {
       return <div className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground">{item.label}</div>
     }
@@ -597,7 +574,6 @@ export function ChatHistoryPanel() {
             data={historyItems}
             overscan={200}
             computeItemKey={(_index, item) => item.key}
-            endReached={teamList.loadMore}
             itemContent={renderListItem}
           />
         </div>

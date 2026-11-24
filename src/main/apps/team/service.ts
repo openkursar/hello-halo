@@ -24,7 +24,6 @@ import {
   SPACE_COORDINATOR_MEMBER_NAME,
   TEAM_FOLDER_REF_PREFIX,
   isTeamFolderRef,
-  TEAM_OUTPUT_TEXT_EPOCHS_MAX,
 } from '../../../shared/apps/team-types'
 import { provisionLeadSpec } from './lead'
 import { conversationKindOf, deriveConversationLabel, deriveConversationTitle } from './epoch-label'
@@ -38,7 +37,7 @@ import type { AutomationSpec } from '../../../shared/apps/spec-types'
 import type { Artifact } from '../../services/artifact.service'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { AgentModelSelection } from '../../../shared/types/ai-sources'
-import type { TeamStore, NativeTaskScope, SubtaskStats } from './types'
+import type { TeamStore } from './types'
 import type {
   CollabSummary,
   Team,
@@ -60,15 +59,9 @@ import type {
   EpochBoard,
   EpochRoster,
   TeamArtifactGroup,
-  TeamOutputPage,
-  TeamOutputFilter,
   TeamArtifactOpenResult,
   TeamArtifact,
-  TeamActivity,
   TeamConversation,
-  TeamMemberFailure,
-  TeamListNativeTasksInput,
-  TeamNativeTaskPage,
   TeamPendingEscalation,
   RosterMember,
   UpdateTeamMemberInput,
@@ -79,15 +72,10 @@ import type {
   TeamParticipant,
 } from '../../../shared/apps/team-types'
 import { isRemoteMember, toLocalMembers } from '../../../shared/apps/team-types'
-import { delegatedTasks } from '../../../shared/apps/team-delegations'
-import { openMemberFailures } from '../../../shared/apps/team-failures'
 import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
 import { parseSpaceCollabChatKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 
 const LOG_TAG = '[TeamService]'
-
-/** How recently a task someone else started must have moved to still concern the viewer. */
-const NATIVE_TASK_INVOLVED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
 class LegacyTeamBusyError extends Error {}
 
@@ -97,8 +85,6 @@ export interface TeamServiceDeps {
   store: TeamStore
   getViewerIdentity?: () => string
   getConversationMember?: (teamId: string, chatKey: string) => string | undefined
-  /** Per conversation, which of these local members have had a turn there; answering the user directly leaves no team activity. */
-  listAnsweredMembers?: (teamId: string, appIds: readonly string[], epochIds: readonly string[]) => Map<string, string[]>
   /** Live occupancy of the original space conversation, including its reserved turn. */
   isConversationBusy?: (conversationId: string) => boolean
   appManager: AppManagerService
@@ -169,9 +155,8 @@ export interface TeamServiceDeps {
    */
   getPendingEscalations?: () => PendingEscalationRecord[]
   /**
-   * Human name for an IM chatKey (IM session registry) or a collaboration room
-   * (the space conversation's title), used when labeling a conversation.
-   * Absent → the raw chat id / the room's stored title is shown.
+   * Human name for an IM chatKey (IM session registry), used when labeling an IM
+   * conversation. Absent → the raw chat id is shown.
    */
   describeChatKey?: (teamId: string, chatKey: string) => string | null
 }
@@ -304,8 +289,6 @@ export interface TeamService {
   setTrigger(teamId: string, input: TeamTriggerInput, triggerId?: string): TeamTrigger
   removeTrigger(teamId: string, triggerId: string): void
   listArtifacts(teamId: string, epochId?: string): Promise<TeamArtifactGroup[]>
-  /** Every file the team declared across its work, newest first, a page at a time. */
-  listOutputs(teamId: string, page?: { offset?: number; limit?: number; producers?: string[] } & TeamOutputFilter): TeamOutputPage
   /**
    * Resolve a shared file to a path this machine can open. Location-transparent:
    * a teammate's file is fetched from their machine and written here read-only,
@@ -340,8 +323,6 @@ export interface TeamService {
   // ── Conversations (office-shared session objects) ──
   /** Every open conversation of this office, newest first (P0-1: office-wide consistent). */
   listConversations(teamId: string): TeamConversation[]
-  /** Bounded space homepage summaries; never loads transcripts or artifact counts. */
-  listNativeTasks(input: TeamListNativeTasksInput): TeamNativeTaskPage
   /**
    * Open a brand-new native team conversation ("New session") — a fresh,
    * independent context whose input target is the team lead (front-desk mode).
@@ -1093,12 +1074,11 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         id: team.id,
         name: team.name,
         status: liveStatus(team),
-        memberCount: members.length,
+        memberCount: members.filter((m) => !m.isLead).length,
         hasWaitingUser: blockedOnUs || waitingCount > 0,
         waitingCount,
         leadAppId: team.leadAppId,
         localMembers: toLocalMembers(members),
-        roster: [...members].sort((a, b) => Number(b.isLead) - Number(a.isLead)).map(m => ({ appId: m.appId, memberName: m.memberName, isLead: m.isLead })),
         hostNodeId: team.hostNodeId,
         updatedAt: team.updatedAt,
       }
@@ -1657,8 +1637,23 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const groups = new Map<string, { spaceId: string | null; seen: Set<string>; artifacts: TeamArtifact[] }>()
     const createdAt = new Date(epoch.startedAt).toISOString()
 
+    const teamFolderDir = getRuntime()?.teamFolders.sharedDir(teamId, epoch.id) ?? null
     for (const { appId, ref } of refs) {
-      const { spaceId, path } = resolveRef(team, epoch.id, appId, ref)
+      // A coordinating space conversation has no app record; it works in the team's own space.
+      const spaceId = parseSpaceCoordinatorAppId(appId)
+        ? team.owningSpaceId
+        : appManager.getApp(appId)?.spaceId ?? null
+      const workDir = spaceId ? deps.spaces.resolveWorkDir?.(spaceId) ?? null : null
+      const path = isTeamFolderRef(ref)
+        ? teamFolderDir
+          ? join(teamFolderDir, ref.slice(TEAM_FOLDER_REF_PREFIX.length))
+          : ref
+        : isAbsolute(ref)
+          ? ref
+          : workDir
+            ? join(workDir, ref)
+            : ref
+
       let g = groups.get(appId)
       if (!g) {
         g = { spaceId, seen: new Set(), artifacts: [] }
@@ -1669,45 +1664,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       g.artifacts.push(buildRefArtifact(path, ref, spaceId, createdAt))
     }
 
-    return Array.from(groups, ([appId, g]) => ({ appId, memberName: producerName(memberById, appId), spaceId: g.spaceId, epochId: epoch.id, artifacts: g.artifacts }))
-  }
-
-  /** Every file the team declared, newest first, one page at a time. `producers` narrows it to those members' files. */
-  function listOutputs(teamId: string, page: { offset?: number; limit?: number; producers?: string[] } & TeamOutputFilter = {}): TeamOutputPage {
-    const team = requireTeam(teamId)
-    const offset = Math.max(0, Math.floor(page.offset ?? 0))
-    const limit = Math.min(100, Math.max(1, Math.floor(page.limit ?? 30)))
-    const since = Number.isFinite(page.since) ? page.since : undefined
-    const text = page.text?.trim().slice(0, 200) || undefined
-    const textEpochIds = text ? page.textEpochIds?.slice(0, TEAM_OUTPUT_TEXT_EPOCHS_MAX) : undefined
-    const { rows, total } = store.listOutputRefs(teamId, { offset, limit, producers: page.producers, since, text, textEpochIds })
-    const memberById = new Map(store.listMembersByTeam(teamId).map((m) => [m.appId, m]))
-    const outputs = rows.map(({ epochId, appId, ref, at }) => {
-      const { path } = resolveRef(team, epochId, appId, ref)
-      return { epochId, appId, memberName: producerName(memberById, appId), ref, name: basename(path), path, at }
+    // Membership changes cannot remove a publication from the historical record.
+    return Array.from(groups, ([appId, g]) => {
+      const memberName = memberById.get(appId)?.memberName ??
+        (parseSpaceCoordinatorAppId(appId) ? SPACE_COORDINATOR_MEMBER_NAME : appManager.getApp(appId)?.spec.name ?? '')
+      return { appId, memberName, spaceId: g.spaceId, epochId: epoch.id, artifacts: g.artifacts }
     })
-    return { outputs, total }
-  }
-
-  /** Where a declared ref points on this machine, and the space it was made in. */
-  function resolveRef(team: Team, epochId: string, appId: string, ref: string): { spaceId: string | null; path: string } {
-    // A coordinating space conversation has no app record; it works in the team's own space.
-    const spaceId = parseSpaceCoordinatorAppId(appId)
-      ? team.owningSpaceId
-      : appManager.getApp(appId)?.spaceId ?? null
-    if (isTeamFolderRef(ref)) {
-      const teamFolderDir = getRuntime()?.teamFolders.sharedDir(team.id, epochId) ?? null
-      return { spaceId, path: teamFolderDir ? join(teamFolderDir, ref.slice(TEAM_FOLDER_REF_PREFIX.length)) : ref }
-    }
-    if (isAbsolute(ref)) return { spaceId, path: ref }
-    const workDir = spaceId ? deps.spaces.resolveWorkDir?.(spaceId) ?? null : null
-    return { spaceId, path: workDir ? join(workDir, ref) : ref }
-  }
-
-  // Membership changes cannot remove a publication from the historical record.
-  function producerName(memberById: Map<string, TeamMember>, appId: string): string {
-    return memberById.get(appId)?.memberName ??
-      (parseSpaceCoordinatorAppId(appId) ? SPACE_COORDINATOR_MEMBER_NAME : appManager.getApp(appId)?.spec.name ?? '')
   }
 
   /**
@@ -1772,9 +1734,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       const localStatus = runtime?.getMemberStatus(member.appId)
       const status = member.awaitingDecision ? 'waiting_user'
         : localStatus && localStatus !== 'idle' ? localStatus : store.getParticipantStatus(teamId, member.appId) ?? projected.get(member.appId) ?? 'idle'
-      // The runtime only sees turns on this machine; a joined office learns the rest from the host's roster.
-      const localBusy = runtime?.getMemberBusy(member.appId, teamId) ?? []
-      const busy = localBusy.length ? localBusy : store.getJoinedMemberBusy(teamId, member.appId)
+      const busy = runtime?.getMemberBusy(member.appId, teamId) ?? store.getJoinedMemberBusy(teamId, member.appId) ?? []
       return {
         appId: member.appId, memberName: member.memberName, role: member.role, duty: member.duty,
         isLead: member.isLead, status, ...projectOwnership(member),
@@ -1967,88 +1927,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   function listConversations(teamId: string): TeamConversation[] {
     const team = requireTeam(teamId)
-    return projectConversations(team, store.listEpochsByTeam(teamId))
-  }
-
-  function listNativeTasks(input: TeamListNativeTasksInput): TeamNativeTaskPage {
-    if (!input || typeof input.spaceId !== 'string' || !input.spaceId.trim()) throw new Error('spaceId is required')
-    if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) throw new Error('limit must be a positive integer')
-    if (input.epochIds !== undefined) {
-      if (!Array.isArray(input.epochIds) || input.epochIds.length > 100 ||
-          input.epochIds.some(id => typeof id !== 'string' || !id.trim())) {
-        throw new Error('epochIds must be an array of at most 100 nonempty strings')
-      }
-      if (input.cursor !== undefined) throw new Error('epochIds cannot be combined with cursor')
-    }
-    const limit = Math.min(input.limit ?? 30, 100)
-    let cursor: { at: number; id: string } | undefined
-    if (input.cursor !== undefined) {
-      try {
-        const parsed = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8'))
-        if (parsed.spaceId !== input.spaceId || !Number.isSafeInteger(parsed.at) || typeof parsed.id !== 'string' || !parsed.id) throw new Error('Invalid cursor')
-        cursor = { at: parsed.at, id: parsed.id }
-      } catch {
-        throw new Error('Invalid native task cursor')
-      }
-    }
-    if (input.scope !== undefined && input.scope !== 'mine') throw new Error('scope must be "mine"')
-    const appIds = appManager.listApps({ spaceId: input.spaceId }).map(app => app.id)
-    const pending = deps.getPendingEscalations?.() ?? []
-    const scope: NativeTaskScope | undefined = input.scope === 'mine' && input.epochIds === undefined
-      ? {
-          viewer: deps.getViewerIdentity?.() ?? null,
-          involvedSince: Date.now() - NATIVE_TASK_INVOLVED_WINDOW_MS,
-          attentionEpochIds: [...new Set(pending.filter(e => e.epochId && appIds.includes(e.appId)).map(e => e.epochId!))],
-        }
-      : undefined
-    const rows = store.listNativeTaskEpochs(input.spaceId, appIds, input.epochIds === undefined ? limit + 1 : limit, cursor, input.epochIds, scope)
-    const page = rows.slice(0, limit)
-    const byTeam = new Map<string, TeamEpoch[]>()
-    for (const epoch of page) byTeam.set(epoch.teamId, [...(byTeam.get(epoch.teamId) ?? []), epoch])
-    const projected = new Map<string, TeamNativeTaskPage['items'][number]>()
-    for (const [teamId, epochs] of byTeam) {
-      const team = requireTeam(teamId)
-      for (const item of projectConversations(team, epochs, false, pending)) {
-        projected.set(item.epochId, { ...item, teamName: team.name, spaceId: input.spaceId })
-      }
-    }
-    const last = page.at(-1)
-    return {
-      items: page.map(epoch => projected.get(epoch.id)!),
-      nextCursor: input.epochIds === undefined && rows.length > limit && last
-        ? Buffer.from(JSON.stringify({ spaceId: input.spaceId, at: last.lastActivityAt ?? last.startedAt, id: last.id })).toString('base64url')
-        : null,
-    }
-  }
-
-  /** Who serves which epoch right now: local live sessions on the host, the host's roster snapshot on a joined node. */
-  function busyByEpochOf(team: Team, members: TeamMember[]): Map<string, Set<string>> {
-    const rt = getRuntime()
-    const busyByEpoch = new Map<string, Set<string>>()
-    for (const m of members) {
-      const busy = team.hostNodeId != null ? store.getJoinedMemberBusy(team.id, m.appId) : rt?.getMemberBusy(m.appId, team.id) ?? []
-      for (const b of busy) busyByEpoch.set(b.epochId, (busyByEpoch.get(b.epochId) ?? new Set()).add(m.appId))
-    }
-    return busyByEpoch
-  }
-
-  /** Subtasks per epoch as the task panel settles them: the board's, else the work handed out by message alone. */
-  function settleSubtasks(team: Team, { subtasks, teamwork }: SubtaskStats, busyByEpoch: Map<string, Set<string>>): Map<string, { done: number; open: number }> {
-    const settled = new Map(subtasks)
-    const delegated = [...teamwork].filter(epochId => !subtasks.has(epochId))
-    const messages = store.listExchangesByEpochs(team.id, delegated)
-    for (const epochId of delegated) {
-      const rows = delegatedTasks({ teamId: team.id, epochId, leadAppId: team.leadAppId ?? null, activities: messages.filter(row => row.epochId === epochId), busyAppIds: busyByEpoch.get(epochId) ?? new Set() })
-      const done = rows.filter(row => row.status === 'done').length
-      if (rows.length) settled.set(epochId, { done, open: rows.length - done })
-    }
-    return settled
-  }
-
-  function projectConversations(team: Team, openEpochs: TeamEpoch[], detailed = true, pending?: PendingEscalationRecord[]): TeamConversation[] {
+    const openEpochs = store.listEpochsByTeam(teamId)
     if (openEpochs.length === 0) return []
-    const teamId = team.id
-    const selectedIds = new Set(openEpochs.map(epoch => epoch.id))
+
     const members = store.listMembersByTeam(teamId)
     // An epoch is "active" when some member is serving it right now. On the
     // AUTHORITY that reads local live sessions; on a JOINED (shadow) office the
@@ -2057,15 +1938,17 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     // (`getJoinedMemberBusy`). Without this branch a joiner sees every
     // conversation as idle and its "busy now" list is always empty.
     const isJoined = team.hostNodeId != null
-    const activeEpochIds = new Set(getRuntime()?.getActiveEpochIds?.(teamId))
+    const rt = getRuntime()
+    const activeEpochIds = new Set(rt?.getActiveEpochIds?.(teamId))
     const participantWork = store.getParticipantWorkStates(teamId)
     for (const [epochId, state] of participantWork) if (state.active) activeEpochIds.add(epochId)
-    const busyByEpoch = busyByEpochOf(team, members)
-    for (const epochId of busyByEpoch.keys()) activeEpochIds.add(epochId)
+    for (const m of members) {
+      const busy = isJoined ? store.getJoinedMemberBusy(teamId, m.appId) : rt?.getMemberBusy(m.appId, teamId) ?? []
+      for (const b of busy) activeEpochIds.add(b.epochId)
+    }
     const localWaitingMembers = new Map<string, string[]>()
-    const memberIds = new Set(members.map(member => member.appId))
-    for (const escalation of pending ?? deps.getPendingEscalations?.() ?? []) {
-      if (escalation.teamId !== teamId || !memberIds.has(escalation.appId) || !escalation.epochId || !selectedIds.has(escalation.epochId)) continue
+    for (const escalation of pendingEscalationsForTeam(teamId)) {
+      if (!escalation.epochId) continue
       localWaitingMembers.set(escalation.epochId, [
         ...(localWaitingMembers.get(escalation.epochId) ?? []),
         escalation.appId,
@@ -2073,45 +1956,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
 
     const ownIds = new Set(members.filter(m => !isRemoteMember(m)).map(m => m.appId))
-    const stats = store.getConversationStats(teamId, [...ownIds], openEpochs.map(epoch => epoch.id), detailed)
-    const { involved, outputCounts, unansweredDecisionMembers, teamwork, participants } = stats
-    const subtasks = settleSubtasks(team, stats, busyByEpoch)
-    const answered = detailed ? deps.listAnsweredMembers?.(teamId, [...ownIds], openEpochs.map(epoch => epoch.id)) : undefined
-    // A cleared IM chat takes no further turns, so a failure left in it is history, not a stop to act on.
-    const unfinished = openEpochs.filter(epoch => epoch.workItem?.status !== 'completed' && !(epoch.endedAt !== null && (epoch.endReason === 'completed' || epoch.endReason === 'cleared'))).map(epoch => epoch.id)
-    // The list names a stopped task's failure from its whole record, as the task panel does.
-    const failedRecords = new Map<string, TeamActivity[]>()
-    for (const row of store.listActivityOfFailedEpochs(teamId, unfinished)) {
-      const rows = failedRecords.get(row.epochId)
-      if (rows) rows.push(row)
-      else failedRecords.set(row.epochId, [row])
-    }
-    const failures = new Map<string, TeamMemberFailure>()
-    for (const [epochId, rows] of failedRecords) {
-      const failure = openMemberFailures(rows, busyByEpoch.get(epochId) ?? new Set()).values().next().value
-      if (failure) failures.set(epochId, failure)
-    }
+    const { involved, outputCounts, unansweredDecisionMembers } = store.getConversationStats(teamId, [...ownIds])
     const joinedStatuses = isJoined ? store.getJoinedMemberStatuses(teamId) : null
     const membersByAppId = new Map(members.map(member => [member.appId, member]))
     const memberOrder = new Map(members.map((member, index) => [member.appId, index]))
-    const byRoster = (left: string, right: string) => ((memberOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (memberOrder.get(right) ?? Number.MAX_SAFE_INTEGER)) || left.localeCompare(right)
-    const viewer = deps.getViewerIdentity?.()
-    const ownerNames = new Map<string, string>()
-    for (const member of members) {
-      const name = member.ownerDisplayName?.trim()
-      const owner = member.memberIdentity ?? (isRemoteMember(member) ? member.ownerNodeId : undefined)
-      if (owner && name && !ownerNames.has(owner)) ownerNames.set(owner, name)
-    }
-    const enderName = (epoch: TeamEpoch): string | undefined => {
-      const endedBy = epoch.workItem?.endedBy
-      return endedBy && endedBy !== viewer ? ownerNames.get(endedBy) : undefined
-    }
-    const starterName = (epoch: TeamEpoch): string | undefined => {
-      const createdBy = epoch.workItem?.createdBy
-      if (createdBy && ownerNames.has(createdBy)) return ownerNames.get(createdBy)
-      const entry = epoch.workItem?.entryAppId ? membersByAppId.get(epoch.workItem.entryAppId) : undefined
-      return entry && isRemoteMember(entry) ? entry.ownerDisplayName?.trim() || undefined : undefined
-    }
     return openEpochs.map((epoch) => {
       const chatKey = epoch.chatKey ?? ''
       const kind = epoch.lifecycle === 'run' ? 'run' : conversationKindOf(chatKey)
@@ -2128,11 +1976,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         ...sharedWaiting,
         ...localWaiting,
         ...(participantWork.get(epoch.id)?.waitingAppIds ?? []),
-      ])].sort(byRoster)
-      const createdByMe = !!epoch.workItem?.createdBy && epoch.workItem.createdBy === viewer
-      const startedBy = createdByMe ? undefined : starterName(epoch)
-      const endedBy = enderName(epoch)
-      const participantAppIds = detailed ? [...new Set([...(participants.get(epoch.id) ?? []), ...(answered?.get(epoch.id) ?? []), ...(busyByEpoch.get(epoch.id) ?? []), ...waitingMembers])].sort(byRoster) : []
+      ])].sort((left, right) => {
+        const byRoster = (memberOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (memberOrder.get(right) ?? Number.MAX_SAFE_INTEGER)
+        return byRoster || left.localeCompare(right)
+      })
       return {
         epochId: epoch.id,
         teamId,
@@ -2142,19 +1989,14 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
           : {}),
         workItemId: epoch.workItem?.id ?? epoch.id,
         completed: epoch.workItem?.status === 'completed',
-        ...(epoch.endedAt !== null && (epoch.endReason === 'completed' || epoch.endReason === 'ended') ? { finishedAt: epoch.endedAt } : {}),
-        ...(epoch.endedAt !== null && epoch.endReason === 'ended' ? { endedManually: true, ...(endedBy ? { endedBy } : {}), ...(!!viewer && epoch.workItem?.endedBy === viewer ? { endedByMe: true } : {}) } : {}),
-        createdByMe,
-        ...(startedBy ? { startedBy } : {}),
+        createdByMe: !!epoch.workItem?.createdBy && epoch.workItem.createdBy === deps.getViewerIdentity?.(),
         involvedMe: involved.has(epoch.id),
         triggerType: epoch.triggerType,
         summary: epoch.summary,
         artifactCount: outputCounts.get(epoch.id) ?? 0,
-        ...(subtasks.has(epoch.id) ? { subtasks: subtasks.get(epoch.id) } : {}),
-        ...(teamwork.has(epoch.id) ? { teamwork: true } : {}),
-        label: (kind !== 'collab' && epoch.workItem?.title) || (kind === 'run' ? team.name : deriveConversationLabel(store, epoch, deps.describeChatKey, members)),
-        // IM chats are answered in the IM app; a run is continued in place like a native chat.
-        readonly: kind === 'im' || isReadonlyCollaboration(team, epoch),
+        label: epoch.workItem?.title || (kind === 'run' ? team.name : deriveConversationLabel(store, epoch, deps.describeChatKey, members)),
+        // IM chats are answered in the IM app; native + member chats are writable here.
+        readonly: kind === 'im' || kind === 'run' || isReadonlyCollaboration(team, epoch),
         ...(memberAppId ? { memberAppId } : {}),
         ...(kind === 'im' ? { channel: 'im' } : {}),
         startedAt: epoch.startedAt,
@@ -2163,8 +2005,6 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         waitingUser: waitingMembers.length > 0,
         waitingForMe: localWaiting.length > 0,
         ...(waitingMembers.length > 0 ? { waitingMemberAppIds: waitingMembers } : {}),
-        ...(participantAppIds.length > 0 ? { participantAppIds } : {}),
-        ...(failures.has(epoch.id) ? { failure: failures.get(epoch.id) } : {}),
       }
     })
   }
@@ -2197,27 +2037,16 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   function renameConversation(teamId: string, epochId: string, title: string | null): void {
     requireTeam(teamId)
-    const epoch = store.getEpochById(epochId)
-    // A collaboration room is named after the space conversation it serves; rename that conversation instead.
-    if (epoch && conversationKindOf(epoch.chatKey ?? '') === 'collab') throw new Error('A collaboration room takes the name of its conversation')
     requireRuntime().renameConversationEpoch(teamId, epochId, title)
   }
 
   async function archiveConversation(teamId: string, epochId: string): Promise<void> {
-    // Tasks are ended where the team is hosted, by its owner; a joined node's seal would never reach the host.
-    const team = requireTeam(teamId)
-    if (team.hostNodeId != null) throw new Error('Only the team’s host can end its tasks')
+    requireTeam(teamId)
     const epoch = store.getEpochById(epochId)
     if (!epoch || epoch.teamId !== teamId) throw new Error('Task not found in this team')
-    if (epoch.endedAt !== null && (epoch.endReason === 'completed' || epoch.endReason === 'ended')) return
-    // Only the board decides a stored end state: at least one subtask and all of them done files the work as
-    // finished, even when it was stopped or failed before. Work handed out by message alone has no such record,
-    // so it is ended by a person unfinished; the list may still read it as done from the exchanges themselves.
-    const subtasks = store.getSubtaskStats(teamId, [epochId]).subtasks.get(epochId)
-    const reason = subtasks && subtasks.done > 0 && !subtasks.open ? 'completed' : 'ended'
-    store.updateWorkItem(epochId, { status: 'completed', ...(reason === 'ended' ? { endedBy: deps.getViewerIdentity?.() ?? null } : {}) })
-    await requireRuntime().sealConversationEpoch(teamId, epochId, reason)
-    console.log(`${LOG_TAG} archiveConversation: team=${teamId} epoch=${epochId} reason=${reason}`)
+    store.updateWorkItem(epochId, { status: 'completed' })
+    await requireRuntime().sealConversationEpoch(teamId, epochId, 'completed')
+    console.log(`${LOG_TAG} archiveConversation: team=${teamId} epoch=${epochId}`)
   }
 
   return {
@@ -2250,7 +2079,6 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     pauseTeam,
     dissolveTeam,
     listArtifacts,
-    listOutputs,
     openArtifact,
     listToolAudit,
     listEpochs,
@@ -2259,7 +2087,6 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     sendToMember,
     stopMember,
     listConversations,
-    listNativeTasks,
     openConversation,
     renameConversation,
     archiveConversation,

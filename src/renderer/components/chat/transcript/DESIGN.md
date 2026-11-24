@@ -99,24 +99,19 @@ its receipt time — never a text partition or a fabricated tool result — live
 after reload. Renderer-only thoughts carry the original record; SDK thoughts and
 stored records stay unchanged, and only native thoughts drive the streaming
 bubble's tool-transition detection. A reply that did no work has no process to
-join: its arrivals are drawn after it — a team's as the received line below,
-another conversation's as its own card — never as a process of their own. Live,
-the same holds for the part of a reply after its last split: arrivals with no
-work of its own beside them are drawn after it until work joins them. Thought durations count only native steps. A teammate's delivery
+join: its arrivals are drawn after it as their own cards, never as a process of
+their own. Live, the same holds for the part of a reply after its last split:
+arrivals with no work of its own beside them are cards after it until work
+joins them. Thought durations count only native steps. A teammate's delivery
 that opened a turn (`inputMode: 'turn'`) is that turn's cause, as a person's
 message is: consecutive ones right before the reply they opened are drawn on
-its sender line ("Halo · Received a message from X"), not as rows; while the
+its sender line ("Halo · Received a report from X"), not as rows; while the
 turn runs, those at the transcript's end or before its placeholder are drawn on
-the streaming reply the same way. A team's message with no reply after it (none yet
-and no turn running, or a person's message in between), or that no drawn reply
-claims (older history, remote records), is that same received line on its own;
-consecutive ones from one team share one line, drawn on the run's first row
-(the rest are empty rows), so a team's messages never read as a card. Another
-conversation's message in that place keeps its own card. A search or reference jump to an opener drawn on a
+the streaming reply the same way. One with no reply after it (none yet and no
+turn running, or a person's message in between), and any record no drawn reply
+claims (older history, remote records), is its kind's own card with its usual
+fresh-arrival behaviour. A search or reference jump to an opener drawn on a
 reply lands on that reply and opens its sender line (`openerOwner`).
-The runtime's own wakes to a lead (turn-end reports and periodic checks,
-`isTeamSystemNotice`) are read by the model only and are never drawn — not as
-rows, arrivals, openers or live inputs; the team bar carries that state.
 
 `transcript-rows` attaches an arrival only when the writer's `inputReplyId` names
 the reply right before it across system/injection records, and never a push;

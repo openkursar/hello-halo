@@ -9,12 +9,12 @@ import type { BrowserHostBridge, BrowserPageGone, BrowserTabOpened } from '../sh
 import type { RpcContract, RpcClient } from '../shared/rpc/define'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../shared/types/model-capabilities'
 import type { ReasoningEffortLevel } from '../shared/constants/reasoning-effort'
-import type { AppChatInjectRequest, EscalationResponse } from '../shared/apps/app-types'
+import type { EscalationResponse } from '../shared/apps/app-types'
 import type { UpdaterChannel, UpdaterStatusPayload } from '../shared/types/updater'
 import type { GoalInput } from '../shared/types/goal'
 import type { CanvasContext } from '../shared/types/canvas-context'
 import type { ContentReference } from '../shared/types/content-reference'
-import type { AgentInjectRequest, AgentInjectResult, AgentSendRequest } from '../shared/types/agent-send'
+import type { AgentInjectRequest, AgentSendRequest } from '../shared/types/agent-send'
 import type { Thought, TranscriptPage } from '../shared/types/transcript'
 import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } from '../shared/types/artifact'
 import type { MemoryPressureEvent } from '../shared/types/memory-pressure'
@@ -68,8 +68,6 @@ import { skillsRpc } from '../shared/rpc/contracts/skills.contract'
 import { TEAM_IPC, TEAM_EVENTS } from '../shared/apps/team-types'
 import type {
   CreateTeamInput,
-  TeamListNativeTasksInput,
-  TeamNativeTaskPage,
   UpdateTeamInput,
   TeamMemberInput,
   UpdateTeamMemberInput,
@@ -252,7 +250,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   testMcpConnections: () => Promise<{ success: boolean; servers: unknown[]; error?: string }>
   probeMcpApp: (appId: string) => Promise<{ success: boolean; result?: unknown; error?: string }>
   answerQuestion: (data: { conversationId: string; id: string; answers: Record<string, string> }) => Promise<IpcResponse>
-  injectMessage: (data: AgentInjectRequest) => Promise<IpcResponse<AgentInjectResult>>
+  injectMessage: (data: AgentInjectRequest) => Promise<IpcResponse>
   getEngineCapabilities: (engineId?: EngineId) => Promise<IpcResponse>
   getEngineAvailability: () => Promise<IpcResponse>
   listToolsets: (data: { spaceId: string; conversationId: string }) => Promise<IpcResponse>
@@ -672,7 +670,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; reasoningEffort?: ReasoningEffortLevel; canvasContext?: CanvasContext; references?: ContentReference[]; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
   appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
   // Add a message to the running turn; delivered:false when no turn was in flight
-  appChatInject: (input: AppChatInjectRequest) => Promise<IpcResponse<{ delivered: boolean; stopped?: boolean }>>
+  appChatInject: (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }) => Promise<IpcResponse<{ delivered: boolean; stopped?: boolean }>>
   appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
   appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse<import('../shared/types/transcript').TranscriptMessage[]> & import('../shared/apps/app-types').AppChatEngineMetadata>
   // Paged read, newest page first; messages carry thoughts:null (see appChatMessageThoughts)
@@ -726,8 +724,6 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   teamSetTrigger: (input: { teamId: string; trigger: TeamTriggerInput; triggerId?: string }) => Promise<IpcResponse>
   teamRemoveTrigger: (input: { teamId: string; triggerId: string }) => Promise<IpcResponse>
   teamListArtifacts: (teamId: string) => Promise<IpcResponse>
-  /** Every file the team produced, newest first, one page at a time. */
-  teamListOutputs: (input: { teamId: string; offset?: number; limit?: number } & import('../shared/apps/team-types').TeamOutputFilter) => Promise<IpcResponse<import('../shared/apps/team-types').TeamOutputPage>>
   /**
    * Resolve a shared file to a path this machine can open. Addressed by ref,
    * because a listing's path only resolves for a member running here.
@@ -770,7 +766,6 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   /** Stop a member's running turn, wherever that member runs. */
   teamStopMember: (input: { teamId: string; appId: string; epochId: string }) => Promise<IpcResponse>
   /** Conversations (office-shared session objects). */
-  teamListNativeTasks: (input: TeamListNativeTasksInput) => Promise<IpcResponse<TeamNativeTaskPage>>
   teamListConversations: (teamId: string) => Promise<IpcResponse>
   teamOpenConversation: (input: { teamId: string; title?: string; memberAppId?: string }) => Promise<IpcResponse>
   teamRenameConversation: (input: { teamId: string; epochId: string; title: string | null }) => Promise<IpcResponse>
@@ -1191,7 +1186,6 @@ const api: HaloAPI = {
   teamPause: (teamId) => ipcRenderer.invoke(TEAM_IPC.pause, teamId),
   teamGetDetail: (teamId) => ipcRenderer.invoke(TEAM_IPC.getDetail, teamId),
   teamListArtifacts: (teamId) => ipcRenderer.invoke(TEAM_IPC.listArtifacts, teamId),
-  teamListOutputs: (input) => ipcRenderer.invoke(TEAM_IPC.listOutputs, input),
   teamOpenArtifact: (input) => ipcRenderer.invoke(TEAM_IPC.openArtifact, input),
   teamListTriggers: (teamId) => ipcRenderer.invoke(TEAM_IPC.listTriggers, teamId),
   teamSetTrigger: (input) => ipcRenderer.invoke(TEAM_IPC.setTrigger, input),
@@ -1208,7 +1202,6 @@ const api: HaloAPI = {
   teamLeaveOffice: (input) => ipcRenderer.invoke(TEAM_IPC.leaveOffice, input),
   teamSendToMember: (input) => ipcRenderer.invoke(TEAM_IPC.sendToMember, input),
   teamStopMember: (input) => ipcRenderer.invoke(TEAM_IPC.stopMember, input),
-  teamListNativeTasks: (input) => ipcRenderer.invoke(TEAM_IPC.listNativeTasks, input),
   teamListConversations: (teamId) => ipcRenderer.invoke(TEAM_IPC.listConversations, teamId),
   teamOpenConversation: (input) => ipcRenderer.invoke(TEAM_IPC.openConversation, input),
   teamRenameConversation: (input) => ipcRenderer.invoke(TEAM_IPC.renameConversation, input),

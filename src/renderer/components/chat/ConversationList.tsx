@@ -26,16 +26,13 @@ import { cn } from '../../lib/utils'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { useAppChatConversationRows, type AppChatConversationRow } from '../../hooks/useAppChatConversationRows'
-import { appChatSessionLabel, formatRowTime, taskStatusLabel, type RowHoverCard } from './conversation-row-format'
+import { appChatSessionLabel, formatRowTime } from './conversation-row-format'
 import { appChatAppId, parseAppChatKey } from '../../../shared/apps/im-keys'
 import { NATIVE_SESSION_CHANNEL, NATIVE_DEFAULT_CHAT_ID } from '../../../shared/types/im-channel'
 import type { ConversationMeta, TaskStatus } from '../../types'
 import { markEntry, trackHome, trackNavigate } from '../../services/home-telemetry'
 import { openDigitalHumanChat } from '../../utils/conversation-navigation'
 import { openPersonActivity } from '../../utils/people-navigation'
-import { buildTeamRows, useTeamConversationRows, type TeamListRow } from '../../hooks/useTeamConversationRows'
-import { TeamConversationRow } from './TeamConversationRow'
-import { ConversationGroupHeader } from './ConversationGroupHeader'
 
 // Width constraints (in pixels)
 const MIN_WIDTH = 140
@@ -71,20 +68,17 @@ function appChatRegistryTarget(row: AppChatConversationRow): { channel: string; 
 function hoverCardFor(
   row: Extract<ConversationRow, { type: 'item' | 'dh-item' }>,
   t: (s: string, opts?: Record<string, unknown>) => string,
-  status: TaskStatus,
-): RowHoverCard {
+): { label: string; owner?: string; time?: string } {
   if (row.type === 'dh-item') {
     return {
       label: appChatSessionLabel(row.row, t),
       owner: row.row.digitalHumanName,
       time: formatRowTime(row.row.updatedAt, t),
-      status,
     }
   }
   return {
     label: row.conversation.title || t('New conversation'),
     time: formatRowTime(row.conversation.updatedAt, t),
-    status,
   }
 }
 
@@ -93,7 +87,6 @@ function hoverCardFor(
  * `GroupedVirtuoso`'s separate groups API had a rendering bug where
  * header/item data could desync). */
 type ConversationRow =
-  | TeamListRow
   | { type: 'item'; key: string; conversation: ConversationMeta }
   | { type: 'dh-header'; key: string; appId: string; name: string; uninstalled: boolean; collapsed: boolean }
   /** `standalone` rows sit outside their digital human's section (i.e. in
@@ -181,15 +174,21 @@ function SectionHeaderButton({ section, label, hint, collapsed, attention, onTog
   )
 }
 
-/** A digital human's face, clickable through to its page (activity thread, or the uninstalled page). */
-function PersonAvatarLink({ appId, name, size, className }: {
+/** A digital human's face, clickable through to its page (activity thread). */
+function PersonAvatarLink({ appId, name, size, dimmed, disabled, className }: {
   appId: string
   name: string
   size: number
+  /** Half strength unless this digital human's conversation is open. */
+  dimmed: boolean
+  disabled?: boolean
   className?: string
 }) {
   const { t } = useTranslation()
   const face = <AutomationAvatar name={name} size={size} />
+  if (disabled) {
+    return <span className={cn('flex shrink-0', dimmed && 'opacity-50 theme-dark:opacity-70', className)}>{face}</span>
+  }
   return (
     <button
       type="button"
@@ -201,7 +200,8 @@ function PersonAvatarLink({ appId, name, size, className }: {
       title={t('View {{name}}', { name })}
       aria-label={t('View {{name}}', { name })}
       className={cn(
-        'flex shrink-0 cursor-pointer rounded-full transition-transform ease-halo hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+        'flex shrink-0 rounded-full transition-[opacity,transform] ease-halo hover:opacity-100 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+        dimmed && 'opacity-50 theme-dark:opacity-70 theme-dark:hover:opacity-100',
         className
       )}
     >
@@ -293,8 +293,6 @@ export const ConversationList = memo(function ConversationList({
   })
   const layoutConfig = useAppStore(state => state.config?.layout)
 
-  const selectedTeamChat = useChatStore(state => state.spaceStates.get(state.currentSpaceId ?? '')?.selectedTeamChat)
-  const teamList = useTeamConversationRows(currentSpaceId)
   const allAppChatRows = useAppChatConversationRows(currentSpaceId)
   const toggleAppChatPin = useAppChatPinsStore(s => s.toggleAppChatPin)
 
@@ -415,14 +413,17 @@ export const ConversationList = memo(function ConversationList({
   /** Hovered row's identity card — rows truncate their title and the
    * collapsed rail shows no title at all, so both lean on this. `owner` is
    * set for a digital human's session. */
-  const [hoverCard, setHoverCard] = useState<(RowHoverCard & {
+  const [hoverCard, setHoverCard] = useState<{
+    label: string
+    owner?: string
+    time?: string
     top: number
     left: number
-  }) | null>(null)
+  } | null>(null)
 
   const showHoverCard = useCallback((
     el: HTMLElement,
-    card: RowHoverCard,
+    card: { label: string; owner?: string; time?: string },
   ) => {
     const r = el.getBoundingClientRect()
     setHoverCard({ ...card, top: r.top + r.height / 2, left: r.right + 8 })
@@ -440,20 +441,8 @@ export const ConversationList = memo(function ConversationList({
     el.style.top = `${top}px`
   }, [hoverCard])
 
-  const teamRows = useMemo(() => buildTeamRows(teamList.tasks, teamList.teams, teamList.pins,
-    id => auto.apps.has(`team:${id}`) || (appGroupChoices[`team:${id}`] ?? selectedTeamChat?.teamId === id), teamList.hidden),
-  [teamList.tasks, teamList.teams, teamList.pins, teamList.hidden, auto.apps, appGroupChoices, selectedTeamChat?.teamId])
-  useEffect(() => {
-    if (!selectedTeamChat) return
-    updateAutoOpen(prev => ({ sections: new Set(prev.sections).add('digital-humans'), apps: new Set(prev.apps).add(`team:${selectedTeamChat.teamId}`) }))
-  }, [selectedTeamChat?.teamId, selectedTeamChat?.epochId, updateAutoOpen])
-  const pinnedRows = useMemo<ConversationRow[]>(() => [...buildPinnedRows(conversations, allAppChatRows), ...teamRows.pinned].sort((a, b) => {
-    const time = (row: ConversationRow) => row.type === 'team-item' ? row.task.lastActivityAt : row.type === 'dh-item' ? row.row.updatedAt : row.type === 'item' ? Date.parse(row.conversation.updatedAt) : 0
-    return time(b) - time(a)
-  }), [conversations, allAppChatRows, teamRows.pinned])
-  const digitalHumanRows = useMemo<ConversationRow[]>(() => [...buildDigitalHumanRows(allAppChatRows, isAppGroupOpen), ...teamRows.rows,
-    ...(teamList.error ? [{ type: 'team-retry' as const, key: 'team:retry' }] : [])],
-  [allAppChatRows, isAppGroupOpen, teamRows.rows, teamList.error])
+  const pinnedRows = useMemo(() => buildPinnedRows(conversations, allAppChatRows), [conversations, allAppChatRows])
+  const digitalHumanRows = useMemo(() => buildDigitalHumanRows(allAppChatRows, isAppGroupOpen), [allAppChatRows, isAppGroupOpen])
   const conversationRows = useMemo<ConversationRow[]>(
     () => conversations.filter(conv => !conv.starred).map(conv => ({ type: 'item', key: conv.id, conversation: conv })),
     [conversations]
@@ -467,9 +456,8 @@ export const ConversationList = memo(function ConversationList({
   const stripRows = useMemo(() => (folded ? [
     ...(pinnedOpen ? pinnedRows : []),
     ...stripDigitalHumanRows,
-    ...teamRows.rows.filter(row => row.type === 'team-item'),
     ...(conversationsOpen ? conversationRows : []),
-  ] : null), [folded, pinnedOpen, pinnedRows, stripDigitalHumanRows, teamRows.rows, conversationsOpen, conversationRows])
+  ] : null), [folded, pinnedOpen, pinnedRows, stripDigitalHumanRows, conversationsOpen, conversationRows])
   const reveal = useConversationReveal({
     spaceId: spaceKey,
     conversationId: selectedAppChat ? selectedAppChat.conversationId : currentConversationId,
@@ -751,13 +739,13 @@ export const ConversationList = memo(function ConversationList({
     // even while a digital human is selected (switching back lands there
     // unchanged) — so this row must not read as "active" during that time,
     // or it and the digital-human's row would both show selected at once.
-    const isActive = conversation.id === currentConversationId && !selectedAppChat && !selectedTeamChat
+    const isActive = conversation.id === currentConversationId && !selectedAppChat
     const isEditing = editingId === conversation.id
 
     return (
       <div
         onClick={() => !isEditing && handleSelectConversation(conversation)}
-        onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'item', key: conversation.id, conversation }, t, status))}
+        onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'item', key: conversation.id, conversation }, t))}
         onMouseLeave={hideHoverCard}
         aria-current={isActive}
         data-menu-open={menuOpenId === conversation.id || undefined}
@@ -833,14 +821,14 @@ export const ConversationList = memo(function ConversationList({
         )}
       </div>
     )
-  }, [editingId, editingTitle, currentConversationId, selectedAppChat, selectedTeamChat, conversationStatuses, menuOpenId, t])
+  }, [editingId, editingTitle, currentConversationId, selectedAppChat, conversationStatuses, menuOpenId, t])
 
   // Render a single digital-human conversation row. Uninstalled digital
   // humans fade out and become non-interactive rather than disappearing —
   // reinstalling the app restores the row automatically since it's derived
   // live from the apps list each render.
   const renderAppChatItem = useCallback((row: AppChatConversationRow, standalone: boolean) => {
-    const isActive = row.id === selectedAppChat?.conversationId && !selectedTeamChat
+    const isActive = row.id === selectedAppChat?.conversationId
     const isEditing = editingId === row.id
     const sessionLabel = appChatSessionLabel(row, t)
     const status = conversationStatuses.get(row.id) ?? 'idle'
@@ -848,14 +836,14 @@ export const ConversationList = memo(function ConversationList({
     return (
       <div
         onClick={() => !isEditing && !row.uninstalled && handleSelectAppChat(row)}
-        onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'dh-item', key: row.id, row, standalone }, t, status))}
+        onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'dh-item', key: row.id, row, standalone }, t))}
         onMouseLeave={hideHoverCard}
         aria-current={isActive && !row.uninstalled}
         data-menu-open={menuOpenId === row.id || undefined}
         className={cn(
           'group relative flex w-full items-center gap-1.5 rounded-sm pr-1.5 py-1.5 text-[13px] transition-colors ease-halo',
           ROW_HIGHLIGHT,
-          standalone ? 'pl-2.5' : 'pl-9',
+          standalone ? 'pl-2.5' : 'pl-[30px]',
           row.uninstalled
             ? 'opacity-40 cursor-not-allowed'
             : 'cursor-pointer',
@@ -872,10 +860,12 @@ export const ConversationList = memo(function ConversationList({
             appId={row.appId}
             name={row.digitalHumanName}
             size={16}
+            dimmed={!isActive}
+            disabled={row.uninstalled}
           />
         )}
 
-        {status !== 'idle' && <TaskStatusDot status={status} size="sm" className={standalone ? undefined : 'absolute left-6 top-1/2 -translate-y-1/2'} />}
+        {status !== 'idle' && <TaskStatusDot status={status} size="sm" />}
 
         {isEditing ? (
           <div ref={editContainerRef} className="flex flex-1 items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -926,31 +916,27 @@ export const ConversationList = memo(function ConversationList({
         )}
       </div>
     )
-  }, [selectedAppChat?.conversationId, selectedTeamChat, editingId, editingTitle, conversationStatuses, menuOpenId, t])
+  }, [selectedAppChat?.conversationId, editingId, editingTitle, conversationStatuses, menuOpenId, t])
 
   // Fixed-positioned and portaled: the row lists scroll, and a scroll
   // container clips anything reaching past its edge.
-  const hoverStatusLabel = hoverCard?.status ? taskStatusLabel(hoverCard.status, t) : undefined
-  // Time leads so it sits in the same spot on every card, whatever follows it.
-  const hoverMeta = hoverCard ? [
-    hoverCard.time && <span key="time" className="shrink-0 tabular-nums">{hoverCard.time}</span>,
-    hoverCard.owner && <span key="owner" className="flex min-w-0 items-center gap-1"><AutomationAvatar name={hoverCard.owner} size={14} /><span className="truncate">{hoverCard.owner}</span></span>,
-    hoverCard.note && <span key="note" className="min-w-0 truncate">{hoverCard.note}</span>,
-    hoverCard.status && hoverStatusLabel && <span key="status" className="flex shrink-0 items-center gap-1"><TaskStatusDot status={hoverCard.status} size="sm" />{hoverStatusLabel}</span>,
-  ].filter(Boolean) : []
   const hoverCardPortal = hoverCard && !editingId && !menuOpenId && createPortal(
     <div
       ref={hoverCardRef}
       role="tooltip"
       style={{ top: hoverCard.top, left: hoverCard.left }}
-      className="pointer-events-none fixed z-[60] w-max min-w-[140px] max-w-[260px] rounded-lg border border-border-faint bg-popover px-3.5 py-3 shadow-soft"
+      className="pointer-events-none fixed z-[60] w-[260px] rounded-lg border border-border bg-popover px-3.5 py-3 shadow-lg"
     >
-      {hoverMeta.length > 0 && (
-        <span className="mb-1.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] leading-[14px] text-faint-foreground">
-          {hoverMeta.flatMap((item, index) => index ? [<span key={`sep-${index}`} aria-hidden="true">·</span>, item] : [item])}
+      {hoverCard.owner && (
+        <span className="mb-1.5 flex items-center gap-2">
+          <AutomationAvatar name={hoverCard.owner} size={20} />
+          <span className="truncate text-[13px] text-muted-foreground">{hoverCard.owner}</span>
         </span>
       )}
-      <span className="block text-[13px] font-medium leading-5 text-foreground line-clamp-3">{hoverCard.label}</span>
+      <span className="block text-sm leading-relaxed text-foreground line-clamp-3">{hoverCard.label}</span>
+      {hoverCard.time && (
+        <span className="mt-1.5 block text-xs text-muted-foreground">{hoverCard.time}</span>
+      )}
     </div>,
     document.body
   )
@@ -960,23 +946,55 @@ export const ConversationList = memo(function ConversationList({
       trackHome('home.dh_group.toggle', { collapsed: !row.collapsed })
       toggleAppCollapsed(row.appId, !row.collapsed)
     }
-    return <ConversationGroupHeader
-      name={row.name}
-      collapsed={row.collapsed}
-      disabled={row.uninstalled}
-      onToggle={toggle}
-      onNew={() => handleNewAppChat(row.appId)}
-      newLabel={t('New conversation with {{name}}', { name: row.name })}
-      avatar={<PersonAvatarLink appId={row.appId} name={row.name} size={18} />}
-      status={workingApps.has(row.appId) && <TaskStatusDot status="generating" size="sm" className="ml-1.5" />}
-    />
+    return (
+      <div className={cn(
+        'group flex w-full items-center gap-0.5 rounded-sm pr-1 mt-0.5 transition-colors ease-halo',
+        row.uninstalled ? 'opacity-40' : 'hover:bg-secondary'
+      )}>
+        <PersonAvatarLink
+          appId={row.appId}
+          name={row.name}
+          size={18}
+          dimmed={selectedAppChat?.appId !== row.appId}
+          disabled={row.uninstalled}
+          className="ml-1.5"
+        />
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={!row.collapsed}
+          className={cn(
+            'flex flex-1 min-w-0 items-center pl-1.5 py-1.5 text-[13px] font-medium',
+            // A group label, not a row to read: in the dark theme it sits with its sessions' tone.
+            row.uninstalled ? 'cursor-not-allowed' : 'text-foreground theme-dark:text-muted-foreground'
+          )}
+        >
+          <span className="min-w-0 truncate">{row.name}</span>
+          {workingApps.has(row.appId) && <TaskStatusDot status="generating" size="sm" className="ml-1.5" />}
+        </button>
+        {!row.uninstalled && (
+          <button
+            type="button"
+            onClick={() => handleNewAppChat(row.appId)}
+            title={t('New conversation with {{name}}', { name: row.name })}
+            aria-label={t('New conversation with {{name}}', { name: row.name })}
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-subtle-foreground pointer-events-none opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {/* A second hit area for the same toggle; the name button carries it for keyboard users. */}
+        <button type="button" tabIndex={-1} aria-hidden="true" onClick={toggle} className="flex h-5 w-5 shrink-0 items-center justify-center">
+          <ChevronRight className={cn(
+            'w-3 h-3 text-subtle-foreground transition-[transform,opacity]',
+            row.collapsed ? 'opacity-100' : 'rotate-90 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+          )} />
+        </button>
+      </div>
+    )
   }
 
-  const renderTeamRow = (row: TeamListRow, compact = false) => <TeamConversationRow key={row.key} row={row} spaceId={spaceKey}
-    onToggle={(id, open) => toggleAppCollapsed(`team:${id}`, open)} onRefresh={teamList.refresh}
-    onHover={showHoverCard} onHoverEnd={hideHoverCard} compact={compact} />
   const renderListRow = (row: ConversationRow) => {
-    if (row.type === 'team-header' || row.type === 'team-item' || row.type === 'team-retry' || row.type === 'team-hidden') return renderTeamRow(row)
     if (row.type === 'dh-header') return renderDigitalHumanHeader(row)
     if (row.type === 'dh-item') return renderAppChatItem(row.row, row.standalone)
     return renderConversationItem(row.conversation)
@@ -1005,26 +1023,24 @@ export const ConversationList = memo(function ConversationList({
             reaching past its edge. */}
         <div ref={reveal.stripRef} className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-0.5">
           {stripRows?.map(row => {
-            if (row.type === 'team-item') return renderTeamRow(row, true)
-            if (row.type === 'dh-header' || row.type === 'team-header' || row.type === 'team-retry' || row.type === 'team-hidden') return null
+            if (row.type === 'dh-header') return null
             const isAppChat = row.type === 'dh-item'
             const id = isAppChat ? row.row.id : row.conversation.id
             const active = isAppChat
-              ? row.row.id === selectedAppChat?.conversationId && !selectedTeamChat
-              : row.conversation.id === currentConversationId && !selectedAppChat && !selectedTeamChat
+              ? row.row.id === selectedAppChat?.conversationId
+              : row.conversation.id === currentConversationId && !selectedAppChat
             const status = conversationStatuses.get(id) ?? 'idle'
             return (
               <button
                 key={row.key}
                 onClick={() => {
                   if (isAppChat) {
-                    if (row.row.uninstalled) openPersonActivity(row.row.appId)
-                    else handleSelectAppChat(row.row)
+                    if (!row.row.uninstalled) handleSelectAppChat(row.row)
                   } else {
                     handleSelectConversation(row.conversation)
                   }
                 }}
-                onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor(row, t, status))}
+                onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor(row, t))}
                 onMouseLeave={hideHoverCard}
                 aria-current={active}
                 className={cn(
@@ -1156,7 +1172,6 @@ export const ConversationList = memo(function ConversationList({
                 style={{ height: '100%' }}
                 className="overflow-x-hidden"
                 components={listComponents}
-                endReached={teamList.loadMore}
                 itemContent={(_, row) => renderListRow(row)}
               />
             </div>

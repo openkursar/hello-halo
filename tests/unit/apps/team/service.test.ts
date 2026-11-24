@@ -866,14 +866,6 @@ describe('TeamService', () => {
       expect(item.waitingCount).toBe(0)
     })
 
-    it('lists every member as a face on a joined office, while only ours stay pickable', () => {
-      materializeBlockedOffice()
-
-      const item = ctx.service.listTeamItems().find((i) => i.id === 'shadow-office')!
-      expect(item.roster.map((m) => m.appId)).toEqual([HOST_LEAD, OWN_MEMBER])
-      expect(item.localMembers.map((m) => m.appId)).toEqual([OWN_MEMBER])
-    })
-
     it('flags the office when one of our own members raised the decision', () => {
       const withEscalation = buildService({
         getPendingEscalations: () => [
@@ -999,8 +991,7 @@ describe('TeamService', () => {
       const items = ctx.service.listTeamItems(SPACE_A)
       const item = items.find((i) => i.id === team.id)
       expect(item).toBeTruthy()
-      // The lead counts: the card's number matches the faces it draws.
-      expect(item!.memberCount).toBe(2)
+      expect(item!.memberCount).toBe(1)
       expect(item!.status).toBe('idle')
     })
   })

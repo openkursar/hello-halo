@@ -1012,14 +1012,6 @@ export class ActivityStore {
     return this.getSessionEnvironment(sessionKey)!
   }
 
-  /** The given chat sessions that have had a turn: one is pinned on its first turn and dropped only when its transcript is cleared. */
-  listPinnedSessions(sessionKeys: readonly string[]): Set<string> {
-    if (!sessionKeys.length) return new Set()
-    const rows = this.db.prepare('SELECT session_key FROM app_session_environments WHERE session_key IN (SELECT value FROM json_each(?))')
-      .all(JSON.stringify(sessionKeys)) as Array<{ session_key: string }>
-    return new Set(rows.map(row => row.session_key))
-  }
-
   deleteSessionEnvironment(sessionKey: string): void {
     this.db.prepare('DELETE FROM app_session_environments WHERE session_key = ?').run(sessionKey)
   }

@@ -404,7 +404,7 @@ export interface CreateTeamRuntimeDeps {
    * survives a run seal and a restart (P0-5). Absent → in-memory only.
    */
   hasPendingEscalation?: (appId: string, teamId: string, epochId?: string) => boolean
-  /** Human name for an IM chatKey or a collaboration room (see orchestration deps). */
+  /** Human name for an IM chatKey (IM session registry). Absent → raw chat id. */
   describeChatKey?: (teamId: string, chatKey: string) => string | null
   /**
    * The digital human's own description, read from the app record so the roster
@@ -505,7 +505,6 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   const turnReport = createTurnReport({ store, bus,
     requestAllowed: requestId => getTeamService()?.participants.requestAllowed(requestId) ?? true,
     onPendingSettled: (teamId, epochId) => orchestration?.notePendingWorkChanged(teamId, epochId),
-    recordReply: input => { board?.postActivity(input) },
   })
 
   orchestration = createOrchestration({
@@ -531,10 +530,9 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     noteTurnEnded: (input) => turnReport.noteTurnEnded(input),
     // A 'stopped' epoch (pause) is reopenable — noteEpochTurn wakes it back up
     // on the next message — so its periodic checks must survive the seal.
-    // Every other end reason (completed/ended/timeout/error) ends the run: a person's
-    // later message may reopen completed or ended work, but its periodic checks are not kept.
+    // Every other end reason (completed/timeout/error) really is final.
     onEpochArchived: (teamId, epochId, endReason) => {
-      if (endReason === 'completed' || endReason === 'ended' || endReason === 'cleared') store.recipientFences.clearEpoch(teamId, epochId)
+      if (endReason === 'completed' || endReason === 'cleared') store.recipientFences.clearEpoch(teamId, epochId)
       if (endReason !== 'stopped') checks?.clearEpoch(teamId, epochId)
       digest.clearEpoch(epochId)
       archive.clearEpoch(epochId)
@@ -676,7 +674,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     },
     sealEpoch: (teamId, reason, summary) => orchestration!.sealEpoch(teamId, reason, summary),
     sealConversationEpoch: async (teamId, epochId, reason, summary) => {
-      if (reason === 'completed' || reason === 'ended' || reason === 'cleared') deps.onTaskClosed?.(teamId, epochId)
+      if (reason === 'completed' || reason === 'cleared') deps.onTaskClosed?.(teamId, epochId)
       await orchestration!.sealConversationEpoch(teamId, epochId, reason, summary)
     },
     captureReport: (correlationId, outcome) => orchestration!.captureReport(correlationId, outcome),

@@ -618,11 +618,6 @@ export type { ToolCall };
 import type { ImageAttachment, ImageMediaType } from '../../shared/types/image-attachment';
 export type { ImageAttachment, ImageMediaType };
 
-export interface QueuedMessage {
-  summary: string;
-  images?: ImageAttachment[];
-}
-
 // Content block types for multi-modal messages (matches Claude API)
 export interface TextContentBlock {
   type: 'text';

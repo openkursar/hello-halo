@@ -4,9 +4,8 @@
  * store always had for them, gathered behind the backend interface.
  */
 import { api } from '../internal'
-import type { Conversation, ConversationMeta, Message, Thought, ImageAttachment } from '../internal'
+import type { Conversation, ConversationMeta, Message, Thought } from '../internal'
 import i18n from '../../../i18n'
-import { useNotificationStore } from '../../notification.store'
 import { previewFromMessages, titleFromFirstMessage } from '../../../../shared/conversation-title'
 import { messageSummaryText } from '../../../../shared/content-reference'
 import type { ContentReference } from '../../../../shared/types/content-reference'
@@ -283,18 +282,14 @@ async function stop(ctx: BackendContext, conversationId: string): Promise<void> 
   }
 }
 
-async function inject(ctx: BackendContext, conversationId: string, message: string, references?: ContentReference[], images?: ImageAttachment[]): Promise<boolean> {
-  const response = await api.injectMessage({ conversationId, message, ...(images?.length ? { images } : {}), ...(references?.length ? { references } : {}) })
+async function inject(ctx: BackendContext, conversationId: string, message: string, references?: ContentReference[]): Promise<boolean> {
+  const response = await api.injectMessage({ conversationId, message, ...(references?.length ? { references } : {}) })
   if (!response || response.success !== false) return true
-  if (response.data?.retryable === false) {
-    useNotificationStore.getState().show({ title: i18n.t('Failed to add message'), body: response.error, variant: 'warning', duration: 8000 })
-    throw new Error(response.error || i18n.t('Failed to add message'))
-  }
   // No live session took it (the turn ended in the meantime): the text still
   // has to go somewhere, and a fresh turn is where it belongs.
   console.warn(`[ChatStore] Injection into ${conversationId} refused (${response.error ?? 'unknown'}); sending it as a new message`)
   ctx.get().dequeueMessage(conversationId, messageSummaryText(message, references))
-  return send(ctx, conversationId, { content: message, images, ...(references?.length ? { options: { references } } : {}) })
+  return send(ctx, conversationId, { content: message, ...(references?.length ? { options: { references } } : {}) })
 }
 
 async function settleTurn(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }, turnId: number): Promise<void> {

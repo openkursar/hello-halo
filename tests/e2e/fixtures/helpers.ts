@@ -79,19 +79,6 @@ export async function startNewDigitalHumanConversation(window: Page, name: strin
   await create.click()
 }
 
-/**
- * Open the team view of the temporary team led by the open conversation, from a
- * member's report in that conversation; the bar above the composer only leads to
- * the team progress canvas.
- */
-export async function openCollaborationTeamView(window: Page) {
-  await expect(window.getByText('Temporary team', { exact: true })).toHaveCount(1)
-  const open = window.getByRole('button', { name: 'Open team view', exact: true })
-  // A message that started a reply is folded into its sender line until expanded.
-  if (!await open.count()) await window.getByRole('button', { name: /^Received (a message|messages) from / }).last().click()
-  await open.last().click()
-}
-
 /** Navigate through the persistent rail and wait for the settings content. */
 export async function navigateToSettings(window: Page) {
   await waitForHomePage(window)

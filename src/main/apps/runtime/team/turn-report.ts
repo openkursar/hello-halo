@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from 'crypto'
-import { isRemoteMember, toActivitySubject } from '../../../../shared/apps/team-types'
+import { isRemoteMember } from '../../../../shared/apps/team-types'
 import type {
   MemberTurnFate,
   TeamActivityKind,
@@ -61,8 +61,6 @@ export interface TurnReportDeps {
   bus: MessageBus
   requestAllowed?(requestId: string): boolean
   onPendingSettled?(teamId: string, epochId: string): void
-  /** Files a member's closing words as its answer when it wrote back to nobody. */
-  recordReply?(input: PostActivityInput): void
 }
 
 /** One act a member filed, kept only long enough to describe the turn it fell in. */
@@ -210,31 +208,6 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
     }
   }
 
-  /**
-   * A member asked by a teammate that ended its turn without writing back has
-   * still answered: its closing text is the answer. Without this the asker's
-   * subtask stays open forever and the task reads as stalled.
-   *
-   * A turn that raised a decision for a person has not answered: the closing
-   * text is that question, and filing it as a reply would settle the asker's
-   * subtask while the person is still being waited on.
-   */
-  function recordUnsentReply(input: NoteTurnEndedInput, startedAt: number | undefined): void {
-    const { appId, teamId, epochId, requestFromAppId } = input
-    const text = input.finalReply?.trim()
-    if (!deps.recordReply || input.fate.kind !== 'ended' || input.triggerKind !== 'message'
-      || !requestFromAppId || requestFromAppId === appId || !text || startedAt === undefined) return
-    const inTurn = (acts.get(memberKey(epochId, appId)) ?? []).filter((a) => a.at >= startedAt)
-    const answered = inTurn.some((a) => a.kind === 'finding' || (a.kind === 'message' && a.targetAppId === requestFromAppId))
-    const askedAPerson = inTurn.some((a) => a.kind === 'decision')
-    if (answered || askedAPerson) return
-    deps.recordReply({
-      teamId, epochId, kind: 'reply', actorAppId: appId, targetAppId: requestFromAppId,
-      subject: toActivitySubject(text), body: text,
-      correlationId: input.correlationId ?? null, status: 'ok',
-    })
-  }
-
   function markReported(correlationId: string, epochId: string): void {
     reported.set(correlationId, epochId)
     if (reported.size > REPORTED_CAP) {
@@ -343,7 +316,6 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
       pending.set(key, queue)
 
       requestFlush(teamId, epochId)
-      recordUnsentReply(input, startedAt)
     } catch (err) {
       // The lead not hearing must never take a member's turn down with it.
       console.error(`${LOG_TAG} noteTurnEnded failed:`, err)

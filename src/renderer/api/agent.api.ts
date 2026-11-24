@@ -14,7 +14,7 @@ import type {
 } from './_shared'
 import type { Goal, GoalInput } from '../../shared/types/goal'
 import type { TerminalSnapshotEntry } from '../../shared/types/terminal'
-import type { AgentInjectRequest, AgentInjectResult, AgentSendRequest } from '../../shared/types/agent-send'
+import type { AgentInjectRequest, AgentSendRequest } from '../../shared/types/agent-send'
 
 export const agentApi = {
   // ===== Agent =====
@@ -87,7 +87,7 @@ export const agentApi = {
   },
 
   // Inject a mid-turn message into an active session (Agent Team mode)
-  injectMessage: async (data: AgentInjectRequest): Promise<ApiResponse<AgentInjectResult>> => {
+  injectMessage: async (data: AgentInjectRequest): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.injectMessage(data)
     }

@@ -6,20 +6,6 @@ import { api } from '../../../api'
 const EMPTY_ACTIVITIES: TeamActivity[] = []
 const ROSTER_REFRESH_MS = 200
 
-/**
- * The same task is observed from several places at once (the homepage
- * conversation, its progress on the canvas, the team page); every one of them
- * answers the same team event, so one read per task serves them all.
- */
-const sharedReads = new Map<string, Promise<unknown>>()
-function shared<T>(key: string, run: () => Promise<T>): Promise<T> {
-  const running = sharedReads.get(key) as Promise<T> | undefined
-  if (running) return running
-  const promise = run().finally(() => { if (sharedReads.get(key) === promise) sharedReads.delete(key) })
-  sharedReads.set(key, promise)
-  return promise
-}
-
 type ObservedBoard = { scope: string; board: EpochBoard | null; boardVersion: number; activities: TeamActivity[]; tasks: BlackboardTask[]; findings: BlackboardFinding[] }
 function mergeRows<T extends { id: string; updatedAt?: number; body?: string | null }>(previous: T[], incoming: T[]): T[] {
   if (!incoming.length) return previous
@@ -55,7 +41,7 @@ export function useTaskBoard(detail: TeamDetail, epochId: string | null) {
       trailing = false
       const version = ++snapshots.current
       try {
-        const response = await shared(`roster:${scope}`, () => api.teamEpochRoster(detail.team.id, epochId))
+        const response = await api.teamEpochRoster(detail.team.id, epochId)
         if (cancelled) return
         if (!response.success || !response.data) throw new Error(response.error || 'Work roster is unavailable')
         setRoster({ scope, version, data: response.data })
@@ -77,7 +63,7 @@ export function useTaskBoard(detail: TeamDetail, epochId: string | null) {
     }
     const off = api.onTeamUpdated(data => {
       const event = data as { teamId: string; changed?: string[]; epochId?: string }
-      if (event.teamId === detail.team.id && (!event.changed || event.changed.includes('members') || event.changed.includes('status') || event.changed.includes('work')) && (!event.epochId || event.epochId === epochId)) {
+      if (event.teamId === detail.team.id && (!event.changed || event.changed.includes('members') || event.changed.includes('status')) && (!event.epochId || event.epochId === epochId)) {
         schedule()
       }
     })
@@ -104,7 +90,7 @@ export function useTaskBoard(detail: TeamDetail, epochId: string | null) {
     let cancelled = false
     if (!epochId) return
     const boardVersion = ++snapshots.current
-    void shared(`board:${scope}`, () => loadBoard(detail.team.id, epochId)).then(board => {
+    void loadBoard(detail.team.id, epochId).then(board => {
       if (cancelled) return
       setFailure(board ? null : scope)
       if (board) setRosterFailure(previous => previous?.scope === scope && previous.version > boardVersion ? previous : null)

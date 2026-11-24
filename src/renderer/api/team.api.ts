@@ -4,8 +4,6 @@ import { ensureExtendedServicesReady } from './bootstrap-ready'
 import type { ApiResponse } from './_shared'
 import type {
   CreateTeamInput,
-  TeamListNativeTasksInput,
-  TeamNativeTaskPage,
   UpdateTeamInput,
   TeamMemberInput,
   UpdateTeamMemberInput,
@@ -13,8 +11,6 @@ import type {
   ProposedMember,
   TeamTriggerInput,
   TeamArtifactOpenResult,
-  TeamOutputPage,
-  TeamOutputFilter,
   TeamRunResult,
   EpochRoster,
 } from '../../shared/apps/team-types'
@@ -22,19 +18,6 @@ import type { ImageAttachment } from '../../shared/types/image-attachment'
 import type { ContentReference } from '../../shared/types/content-reference'
 
 export const teamApi = {
-  teamListNativeTasks: async (input: TeamListNativeTasksInput): Promise<ApiResponse<TeamNativeTaskPage>> => {
-    if (isElectron()) {
-      await ensureExtendedServicesReady()
-      return window.halo.teamListNativeTasks(input)
-    }
-    const query = new URLSearchParams({ spaceId: input.spaceId })
-    if (input.limit !== undefined) query.set('limit', String(input.limit))
-    if (input.cursor !== undefined) query.set('cursor', input.cursor)
-    if (input.epochIds !== undefined) query.set('epochIds', JSON.stringify(input.epochIds))
-    if (input.scope !== undefined) query.set('scope', input.scope)
-    return httpRequest('GET', `/api/teams/native-tasks?${query}`)
-  },
-
   // ===== Teams =====
   teamList: async (spaceId?: string): Promise<ApiResponse> => {
     if (isElectron()) {
@@ -58,15 +41,6 @@ export const teamApi = {
   teamListArtifacts: async (teamId: string): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamListArtifacts(teamId)
     return httpRequest('GET', `/api/teams/${teamId}/artifacts`)
-  },
-
-  teamListOutputs: async (teamId: string, offset: number, limit: number, filter: TeamOutputFilter = {}): Promise<ApiResponse<TeamOutputPage>> => {
-    if (isElectron()) return window.halo.teamListOutputs({ teamId, offset, limit, ...filter })
-    const query = new URLSearchParams({ offset: String(offset), limit: String(limit) })
-    if (filter.since !== undefined) query.set('since', String(filter.since))
-    if (filter.text) query.set('q', filter.text)
-    if (filter.text && filter.textEpochIds?.length) query.set('epochs', filter.textEpochIds.join(','))
-    return httpRequest('GET', `/api/teams/${teamId}/outputs?${query}`)
   },
 
   /**

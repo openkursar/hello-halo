@@ -310,8 +310,6 @@ export interface V2SessionInfo {
   createdAt: number
   lastUsedAt: number
   sourceId?: string
-  /** Image handling stays bound to the running session, even if the model selection changes. */
-  imageInput?: Pick<ApiCredentials, 'model' | 'supportsVision' | 'visionOverride'> & { ocrAvailable: boolean }
   // Captured before asynchronous creation, so a racing config change stays stale.
   credentialsGeneration: number | string
   // Per-conversation credential/model fingerprint at session creation time.

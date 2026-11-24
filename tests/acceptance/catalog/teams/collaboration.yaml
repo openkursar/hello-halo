@@ -37,9 +37,6 @@ promises:
   room:
     en: A temporary collaboration has one source task and keeps its members reachable.
     zh: 临时协作只有一个源任务，其成员始终可访问。
-  member-work:
-    en: In the source conversation I can watch any member's work in place of the chat, under the member's given name, but cannot message it there; one action returns to the chat. Work the lead handed out by message reads as one subtask per member, in the order it was handed out, named by what the member reported once done.
-    zh: 在源对话中可以在聊天位置查看任一成员的工作，成员以其起的名字显示，但不能在此给它发消息；一个操作即可返回主聊天。负责人通过消息分派的工作按分派顺序，每个成员显示为一项子任务，完成后以成员回报说明的内容命名。
   keep:
     en: Keeping a collaboration saves its members as a separate team under a lead of its own and leaves the temporary collaboration and its task as they were.
     zh: 保留协作会把其成员保存为拥有独立负责人的另一支团队，临时协作及其任务保持原样。
@@ -333,37 +330,11 @@ scenarios:
       - en: Use the isolated fixture described by the referenced executable test.
         zh: 使用引用测试中定义的隔离测试资料。
     steps:
-      - en: Open the seeded collaboration's source conversation, open the team view from a member's report in it, then resize to a narrow screen.
-        zh: 打开预置临时协作的源对话，从其中成员的回报打开团队视图，再切到窄屏。
+      - en: Open a seeded temporary collaboration and resize to a narrow screen.
+        zh: 打开预置临时协作并切到窄屏。
     expected:
-      - en: The source conversation shows the team's members above its composer, marked as a temporary team.
-        zh: 源对话在输入框上方展示团队成员，并标明是临时团队。
       - en: The one room and members are accessible, without controls that create unrelated tasks in the temporary collaboration.
         zh: 唯一任务及成员可访问，不出现会在临时协作里创建无关任务的控件。
-  - id: teams.collaboration.member-work
-    title:
-      en: Watch a temporary member's work from the source conversation
-      zh: 在源对话中查看临时成员的工作
-    verifies: [member-work]
-    platforms: [darwin, win32, linux]
-    profiles: [regression]
-    evidence: ui
-    mode: none
-    automation: planned
-    preconditions:
-      - en: A source conversation whose temporary team's lead handed work to three named members by message, one after another, and each member reported back.
-        zh: 一个源对话，其临时团队负责人先后用消息把工作分派给三个有名字的成员，且每个成员都已回报。
-    steps:
-      - en: Click a member's avatar above the composer, then use the locked composer's action to return; open the team progress canvas.
-        zh: 点击输入框上方某成员的头像，再用锁定输入框中的操作返回；打开团队进度画布。
-    expected:
-      - en: The member's work replaces the chat with that member selected on the rail and no main-chat item added; the composer says temporary members cannot be messaged, and Back to main chat restores the conversation.
-        zh: 成员的工作替换聊天区域，该成员在头像栏中被选中且没有新增主对话项；输入框说明临时成员不能发消息，“返回主聊天”恢复原对话。
-      - en: The canvas lists one done subtask per member in the order the work was handed out, each named by the opening line of that member's report, and members appear by their given names without an id suffix.
-        zh: 画布按分派顺序为每个成员列出一项已完成子任务，各以该成员回报的首行命名，成员以起的名字显示，不带 id 后缀。
-    notes:
-      en: Delegated-subtask titles and order, display names and the selected member on a temporary rail are unit-tested; no acceptance binding yet.
-      zh: 分派子任务的标题与顺序、显示名以及临时头像栏中的选中成员有单元测试；尚无验收绑定。
   - id: teams.collaboration.keep-existing
     title:
       en: Keep the collaboration as a separate saved team

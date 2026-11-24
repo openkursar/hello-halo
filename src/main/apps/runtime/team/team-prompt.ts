@@ -127,12 +127,6 @@ export function buildTeamEntry(ctx: TeamPromptContext, reportToUserAvailable = t
     '  permitted actions and required evidence.',
     '- Findings are reusable knowledge or artifacts, not requests, replies, acknowledgements or progress messages.',
     '  Publishing does not notify a teammate. With one collaborator, direct messages usually suffice.',
-    ...(ctx.temporaryCollaboration ? [] : [
-      '- The board covers THIS conversation only. Each conversation with the team',
-      '  starts with an empty board; work done in its other conversations is not',
-      '  on it. An empty board here never means the team has done nothing. When',
-      '  asked about past or recent work, ask the teammates who would know.',
-    ]),
     ...(reportToUserAvailable ? [
       '- Only when you need a HUMAN decision, call',
       '  `report_to_user({type:"escalation", message:"Your question", choices:["Option A", "Option B"]})`.',

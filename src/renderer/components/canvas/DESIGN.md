@@ -125,10 +125,9 @@ latter for atomic temp+rename writers; `resync` = every file tab):
 
 A row of a reference chip's list (or a `path:line` link in a reply) asks a tab
 to show a place through `TabState.reveal` — a one-shot `RevealRequest { seq,
-range?, quote?, passage?, keepFocus?, commentId?, path?, side?, page?,
-activityId?, memberAppId? }` set by `openFile(path, { reveal })`,
-`openTerminal(sessionId, title, { reveal })`, `openChanges(source, { reveal })`,
-`openTeamTask(task, title, { reveal })` or `revealInTab(tabId, target)`. `keepFocus`
+range?, quote?, passage?, keepFocus?, commentId?, path?, side?, page? }` set by
+`openFile(path, { reveal })`, `openTerminal(sessionId, title, { reveal })`,
+`openChanges(source, { reveal })` or `revealInTab(tabId, target)`. `keepFocus`
 means the request came from the composer: the viewer shows the place without
 taking keyboard focus. `commentId` means a pending comment was gone back to in
 order to edit it: its card there takes the focus instead — pass it to
@@ -258,42 +257,6 @@ as diffs. `openChanges(source, { reveal })` keeps one tab per source:
   count is kept for the view's lifetime (`ChangedSinceCounter`), so coming back
   shows the last one at once. Report links to files of the list open a detail
   page walked through the files the report names; Esc returns to the link.
-
-## Team progress view
-
-The `team-task` content type (`viewers/TeamTaskViewer.tsx`) shows one team
-conversation's work beside the homepage chat, which no longer opens a drawer
-for it. `openTeamTask(task, title, { reveal })` keeps one tab per team + epoch
-and re-titles it on reuse. The progress (`components/team/TeamTaskProgress.tsx`)
-reads the board itself (`useTaskBoard`), so it does not depend on the chat
-staying mounted. It opens on one overview (`TeamTaskOverview.tsx`) headed by the
-task: the team as one line of context above it (its name, which leaves the chat for
-the team under Apps › Teams, or "Temporary team" with the keep action, and who is in
-it, opening the members page) and the task title as
-the page heading, then the same body as the team page's task panel
-(`team/detail/TaskBody`): status line, brief card, decisions answered in place, the
-team scene, the subtask timeline and the outputs after it, wherever the work stands.
-Only the shells differ: the panel has "Open conversation", the canvas the team line.
-Any member it names (the brief, scene, footer or a subtask's assignee) switches the
-chat to them in this conversation, as picking them in the member selector would,
-rather than opening a second view of their work here. A temporary team's member opens in place of the chat of the conversation that
-leads it (`collab-member-view.store`); on a machine without that conversation it opens
-the member's execution here instead. The collaboration record ("Member conversations")
-and members are subpages one step away.
-The work reads as done once it was ended as done (`finishedAt`, or archived) or
-every subtask is done or rejected with nobody still working, waiting or failed
-(`taskProgress().finished`); a new message or subtask turns it back to in progress.
-The members page lists the whole roster, each with its concrete work here (the
-task in hand or next, what it finished, the work it split out); members outside
-this conversation are listed last; the others switch the chat to them, as a subtask
-does.
-`reveal.activityId` opens the collaboration record at that record;
-`reveal.memberAppId` opens that member's execution. The page, sections
-opened or closed against their default, and open member execution are kept in
-`tab.view.teamTask`, so returning to the tab lands there again. Its outputs open as canvas
-tabs (`openFile` on the resolved local copy, so binaries still go to the system
-application); the team workbench drawer keeps opening them in the system
-application.
 
 ## Browser page lifetime and presentation
 

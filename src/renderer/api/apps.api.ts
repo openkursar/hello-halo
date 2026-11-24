@@ -12,7 +12,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswerPayload, InstalledApp, PendingDecisionQuery, AppChatEngineMetadata, AppChatTranscriptPage, AppChatInjectRequest } from '../../shared/apps/app-types'
+import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswerPayload, InstalledApp, PendingDecisionQuery, AppChatEngineMetadata, AppChatTranscriptPage } from '../../shared/apps/app-types'
 import type { AppSpec } from '../../shared/apps/spec-types'
 import type { CapabilityInventory } from '../../shared/apps/capability-inventory'
 import type { AppSpaceChangePreview } from '../../shared/apps/app-environment'
@@ -469,7 +469,7 @@ export const appsApi = {
   // Add a message to the turn a digital human is running. delivered is false when
   // no turn was in flight to take it — the caller sends it as a new message —
   // and stopped says the user stopped that turn, so the text goes back to them.
-  appChatInject: async (input: AppChatInjectRequest): Promise<ApiResponse<{ delivered: boolean; stopped?: boolean }>> => {
+  appChatInject: async (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }): Promise<ApiResponse<{ delivered: boolean; stopped?: boolean }>> => {
     if (isElectron()) {
       return window.halo.appChatInject(input)
     }
@@ -477,7 +477,6 @@ export const appsApi = {
       conversationId: input.conversationId,
       message: input.message,
       ...(input.references ? { references: input.references } : {}),
-      ...(input.images ? { images: input.images } : {}),
     })
   },
 

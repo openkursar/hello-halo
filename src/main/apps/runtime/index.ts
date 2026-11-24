@@ -61,7 +61,7 @@ import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from '.
 import { setRelayActionAccess, type RelayActionAccess } from './relay-actions'
 import { createConversationReminders, setConversationReminders } from './reminders'
 import { deliverReminder } from './reminders/delivery'
-import { buildTeamSessionKey, getAppChatConversationId, parseAppChatKey } from '../../../shared/apps/im-keys'
+import { getAppChatConversationId, parseAppChatKey } from '../../../shared/apps/im-keys'
 import { restoreLegacyDefaultChats } from './legacy-default-chats'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance, releaseSupplementsWhenIdle } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
@@ -539,16 +539,6 @@ export function getAppMemoryService(): MemoryService | null {
  */
 export function getActivityStore(): ActivityStore | null {
   return activityStoreRef
-}
-
-/** Per team conversation, which of these members have had a turn of their own there. */
-export function listTeamAnsweredMembers(teamId: string, appIds: readonly string[], epochIds: readonly string[]): Map<string, string[]> {
-  const result = new Map<string, string[]>()
-  if (!activityStoreRef) return result
-  const keys = epochIds.flatMap(epochId => appIds.map(appId => ({ epochId, appId, key: buildTeamSessionKey(appId, teamId, epochId) })))
-  const pinned = activityStoreRef.listPinnedSessions(keys.map(entry => entry.key))
-  for (const { epochId, appId, key } of keys) if (pinned.has(key)) result.set(epochId, [...(result.get(epochId) ?? []), appId])
-  return result
 }
 
 /** Working directories the digital humans pinned in `spaceId` name (sessions, team seats, runs). */

@@ -17,8 +17,8 @@ import {
   isCrossConversationMessage,
   isCrossConversationNotice,
 } from './cross-conversation'
-import { ReplyOpeners, isTeamMessage, type OpenerReveal } from './team-collab'
-import { TrailingArrivals } from './ArrivalCard'
+import { ReplyOpeners, TeamMemberMessage, isTeamMessage, type OpenerReveal, type TeamRunPosition } from './team-collab'
+import { ArrivalCard } from './ArrivalCard'
 import { mergeArrivalThoughts, toArrivalThought } from './transcript'
 import { PushedMessageLabel, isPushedMessage } from './PushedMessageLabel'
 import { ContinuityNotice, isContinuityNotice } from './ContinuityNotice'
@@ -63,24 +63,17 @@ export interface MessageRowProps {
   injectionMessages?: Message[]
 
   /** Records received while this reply was written (see transcript/arrivals): drawn in
-   *  its process, or after it when it has none. */
+   *  its process, or after it as their own cards when it has none. */
   arrivals?: Message[]
 
   /** Reveal the reply's copy and token usage on hover only (every reply but the latest). */
   actionsOnHover?: boolean
 
-  /** Teammates' deliveries that started this reply (see transcript/transcript-rows); drawn on its sender line.
-   *  On a team message, the consecutive ones its line stands for. */
+  /** Teammates' deliveries that started this reply (see transcript/transcript-rows); drawn on its sender line. */
   openers?: Message[]
 
   /** Opens the openers to show one of them (a search or reference jump). */
   openerReveal?: OpenerReveal
-
-  /** A sender line the caller drew itself, for deliveries that are not transcript messages. */
-  openersLine?: ReactNode
-
-  /** Drawn under an assistant reply, e.g. what it handed on to teammates. */
-  afterReply?: ReactNode
 
   /** Additional className for the outer wrapper (e.g., width constraints from the list) */
   className?: string
@@ -92,12 +85,8 @@ export interface MessageRowProps {
    */
   senderName?: string
 
-  /**
-   * The person who wrote this transcript's user messages, when that is not the
-   * reader (someone else's digital human). Their messages move to the left under
-   * this name, so the right side always means the reader.
-   */
-  authorName?: string
+  /** Where a team message sits among consecutive ones, so a run reads as one block. */
+  teamRunPosition?: TeamRunPosition
 
   /** The chat shows how this reply ended right below it (the notice after a stop), so the reply's own note steps aside. */
   endingShownBelow?: boolean
@@ -118,12 +107,10 @@ export const MessageRow = memo(function MessageRow({
   arrivals,
   openers,
   openerReveal,
-  openersLine,
-  afterReply,
   actionsOnHover = false,
   className = '',
   senderName,
-  authorName,
+  teamRunPosition = 'single',
   endingShownBelow = false,
 }: MessageRowProps) {
   const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
@@ -158,33 +145,30 @@ export const MessageRow = memo(function MessageRow({
     )
   }
 
-  // No reply follows it: the line a reply would carry, on its own.
   if (isTeamMessage(message)) {
+    const endsRun = teamRunPosition === 'single' || teamRunPosition === 'last'
     return (
-      <div className={`pb-3 ${className}`}>
-        <div className="w-[85%]">
-          <ReplyOpeners senderName={senderName} openers={openers?.length ? openers : [message]} reveal={openerReveal} />
-        </div>
+      <div className={`${endsRun ? 'pb-4 ' : ''}${className}`}>
+        <TeamMemberMessage message={message} />
       </div>
     )
   }
 
   const hasSeparatedThoughts = message.thoughts === null && !!message.thoughtsSummary
 
-  // Sender label — plain text, always the topmost element of the row (above
-  // thoughts, above the bubble): the reply's sender, or another person's name.
-  const fromOther = message.role === 'user' && !!authorName
-  const senderLabel = message.role !== 'assistant'
-    ? fromOther ? <div className="mb-2 text-sm font-semibold text-foreground">{authorName}</div> : null
-    : openersLine ? openersLine
+  // Reply-sender label — plain text, always the topmost element of
+  // the reply (above thoughts, above the bubble), assistant messages only.
+  const senderLabel = message.role !== 'assistant' ? null
     : openers?.length ? <ReplyOpeners senderName={senderName} openers={openers} reveal={openerReveal} />
-    : senderName ? <div className="mb-2 text-sm font-semibold text-foreground">{senderName}</div>
+    : senderName ? <div className="mb-2 text-xs font-medium text-muted-foreground">{senderName}</div>
     : null
 
-  // A reply without a process of its own shows what it received after it.
-  const trailingArrivals = arrivals?.length && !hasInlineThoughts && !hasSeparatedThoughts
-    ? <TrailingArrivals arrivals={arrivals} senderName={senderName} />
-    : null
+  // A reply without a process of its own shows what it received as cards after it.
+  const trailingArrivals = arrivals?.length && !hasInlineThoughts && !hasSeparatedThoughts ? (
+    <div className="mt-3 space-y-2">
+      {arrivals.map(arrival => <ArrivalCard key={arrival.clientKey ?? arrival.id} message={arrival} />)}
+    </div>
+  ) : null
 
   // Assistant messages with thoughts: show collapsed thoughts above message bubble
   if (message.role === 'assistant' && (hasInlineThoughts || hasSeparatedThoughts)) {
@@ -238,7 +222,6 @@ export const MessageRow = memo(function MessageRow({
           {injectionMessages && injectionMessages.length > 0 && (
             <InjectionAnnotation messages={injectionMessages} />
           )}
-          {afterReply}
         </div>
       </div>
     )
@@ -264,7 +247,6 @@ export const MessageRow = memo(function MessageRow({
               isInContainer
             />
             <InjectionAnnotation messages={injectionMessages} />
-            {afterReply}
           </div>
         </div>
         {trailingArrivals}
@@ -283,10 +265,8 @@ export const MessageRow = memo(function MessageRow({
         hideTerminalOpen={hideTerminalOpen}
         allowViewChanges={allowViewChanges}
         actionsOnHover={actionsOnHover}
-        alignStart={fromOther}
         hideEnding={endingShownBelow}
       />
-      {message.role === 'assistant' && afterReply}
       {trailingArrivals}
     </div>
   )

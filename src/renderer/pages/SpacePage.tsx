@@ -22,7 +22,6 @@ import { useCanvasStore, useCanvasIsOpen, useCanvasIsMaximized } from '../stores
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 import { useSearchStore } from '../stores/search.store'
 import { ChatView } from '../components/chat/ChatView'
-import { TeamConversationHost } from '../components/team'
 import { ArtifactRail } from '../components/artifact/ArtifactRail'
 import { ConversationList } from '../components/chat/ConversationList'
 import { ChatHistoryPanel } from '../components/chat/ChatHistoryPanel'
@@ -85,7 +84,11 @@ export function SpacePage() {
 
   const currentSpace = useSpaceStore(state => state.currentSpace)
 
-  const selectedTeamChat = useChatStore(state => state.spaceStates.get(currentSpace?.id ?? '')?.selectedTeamChat ?? null)
+  // For mobile ChatHistoryPanel visibility check
+  const hasConversations = useChatStore(state => {
+    const spaceState = state.spaceStates.get(state.currentSpaceId ?? '')
+    return (spaceState?.conversations?.length ?? 0) > 0
+  })
 
   // The conversation on screen — a selected digital human's, else the regular one
   const activeConversationId = useActiveConversationId()
@@ -227,7 +230,6 @@ export function SpacePage() {
     // Load conversations if not already loaded for this space
     const initSpace = async () => {
       await useChatStore.getState().loadConversations(currentSpace.id)
-      if (useSpaceStore.getState().currentSpace?.id !== currentSpace.id) return
 
       // Preload other spaces' conversations in background for PULSE global visibility
       const { haloSpace, spaces } = useSpaceStore.getState()
@@ -270,7 +272,7 @@ export function SpacePage() {
       if (pendingNav) {
         useChatStore.setState({ pendingPulseNavigation: null })
         useChatStore.getState().selectConversation(pendingNav)
-      } else if (spaceState.selectedAppChat || spaceState.selectedTeamChat) {
+      } else if (spaceState.selectedAppChat) {
         // Same-space links select the digital human before this page mounts.
         return
       } else if (spaceState.conversations.length > 0) {
@@ -384,14 +386,14 @@ export function SpacePage() {
             and clear the macOS traffic lights. */}
         <Header
           hidden={isCanvasMaximized}
-          title={!isMobile || selectedTeamChat ? currentConversationTitle : undefined}
+          title={!isMobile ? currentConversationTitle : undefined}
           left={
             <>
               {/* Space Selector - dropdown for switching spaces (includes icon + name + "Manage Spaces") */}
               <SpaceSelector />
 
               {/* Mobile: Chat History Panel as bottom sheet */}
-              {isMobile && (
+              {isMobile && hasConversations && (
                 <div className="ml-1">
                   <ChatHistoryPanel />
                 </div>
@@ -486,7 +488,7 @@ export function SpacePage() {
                     maxWidth: isCanvasOpen ? chatWidthMax : undefined,
                   }}
                 >
-                  {selectedTeamChat ? <TeamConversationHost spaceId={currentSpace.id} target={selectedTeamChat} /> : <ChatView isCompact={isCanvasOpen} />}
+                  <ChatView isCompact={isCanvasOpen} />
 
                   {/* Drag handle for chat width - only when canvas is open */}
                   {isCanvasOpen && (
@@ -524,7 +526,7 @@ export function SpacePage() {
           {/* Mobile Layout */}
           {isMobile && (
             <div className="flex-1 flex flex-col min-w-0 isolate">
-              {selectedTeamChat ? <TeamConversationHost spaceId={currentSpace.id} target={selectedTeamChat} /> : <ChatView isCompact={false} isVisible={!isCanvasOpen} />}
+              <ChatView isCompact={false} isVisible={!isCanvasOpen} />
             </div>
           )}
 

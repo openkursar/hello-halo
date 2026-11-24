@@ -11,10 +11,7 @@ import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistor
  */
 
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
-import { Loader2, MessageSquareMore } from 'lucide-react'
-import { LockedComposer } from './LockedComposer'
-import { AutomationAvatar } from '../apps/AutomationAvatar'
-import { ChangesScopeContext, type ChangesScope } from '../chat/changes-scope'
+import { Loader2, LockKeyhole, MessageSquareMore } from 'lucide-react'
 import { api } from '../../api'
 import { injectTeamSessionMessage } from './session-input'
 import { mergeArrivingMessages, withoutLiveInputs, withStoppedInputs } from '../../utils/live-inputs'
@@ -29,7 +26,6 @@ import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
 import { InterruptedBubble } from '../chat/InterruptedBubble'
 import { TurnErrorBubble } from '../chat/TurnErrorBubble'
 import { InputArea } from '../chat/InputArea'
-import { useConversationReferenceScope } from '../references'
 import { useConversationDetail } from '../../hooks/useConversationDetail'
 import { useTranslation } from '../../i18n'
 import type { Message, Thought, ImageAttachment } from '../../types'
@@ -59,8 +55,6 @@ export interface TeamSessionChatProps {
   readonly?: boolean
   /** Persistent explanation shown where the composer would normally be. */
   readonlyMessage?: string
-  /** Where the reader can go instead, inside the locked composer. */
-  readonlyAction?: React.ReactNode
   placeholder?: string
   emptyTitle?: string
   emptyContent?: React.ReactNode
@@ -69,12 +63,6 @@ export interface TeamSessionChatProps {
   topSlot?: React.ReactNode
   /** Rendered directly above the input (e.g. an "away" hint or active-door card). */
   aboveInput?: React.ReactNode
-  /** Navigation beside the composer, including read-only and offline surfaces. */
-  composerAdjacentSlot?: React.ReactNode
-  /** Label above each reply, naming the digital human that wrote it. */
-  senderName?: string
-  /** Who wrote the user messages, when it is not the reader (another person's member). */
-  authorName?: string
   /**
    * Draft mode: when `epochId` is null, this lazily creates the conversation on
    * the FIRST send and returns its epoch id — so the user lands on a ready input
@@ -94,14 +82,10 @@ type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
 export function TeamSessionChat({
   appId, spaceId, teamId, epochId, isRemote, ownerName, reachability = 'online',
-  readonly = false, readonlyMessage, readonlyAction, placeholder, emptyTitle, emptyHint, emptyContent, topSlot, aboveInput, composerAdjacentSlot, senderName, authorName, ensureEpochId, toolbarSlot, renderMessages, renderAfterStreaming, isBackgroundTurn, draftKey,
+  readonly = false, readonlyMessage, placeholder, emptyTitle, emptyHint, emptyContent, topSlot, aboveInput, ensureEpochId, toolbarSlot, renderMessages, renderAfterStreaming, isBackgroundTurn, draftKey,
 }: TeamSessionChatProps) {
   const { t } = useTranslation()
   const conversationId = buildTeamSessionKey(appId, teamId, epochId ?? 'none')
-  const changesScope = useMemo<ChangesScope | null>(
-    () => (!isRemote && spaceId && epochId ? { spaceId, conversationId } : null),
-    [isRemote, spaceId, epochId, conversationId]
-  )
 
   useConversationDetail(conversationId)
 
@@ -114,8 +98,6 @@ export function TeamSessionChat({
     () => (peekTeamSessionHistory(appId, spaceId, teamId, epochId ?? '')?.length ? 'loaded' : 'loading')
   )
   const [isStale, setIsStale] = useState(false)
-  /** The owner's computer is offline and this one holds no copy of the transcript. */
-  const [ownerUnreachable, setOwnerUnreachable] = useState(false)
   /**
    * A send that arrived but started no turn, so no reply is coming on this
    * screen. Deliberately not routed through `setSessionError`: that is the error
@@ -142,10 +124,9 @@ export function TeamSessionChat({
     .filter(({ message }) => message.source === 'injection')
     .map(({ message }) => ({ message, textBlockVersion: 0, textOffset: 0 })), [liveInputs])
   const visibleMessages = backgroundTurn && isGenerating ? withoutLiveInputs(messages, ownAdditions) : quietMessages
-  const latestReply = visibleMessages.findLastIndex(message => message.role === 'assistant')
   // The notice after a stop says how the latest reply ended, so that reply's own note steps aside meanwhile.
   const interruptedNoticeShown = !isGenerating && !!error && errorType === 'interrupted'
-  const endedReply = interruptedNoticeShown && latestReply >= 0 ? visibleMessages[latestReply] : undefined
+  const latestReply = interruptedNoticeShown ? visibleMessages.findLast(message => message.role === 'assistant') : undefined
   const hasLiveInputs = isGenerating && (backgroundTurn ? ownAdditions : liveInputs ?? []).length > 0
   const follower = useStickToBottom({ live: isGenerating && !backgroundTurn })
   // What the person opened in each reply's work, kept as the running reply is replaced by its saved one.
@@ -154,19 +135,6 @@ export function TeamSessionChat({
   // The steps just streamed stand in for the finished reply's while they load, if its work was left open.
   const streamedThoughts = !isGenerating && latestReplyId && workView.carriedOpen(latestReplyId) && thoughts.length > 0 ? thoughts : undefined
   const { scroller, scrollToBottom, detach, isFollowing } = follower
-  const referenceScope = useConversationReferenceScope()
-
-  // A reveal scrolls up to one of these messages; following would pull it back down.
-  const messagesRef = useRef(messages)
-  messagesRef.current = messages
-  useEffect(() => {
-    const onNavigate = (event: Event) => {
-      const { messageId } = (event as CustomEvent<{ messageId: string }>).detail
-      if (messagesRef.current.some(message => message.id === messageId)) detach()
-    }
-    window.addEventListener('search:navigate-to-message', onNavigate)
-    return () => window.removeEventListener('search:navigate-to-message', onNavigate)
-  }, [detach])
 
   const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
 
@@ -216,7 +184,6 @@ export function TeamSessionChat({
     seqCursorRef.current = 0
     ownTurnRef.current = false
     setIsStale(false)
-    setOwnerUnreachable(false)
     setDeliveredNoReply(null)
   }, [appId, epochId])
 
@@ -268,7 +235,6 @@ export function TeamSessionChat({
       if (generation !== historyGeneration.current) return
       if (res.success && res.data) {
         setIsStale(res.stale === true)
-        setOwnerUnreachable(false)
         const batch = (res.data as Message[]) ?? []
         const seqOf = (m: Message): number | undefined => (m as { seq?: number }).seq
         const maxSeq = batch.reduce((hi, m) => Math.max(hi, seqOf(m) ?? 0), cursor)
@@ -290,7 +256,6 @@ export function TeamSessionChat({
         }
       } else {
         console.warn('[TeamSessionChat] History rejected', { teamId, appId, epochId, error: res.error })
-        if (res.error === 'history-owner-unreachable') setOwnerUnreachable(true)
         if (!silent) failedRefresh()
       }
     } catch (err) {
@@ -305,13 +270,6 @@ export function TeamSessionChat({
     void loadMessages()
     return () => { historyGeneration.current++ }
   }, [loadMessages])
-
-  const prevReachability = useRef(reachability)
-  useEffect(() => {
-    const back = prevReachability.current !== reachability && reachability !== 'offline'
-    prevReachability.current = reachability
-    if (back && (ownerUnreachable || isStale)) void loadMessages()
-  }, [reachability, ownerUnreachable, isStale, loadMessages])
 
   const prevGen = useRef(isGenerating)
   useEffect(() => {
@@ -475,12 +433,12 @@ export function TeamSessionChat({
     }
   }, [appId, spaceId, teamId, conversationId, epochId, ensureEpochId, isRemote, ownerName, resetSession, scrollToBottom, markSendFailed, t])
 
-  const handleInject = useCallback(async (content: string, references?: ContentReference[], images?: ImageAttachment[]) => {
+  const handleInject = useCallback(async (content: string, references?: ContentReference[]) => {
     if (isRemote || readonly || !epochId) return false
     try {
       return await injectTeamSessionMessage(
-        { appId, conversationId, message: content, ...(references?.length ? { references } : {}), ...(images?.length ? { images } : {}) },
-        () => handleSend(content, images, undefined, references?.length ? { references } : undefined)
+        { appId, conversationId, message: content, ...(references?.length ? { references } : {}) },
+        () => handleSend(content, undefined, undefined, references?.length ? { references } : undefined)
       )
     } catch (error) {
       useChatStore.getState().setSessionError(conversationId,
@@ -553,12 +511,10 @@ export function TeamSessionChat({
     onAnswerQuestion={readonly ? undefined : handleAnswerQuestion}
     apiRetry={apiRetry}
     onStop={handleStop}
-    senderName={senderName}
-    authorName={authorName}
   />
 
   return (
-    <ChangesScopeContext.Provider value={changesScope}>
+    <>
       {loadState === 'loading' && topSlot && <div className="shrink-0 overflow-y-auto px-4 py-3">{topSlot}</div>}
       {loadState === 'loading' ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
@@ -567,7 +523,7 @@ export function TeamSessionChat({
         </div>
       ) : (
         <div ref={epochId ? follower.scrollerRef : undefined} tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none" onScroll={handleScroll}>
-          <div ref={epochId ? follower.contentRef : undefined} className={`mx-auto py-5 ${composerAdjacentSlot ? 'max-w-[calc(var(--chat-reading-width)+3rem)] animate-member-swap px-6' : 'max-w-3xl px-4'}`}>
+          <div ref={epochId ? follower.contentRef : undefined} className="mx-auto max-w-3xl px-4 py-5">
             <WorkViewMemoryProvider memory={workView}>
             {topSlot}
 
@@ -580,18 +536,7 @@ export function TeamSessionChat({
               </div>
             )}
 
-            {loadState === 'error' && ownerUnreachable && !hasStreaming && !showRelayedTranscript && (
-              <div className={`flex flex-col items-center justify-center px-4 text-center ${senderName ? 'min-h-[55vh]' : 'py-16'}`}>
-                {senderName && <span className="mb-4 flex opacity-65 grayscale-[.6]"><AutomationAvatar name={senderName} size={44} /></span>}
-                <p className="text-sm text-muted-foreground">
-                  {ownerName
-                    ? t('{{owner}}’s computer is offline. This chat will appear once it’s back online.', { owner: ownerName })
-                    : t('The owner’s computer is offline. This chat will appear once it’s back online.')}
-                </p>
-              </div>
-            )}
-
-            {loadState === 'error' && !ownerUnreachable && !hasStreaming && !showRelayedTranscript && (
+            {loadState === 'error' && !hasStreaming && !showRelayedTranscript && (
               <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
                 <p className="text-sm text-muted-foreground">{t('Couldn\u2019t load the chat history right now.')}</p>
                 <button
@@ -611,15 +556,15 @@ export function TeamSessionChat({
               </div>
             )}
 
-            {(loadState !== 'error' || messages.length > 0) && (renderMessages ? renderMessages(visibleMessages, hasStreaming ? thoughts : [], endedReply?.id) : visibleMessages.map((message, index) => (
+            {(loadState !== 'error' || messages.length > 0) && (renderMessages ? renderMessages(visibleMessages, hasStreaming ? thoughts : [], latestReply?.id) : visibleMessages.map(message => (
               <div key={message.clientKey ?? message.id} className={transcriptRowClass(message)}>
-                <MessageRow message={message} hideBrowserLiveView hideTerminalOpen senderName={senderName} authorName={authorName} actionsOnHover={index !== latestReply}
-                  endingShownBelow={message === endedReply} streamedThoughts={message.id === latestReplyId ? streamedThoughts : undefined} />
+                <MessageRow message={message} hideBrowserLiveView hideTerminalOpen endingShownBelow={interruptedNoticeShown && message === latestReply}
+                  streamedThoughts={message.id === latestReplyId ? streamedThoughts : undefined} />
               </div>
             )))}
 
             {(hasStreaming || hasLiveInputs || showRelayedTranscript || pendingQuestion) && <div className="mt-4">{readonlyQuestion ?? (backgroundTurn
-              ? (pendingQuestion || hasLiveInputs) && <StreamingSection streamingContent="" isStreaming={false} thoughts={[]} isThinking={false} textBlockVersion={0} liveInputs={hasLiveInputs ? ownAdditions : undefined} showBrowserViewButton={false} pendingQuestion={pendingQuestion} onAnswerQuestion={handleAnswerQuestion} senderName={senderName} authorName={authorName} />
+              ? (pendingQuestion || hasLiveInputs) && <StreamingSection streamingContent="" isStreaming={false} thoughts={[]} isThinking={false} textBlockVersion={0} liveInputs={hasLiveInputs ? ownAdditions : undefined} showBrowserViewButton={false} pendingQuestion={pendingQuestion} onAnswerQuestion={handleAnswerQuestion} />
               : streamingSection)}</div>}
             {hasStreaming && renderAfterStreaming?.(thoughts)}
 
@@ -676,15 +621,39 @@ export function TeamSessionChat({
         </div>
       )}
 
-      {composerAdjacentSlot && <div className="shrink-0 min-w-0 px-6"><div className="mx-auto max-w-chat">{composerAdjacentSlot}</div></div>}
-      {/* Input region — when sending is impossible the composer stays, locked, with the reason inside.
-          Read-only means this person may not write here, not that they may not interrupt: a teammate's
-          turn runs on its owner's machine and this is the only screen that shows it. */}
-      {readonly ? <LockedComposer roomy={!!composerAdjacentSlot} reason={readonlyMessage ?? t('This conversation is read-only.')} action={readonlyAction} onStop={isGenerating ? handleStop : undefined} />
-      : reachability === 'offline' ? (
-        <LockedComposer roomy={!!composerAdjacentSlot} reason={`${t('{{name}} is offline right now.', { name: ownerName || t('This teammate') })} ${t('Messages can’t reach them while their machine is disconnected. Wait for them to come back online, then continue here.')}`} />
+      {/* Input region — a read-only surface keeps its permission boundary visible. */}
+      {readonly ? <div className="shrink-0 border-t border-border p-3">
+        <div role="status" className="flex min-h-11 items-center gap-2 rounded-xl bg-secondary/60 px-3 py-2 text-xs text-muted-foreground">
+          <LockKeyhole size={14} className="shrink-0" />
+          <span className="min-w-0 flex-1">{readonlyMessage ?? t('This conversation is read-only.')}</span>
+          {/* Read-only means this person may not WRITE here, not that they may
+              not interrupt. A teammate's turn runs on its owner's machine and
+              this is the only screen that shows it, so without this the work
+              visibly running in front of someone cannot be stopped by anyone. */}
+          {isGenerating && (
+            <button
+              onClick={handleStop}
+              className="flex h-7 shrink-0 items-center gap-1.5 rounded-lg bg-destructive/10 px-2 text-destructive transition-colors hover:bg-destructive/20 active:bg-destructive/30"
+              title={t('Stop generation')}
+            >
+              <span className="h-2.5 w-2.5 rounded-sm border-2 border-current" />
+              <span className="hidden sm:inline">{t('Stop')}</span>
+            </button>
+          )}
+        </div>
+      </div> : reachability === 'offline' ? (
+        <div className="shrink-0 border-t border-border p-3">
+          <div className="rounded-xl border border-halo-warning/30 bg-halo-warning/5 px-4 py-3">
+            <p className="text-sm font-medium text-foreground">
+              {t('{{name}} is offline right now.', { name: ownerName || t('This teammate') })}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('Messages can’t reach them while their machine is disconnected. Wait for them to come back online, then continue here.')}
+            </p>
+          </div>
+        </div>
       ) : (
-        <div className={composerAdjacentSlot ? 'shrink-0' : 'shrink-0 p-3'}>
+        <div className="shrink-0 p-3">
           {reachability === 'away' && (
             <p className="mb-2 px-1 text-xs text-halo-warning">
               {t('{{owner}} seems to have stepped away — replies may take a moment.', { owner: ownerName || t('This teammate') })}
@@ -694,7 +663,6 @@ export function TeamSessionChat({
           <InputArea
             key={inputIdentity.current.key}
             draftKey={draftKey}
-            referenceKey={referenceScope?.conversationId}
             toolbarSlot={toolbarSlot}
             hideToolsetControls
             hideKnowledgeControls
@@ -703,10 +671,10 @@ export function TeamSessionChat({
             onStop={handleStop}
             isGenerating={isGenerating}
             placeholder={placeholder ?? t('Type a message…')}
-            isCompact={!composerAdjacentSlot}
+            isCompact
           />
         </div>
       )}
-    </ChangesScopeContext.Provider>
+    </>
   )
 }

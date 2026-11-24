@@ -1,86 +1,11 @@
 import { taskTime } from '../../../src/renderer/components/team/workbench/time'
 import { executionTurns } from '../../../src/renderer/components/team/workbench/model'
-import { failureCause, progressSummary, taskProgress } from '../../../src/renderer/components/team/workbench/progress'
-import { failureFix } from '../../../src/renderer/components/team/workbench/progress-labels'
 import { describe, expect, it } from 'vitest'
-import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, filterTaskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions, taskParticipants, reportGaps } from '../../../src/renderer/components/team/workbench/model'
-import { undeliveredParties } from '../../../src/shared/apps/team-failures'
+import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions, undeliveredParties, taskParticipants, reportGaps } from '../../../src/renderer/components/team/workbench/model'
 import { conversationLabel } from '../../../src/renderer/components/team/run-history'
-import { isTeamWork, liveTaskCount, memberState, settingsFailure, sortByState, taskState } from '../../../src/renderer/components/team/detail/status'
-import type { TeamConversation, TeamActivity, TeamDetail, RosterMember, BlackboardTask, BlackboardFinding } from '../../../src/shared/apps/team-types'
+import type { TeamConversation, TeamActivity, RosterMember, BlackboardTask, BlackboardFinding } from '../../../src/shared/apps/team-types'
 import type { ActivityEntry } from '../../../src/shared/apps/app-types'
 const task = (patch: Partial<TeamConversation> = {}): TeamConversation => ({ epochId: 'task', teamId: 'team', kind: 'native', label: 'Task', readonly: false, startedAt: 1, lastActivityAt: 1, ...patch })
-describe('task detail status projection', () => {
-  const detail = { team: { id: 'team' }, roster: [], activities: [] } as unknown as TeamDetail
-  const member = (patch: Partial<RosterMember> = {}): RosterMember => ({ appId: 'a', memberName: 'Ana', role: 'Writer', isLead: false, spaceId: null, status: 'idle', ...patch })
-  it('puts a decision waiting for the user above completion and live work', () => {
-    expect(taskState(detail, task({ waitingForMe: true, completed: true })).key).toBe('waiting_user')
-    expect(taskState(detail, task({ waitingForMe: true })).key).toBe('waiting_user')
-    expect(taskState(detail, task({ completed: true })).key).toBe('done')
-    expect(taskState(detail, task({ active: true })).key).toBe('running')
-  })
-  it('counts a local pending decision even before the task row says so', () => {
-    const withDecision = { ...detail, pendingEscalations: [{ entryId: 'e', appId: 'a', memberName: 'Ana', question: 'Ship it?', epochId: 'task' }] } as never
-    const state = taskState(withDecision, task({ completed: true }))
-    expect(state.key).toBe('waiting_user')
-    expect(state.fact).toEqual({ kind: 'decision', memberName: 'Ana', question: 'Ship it?' })
-  })
-  it('reports a member error on the task it is busy with', () => {
-    const failing = { ...detail, roster: [member({ status: 'error', busy: [{ epochId: 'task', label: 'Draft', kind: 'conversation' }] })] } as never
-    expect(taskState(failing, task({ active: true })).key).toBe('error')
-  })
-  it('reports the failure the task list read from the whole record, once nobody is on the task', () => {
-    const failure = { appId: 'a', activityId: 'lost', senderAppId: 'lead' }
-    const withMember = { ...detail, roster: [member()] } as never
-    const state = taskState(withMember, task({ failure }))
-    expect(state.key).toBe('error')
-    expect(state.fact).toEqual({ kind: 'error', memberName: 'Ana', failure })
-    expect(taskState(withMember, task({ failure, active: true })).key).toBe('running')
-  })
-  it('names the member whose model settings the user can change to restart a stopped task', () => {
-    const roster = [member(), member({ appId: 'b', owner: 'Bo', sameMachine: false })]
-    const withMembers = { ...detail, roster } as never
-    const stopped = (appId: string, reason: string, patch: Partial<TeamConversation> = {}) => task({ failure: { appId, activityId: 'x', reason }, ...patch })
-    expect(settingsFailure(withMembers, stopped('a', 'model_not_found'))).toEqual({ member: roster[0], cause: 'model' })
-    expect(settingsFailure(withMembers, stopped('a', 'HTTP 429 rate limit'))?.cause).toBe('quota')
-    expect(settingsFailure(withMembers, stopped('a', 'ECONNRESET'))).toBeNull()
-    expect(settingsFailure(withMembers, stopped('b', 'model_not_found'))).toBeNull()
-    expect(settingsFailure(withMembers, stopped('a', 'model_not_found', { active: true }))).toBeNull()
-    expect(settingsFailure(withMembers, task({ failure: { appId: 'a', activityId: 'x', senderAppId: 'lead' } }))).toBeNull()
-  })
-  it('does not infer a stuck state from silence', () => {
-    expect(taskState(detail, task()).key).toBe('idle')
-  })
-  it('settles work nobody is on by its board', () => {
-    expect(taskState(detail, task({ subtasks: { done: 2, open: 0 } })).key).toBe('done')
-    expect(taskState(detail, task({ subtasks: { done: 1, open: 1 } })).key).toBe('idle')
-    expect(taskState(detail, task({ active: true, subtasks: { done: 2, open: 0 } })).key).toBe('running')
-  })
-  it('tells team work from a question the lead simply answered', () => {
-    expect(isTeamWork(task())).toBe(false)
-    for (const patch of [{ subtasks: { done: 0, open: 1 } }, { teamwork: true }, { artifactCount: 1 }, { kind: 'run' as const }]) expect(isTeamWork(task(patch))).toBe(true)
-  })
-  it('orders tasks by need, then by recency', () => {
-    const rows = [task({ epochId: 'done', completed: true, lastActivityAt: 9 }), task({ epochId: 'old', lastActivityAt: 1 }), task({ epochId: 'ask', waitingForMe: true, lastActivityAt: 0 }), task({ epochId: 'new', lastActivityAt: 5 })]
-    expect(sortByState(detail, rows).map(row => row.epochId)).toEqual(['ask', 'new', 'old', 'done'])
-  })
-  it('lets offline outrank any stale member status', () => {
-    expect(memberState(detail, member({ presence: 'offline', status: 'error' }))).toBe('offline')
-    expect(memberState(detail, member({ busy: [{ epochId: 'task', label: 'Draft', kind: 'conversation' }] }))).toBe('working')
-    expect(memberState(detail, member())).toBe('idle')
-  })
-  it('counts each live task once, however many members are on it, and ignores work outside the listed tasks', () => {
-    const busy = (...ids: string[]) => ids.map(epochId => ({ epochId, label: '', kind: 'conversation' as const }))
-    const roster = [member({ appId: 'a', busy: busy('t1', 't2') }), member({ appId: 'b', busy: busy('t1') }), member({ appId: 'c', busy: busy('elsewhere') }), member({ appId: 'd' })]
-    const rows = ['t1', 't2', 't3'].map(epochId => task({ epochId, teamwork: true }))
-    expect(liveTaskCount({ ...detail, roster } as never, rows)).toBe(2)
-    expect(liveTaskCount({ ...detail, roster } as never, [task({ epochId: 't1' })])).toBe(0)
-  })
-  it('does not count work held up on the user as running', () => {
-    expect(liveTaskCount(detail, [task({ teamwork: true, active: true, waitingForMe: true }), task({ epochId: 't2', teamwork: true, active: true })])).toBe(1)
-  })
-})
-
 describe('task workbench projection', () => {
   it('keeps questions above completion and source grouping', () => {
     expect(taskGroup(task({ waitingUser: true, waitingForMe: true, completed: true, kind: 'im' }))).toBe('attention')
@@ -185,174 +110,12 @@ describe('conversation collaboration awareness', () => {
     const rows = taskConversationRows([received, human], [update('before'), update('after', { createdAt: 3000 })], 'task', 'kb')
     expect(rows.map(row => row.id)).toEqual(['activity:before', 'message:human', 'activity:after'])
   })
-  it('draws what a member received right before its reply on that reply, and keeps the rest as a segment', () => {
-    const human = { ...received, id: 'human', role: 'user' as const, content: 'Hello', timestamp: new Date(500).toISOString(), metadata: { teamTriggerKind: 'human_message' } }
-    const reply = { id: 'reply', role: 'assistant' as const, content: 'Done', timestamp: new Date(4000).toISOString() }
-    const events = [
-      update('report', { actorAppId: 'writer', targetAppId: 'kb', createdAt: 1000 }),
-      update('failed', { actorAppId: 'writer', targetAppId: 'kb', status: 'undelivered', createdAt: 1500 }),
-      update('ask', { actorAppId: 'kb', targetAppId: 'writer', createdAt: 2000 }),
-    ]
-    const rows = taskConversationRows([human, reply] as never, events, 'task', 'kb')
-    expect(rows.map(row => row.id)).toEqual(['message:human', 'activity:failed', 'activity:ask', 'message:reply'])
-    expect((rows[rows.length - 1] as { openers?: TeamActivity[] }).openers?.map(row => row.id)).toEqual(['report'])
-    expect(rows.flatMap(row => row.activities ?? []).map(row => row.id)).toEqual(['failed', 'ask'])
-  })
   it('deduplicates live echoes and does not fold delivery failures', () => {
     const first = update('first')
     const rows = taskConversationRows([], [first, first, update('failed', { status: 'undelivered', createdAt: 2000 }), update('last', { createdAt: 3000 })], 'task', 'kb')
     expect(rows).toHaveLength(3)
     expect(rows[0].activities).toHaveLength(1)
     expect(rows[1].activities?.[0].status).toBe('undelivered')
-  })
-  it('on the homepage, hangs a reply\'s hand-offs under it and leaves failures to the conversation bar', () => {
-    const human = { ...received, id: 'human', content: 'Go', timestamp: new Date(500).toISOString(), metadata: { teamTriggerKind: 'human_message' } }
-    const reply = { id: 'reply', role: 'assistant' as const, content: 'On it', timestamp: new Date(600).toISOString() }
-    const events = [
-      update('to-writer', { actorAppId: 'kb', targetAppId: 'writer', createdAt: 1000 }),
-      update('lost', { actorAppId: 'kb', targetAppId: 'analyst', status: 'undelivered', createdAt: 1100 }),
-      update('to-analyst', { actorAppId: 'kb', targetAppId: 'analyst', createdAt: 1200 }),
-      update('back', { actorAppId: 'writer', targetAppId: 'kb', createdAt: 1300 }),
-    ]
-    const compact = taskConversationRows([human, reply] as never, events, 'task', 'kb', [], { compact: true })
-    expect(compact.map(row => row.id)).toEqual(['message:human', 'message:reply', 'activity:to-writer'])
-    expect((compact[1] as { dispatches?: TeamActivity[] }).dispatches?.map(row => row.id)).toEqual(['to-writer', 'to-analyst'])
-    expect(compact[2].activities?.map(row => row.id)).toEqual(['back'])
-    const full = taskConversationRows([human, reply] as never, events, 'task', 'kb')
-    expect(full.some(row => (row as { dispatches?: TeamActivity[] }).dispatches)).toBe(false)
-    expect(full.flatMap(row => row.activities ?? []).map(row => row.id)).toContain('lost')
-  })
-  it('on the homepage, hangs a hand-off sent mid-turn under that turn\'s reply, not the one before', () => {
-    const human = { ...received, id: 'human', content: 'Who are you?', timestamp: new Date(500).toISOString(), metadata: { teamTriggerKind: 'human_message' } }
-    const intro = { id: 'intro', role: 'assistant' as const, content: 'Tell me when to start', timestamp: new Date(600).toISOString() }
-    const accepted = { id: 'accepted', role: 'assistant' as const, content: 'Accepted, writer drafts next', timestamp: new Date(3000).toISOString() }
-    const events = [
-      update('report', { actorAppId: 'analyst', targetAppId: 'kb', createdAt: 1000 }),
-      update('to-writer', { actorAppId: 'kb', targetAppId: 'writer', createdAt: 2000 }),
-    ]
-    const compact = taskConversationRows([human, intro, accepted] as never, events, 'task', 'kb', [], { compact: true })
-    expect(compact.map(row => row.id)).toEqual(['message:human', 'message:intro', 'message:accepted'])
-    expect((compact[1] as { dispatches?: TeamActivity[] }).dispatches).toBeUndefined()
-    expect((compact[2] as { openers?: TeamActivity[] }).openers?.map(row => row.id)).toEqual(['report'])
-    expect((compact[2] as { dispatches?: TeamActivity[] }).dispatches?.map(row => row.id)).toEqual(['to-writer'])
-  })
-  it('on the homepage, does not name a message on the reply\'s sender line that its work already shows', () => {
-    const human = { ...received, id: 'human', content: 'Go', timestamp: new Date(500).toISOString(), metadata: { teamTriggerKind: 'human_message' } }
-    const arrival = { id: 'arrived', role: 'system' as const, source: 'team-message' as const, content: 'Draft ready', timestamp: new Date(1000).toISOString(), metadata: { teamId: 'team', fromMemberName: 'Writer', inputMode: 'live' as const, inputReplyId: 'reply', correlationId: 'mid-turn' } }
-    const reply = { id: 'reply', role: 'assistant' as const, content: 'Done', timestamp: new Date(3000).toISOString() }
-    const events = [
-      update('mid-turn', { actorAppId: 'writer', targetAppId: 'kb', correlationId: 'mid-turn', createdAt: 1000 }),
-      update('before', { actorAppId: 'analyst', targetAppId: 'kb', correlationId: 'earlier', createdAt: 800 }),
-    ]
-    const compact = taskConversationRows([human, reply, arrival] as never, events, 'task', 'kb', [], { compact: true })
-    expect((compact[compact.length - 1] as { openers?: TeamActivity[] }).openers?.map(row => row.id)).toEqual(['before'])
-    const full = taskConversationRows([human, reply, arrival] as never, events, 'task', 'kb')
-    expect((full[full.length - 1] as { openers?: TeamActivity[] }).openers?.map(row => row.id)).toEqual(['before', 'mid-turn'])
-  })
-  it('on the homepage, shows replies to teammates as dialogue before the user ever writes', () => {
-    const reply = { ...received, id: 'reply', role: 'assistant' as const, content: 'Found 29 items', timestamp: new Date(3000).toISOString() }
-    const nudge = { ...received, id: 'nudge-reply', role: 'assistant' as const, content: 'Still working', timestamp: new Date(5000).toISOString(), metadata: { teamTriggerKind: 'periodic_check' } }
-    const events = [
-      update('ask', { actorAppId: 'lead', targetAppId: 'kb', createdAt: 1000 }),
-      update('report', { actorAppId: 'kb', targetAppId: 'lead', createdAt: 4000 }),
-    ]
-    const compact = taskConversationRows([received, reply, nudge] as never, events, 'task', 'kb', [], { compact: true })
-    expect(compact.map(row => row.id)).toEqual(['message:reply'])
-    expect((compact[0] as { openers?: TeamActivity[] }).openers?.map(row => row.id)).toEqual(['ask'])
-    expect((compact[0] as { dispatches?: TeamActivity[] }).dispatches?.map(row => row.id)).toEqual(['report'])
-    const full = taskConversationRows([received, reply, nudge] as never, events, 'task', 'kb')
-    expect(full.some(row => row.message)).toBe(false)
-  })
-  it('on the homepage, shows a reply to a teammate turn-end report as dialogue', () => {
-    const stopped = { ...received, id: 'stopped', content: '[System] Analyst finished', timestamp: new Date(2000).toISOString(), metadata: { teamTriggerKind: 'member_stopped' } }
-    const reply = { ...stopped, id: 'reply', role: 'assistant' as const, content: 'Analysis received, drafting now', timestamp: new Date(3000).toISOString() }
-    const events = [
-      update('analysis', { actorAppId: 'analyst', targetAppId: 'lead', createdAt: 1000 }),
-      update('to-writer', { actorAppId: 'lead', targetAppId: 'writer', createdAt: 4000 }),
-    ]
-    const compact = taskConversationRows([stopped, reply] as never, events, 'task', 'lead', [], { compact: true })
-    expect(compact.map(row => row.id)).toEqual(['message:reply'])
-    expect((compact[0] as { openers?: TeamActivity[] }).openers?.map(row => row.id)).toEqual(['analysis'])
-    expect((compact[0] as { dispatches?: TeamActivity[] }).dispatches?.map(row => row.id)).toEqual(['to-writer'])
-  })
-})
-
-describe('conversation progress', () => {
-  const member = (appId: string, patch: Partial<RosterMember> = {}) => ({ appId, memberName: appId, ...patch }) as RosterMember
-  const work = (id: string, assigneeAppId: string, status: BlackboardTask['status'], updatedAt = 1) => ({ id, title: id, assigneeAppId, createdByAppId: 'lead', status, updatedAt, epochId: 'task' }) as BlackboardTask
-  const base = {
-    epochId: 'task', leadAppId: 'lead', activities: [] as TeamActivity[], tasks: [] as BlackboardTask[], decisions: [], waitingAppIds: [] as string[], completed: false,
-    roster: [member('lead'), member('writer'), member('analyst'), member('bystander')], participants: new Set(['lead', 'writer', 'analyst']),
-  }
-  it('puts what needs the user first, then work in flight, and only covers who took part', () => {
-    const progress = taskProgress({
-      ...base,
-      roster: [member('lead'), member('writer', { busy: [{ epochId: 'task', label: 'Task', kind: 'native' } as never] }), member('analyst'), member('bystander')],
-      tasks: [work('draft', 'writer', 'in_progress'), work('numbers', 'analyst', 'done'), work('review', 'analyst', 'pending')],
-      decisions: [{ id: 'd1', appId: 'analyst', question: 'Use Q3 data?' }],
-    })
-    expect(progress.members.map(row => [row.appId, row.state])).toEqual([['analyst', 'waiting'], ['writer', 'working'], ['lead', 'idle']])
-    expect(progress.members[0]).toMatchObject({ decisionId: 'd1', question: 'Use Q3 data?' })
-    expect(progress.members[1].taskTitle).toBe('draft')
-    expect(progress.counts).toMatchObject({ done: 1, in_progress: 1, pending: 1 })
-    expect(progress.total).toBe(3)
-  })
-  it('shows a lost message until the recipient acts again, and a decision only its owner can answer', () => {
-    const lost = { ...activity, id: 'lost', actorAppId: 'lead', targetAppId: 'writer', status: 'undelivered', createdAt: 1000 } as TeamActivity
-    const failed = taskProgress({ ...base, activities: [lost], waitingAppIds: ['analyst'] })
-    expect(failed.members.find(row => row.appId === 'writer')).toMatchObject({ state: 'failed', activityId: 'lost', senderAppId: 'lead' })
-    expect(failed.members.find(row => row.appId === 'analyst')).toEqual({ appId: 'analyst', state: 'waiting' })
-    const recovered = taskProgress({ ...base, activities: [lost, { ...activity, id: 'later', actorAppId: 'writer', targetAppId: 'lead', createdAt: 2000 } as TeamActivity] })
-    expect(recovered.members.find(row => row.appId === 'writer')?.state).not.toBe('failed')
-    const turn = taskProgress({ ...base, activities: [{ ...activity, id: 'turn', kind: 'reply', actorAppId: 'analyst', targetAppId: 'lead', status: 'error', createdAt: 1000 } as TeamActivity] })
-    expect(turn.members.find(row => row.appId === 'analyst')).toEqual({ appId: 'analyst', state: 'failed', activityId: 'turn', reason: 'Investigate' })
-  })
-  it('keeps why a turn failed and tells what kind of trouble it was', () => {
-    const failedTurn = (subject: string, status: TeamActivity['status'] = 'error') => taskProgress({ ...base, activities: [{ ...activity, id: 'turn', kind: 'reply', actorAppId: 'analyst', targetAppId: 'lead', status, subject, createdAt: 1000 } as TeamActivity] })
-      .members.find(row => row.appId === 'analyst')!
-    const model = failedTurn('The member\'s turn failed: Anthropic API error (400): The model or service ID de…')
-    expect(model.reason).toBe('Anthropic API error (400): The model or service ID de…')
-    expect(failureCause(model)).toBe('model')
-    expect(failureCause(failedTurn('The member\'s turn failed: 401 invalid x-api-key'))).toBe('account')
-    expect(failureCause(failedTurn('The member\'s turn failed: 429 rate_limit_error'))).toBe('quota')
-    expect(failureCause(failedTurn('The member\'s turn failed: 529 overloaded_error'))).toBe('service')
-    expect(failureCause(failedTurn('The member\'s turn failed: fetch failed'))).toBe('network')
-    expect(failureCause(failedTurn('The member did not finish in time (timeout).', 'timeout'))).toBe('timeout')
-    expect(failureCause(failedTurn('The member\'s turn failed: something odd'))).toBeNull()
-  })
-  it('says who has to fix a failed turn: you through its model settings, or its owner', () => {
-    const t = ((key: string, vars?: Record<string, string>) => key.replace(/\{\{(\w+)\}\}/g, (_, name) => vars?.[name] ?? '')) as never
-    const row = { appId: 'analyst', state: 'failed' as const, activityId: 'turn', reason: 'Anthropic API error (400): The model or service ID de…' }
-    expect(failureFix(row, [member('analyst')], t)).toEqual({ text: 'Needs you', changeModel: true })
-    expect(failureFix(row, [member('analyst', { owner: 'Lin', sameMachine: false })], t)).toEqual({ text: 'Lin needs to change its model settings' })
-    expect(failureFix({ ...row, reason: 'something odd' }, [member('analyst', { owner: 'Lin', sameMachine: false })], t)).toEqual({ text: 'Lin needs to look into it' })
-    expect(failureFix({ ...row, reason: 'fetch failed' }, [member('analyst', { owner: 'Lin', sameMachine: false })], t)).toEqual({})
-    expect(failureFix({ ...row, senderAppId: 'lead' }, [member('analyst')], t)).toEqual({})
-  })
-  it('reads everyone as done once the conversation is completed', () => {
-    const progress = taskProgress({ ...base, completed: true, tasks: [work('draft', 'writer', 'done')] })
-    expect(progress.members.map(row => row.state)).toEqual(['done', 'done', 'done'])
-    expect(progress.members.find(row => row.appId === 'writer')?.taskTitle).toBe('draft')
-    expect(progress.finished).toBe(true)
-  })
-  it('reads the work as finished once every subtask is settled and nobody is still at it', () => {
-    const settled = [work('draft', 'writer', 'done'), work('extra', 'analyst', 'rejected')]
-    expect(taskProgress({ ...base, tasks: settled }).finished).toBe(true)
-    expect(taskProgress({ ...base, tasks: [work('draft', 'writer', 'done'), work('review', 'analyst', 'pending')] }).finished).toBe(false)
-    expect(taskProgress({ ...base, tasks: [work('extra', 'analyst', 'rejected')] }).finished).toBe(false)
-    expect(taskProgress({ ...base }).finished).toBe(false)
-    const leadBusy = [member('lead', { busy: [{ epochId: 'task', label: 'Task', kind: 'native' } as never] }), member('writer'), member('analyst')]
-    expect(taskProgress({ ...base, roster: leadBusy, tasks: settled }).finished).toBe(false)
-    expect(taskProgress({ ...base, tasks: settled, waitingAppIds: ['analyst'] }).finished).toBe(false)
-  })
-  it('sums up the most pressing state as a count, leaving the lead\'s own work to the stream', () => {
-    const counts = { done: 0, in_progress: 0, blocked: 0, pending: 0, rejected: 0 }
-    const of = (...members: Parameters<typeof progressSummary>[0]['members']) => progressSummary({ members, counts, total: 0, finished: false }, 'lead')
-    expect(of({ appId: 'a', state: 'failed' }, { appId: 'b', state: 'waiting', decisionId: 'd' }, { appId: 'c', state: 'waiting', decisionId: 'e' })).toEqual({ kind: 'waiting', count: 2 })
-    expect(of({ appId: 'a', state: 'failed' }, { appId: 'b', state: 'waiting' })).toEqual({ kind: 'failed', count: 1 })
-    expect(of({ appId: 'b', state: 'waiting' }, { appId: 'c', state: 'working' })).toEqual({ kind: 'decision', count: 1 })
-    expect(of({ appId: 'lead', state: 'working' })).toEqual({ kind: 'idle' })
-    expect(progressSummary({ members: [], counts, total: 0, finished: true }, 'lead')).toEqual({ kind: 'done' })
   })
 })
 
@@ -371,7 +134,6 @@ describe('shared decision visibility', () => {
       answer: 'Approved', answeredAt: 3000,
     }])
     expect(taskConversationRows([], [request, answer], 'task', 'remote')[0].sharedDecision?.answer).toBe('Approved')
-    expect(taskConversationRows([], [request, answer], 'task', 'remote', [], { sharedDecisions: false })).toEqual([])
   })
 
   it('does not duplicate a shared decision that has a local actionable entry', () => {
@@ -396,7 +158,7 @@ it('keeps invalid-date reports without fabricating dates or breaking ordering', 
   expect(rows.slice(1).every(row => row.at === null)).toBe(true)
 })
 
-it('shows each activity as its own record, newest first', () => {
+it('shows newest activity groups first while preserving request and reply order inside them', () => {
   const beforeMidnight = Date.parse('2026-09-14T23:59:00Z')
   const afterMidnight = Date.parse('2026-09-15T00:01:00Z')
   const rows = taskActivityRows([], [
@@ -405,27 +167,11 @@ it('shows each activity as its own record, newest first', () => {
     { ...activity, id: 'summary', kind: 'run_end', createdAt: afterMidnight + 1000 },
     { ...activity, id: 'unknown', kind: 'finding', createdAt: NaN },
   ])
-  expect(rows.map(row => row.id)).toEqual(['summary', 'response', 'request', 'unknown'])
-  expect(rows.every(row => row.activities?.length === 1)).toBe(true)
+  expect(rows.map(row => row.id)).toEqual(['summary', 'request', 'unknown'])
+  expect(rows[1].at).toBe(afterMidnight)
+  expect(rows[1].activities?.map(item => item.id)).toEqual(['request', 'response'])
 })
 
-
-it('filters records by kind', () => {
-  const report = { appId: 'kb', message: { ...received, id: 'report', role: 'assistant' as const, metadata: {} } }
-  const failedReport = { appId: 'writer', message: { ...received, id: 'failed-report', role: 'assistant' as const, metadata: {}, error: 'crashed' } }
-  const rows = taskActivityRows([report, failedReport], [
-    activity,
-    { ...activity, id: 'output', kind: 'finding', actorAppId: 'writer', targetAppId: null },
-    { ...activity, id: 'summary', kind: 'run_end', actorAppId: 'lead', targetAppId: null },
-    { ...activity, id: 'decision', kind: 'decision', actorAppId: 'kb', targetAppId: null, status: 'escalation' },
-    { ...activity, id: 'lost', actorAppId: 'writer', targetAppId: 'kb', status: 'undelivered' },
-  ])
-  const ids = (kind: Parameters<typeof filterTaskActivityRows>[1]) => filterTaskActivityRows(rows, kind).map(row => row.activities?.[0]?.id ?? row.message?.id).sort()
-  expect(filterTaskActivityRows(rows, null)).toBe(rows)
-  expect(ids('output')).toEqual(['output', 'summary'])
-  expect(ids('decision')).toEqual(['decision'])
-  expect(ids('failed')).toEqual(['failed-report', 'lost'])
-})
 
 it('validates timestamps across message and board date representations', () => {
   for (const value of [undefined, null, '', 'bad date', NaN, Infinity, 8640000000000001]) expect(taskTime(value)).toBeNull()
@@ -465,7 +211,7 @@ describe('conversation audience across agent turns', () => {
     const messages = [human, notice, result]
     expect(conversationMessages(messages)).toEqual([human, result])
     expect(taskReportMessages(messages)).toEqual([notice])
-    expect(taskActivityRows([{ appId: 'lead', message: notice }], [])[0]).toMatchObject({ appId: 'lead', message: notice, notice: true })
+    expect(taskActivityRows([{ appId: 'lead', message: notice }], [])[0].notifications).toEqual([{ appId: 'lead', message: notice }])
   })
 
   it('keeps system-triggered results internal when no human started the conversation', () => {
@@ -473,12 +219,20 @@ describe('conversation audience across agent turns', () => {
     expect(taskReportMessages([notice, result])).toEqual([notice, result])
   })
 
-  it('shows each notification as its own record', () => {
+  it('groups consecutive notifications without crossing member boundaries or other records', () => {
     const second = { ...notice, id: 'notice-2', timestamp: new Date(2000).toISOString() }
-    const rows = taskActivityRows([{ appId: 'lead', message: notice }, { appId: 'lead', message: second }], [])
-    expect(rows.map(row => row.message?.id)).toEqual(['notice-2', 'notice'])
-    expect(rows.every(row => row.notice)).toBe(true)
+    const records = [{ appId: 'lead', message: notice }, { appId: 'lead', message: second }]
+    expect(taskActivityRows(records, [])[0].notifications).toHaveLength(2)
+    expect(taskActivityRows([records[0], { ...records[1], appId: 'kb' }], [])).toHaveLength(2)
+    expect(taskActivityRows(records, [{ ...activity, createdAt: 1500 }])).toHaveLength(3)
   })
+})
+
+it('bounds each expandable activity group during a long message burst', () => {
+  const events = Array.from({ length: 1200 }, (_, i) => ({ ...activity, id: `burst-${i}`, createdAt: 1000 + i }))
+  const rows = taskActivityRows([], events)
+  expect(rows.flatMap(row => row.activities ?? [])).toHaveLength(1200)
+  expect(rows.every(row => (row.activities?.length ?? 0) <= 20)).toBe(true)
 })
 
 describe('conversation labels', () => {

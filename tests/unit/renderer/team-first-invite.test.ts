@@ -50,7 +50,6 @@ vi.mock('../../../src/renderer/stores/team.store', () => {
 vi.mock('../../../src/renderer/stores/apps.store', () => ({
   useAppsStore: Object.assign(() => null, { getState: () => ({ apps: [] }) }),
 }))
-vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: () => vi.fn() }))
 vi.mock('../../../src/renderer/components/capability/DelegationPresetPicker', () => ({ DelegationPresetPicker: () => null }))
 vi.mock('../../../src/renderer/components/team/lendable-items', () => ({ inventoryOf: vi.fn(), loadLendableItems: vi.fn() }))
 

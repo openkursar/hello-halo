@@ -36,8 +36,6 @@ vi.mock('../../../src/renderer/stores/conversation-list-prefs.store', async orig
   useConversationListPrefs: (select: any) => select(env.prefs),
 }))
 vi.mock('../../../src/renderer/hooks/useAppChatConversationRows', () => ({ useAppChatConversationRows: () => env.rows }))
-vi.mock('../../../src/renderer/stores/team-chat-pins.store', () => ({ useTeamChatPinsStore: (select: any) => select({ pinned: {} }), teamTaskKey: (team: string, epoch: string) => `team:${team}:${epoch}` }))
-vi.mock('../../../src/renderer/stores/team-chat-hidden.store', () => ({ useTeamChatHiddenStore: Object.assign((select: any) => select({ hidden: {}, hide: vi.fn(), reconcile: vi.fn() }), { getState: () => ({ restore: vi.fn() }) }) }))
 vi.mock('../../../src/renderer/components/chat/conversation-list-panes', () => ({
   ROW_HEIGHT: 32,
   usePaneResize: () => ({ height: 160, dragging: false, handleProps: {} }),
@@ -46,13 +44,10 @@ vi.mock('../../../src/renderer/components/chat/conversation-list-panes', () => (
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({ AutomationAvatar: () => null }))
 vi.mock('../../../src/renderer/services/home-telemetry', () => ({ markEntry: vi.fn(), trackHome: vi.fn(), trackNavigate: vi.fn() }))
 vi.mock('../../../src/renderer/utils/conversation-navigation', () => ({ openDigitalHumanChat: vi.fn() }))
-vi.mock('../../../src/renderer/utils/people-navigation', () => ({ openPersonActivity: vi.fn(), openPersonTeam: vi.fn() }))
+vi.mock('../../../src/renderer/utils/people-navigation', () => ({ openPersonActivity: vi.fn() }))
 
 import { ConversationList } from '../../../src/renderer/components/chat/ConversationList'
 import { TaskStatusDot } from '../../../src/renderer/components/pulse/TaskStatusDot'
-import { ConversationGroupHeader } from '../../../src/renderer/components/chat/ConversationGroupHeader'
-import { TeamConversationRow } from '../../../src/renderer/components/chat/TeamConversationRow'
-import { openPersonTeam } from '../../../src/renderer/utils/people-navigation'
 
 class ComponentRunner {
   values: any[] = []; index = 0
@@ -77,8 +72,7 @@ function listedChat(appId: string) {
 function headingDot(appId: string) {
   const pane = nodes(render()).find(node => node.props?.data?.some?.((row: any) => row.type === 'dh-header'))
   const heading = pane.props.data.find((row: any) => row.type === 'dh-header' && row.appId === appId)
-  const group = pane.props.itemContent(0, heading)
-  return group.props.status?.type === TaskStatusDot ? group.props.status.props.status : undefined
+  return nodes(pane.props.itemContent(0, heading)).find(node => node.type === TaskStatusDot)?.props.status
 }
 
 /** The status dot on the folded "Digital Humans" heading, if any. */
@@ -95,51 +89,6 @@ beforeEach(() => {
 describe('a digital human at work', () => {
   beforeEach(() => {
     env.prefs.sectionOpen = { s1: { 'digital-humans': true } }
-  })
-
-  it('shares header geometry and separates team detail navigation from group expansion', () => {
-    env.rows = [listedChat('lin')]
-    const pane = nodes(render()).find(node => node.props?.data?.some?.((row: any) => row.type === 'dh-header'))
-    const personal = pane.props.itemContent(0, pane.props.data.find((row: any) => row.type === 'dh-header'))
-    const onToggle = vi.fn()
-    const onSelected = vi.fn()
-    const team = new ComponentRunner().render(() => TeamConversationRow({
-      row: { type: 'team-header', key: 'team:t', teamId: 't', name: 'Crew', collapsed: false, avatar: { names: ['Lead', 'Writer'], overflow: 0 } },
-      spaceId: 's1', onToggle, onSelected, onRefresh: vi.fn(),
-    }))
-    expect(personal.type).toBe(ConversationGroupHeader)
-    expect(team.type).toBe(ConversationGroupHeader)
-    const personalLayout = ConversationGroupHeader(personal.props)
-    const teamLayout = ConversationGroupHeader(team.props)
-    expect(personalLayout.props.className).toBe(teamLayout.props.className)
-    expect(personalLayout.props.children[0].props.className).toBe(teamLayout.props.children[0].props.className)
-    expect(personalLayout.props.children[1].props.className).toBe(teamLayout.props.children[1].props.className)
-    vi.mocked(openPersonTeam).mockClear()
-    team.props.avatar.props.onClick()
-    expect(openPersonTeam).toHaveBeenCalledWith({ teamId: 't' })
-    expect(onSelected).toHaveBeenCalledTimes(1)
-    expect(onToggle).not.toHaveBeenCalled()
-    team.props.onToggle()
-    expect(onToggle).toHaveBeenCalledWith('t', true)
-    expect(openPersonTeam).toHaveBeenCalledTimes(1)
-  })
-
-  it.each(['idle', 'generating'])('aligns nested conversation titles with group names while %s', status => {
-    const chat = listedChat('lin')
-    env.rows = [chat]
-    env.statuses = new Map([[chat.id, status]])
-    env.prefs.appGroupOpen = { s1: { lin: true } }
-    const pane = nodes(render()).find(node => node.props?.data?.some?.((row: any) => row.type === 'dh-header'))
-    const header = pane.props.itemContent(0, pane.props.data.find((row: any) => row.type === 'dh-header'))
-    const layout = ConversationGroupHeader(header.props)
-    expect(layout.props.className).toContain('pl-2.5')
-    expect(layout.props.children[0].props.className).toContain('justify-start')
-    expect(layout.props.className).toContain('gap-0.5')
-    expect(layout.props.children[0].props.className).toContain('w-[18px]')
-    expect(layout.props.children[1].props.className).toContain('pl-1.5')
-    const item = pane.props.itemContent(0, { type: 'dh-item', key: chat.id, row: chat, standalone: false })
-    expect(item.props.className).toContain('pl-9')
-    if (status !== 'idle') expect(nodes(item).find(node => node.type === TaskStatusDot)?.props.className).toContain('absolute left-6')
   })
 
   it('shows on its heading while it answers an IM chat the list does not show', () => {

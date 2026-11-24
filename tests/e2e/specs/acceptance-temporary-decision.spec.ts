@@ -8,7 +8,6 @@ import { buildTeamSessionKey } from '../../../src/shared/apps/team-types'
 import { parseAppChatKey } from '../../../src/shared/apps/im-keys'
 import { test, expect, acceptance } from '../fixtures/acceptance-automation'
 import { sendAcceptanceMessage, waitForAcceptanceIdle } from '../fixtures/acceptance-app'
-import { openCollaborationTeamView } from '../fixtures/helpers'
 import { openManagedPerson } from '../fixtures/acceptance-management'
 import { readDecision, pendingDecisions } from '../fixtures/acceptance-decisions'
 import { collaboratorReceipt, hasRetiredDailyTeamTool, type CollaboratorReceipt } from '../fixtures/acceptance-collaboration'
@@ -45,7 +44,9 @@ async function waitForMemberIdle(page: Page, scope: Scope, appId: string) {
 }
 
 async function openMemberRoom(page: Page, scope: Scope, member: CollaboratorReceipt) {
-  await openCollaborationTeamView(page)
+  const summary = page.getByRole('group', { name: scope.name, exact: true }).last()
+  await expect(summary).toBeVisible()
+  await summary.getByRole('button', { name: 'View team', exact: true }).click()
   const header = page.getByRole('heading', { name: scope.name, level: 1, exact: true }).locator('xpath=ancestor::header')
   await expect(header).toBeVisible()
   const select = page.getByRole('button', { name: `View ${member.name}’s work in this task`, exact: true })

@@ -141,7 +141,6 @@ GET    /api/teams/<teamId>/chat-messages                           [ai]       te
 POST   /api/teams/<teamId>/members/<appId>/send                    [ai]       team                    Send a message to one team member in one conversation and wait for its reply
 POST   /api/teams/<teamId>/members/<appId>/stop                    [ai]       team                    Stop the turn one team member is running in one conversation
 GET    /api/teams/<teamId>/artifacts                               [ai]       team                    List files each member produced in the current or latest run
-GET    /api/teams/<teamId>/outputs                                 [ai]       team                    List every file a team produced across its work, newest first
 GET    /api/teams/<teamId>/conversations                           [ai]       team                    List a team's conversations (its tasks and chats), newest first
 POST   /api/teams/<teamId>/conversations                           [ai]       team                    Open a new team conversation
 PATCH  /api/teams/<teamId>/conversations/<epochId>                 [ai]       team                    Rename a team conversation

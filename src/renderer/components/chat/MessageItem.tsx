@@ -41,7 +41,6 @@ import { SourceChips } from './SourceChips'
 import { GoalSetBadge } from '../goal'
 import { messageReferences } from '../../../shared/content-reference'
 import { useSpaceStore } from '../../stores/space.store'
-import { useChangesScope } from './changes-scope'
 import {
   MessageReferenceChips,
   MessageTaskCard,
@@ -61,8 +60,6 @@ interface MessageItemProps {
   hideTerminalOpen?: boolean  // Hide the "Open" button in TerminalTaskCard (no canvas to open a terminal in)
   /** Show copy and token usage only while the reply (a `group/reply` ancestor) is hovered or focused. */
   actionsOnHover?: boolean
-  /** A user message written by someone other than the reader: drawn on the left, the reader's own side being the right. */
-  alignStart?: boolean
   /** The chat shows how this reply ended right below it, so its own note steps aside. */
   hideEnding?: boolean
 }
@@ -259,9 +256,8 @@ function ThoughtItem({ thought }: { thought: Thought }) {
   )
 }
 
-export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false, allowViewChanges = false, actionsOnHover = false, alignStart = false, hideEnding = false }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false, allowViewChanges = false, actionsOnHover = false, hideEnding = false }: MessageItemProps) {
   const isUser = message.role === 'user'
-  const alignEnd = isUser && !alignStart
   const isStreaming = (message as any).isStreaming
   const [copied, setCopied] = useState(false)
   const { t } = useTranslation()
@@ -270,10 +266,6 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   const loadMessageThoughts = useChatStore(s => s.loadMessageThoughts)
   const currentSpaceId = useChatStore(s => s.currentSpaceId)
   const currentConversationId = useChatStore(selectActiveConversationId)
-  const providedScope = useChangesScope()
-  const changesScope = providedScope ?? (allowViewChanges && currentSpaceId && currentConversationId
-    ? { spaceId: currentSpaceId, conversationId: currentConversationId }
-    : null)
 
   // Whether thoughts are stored separately (null = separated, not yet loaded)
   const hasThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
@@ -467,39 +459,38 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         <FileChangesFooter
           fileChangesSummary={fileChangesSummary}
           thoughts={message.thoughts}
-          reply={changesScope
-            ? { ...changesScope, messageId: message.id, timestamp: message.timestamp }
-            : undefined}
+          reply={
+            allowViewChanges && currentSpaceId && currentConversationId
+              ? { spaceId: currentSpaceId, conversationId: currentConversationId, messageId: message.id, timestamp: message.timestamp }
+              : undefined
+          }
         />
       )}
 
-      {/* Copy button + token usage for a finished assistant reply. Each shows on its own:
-          digital-human and team transcripts carry no per-reply tokenUsage.
+      {/* Copy button + token usage - only for completed assistant messages with tokenUsage.
           The icon sits on the reply's left edge, so the button is pulled left by its own
           padding; a hover fill would then hang outside that edge, hence colour only.
           Revealed on hover only where a pointer can hover: touch keeps it in view, and the
           hidden state takes no pointer so a tap on empty space cannot copy. */}
-      {!isUser && !isWorking && !isStreaming && (!!message.content || message.tokenUsage) && (
+      {!isUser && !isWorking && message.tokenUsage && (
         <div className={`flex items-center mt-1 ${actionsOnHover ? 'opacity-0 pointer-events-none transition-opacity group-hover/reply:opacity-100 group-hover/reply:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto' : ''}`}>
-          {!!message.content && (
-            <button
-              onClick={handleCopyMessage}
-              className="flex items-center gap-1.5 -ml-1.5 h-6 px-2 text-xs text-faint-foreground
-                hover:text-foreground transition-colors"
-              title={t('Copy message')}
-            >
-              {copied ? (
-                <>
-                  <Check size={14} className="text-green-400" />
-                  <span className="text-green-400">{t('Copied')}</span>
-                </>
-              ) : (
-                <Copy size={14} />
-              )}
-            </button>
-          )}
+          <button
+            onClick={handleCopyMessage}
+            className="flex items-center gap-1.5 -ml-1.5 h-6 px-2 text-xs text-faint-foreground
+              hover:text-foreground transition-colors"
+            title={t('Copy message')}
+          >
+            {copied ? (
+              <>
+                <Check size={14} className="text-green-400" />
+                <span className="text-green-400">{t('Copied')}</span>
+              </>
+            ) : (
+              <Copy size={14} />
+            )}
+          </button>
 
-          {message.tokenUsage && <TokenUsageIndicator tokenUsage={message.tokenUsage} previousCost={previousCost} />}
+          <TokenUsageIndicator tokenUsage={message.tokenUsage} previousCost={previousCost} />
         </div>
       )}
     </div>
@@ -511,14 +502,14 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
     <span className="text-[11px] leading-4 text-muted-foreground">{t('Stopped, not handled')}</span>
   )
   const content = userHasCards ? (
-    <div className={`flex flex-col ${alignEnd ? 'items-end' : 'items-start'} gap-1.5 ${isInContainer ? 'w-full' : 'max-w-[85%]'}`}>
+    <div className={`flex flex-col items-end gap-1.5 ${isInContainer ? 'w-full' : 'max-w-[85%]'}`}>
       {task && <MessageTaskCard task={task} />}
-      <MessageReferenceChips references={userReferences} baseDir={spaceRoot} className={`max-w-full ${alignEnd ? 'justify-end' : 'justify-start'}`} />
+      <MessageReferenceChips references={userReferences} baseDir={spaceRoot} className="max-w-full justify-end" />
       {!userBubbleEmpty && bubble}
       {stoppedNote}
     </div>
   ) : stoppedUnhandled ? (
-    <div className={`flex flex-col ${alignEnd ? 'items-end' : 'items-start'} gap-1 ${isInContainer ? 'w-full' : 'max-w-[85%]'}`}>
+    <div className={`flex flex-col items-end gap-1 ${isInContainer ? 'w-full' : 'max-w-[85%]'}`}>
       {bubble}
       {stoppedNote}
     </div>
@@ -537,7 +528,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   // Normal case: wrap with flex container
   return (
     <div
-      className={`flex ${alignEnd ? 'justify-end' : 'justify-start'} animate-fade-in`}
+      className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-fade-in`}
       data-message-id={message.id}
     >
       {content}

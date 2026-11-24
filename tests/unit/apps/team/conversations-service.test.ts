@@ -26,8 +26,8 @@ import { TeamStore } from '../../../../src/main/apps/team/store'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../src/main/apps/team/migrations'
 import { createTeamService } from '../../../../src/main/apps/team/service'
 import type { TeamServiceDeps, PendingEscalationRecord } from '../../../../src/main/apps/team/service'
-import type { Team, TeamMember, TeamEpoch, RosterBusyEntry, EpochEndReason } from '../../../../src/shared/apps/team-types'
-import { nativeConversationChatKey, memberChatKey, spaceCollabChatKey } from '../../../../src/shared/apps/im-keys'
+import type { Team, TeamMember, TeamEpoch, RosterBusyEntry } from '../../../../src/shared/apps/team-types'
+import { nativeConversationChatKey, memberChatKey } from '../../../../src/shared/apps/im-keys'
 
 const SPACE = 'space-a'
 const TEAM_ID = 'team-1'
@@ -58,7 +58,7 @@ function makeRuntime(store: TeamStore, busyByApp: Map<string, RosterBusyEntry[]>
     getObservableStatus: (teamId: string) => store.getTeamById(teamId)?.status ?? 'idle',
     getMemberBusy: (appId: string) => busyByApp.get(appId) ?? [],
     startEpoch: vi.fn(),
-    ensureConversationEpoch: (teamId: string, chatKey: string, title?: string, createdBy?: string, entryAppId?: string): TeamEpoch => {
+    ensureConversationEpoch: (teamId: string, chatKey: string, title?: string): TeamEpoch => {
       const existing = store.getOpenConversationEpoch(teamId, chatKey)
       if (existing) return existing
       const epoch: TeamEpoch = {
@@ -66,13 +66,12 @@ function makeRuntime(store: TeamStore, busyByApp: Map<string, RosterBusyEntry[]>
         summary: null, lifecycle: 'conversation', chatKey, title: title ?? null,
       }
       store.insertEpoch(epoch, 'event')
-      if (createdBy || entryAppId) store.updateWorkItem(epoch.id, { ...(createdBy ? { createdBy } : {}), ...(entryAppId ? { entryAppId } : {}) })
       return epoch
     },
     renameConversationEpoch: (teamId: string, epochId: string, title: string | null) => store.renameEpoch(epochId, title),
     noteEpochTurn: vi.fn(),
     sealEpoch: vi.fn(),
-    sealConversationEpoch: vi.fn(async (teamId: string, epochId: string, reason: EpochEndReason = 'stopped') => store.endEpoch(epochId, Date.now(), reason, null)),
+    sealConversationEpoch: vi.fn(async (teamId: string, epochId: string) => store.endEpoch(epochId, Date.now(), 'stopped', null)),
     requestSeal: vi.fn(),
     captureReport: vi.fn(),
     buildPromptContext: vi.fn(),
@@ -88,14 +87,10 @@ describe('TeamService — conversations + pending escalations', () => {
   let pending: PendingEscalationRecord[]
 
   function build() {
-    return createTeamService(buildDeps())
-  }
-
-  function buildDeps(): TeamServiceDeps {
     const runtime = makeRuntime(store, busyByApp)
-    return {
+    const deps: TeamServiceDeps = {
       store,
-      appManager: { getApp: (id: string) => ({ id, spaceId: SPACE, spec: { name: id } }), listApps: ({ spaceId }: { spaceId: string }) => spaceId === SPACE ? [{ id: LEAD_APP }, { id: MEMBER_APP }] : [] } as never,
+      appManager: { getApp: (id: string) => ({ id, spaceId: SPACE, spec: { name: id } }) } as never,
       getRuntime: () => runtime as never,
       spaces: { spaceExists: () => true, createMemberSpace: () => 'ms' },
       listArtifacts: vi.fn(async () => []),
@@ -103,6 +98,7 @@ describe('TeamService — conversations + pending escalations', () => {
       getPendingEscalations: () => pending,
       describeChatKey: () => 'WeCom Group',
     }
+    return createTeamService(deps)
   }
 
   beforeEach(() => {
@@ -119,76 +115,13 @@ describe('TeamService — conversations + pending escalations', () => {
 
   afterEach(() => { dbManager.closeAll() })
 
-  it('pages native homepage tasks without reading whole-team histories', async () => {
+  it('new tasks addressed to the same member have independent contexts and titles', async () => {
     const svc = build()
-    const first = await svc.openConversation(TEAM_ID, 'First', MEMBER_APP)
-    const second = await svc.openConversation(TEAM_ID, 'Second', MEMBER_APP)
-    const fullRead = vi.spyOn(store, 'listEpochsByTeam')
-    const stats = vi.spyOn(store, 'getConversationStats')
-    const page = svc.listNativeTasks({ spaceId: SPACE, limit: 1 })
-    expect(page.items).toHaveLength(1)
-    expect(page.items[0]).toMatchObject({ teamId: TEAM_ID, teamName: 'Team', spaceId: SPACE, kind: 'native' })
-    expect(page.nextCursor).toBeTruthy()
-    const next = svc.listNativeTasks({ spaceId: SPACE, limit: 1, cursor: page.nextCursor! })
-    expect(new Set([...page.items, ...next.items].map(item => item.epochId))).toEqual(new Set([first.epochId, second.epochId]))
-    expect(next.nextCursor).toBeNull()
-    expect(fullRead).not.toHaveBeenCalled()
-    expect(stats.mock.calls.every(call => call[2]?.length === 1 && call[3] === false)).toBe(true)
-    expect(svc.listNativeTasks({ spaceId: 'other' }).items).toEqual([])
-    expect(() => svc.listNativeTasks({ spaceId: 'other', cursor: page.nextCursor! })).toThrow('cursor')
-    expect(() => svc.listNativeTasks({ spaceId: SPACE, limit: 0 })).toThrow('limit')
-  })
-
-  it('resolves old pins within space scope without a continuation cursor', async () => {
-    const svc = build()
-    const old = await svc.openConversation(TEAM_ID, 'Pinned', MEMBER_APP)
-    for (let i = 0; i < 31; i++) {
-      const recent = await svc.openConversation(TEAM_ID, `Recent ${i}`, MEMBER_APP)
-      store.touchEpoch(recent.epochId, Date.now() + 1000 + i)
-    }
-    expect(svc.listNativeTasks({ spaceId: SPACE }).items.map(item => item.epochId)).not.toContain(old.epochId)
-    const epochIds = [old.epochId, 'missing', old.epochId]
-    const page = svc.listNativeTasks({ spaceId: SPACE, epochIds, limit: 100 })
-    expect(page.items.map(item => item.epochId)).toEqual([old.epochId])
-    expect(page.nextCursor).toBeNull()
-    expect(svc.listNativeTasks({ spaceId: 'other', epochIds }).items).toEqual([])
-    expect(svc.listNativeTasks({ spaceId: SPACE, epochIds: [] })).toEqual({ items: [], nextCursor: null })
-    const allIds = store.listEpochsByTeam(TEAM_ID).map(epoch => epoch.id)
-    expect(svc.listNativeTasks({ spaceId: SPACE, epochIds: allIds, limit: 1 }).items).toHaveLength(1)
-    expect(svc.listNativeTasks({ spaceId: SPACE, epochIds: allIds, limit: 1 }).nextCursor).toBeNull()
-  })
-
-  it.each([null, 'task', {}, [1], [''], ['   '], Array(101).fill('task')])(
-    'rejects invalid exact IDs %j', epochIds => {
-      const svc = build()
-      const query = vi.spyOn(store, 'listNativeTaskEpochs')
-      expect(() => svc.listNativeTasks({ spaceId: SPACE, epochIds: epochIds as never })).toThrow('epochIds')
-      expect(query).not.toHaveBeenCalled()
-    },
-  )
-
-  it('rejects exact IDs combined with even an empty cursor', () => {
-    expect(() => build().listNativeTasks({ spaceId: SPACE, epochIds: [], cursor: '' })).toThrow('cursor')
-  })
-
-  it('opens independent native conversations without assigning blackboard tasks', async () => {
-    const svc = build()
-    const insertTask = vi.spyOn(store, 'insertTask')
     const first = await svc.openConversation(TEAM_ID, 'First request', MEMBER_APP)
     const second = await svc.openConversation(TEAM_ID, 'Second request', MEMBER_APP)
-    const firstEpoch = store.getEpochById(first.epochId)!
-    const secondEpoch = store.getEpochById(second.epochId)!
-
     expect(first.epochId).not.toBe(second.epochId)
-    expect(firstEpoch).toMatchObject({ teamId: TEAM_ID, lifecycle: 'conversation', title: 'First request', endedAt: null,
-      workItem: { id: first.epochId, status: 'open', entryAppId: MEMBER_APP } })
-    expect(secondEpoch).toMatchObject({ teamId: TEAM_ID, lifecycle: 'conversation', title: 'Second request', endedAt: null,
-      workItem: { id: second.epochId, status: 'open', entryAppId: MEMBER_APP } })
-    expect(firstEpoch.chatKey).toMatch(/^native:/)
-    expect(secondEpoch.chatKey).toMatch(/^native:/)
-    expect(firstEpoch.chatKey).not.toBe(secondEpoch.chatKey)
-    expect(store.listTasksByTeam(TEAM_ID)).toEqual([])
-    expect(insertTask).not.toHaveBeenCalled()
+    expect(store.getEpochById(first.epochId)!.title).toBe('First request')
+    expect(store.getEpochById(second.epochId)!.title).toBe('Second request')
   })
 
   it('conversation summaries do not materialize activity bodies or repeat member reads', async () => {
@@ -233,90 +166,6 @@ describe('TeamService — conversations + pending escalations', () => {
     const { epochId } = await svc.openConversation(TEAM_ID)
     busyByApp.set(MEMBER_APP, [{ epochId, kind: 'conversation', label: '' }])
     expect(svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.active).toBe(true)
-  })
-
-  it('counts work handed out by message as subtasks while the board is empty', async () => {
-    const svc = build()
-    const { epochId } = await svc.openConversation(TEAM_ID, 'Brief')
-    const message = (id: string, actorAppId: string, targetAppId: string, createdAt: number) => store.insertActivity({
-      id, teamId: TEAM_ID, epochId, kind: 'message', actorAppId, targetAppId, subject: 'Draft', body: null,
-      refId: null, correlationId: null, status: 'sent', createdAt,
-    })
-    const subtasks = () => svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.subtasks
-    message('ask', LEAD_APP, MEMBER_APP, 100)
-    expect(subtasks()).toEqual({ done: 0, open: 1 })
-    message('answer', MEMBER_APP, LEAD_APP, 200)
-    expect(subtasks()).toEqual({ done: 1, open: 0 })
-    busyByApp.set(MEMBER_APP, [{ epochId, kind: 'conversation', label: '' }])
-    expect(subtasks()).toEqual({ done: 0, open: 1 })
-  })
-
-  it('names a failure still holding up any unfinished task, not only the current one', async () => {
-    const svc = build()
-    const { epochId: stuck } = await svc.openConversation(TEAM_ID, 'Stuck')
-    await svc.openConversation(TEAM_ID, 'Current')
-    const act = (id: string, patch: Record<string, unknown>) => store.insertActivity({
-      id, teamId: TEAM_ID, epochId: stuck, kind: 'message', actorAppId: LEAD_APP, targetAppId: MEMBER_APP, subject: 'Draft', body: null,
-      refId: null, correlationId: null, status: 'sent', createdAt: 100, ...patch,
-    })
-    const failure = () => svc.listConversations(TEAM_ID).find(c => c.epochId === stuck)?.failure
-    act('lost', { kind: 'reply', actorAppId: MEMBER_APP, targetAppId: LEAD_APP, status: 'undelivered', createdAt: 100 })
-    act('lead-later', { createdAt: 200 })
-    expect(failure()).toEqual({ appId: MEMBER_APP, activityId: 'lost', senderAppId: LEAD_APP })
-    act('member-back', { actorAppId: MEMBER_APP, targetAppId: LEAD_APP, createdAt: 300 })
-    expect(failure()).toBeUndefined()
-  })
-
-  it('leaves a failure in a cleared IM chat in its history, not on the list as a stop', () => {
-    const svc = build()
-    for (const [id, endReason] of [['im-cleared', 'cleared'], ['im-stopped', 'stopped']] as const) {
-      store.insertEpoch({
-        id, teamId: TEAM_ID, startedAt: 1, endedAt: 5, endReason, summary: null,
-        lifecycle: 'conversation', chatKey: `instance-1:group:${id}`,
-      })
-      store.insertActivity({
-        id: `${id}-lost`, teamId: TEAM_ID, epochId: id, kind: 'reply', actorAppId: MEMBER_APP, targetAppId: LEAD_APP, subject: 'Draft', body: null,
-        refId: null, correlationId: null, status: 'undelivered', createdAt: 100,
-      })
-    }
-    const list = svc.listConversations(TEAM_ID)
-    expect(list.find(c => c.epochId === 'im-cleared')?.failure).toBeUndefined()
-    expect(list.find(c => c.epochId === 'im-stopped')?.failure).toMatchObject({ appId: MEMBER_APP, activityId: 'im-stopped-lost' })
-  })
-
-  it('names who took part in a task in roster order, only on the team task list', async () => {
-    const svc = build()
-    const { epochId } = await svc.openConversation(TEAM_ID, 'Brief')
-    const { epochId: quiet } = await svc.openConversation(TEAM_ID, 'Quiet')
-    const participants = (id: string) => svc.listConversations(TEAM_ID).find(c => c.epochId === id)?.participantAppIds
-    store.insertActivity({
-      id: 'ask', teamId: TEAM_ID, epochId, kind: 'message', actorAppId: 'outsider-app', targetAppId: MEMBER_APP, subject: 'Draft', body: null,
-      refId: null, correlationId: null, status: 'sent', createdAt: 100,
-    })
-    expect(participants(epochId)).toEqual([MEMBER_APP])
-    busyByApp.set(LEAD_APP, [{ epochId, kind: 'conversation', label: '' }])
-    expect(participants(epochId)).toEqual(store.listMembersByTeam(TEAM_ID).map(member => member.appId))
-    expect(participants(quiet)).toBeUndefined()
-    expect(svc.listNativeTasks({ spaceId: SPACE }).items.every(item => !('participantAppIds' in item))).toBe(true)
-  })
-
-  it('counts whoever answered the user directly as taking part, though it left no team activity', async () => {
-    const answeredIn = new Map<string, string[]>()
-    const listAnsweredMembers = vi.fn((_teamId: string, appIds: readonly string[], epochIds: readonly string[]) =>
-      new Map([...answeredIn].filter(([epochId]) => epochIds.includes(epochId)).map(([epochId, ids]) => [epochId, ids.filter(id => appIds.includes(id))])))
-    const svc = createTeamService({ ...buildDeps(), listAnsweredMembers })
-    const { epochId: direct } = await svc.openConversation(TEAM_ID, 'Direct', MEMBER_APP)
-    const { epochId: lead } = await svc.openConversation(TEAM_ID, 'Lead')
-    const { epochId: quiet } = await svc.openConversation(TEAM_ID, 'Quiet')
-    answeredIn.set(direct, [MEMBER_APP])
-    answeredIn.set(lead, [LEAD_APP])
-    const participants = (id: string) => svc.listConversations(TEAM_ID).find(c => c.epochId === id)?.participantAppIds
-    expect(participants(direct)).toEqual([MEMBER_APP])
-    expect(participants(lead)).toEqual([LEAD_APP])
-    expect(participants(quiet)).toBeUndefined()
-    listAnsweredMembers.mockClear()
-    svc.listNativeTasks({ spaceId: SPACE })
-    expect(listAnsweredMembers).not.toHaveBeenCalled()
   })
 
   it('projects a teammate decision as visible but not answerable on this machine', async () => {
@@ -442,9 +291,6 @@ describe('TeamService — conversations + pending escalations', () => {
     busyByApp = new Map()
     const conv = svc.listConversations(TEAM_ID).find(c => c.epochId === 'conv-joined')
     expect(conv?.active).toBe(true)
-    // The task panel reads the same busy, or it calls a task finished that the list shows running.
-    const lead = svc.getEpochBoard(TEAM_ID, 'conv-joined')?.roster?.find(m => m.appId === LEAD_APP)
-    expect(lead?.busy).toEqual([{ epochId: 'conv-joined', kind: 'conversation', label: 'topic' }])
   })
 
   it('renameConversation relabels the session', async () => {
@@ -454,155 +300,11 @@ describe('TeamService — conversations + pending escalations', () => {
     expect(svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.label).toBe('B')
   })
 
-  it('refuses to rename a collaboration room, which takes its conversation\u2019s name', async () => {
-    const svc = build()
-    store.insertEpoch({
-      id: 'room', teamId: TEAM_ID, startedAt: 1, endedAt: null, endReason: null, summary: null,
-      lifecycle: 'conversation', chatKey: spaceCollabChatKey('conv-1'), title: 'First brief',
-    })
-    expect(() => svc.renameConversation(TEAM_ID, 'room', 'My name')).toThrow('conversation')
-    expect(store.getEpochById('room')?.title).toBe('First brief')
-    const { epochId } = await svc.openConversation(TEAM_ID)
-    svc.renameConversation(TEAM_ID, epochId, 'Renamed')
-    expect(store.getEpochById(epochId)?.title).toBe('Renamed')
-  })
-
   it('archiveConversation retains a completed task in the list', async () => {
     const svc = build()
     const { epochId } = await svc.openConversation(TEAM_ID)
     await svc.archiveConversation(TEAM_ID, epochId)
     expect(svc.listConversations(TEAM_ID)).toEqual([expect.objectContaining({ epochId, completed: true })])
-  })
-
-  it('archiving unfinished work records it as ended by the viewer, apart from finished work', async () => {
-    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
-    const { epochId } = await svc.openConversation(TEAM_ID)
-    await svc.archiveConversation(TEAM_ID, epochId)
-    expect(store.getEpochById(epochId)).toMatchObject({ endReason: 'ended', workItem: { status: 'completed', endedBy: 'me' } })
-    const task = svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)
-    expect(task).toMatchObject({ completed: true, endedManually: true, endedByMe: true })
-    expect(task?.endedBy).toBeUndefined()
-    store.updateWorkItem(epochId, { status: 'open' })
-    expect(store.getEpochById(epochId)?.workItem?.endedBy).toBeNull()
-  })
-
-  it('archiving work that already finished keeps it finished', async () => {
-    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
-    store.insertEpoch({
-      id: 'conv-done', teamId: TEAM_ID, startedAt: 1, endedAt: 5, endReason: 'completed', summary: 'Shipped',
-      lifecycle: 'conversation', chatKey: nativeConversationChatKey('done'),
-    })
-    await svc.archiveConversation(TEAM_ID, 'conv-done')
-    expect(store.getEpochById('conv-done')).toMatchObject({ endReason: 'completed', workItem: { endedBy: null } })
-    expect(svc.listConversations(TEAM_ID).find(c => c.epochId === 'conv-done')?.endedManually).toBeUndefined()
-  })
-
-  it('archiving open work whose subtasks are all done records it as finished, not ended by hand', async () => {
-    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
-    const { epochId } = await svc.openConversation(TEAM_ID)
-    store.insertTask({
-      id: 'task-done', teamId: TEAM_ID, epochId, title: 'Draft the brief',
-      assigneeAppId: LEAD_APP, status: 'done', resultRef: null, note: null,
-      parentId: null, createdByAppId: LEAD_APP, createdAt: 1, updatedAt: 1,
-    })
-    await svc.archiveConversation(TEAM_ID, epochId)
-    expect(store.getEpochById(epochId)).toMatchObject({ endReason: 'completed', workItem: { status: 'completed', endedBy: null } })
-    expect(svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.endedManually).toBeUndefined()
-  })
-
-  it('archiving work that stopped or failed judges it by its subtasks, as the list does', async () => {
-    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
-    const sealed = (id: string, endReason: EpochEndReason, status: 'done' | 'in_progress') => {
-      store.insertEpoch({
-        id, teamId: TEAM_ID, startedAt: 1, endedAt: 5, endReason, summary: null,
-        lifecycle: 'conversation', chatKey: nativeConversationChatKey(id),
-      })
-      store.insertTask({
-        id: `${id}-task`, teamId: TEAM_ID, epochId: id, title: 'Draft the brief',
-        assigneeAppId: LEAD_APP, status, resultRef: null, note: null,
-        parentId: null, createdByAppId: LEAD_APP, createdAt: 1, updatedAt: 1,
-      })
-    }
-    for (const reason of ['stopped', 'error', 'timeout'] as const) {
-      sealed(`done-${reason}`, reason, 'done')
-      await svc.archiveConversation(TEAM_ID, `done-${reason}`)
-      expect(store.getEpochById(`done-${reason}`)).toMatchObject({ endReason: 'completed', workItem: { status: 'completed', endedBy: null } })
-    }
-    sealed('open-stopped', 'stopped', 'in_progress')
-    await svc.archiveConversation(TEAM_ID, 'open-stopped')
-    expect(store.getEpochById('open-stopped')).toMatchObject({ endReason: 'ended', workItem: { endedBy: 'me' } })
-  })
-
-  it('archiving work handed out by message alone records it as ended by hand, whether or not it was answered', async () => {
-    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
-    const message = (epochId: string, id: string, actorAppId: string, targetAppId: string, createdAt: number) => store.insertActivity({
-      id, teamId: TEAM_ID, epochId, kind: 'message', actorAppId, targetAppId, subject: 'Draft', body: null,
-      refId: null, correlationId: null, status: 'sent', createdAt,
-    })
-    const { epochId: answered } = await svc.openConversation(TEAM_ID, 'Answered')
-    message(answered, 'ask-1', LEAD_APP, MEMBER_APP, 100)
-    message(answered, 'answer-1', MEMBER_APP, LEAD_APP, 200)
-    const { epochId: waiting } = await svc.openConversation(TEAM_ID, 'Waiting')
-    message(waiting, 'ask-2', LEAD_APP, MEMBER_APP, 100)
-    await svc.archiveConversation(TEAM_ID, answered)
-    await svc.archiveConversation(TEAM_ID, waiting)
-    expect(store.getEpochById(answered)).toMatchObject({ endReason: 'ended', workItem: { endedBy: 'me' } })
-    expect(store.getEpochById(waiting)).toMatchObject({ endReason: 'ended', workItem: { endedBy: 'me' } })
-  })
-
-  it('reads exchanges for settling with each body cut to its opening, not the whole report', async () => {
-    const svc = build()
-    const { epochId } = await svc.openConversation(TEAM_ID, 'Long')
-    store.insertActivity({
-      id: 'report', teamId: TEAM_ID, epochId, kind: 'finding', actorAppId: MEMBER_APP, targetAppId: null, subject: 'Report',
-      body: `Reviewed everything.\n\n${'x'.repeat(5000)}`, refId: null, correlationId: null, status: 'ok', createdAt: 100,
-    })
-    const [row] = store.listExchangesByEpochs(TEAM_ID, [epochId])
-    expect(row.body?.startsWith('Reviewed everything.')).toBe(true)
-    expect(row.body!.length).toBeLessThan(1000)
-  })
-
-  it('on a joined office, names the host owner who ended a task and refuses to end one locally', async () => {
-    const svc = createTeamService({ ...buildDeps(), getViewerIdentity: () => 'me' })
-    store.materializeJoinedOffice({
-      hostNodeId: 'host-1',
-      selfNodeId: 'viewer-1',
-      snapshot: {
-        team: { id: TEAM_ID, name: 'Team', goal: 'g', leadAppId: LEAD_APP, collabMode: 'free', hostNodeId: 'host-1' },
-        members: [
-          { appId: LEAD_APP, memberName: 'Lead', role: 'Lead', isLead: true, ownerNodeId: 'host-1', memberIdentity: 'host-person', ownerDisplayName: 'Zhang' },
-        ],
-        edges: [],
-      },
-    })
-    store.upsertEpoch({
-      id: 'conv-ended', teamId: TEAM_ID, startedAt: 1, endedAt: 5, endReason: 'ended', summary: null,
-      lifecycle: 'conversation', chatKey: nativeConversationChatKey('ended'),
-      workItem: { id: 'conv-ended', teamId: TEAM_ID, title: null, status: 'completed', createdBy: 'me', endedBy: 'host-person', createdAt: 1, updatedAt: 5 },
-    })
-    expect(svc.listConversations(TEAM_ID).find(c => c.epochId === 'conv-ended')).toMatchObject({ endedManually: true, endedBy: 'Zhang' })
-    expect(svc.listConversations(TEAM_ID).find(c => c.epochId === 'conv-ended')?.endedByMe).toBeUndefined()
-    store.insertEpoch({
-      id: 'conv-open', teamId: TEAM_ID, startedAt: 1, endedAt: null, endReason: null, summary: null,
-      lifecycle: 'conversation', chatKey: nativeConversationChatKey('open'),
-    })
-    await expect(svc.archiveConversation(TEAM_ID, 'conv-open')).rejects.toThrow('host')
-    expect(store.getEpochById('conv-open')?.endedAt).toBeNull()
-  })
-
-  it('tells when a conversation was ended as done, but not when it was stopped', () => {
-    const svc = build()
-    store.insertEpoch({
-      id: 'conv-done', teamId: TEAM_ID, startedAt: 1, endedAt: 5, endReason: 'completed', summary: 'Shipped',
-      lifecycle: 'conversation', chatKey: nativeConversationChatKey('done'),
-    })
-    store.insertEpoch({
-      id: 'conv-stopped', teamId: TEAM_ID, startedAt: 1, endedAt: 6, endReason: 'stopped', summary: null,
-      lifecycle: 'conversation', chatKey: nativeConversationChatKey('stopped'),
-    })
-    const list = svc.listConversations(TEAM_ID)
-    expect(list.find(c => c.epochId === 'conv-done')).toMatchObject({ finishedAt: 5 })
-    expect(list.find(c => c.epochId === 'conv-stopped')?.finishedAt).toBeUndefined()
   })
 
   it('getTeamDetail carries the team\u2019s pending escalations; other teams\u2019 are excluded', async () => {

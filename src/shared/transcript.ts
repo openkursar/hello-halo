@@ -46,15 +46,6 @@ export function isTeamTranscriptMessage(message: TranscriptMessage): boolean {
   return message.role === 'system' && message.source === 'team-message' && !!message.metadata?.teamId
 }
 
-/**
- * A wake the runtime writes to a lead (a turn-end report, a periodic check):
- * read by the model only. People follow the same state on the team bar.
- */
-export function isTeamSystemNotice(message: TranscriptMessage): boolean {
-  const kind = message.metadata?.teamTriggerKind
-  return isTeamTranscriptMessage(message) && (kind === 'member_stopped' || kind === 'periodic_check')
-}
-
 export function clampTranscriptLimit(limit: number | undefined): number {
   if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 1) return DEFAULT_TRANSCRIPT_PAGE_SIZE
   return Math.min(Math.floor(limit), MAX_TRANSCRIPT_PAGE_SIZE)

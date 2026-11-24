@@ -17,7 +17,6 @@ vi.mock('../../../src/renderer/components/chat/MessageRow', () => ({
 vi.mock('../../../src/renderer/components/apps/EscalationCard', () => ({ EscalationCard: () => null }))
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({ AutomationAvatar: () => null }))
 vi.mock('../../../src/renderer/components/chat/InjectionAnnotation', () => ({ InjectionAnnotation: () => null }))
-vi.mock('../../../src/renderer/components/chat/team-collab', () => ({ DispatchLine: () => null, OpenersLine: () => null }))
 
 import { TaskConversation } from '../../../src/renderer/components/team/workbench/TaskConversation'
 
@@ -27,7 +26,7 @@ const messages: Message[] = [
   { id: 'reply', role: 'assistant', content: 'Half of the pl', timestamp: at(2), metadata: { ending: 'stopped' } },
 ]
 const room = (endingShownBelow?: string) => renderToStaticMarkup(createElement(TaskConversation, {
-  messages, activities: [], epochId: 'epoch', appId: 'member', detail: { team: { id: 'team', name: 'Crew' }, members: [], roster: [] } as never,
+  messages, activities: [], epochId: 'epoch', appId: 'member', detail: { team: { id: 'team', name: 'Crew' }, members: [] } as never,
   showEmpty: false, onActivity: () => {}, endingShownBelow,
 }))
 

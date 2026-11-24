@@ -14,7 +14,7 @@ describe('digital human work projection', () => {
     ] as TeamListItem[]
     expect(visibleDigitalHumans(apps, teams).map(app => app.id)).toEqual(['system', 'owner', 'Lead researcher'])
   })
-  it('tells dedicated coordinators, labelled as a lead, apart from temporary collaborators', () => {
+  it('keeps coordinators out of the recipients a person addresses directly', () => {
     const teams = [
       { localMembers: [{ appId: 'system', isLead: true, isSystemCoordinator: true }, { appId: 'owner', isLead: true, isSystemCoordinator: false }] },
       { ephemeral: true, localMembers: [{ appId: 'throwaway', isLead: false, isSystemCoordinator: false }] },

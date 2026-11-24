@@ -58,7 +58,7 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
       'one digital human on its own schedule': 'digital-human',
       'installing a digital human to use as a member': 'digital-human',
       'binding an IM chat to a team member': 'channels',
-      'a temporary team for this conversation, or independent work inside it': 'tool:spawn_agent',
+      'assigning independent work inside this conversation': 'tool:spawn_agent',
     },
     withheld: [
       'Invite people from other computers into a team, revoke an invite, or join a team hosted on someone else\'s computer — each one decides who can reach this machine, so the user does it from the team\'s settings in the Halo app.',

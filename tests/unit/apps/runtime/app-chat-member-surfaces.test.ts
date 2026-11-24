@@ -182,7 +182,7 @@ vi.mock('../../../../src/main/services/agent/message-utils', () => ({
   formatCanvasContext: () => '',
 }))
 const { prepareNonVisionImageFallback } = vi.hoisted(() => ({ prepareNonVisionImageFallback: vi.fn((_params: unknown): any => undefined) }))
-vi.mock('../../../../src/main/services/agent/image-attachments', () => ({ prepareNonVisionImageFallback, modelAcceptsImages: () => false }))
+vi.mock('../../../../src/main/services/agent/image-attachments', () => ({ prepareNonVisionImageFallback }))
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getApiCredentials: vi.fn(async () => ({ provider: 'anthropic' })),
   getApiCredentialsForSelection: vi.fn(async () => ({ provider: 'anthropic' })),
@@ -1079,38 +1079,12 @@ describe('live messages keep the current turn envelope', () => {
     const credentials = { provider: 'openai' as const, model: 'captured-nonvision', baseUrl: 'https://example.invalid', apiKey: '' }
     vi.mocked(getApiCredentialsForSelection).mockResolvedValueOnce(credentials)
     await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: 'app-chat:app-member:local:direct:image-snapshot', message: 'start' })
-    v2Sessions.set('app-chat:app-member:local:direct:image-snapshot', { imageInput: { ocrAvailable: true } })
     prepareNonVisionImageFallback.mockReturnValue({ contextBlock: '<halo_attachments>saved image</halo_attachments>\n', filePaths: ['/tmp/image.png'] })
     const prepare = sink.setTurnIdentity.mock.calls.at(-1)![2] as (text: string, images: unknown[]) => unknown
     const images = [{ id: 'image', mediaType: 'image/png', data: 'aGVsbG8=' }]
     expect(prepare('read the image', images)).toEqual({ text: '<halo_attachments>saved image</halo_attachments>\nread the image', images: undefined })
     expect(prepareNonVisionImageFallback.mock.calls.at(-1)![0]).toMatchObject({ credentials, images, scope: { workDir: environment.workDir } })
     expect(images).toHaveLength(1)
-  })
-
-  it.each([null, { contextBlock: 'one image saved', filePaths: ['/tmp/one.png'] }])('refuses incomplete live image preparation: %j', async fallback => {
-    const conversationId = 'app-chat:app-member:local:direct:incomplete-images'
-    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId, message: 'start' })
-    v2Sessions.set(conversationId, { imageInput: { ocrAvailable: true } })
-    prepareNonVisionImageFallback.mockReturnValue(fallback)
-    const prepare = sink.setTurnIdentity.mock.calls.at(-1)![2] as (text: string, images: unknown[]) => unknown
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    send.mockClear()
-    expect(prepare('read both', [{ id: 'one' }, { id: 'two' }])).toBe(false)
-    expect(send).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`conversation=${conversationId} reason=incomplete image preparation`))
-    v2Sessions.delete(conversationId)
-  })
-
-  it('refuses before saving when the actual session has no OCR', async () => {
-    const conversationId = 'app-chat:app-member:local:direct:no-ocr'
-    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId, message: 'start' })
-    v2Sessions.set(conversationId, { imageInput: { ocrAvailable: false } })
-    prepareNonVisionImageFallback.mockClear()
-    const prepare = sink.setTurnIdentity.mock.calls.at(-1)![2] as (text: string, images: unknown[]) => unknown
-    expect(prepare('read image', [{ id: 'one' }])).toBe(false)
-    expect(prepareNonVisionImageFallback).not.toHaveBeenCalled()
-    v2Sessions.delete(conversationId)
   })
 
   it('keeps slash commands inert and defers new attachment grants in a restricted turn', async () => {
@@ -1120,9 +1094,8 @@ describe('live messages keep the current turn envelope', () => {
     const result = prepare('/dangerous-command')
     expect(result.text).toContain('/dangerous-command')
     expect(result.text.startsWith('/')).toBe(false)
-    prepareNonVisionImageFallback.mockClear()
+    prepareNonVisionImageFallback.mockReturnValue({ contextBlock: 'image files', filePaths: ['/tmp/new-image.png'] })
     expect(prepare('read image', [{ id: 'img', mediaType: 'image/png', data: 'aGVsbG8=' }])).toBe(false)
-    expect(prepareNonVisionImageFallback).not.toHaveBeenCalled()
   })
 })
 

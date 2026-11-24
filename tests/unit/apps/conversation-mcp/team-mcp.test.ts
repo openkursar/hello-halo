@@ -17,7 +17,6 @@ vi.mock('../../../../src/main/apps/runtime/team', async () => ({
   getActiveTeamRuntime: () => refs.runtime,
 }))
 vi.mock('../../../../src/main/services/space.service', () => ({ getSpace: (id: string) => id === 'space-1' ? { path: refs.directory } : null }))
-vi.mock('../../../../src/main/services/conversation.service', () => ({ getConversation: (spaceId: string, id: string) => spaceId === 'space-1' && id === 'conversation-1' ? { title: 'Plan the launch' } : null }))
 vi.mock('../../../../src/main/apps/manager', () => ({ getAppManager: () => ({ getApp: () => refs.app, listEffectiveMcpApps: () => [] }) }))
 vi.mock('../../../../src/main/http/websocket', () => ({ broadcastToAll: vi.fn() }))
 vi.mock('../../../../src/main/foundation/window.service', () => ({ sendToRenderer: vi.fn() }))
@@ -106,7 +105,6 @@ describe('conversation collaboration MCP', () => {
     const second = await spawn(endpoint, 'tester')
     const context = refs.service.getCollabForConversation('conversation-1')
     expect(counter).toBe(1)
-    expect(refs.service.ensureCollaboration).toHaveBeenCalledWith(expect.objectContaining({ title: 'Plan the launch' }))
     expect(first.handle).not.toBe(second.handle)
     expect(store.participants.list(context.teamId, context.epochId)).toHaveLength(2)
     expect(deliveries.map(delivery => delivery.envelope.body)).toEqual(['Review as reviewer; return evidence.', 'Review as tester; return evidence.'])

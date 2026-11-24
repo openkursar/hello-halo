@@ -164,11 +164,9 @@ function formatFileSize(bytes: number): string {
 // Single image display in message bubble
 interface MessageImageProps {
   images: ImageAttachment[]
-  presentation?: 'preview' | 'chips'
 }
 
-export function MessageImages({ images, presentation = 'preview' }: MessageImageProps) {
-  const { t } = useTranslation()
+export function MessageImages({ images }: MessageImageProps) {
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerIndex, setViewerIndex] = useState(0)
 
@@ -177,29 +175,6 @@ export function MessageImages({ images, presentation = 'preview' }: MessageImage
   const openViewer = (index: number) => {
     setViewerIndex(index)
     setViewerOpen(true)
-  }
-
-  if (presentation === 'chips') {
-    return (
-      <>
-        {images.map((image, index) => (
-          <button
-            key={image.id}
-            type="button"
-            title={image.name || t('Attached image')}
-            aria-haspopup="dialog"
-            onClick={() => openViewer(index)}
-            className="inline-flex h-7 min-w-0 max-w-[min(240px,100%)] items-center gap-1.5 rounded-lg border border-border-soft bg-background/60 px-2 text-[12.5px] leading-none text-foreground hover:bg-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-          >
-            <ImageIcon size={13} className="shrink-0 text-muted-foreground" aria-hidden />
-            <span className="truncate">{image.name || t('Attached image')}</span>
-          </button>
-        ))}
-        {viewerOpen && (
-          <ImageViewer images={images} initialIndex={viewerIndex} onClose={() => setViewerOpen(false)} />
-        )}
-      </>
-    )
   }
 
   // Single image - larger display

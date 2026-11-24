@@ -25,7 +25,6 @@ import type {
   BlackboardFinding,
   TeamEpoch,
   TeamToolAudit,
-  NativeTaskScope,
 } from '../../../../src/main/apps/team/types'
 
 // ============================================
@@ -193,95 +192,6 @@ describe('TeamStore', () => {
       // because it describes the owner's computer rather than the office.
       store.insertToolAudit(entry())
       expect(store.listActivityByTeam('team-1')).toHaveLength(0)
-    })
-  })
-
-  describe('native homepage task scope', () => {
-    it('includes joined tasks only through local members and excludes external and temporary work', () => {
-      store.insertTeam(makeTeam())
-      store.insertTeam(makeTeam({ id: 'joined', name: 'Joined', owningSpaceId: 'office', hostNodeId: 'host' }))
-      store.insertTeam(makeTeam({ id: 'temp', name: 'Temporary', ephemeral: true }))
-      store.addMember(makeMember({ teamId: 'joined', appId: 'local', origin: 'remote', ownerNodeId: 'SELF' }))
-      store.addMember(makeMember({ teamId: 'joined', appId: 'other', memberName: 'other', origin: 'remote', ownerNodeId: 'elsewhere' }))
-      for (const [id, teamId, chatKey] of [['native', 'team-1', 'native:a'], ['joined-task', 'joined', 'native:b'], ['temporary', 'temp', 'native:c'], ['im', 'team-1', 'im:group']]) {
-        store.insertEpoch(makeEpoch({ id, teamId, chatKey, lifecycle: 'conversation', startedAt: 100 }), 'event')
-      }
-      expect(store.listNativeTaskEpochs(SPACE_A, ['local'], 10).map(row => row.id).sort()).toEqual(['joined-task', 'native'])
-      expect(store.listNativeTaskEpochs(SPACE_B, ['other'], 10)).toEqual([])
-      expect(store.listNativeTaskEpochs(SPACE_B, ['local'], 10).map(row => row.id)).toEqual(['joined-task'])
-      expect(store.listNativeTaskEpochs(SPACE_A, [], 10).map(row => row.id)).toEqual(['native'])
-      store.insertEpoch(makeEpoch({ id: 'newer', chatKey: 'native:new', lifecycle: 'conversation', startedAt: 200 }), 'event')
-      const ids = ['native', 'joined-task', 'temporary', 'im', 'missing', 'native']
-      expect(store.listNativeTaskEpochs(SPACE_A, ['local'], 10, undefined, ids).map(row => row.id).sort()).toEqual(['joined-task', 'native'])
-      expect(store.listNativeTaskEpochs(SPACE_A, [], 1, undefined, ids).map(row => row.id)).toEqual(['native'])
-      expect(store.listNativeTaskEpochs(SPACE_B, ['other'], 10, undefined, ids)).toEqual([])
-      expect(store.listNativeTaskEpochs(SPACE_B, ['local'], 10, undefined, ids).map(row => row.id)).toEqual(['joined-task'])
-      expect(store.listNativeTaskEpochs(SPACE_A, ['local'], 10, undefined, [])).toEqual([])
-      expect(store.listNativeTaskEpochs(SPACE_A, ['local'], 1, undefined, ids)).toHaveLength(1)
-    })
-
-    describe('mine scope', () => {
-      const NOW = 10 * 24 * 3600_000
-      const WEEK = 7 * 24 * 3600_000
-      const scope = (overrides?: Partial<NativeTaskScope>): NativeTaskScope => ({ viewer: 'me', involvedSince: NOW - WEEK, attentionEpochIds: [], ...overrides })
-      const task = (id: string, createdBy: string | null, lastActivityAt: number, teamId = 'team-1') =>
-        store.insertEpoch(makeEpoch({
-          id, teamId, chatKey: `native:${id}`, lifecycle: 'conversation', startedAt: lastActivityAt, lastActivityAt,
-          workItem: createdBy === null ? undefined : { id, teamId, createdAt: lastActivityAt, title: id, status: 'open', createdBy, entryAppId: null, updatedAt: lastActivityAt },
-        }), 'event')
-      const ids = (s: NativeTaskScope, limit = 20) => store.listNativeTaskEpochs(SPACE_A, ['mine-app'], limit, undefined, undefined, s).map(row => row.id)
-
-      beforeEach(() => {
-        store.insertTeam(makeTeam())
-        store.addMember(makeMember({ appId: 'mine-app', memberName: 'mine' }))
-      })
-
-      it('keeps tasks the viewer started and drops other people\u2019s', () => {
-        task('mine', 'me', NOW)
-        task('theirs', 'someone', NOW)
-        expect(ids(scope())).toEqual(['mine'])
-      })
-
-      it('keeps a task a decision is waiting on the viewer for', () => {
-        task('theirs', 'someone', NOW)
-        expect(ids(scope({ attentionEpochIds: ['theirs'] }))).toEqual(['theirs'])
-      })
-
-      it('keeps involved tasks only inside the recency window', () => {
-        task('recent', 'someone', NOW - 1000)
-        task('stale', 'someone', NOW - WEEK - 1000)
-        store.insertActivity({ id: 'a1', teamId: 'team-1', epochId: 'recent', kind: 'message', actorAppId: 'mine-app', targetAppId: 'their-app', subject: 's', body: 'b', refId: null, correlationId: null, status: 'ok', createdAt: NOW - 1000 })
-        store.insertActivity({ id: 'a2', teamId: 'team-1', epochId: 'stale', kind: 'message', actorAppId: 'mine-app', targetAppId: 'their-app', subject: 's', body: 'b', refId: null, correlationId: null, status: 'ok', createdAt: NOW - WEEK - 1000 })
-        expect(ids(scope())).toEqual(['recent'])
-      })
-
-      it('counts an assignee on the board as involvement', () => {
-        task('assigned', 'someone', NOW)
-        store.insertTask(makeTask({ id: 't', epochId: 'assigned', assigneeAppId: 'mine-app', createdByAppId: 'their-app' }))
-        expect(ids(scope())).toEqual(['assigned'])
-      })
-
-      it('treats a task without a recorded creator as the viewer\u2019s only when no other person is on the team', () => {
-        task('legacy', null, NOW)
-        expect(ids(scope())).toEqual(['legacy'])
-        store.insertTeam(makeTeam({ id: 'shared', name: 'Shared' }))
-        store.addMember(makeMember({ teamId: 'shared', appId: 'friend', memberName: 'friend', origin: 'remote', ownerNodeId: 'elsewhere' }))
-        task('legacy-shared', null, NOW, 'shared')
-        expect(ids(scope())).toEqual(['legacy'])
-      })
-
-      it('fills a page with the viewer\u2019s tasks despite newer tasks of others', () => {
-        for (let i = 0; i < 5; i++) task(`other-${i}`, 'someone', NOW + 100 + i)
-        task('mine-1', 'me', NOW)
-        task('mine-2', 'me', NOW - 1)
-        expect(ids(scope(), 2)).toEqual(['mine-1', 'mine-2'])
-      })
-
-      it('does not scope a lookup by id', () => {
-        task('theirs', 'someone', NOW)
-        const rows = store.listNativeTaskEpochs(SPACE_A, ['mine-app'], 5, undefined, ['theirs'])
-        expect(rows.map(row => row.id)).toEqual(['theirs'])
-      })
     })
   })
 
@@ -597,54 +507,6 @@ describe('TeamStore', () => {
     })
   })
 
-  describe('team outputs', () => {
-    beforeEach(() => {
-      store.insertFinding(makeFinding({ id: 'f1', epochId: 'e1', authorAppId: 'a', ref: 'plan.md', createdAt: 100 }))
-      store.insertFinding(makeFinding({ id: 'f2', epochId: 'e1', authorAppId: 'b', ref: 'plan.md', createdAt: 300 }))
-      store.insertFinding(makeFinding({ id: 'f3', epochId: 'e2', authorAppId: 'a', ref: 'plan.md', createdAt: 200 }))
-      store.insertFinding(makeFinding({ id: 'f4', epochId: 'e2', authorAppId: 'a', ref: null, createdAt: 900 }))
-      store.insertTask(makeTask({ id: 't1', epochId: 'e2', assigneeAppId: 'b', resultRef: 'report.xlsx', updatedAt: 400 }))
-      store.insertTask(makeTask({ id: 't2', epochId: 'e2', assigneeAppId: null, resultRef: 'orphan.md', updatedAt: 999 }))
-      store.insertFinding(makeFinding({ id: 'other', teamId: 'team-2', epochId: 'x', ref: 'theirs.md', createdAt: 999 }))
-    })
-
-    it('lists each run\u2019s file once, newest first, under its latest declaration', () => {
-      const { rows, total } = store.listOutputRefs('team-1', { offset: 0, limit: 10 })
-      expect(total).toBe(3)
-      expect(rows).toEqual([
-        { epochId: 'e2', appId: 'b', ref: 'report.xlsx', at: 400 },
-        { epochId: 'e1', appId: 'b', ref: 'plan.md', at: 300 },
-        { epochId: 'e2', appId: 'a', ref: 'plan.md', at: 200 },
-      ])
-    })
-
-    it('pages without changing the total, and narrows to the given producers', () => {
-      expect(store.listOutputRefs('team-1', { offset: 1, limit: 1 })).toEqual({ rows: [{ epochId: 'e1', appId: 'b', ref: 'plan.md', at: 300 }], total: 3 })
-      expect(store.listOutputRefs('team-1', { offset: 0, limit: 10, producers: ['a'] })).toEqual({
-        rows: [{ epochId: 'e2', appId: 'a', ref: 'plan.md', at: 200 }, { epochId: 'e1', appId: 'a', ref: 'plan.md', at: 100 }],
-        total: 2,
-      })
-    })
-
-    it('filters by time after taking each file\u2019s latest declaration', () => {
-      const { rows, total } = store.listOutputRefs('team-1', { offset: 0, limit: 10, since: 300 })
-      expect(total).toBe(2)
-      expect(rows.map(row => row.ref)).toEqual(['report.xlsx', 'plan.md'])
-    })
-
-    it('matches text against the file name, the producer\u2019s name and title-matched tasks', () => {
-      store.addMember(makeMember({ appId: 'b', memberName: 'Analyst' }))
-      store.insertFinding(makeFinding({ id: 'f5', epochId: 'e3', authorAppId: 'a', ref: '/Users/report-owner/notes_v1.md', createdAt: 500 }))
-      const refs = (filter: { text: string; textEpochIds?: string[] }) =>
-        store.listOutputRefs('team-1', { offset: 0, limit: 10, ...filter }).rows.map(row => `${row.epochId}:${row.ref}`)
-      expect(refs({ text: 'REPORT' })).toEqual(['e2:report.xlsx'])
-      expect(refs({ text: 'analyst' })).toEqual(['e2:report.xlsx', 'e1:plan.md'])
-      expect(refs({ text: 'nothing', textEpochIds: ['e1'] })).toEqual(['e1:plan.md'])
-      expect(refs({ text: '_v' })).toEqual(['e3:/Users/report-owner/notes_v1.md'])
-      expect(refs({ text: '%' })).toEqual([])
-    })
-  })
-
   // ===========================================================================
   // team_epochs
   // ===========================================================================
@@ -756,31 +618,6 @@ describe('TeamStore', () => {
       const { workItem, ...legacy } = old
       store.upsertEpoch(legacy)
       expect(store.getEpochById(old.id)!.workItem!.title).toBe('New title')
-    })
-
-    it('keeps the real start of an epoch a joiner shadowed on arrival, whichever side sends it on', () => {
-      store.insertTeam(makeTeam())
-      store.insertEpoch(makeEpoch({ startedAt: 5000 }))
-      const shadow = store.getEpochById('epoch-1')!
-      store.upsertEpoch({ ...shadow, startedAt: 1000 })
-      expect(store.getEpochById('epoch-1')!.startedAt).toBe(1000)
-      store.upsertEpoch(shadow)
-      expect(store.getEpochById('epoch-1')!.startedAt).toBe(1000)
-    })
-
-    it('carries a person\u2019s first turn into a run across replicas, keeping the earliest and never clearing it', () => {
-      store.insertTeam(makeTeam())
-      store.insertEpoch(makeEpoch({ lifecycle: 'run' }))
-      expect(store.markRunHumanTurn('epoch-1', 5000)).toBe(true)
-      expect(store.markRunHumanTurn('epoch-1', 6000)).toBe(false)
-      const stamped = store.getEpochById('epoch-1')!
-      expect(stamped.firstHumanTurnAt).toBe(5000)
-      store.upsertEpoch({ ...stamped, firstHumanTurnAt: 4000 })
-      expect(store.getEpochById('epoch-1')!.firstHumanTurnAt).toBe(4000)
-      store.upsertEpoch({ ...stamped, firstHumanTurnAt: null })
-      expect(store.getEpochById('epoch-1')!.firstHumanTurnAt).toBe(4000)
-      store.upsertEpoch({ ...stamped, id: 'replica', firstHumanTurnAt: 7000 })
-      expect(store.getEpochById('replica')!.firstHumanTurnAt).toBe(7000)
     })
 
     it('cannot revive cleared context with a delayed replica but accepts explicit completed-task resume', () => {

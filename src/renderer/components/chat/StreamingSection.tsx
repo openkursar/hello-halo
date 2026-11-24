@@ -14,11 +14,11 @@ import { ThoughtProcess } from './ThoughtProcess'
 import { LIVE_WORK, liveTextIds, sameIdsOr } from './work-history'
 import { MessageRow } from './MessageRow'
 import { InjectionAnnotation } from './InjectionAnnotation'
-import { TrailingArrivals } from './ArrivalCard'
+import { ArrivalCard } from './ArrivalCard'
 import { ReplyOpeners, type OpenerReveal } from './team-collab'
-import { isArrivalRecord, isArrivalThought, isShownArrival, mergeArrivalThoughts, projectArrivalThoughts, type ArrivalThought } from './transcript'
+import { isArrivalRecord, isArrivalThought, mergeArrivalThoughts, projectArrivalThoughts, type ArrivalThought } from './transcript'
 import { splitLiveInputSections, type LiveInputSection } from '../../utils/live-inputs'
-import type { LiveInput, Message, QueuedMessage } from '../../types'
+import type { LiveInput, Message } from '../../types'
 import { StreamingBubble } from './StreamingBubble'
 import { BrowserTaskCard } from '../tool/BrowserTaskCard'
 import { TerminalTaskCard } from '../tool/TerminalTaskCard'
@@ -72,7 +72,7 @@ export interface StreamingSectionProps {
   embedded?: boolean
 
   /** Messages queued for mid-turn injection (shown below StreamingBubble) */
-  queuedMessages?: QueuedMessage[]
+  queuedMessages?: string[]
   /** Inputs accepted while this turn runs, at the point each became visible. */
   liveInputs?: LiveInput[]
   /**
@@ -95,9 +95,6 @@ export interface StreamingSectionProps {
    */
   senderName?: string
 
-  /** See MessageRow `authorName`: the person, other than the reader, behind the inputs. */
-  authorName?: string
-
   /** A failed model request the engine is waiting to resend. */
   apiRetry?: ApiRetryNoticeState | null
 
@@ -119,7 +116,7 @@ function useShownTextIds(thoughts: readonly Thought[], text: string): ReadonlySe
   }, [thoughts, text])
 }
 
-const ArrivedInputSection = memo(function ArrivedInputSection({ input, thoughts, text, embedded, authorName }: LiveInputSection & { embedded: boolean; authorName?: string }) {
+const ArrivedInputSection = memo(function ArrivedInputSection({ input, thoughts, text, embedded }: LiveInputSection & { embedded: boolean }) {
   const shownBelow = useShownTextIds(thoughts, text)
   return <>
     <div className={embedded ? 'w-full' : 'w-[85%]'}>
@@ -133,7 +130,7 @@ const ArrivedInputSection = memo(function ArrivedInputSection({ input, thoughts,
       )}
       {text && <StreamingBubble content={text} isStreaming={false} thoughts={[]} textBlockVersion={input.textBlockVersion} />}
     </div>
-    <MessageRow message={input.message} hideBrowserLiveView hideTerminalOpen authorName={authorName} />
+    <MessageRow message={input.message} hideBrowserLiveView hideTerminalOpen />
   </>
 })
 
@@ -157,13 +154,12 @@ export function StreamingSection({
   openers,
   openerReveal,
   senderName,
-  authorName,
   apiRetry = null,
   onStop,
 }: StreamingSectionProps) {
   const conversationInputs = useMemo(() => liveInputs.filter(input => input.message.source !== 'injection' && !isArrivalRecord(input.message)), [liveInputs])
   const injectionMessages = useMemo(() => liveInputs.filter(input => input.message.source === 'injection').map(input => input.message), [liveInputs])
-  const arrivalMessages = useMemo(() => arrivals ?? liveInputs.filter(input => isShownArrival(input.message)).map(input => input.message), [liveInputs, arrivals])
+  const arrivalMessages = useMemo(() => arrivals ?? liveInputs.filter(input => isArrivalRecord(input.message)).map(input => input.message), [liveInputs, arrivals])
   const hasOwnThoughts = thoughts.length > 0
   const previousArrivalThoughts = useRef<ArrivalThought[]>([])
   const arrivalThoughts = useMemo(() => {
@@ -180,7 +176,7 @@ export function StreamingSection({
   }, [processThoughts, textBlockVersion, conversationInputs])
   const bubbleThoughts = useMemo(() => arrivalThoughts.length === 0 ? layout.thoughts : layout.thoughts.filter(thought => !isArrivalThought(thought)), [layout.thoughts, arrivalThoughts.length])
   // Received where the reply has no work beside them — before its first step, or
-  // after its last split — they are drawn after it until work joins them, as the record draws them.
+  // after its last split — they are cards after it until work joins them, as the record draws them.
   const arrivalsOnly = bubbleThoughts.length === 0 && layout.thoughts.length > 0
   const replyThoughts = arrivalsOnly ? EMPTY_THOUGHTS : layout.thoughts
   const trailingArrivals = useMemo(() => !hasOwnThoughts ? arrivalMessages
@@ -191,12 +187,12 @@ export function StreamingSection({
   const shownBelow = useShownTextIds(replyThoughts, replyText)
   return (
     <div className={`animate-fade-in pb-4 ${className}`}>
-      {layout.sections.map(section => <ArrivedInputSection key={section.input.message.clientKey ?? section.input.message.id} {...section} embedded={embedded} authorName={authorName} />)}
+      {layout.sections.map(section => <ArrivedInputSection key={section.input.message.clientKey ?? section.input.message.id} {...section} embedded={embedded} />)}
       <div className={`${embedded ? 'w-full' : 'w-[85%]'} relative`}>
         {openers?.length ? (
           <ReplyOpeners senderName={senderName} openers={openers} reveal={openerReveal} />
         ) : senderName && (
-          <div className="mb-2 text-sm font-semibold text-foreground">{senderName}</div>
+          <div className="mb-2 text-xs font-medium text-muted-foreground">{senderName}</div>
         )}
 
         {/* The reply's work so far */}
@@ -256,7 +252,11 @@ export function StreamingSection({
 
         {injectionMessages.length > 0 && <InjectionAnnotation messages={injectionMessages} />}
 
-        {trailingArrivals.length > 0 && <TrailingArrivals arrivals={trailingArrivals} senderName={senderName} />}
+        {trailingArrivals.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {trailingArrivals.map(message => <ArrivalCard key={message.clientKey ?? message.id} message={message} />)}
+          </div>
+        )}
 
         {/* Mid-turn queued messages — shown while user types during active generation */}
         <QueuedMessagesPanel messages={queuedMessages} />

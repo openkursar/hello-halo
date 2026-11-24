@@ -1505,12 +1505,6 @@ async function getOrCreateV2SessionInner(
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
     sourceId,
-    imageInput: {
-      model: sdkOptions.apiCredentials?.model ?? sdkOptions.model ?? '',
-      supportsVision: sdkOptions.apiCredentials?.supportsVision,
-      visionOverride: sdkOptions.apiCredentials?.visionOverride,
-      ocrAvailable: Boolean(sdkOptions.mcpServers?.ocr),
-    },
     credentialsGeneration: creationCredentialsGeneration,
     credentialsFingerprint: currentFingerprint,
     knowledgeFingerprint: currentKnowledgeFingerprint,

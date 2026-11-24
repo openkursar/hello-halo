@@ -237,8 +237,7 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
         ...latestSpaceState,
         currentConversationId: conversationId,
         // Explicitly picking a regular conversation exits digital-human mode.
-        selectedAppChat: null,
-        selectedTeamChat: null
+        selectedAppChat: null
       })
 
       let meta: ConversationMeta | undefined

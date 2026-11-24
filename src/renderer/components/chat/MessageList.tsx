@@ -20,7 +20,7 @@
 import { useRef, useMemo, useCallback, useState, forwardRef, useImperativeHandle } from 'react'
 import type { ReactNode } from 'react'
 import { MessageRow } from './MessageRow'
-import { isTeamMessage, type OpenerReveal } from './team-collab'
+import { isTeamMessage, type OpenerReveal, type TeamRunPosition } from './team-collab'
 import { StreamingSection } from './StreamingSection'
 import { WorkViewMemoryProvider, useTranscriptWorkView } from './work-history/view-memory'
 import { withoutLiveInputs } from '../../utils/live-inputs'
@@ -196,18 +196,14 @@ const EMPTY_QUEUE: never[] = []
 const EMPTY_LIVE_INPUTS: LiveInput[] = []
 const EMPTY_ARRIVALS: Message[] = []
 
-/** Consecutive messages from one team read as one received line, drawn on the run's first row. */
-function continuesTeamRun(messages: readonly Message[], index: number): boolean {
+function teamRunPosition(messages: readonly Message[], index: number): TeamRunPosition | undefined {
   const message = messages[index]
-  const previous = messages[index - 1]
-  return !!previous && isTeamMessage(message) && isTeamMessage(previous) && previous.metadata?.teamId === message.metadata?.teamId
-}
-
-function teamRunFrom(messages: readonly Message[], index: number): Message[] | undefined {
-  if (!isTeamMessage(messages[index])) return undefined
-  let end = index + 1
-  while (end < messages.length && continuesTeamRun(messages, end)) end++
-  return messages.slice(index, end)
+  if (!isTeamMessage(message)) return undefined
+  const sameTeam = (other: Message | undefined) =>
+    !!other && isTeamMessage(other) && other.metadata?.teamId === message.metadata?.teamId
+  const prev = sameTeam(messages[index - 1])
+  const next = sameTeam(messages[index + 1])
+  return prev ? (next ? 'middle' : 'last') : (next ? 'first' : 'single')
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList({
@@ -307,10 +303,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         if (index >= 0) setOpenerReveal({ messageId })
       }
       if (index < 0) return false
-      if (isTeamMessage(displayMessagesRef.current[index])) {
-        while (continuesTeamRun(displayMessagesRef.current, index)) index--
-        setOpenerReveal({ messageId })
-      }
       detach()
       reveal(index, el => revealRowInView(scroller, el, behavior))
       return true
@@ -349,23 +341,17 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       const key = rowKeys[index]
       if (index === liveStart) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
       if (index === liveEnd) out.push(<div key="history-end" ref={endSentinelRef} aria-hidden="true" />)
-      const continuesRun = index > start && continuesTeamRun(displayMessages, index)
       if (index < liveStart || index >= liveEnd) {
         out.push(
           <div
             key={key}
             data-transcript-index={index}
             aria-hidden="true"
-            style={{ height: placeholderHeight(key) ?? (continuesRun ? 0 : estimatedRowHeight(message)) }}
+            style={{ height: placeholderHeight(key) ?? estimatedRowHeight(message) }}
           />
         )
         continue
       }
-      if (continuesRun) {
-        out.push(<div key={key} data-transcript-index={index} />)
-        continue
-      }
-      const rowOpeners = teamRunFrom(displayMessages, index) ?? openers.get(message.id)
       out.push(
         <div key={key} data-transcript-index={index} className={transcriptRowClass(message)}>
           <MessageRow
@@ -380,11 +366,12 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             allowViewChanges={allowViewChanges}
             injectionMessages={injections.get(message.id)}
             arrivals={arrivals.get(message.id)}
-            openers={rowOpeners}
-            openerReveal={openerReveal && rowOpeners?.some(m => m.id === openerReveal.messageId) ? openerReveal : undefined}
+            openers={openers.get(message.id)}
+            openerReveal={openerReveal && openers.get(message.id)?.some(m => m.id === openerReveal.messageId) ? openerReveal : undefined}
             actionsOnHover={index !== latestReply}
             className={contentWidthClass}
-            senderName={message.role === 'assistant' || isTeamMessage(message) ? senderName : undefined}
+            senderName={message.role === 'assistant' ? senderName : undefined}
+            teamRunPosition={teamRunPosition(displayMessages, index)}
             endingShownBelow={interruptedNoticeShown && index === latestReply}
           />
         </div>

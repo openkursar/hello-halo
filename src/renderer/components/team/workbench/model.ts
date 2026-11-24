@@ -20,6 +20,17 @@ export function visibleTasks(tasks: TeamConversation[]): TeamConversation[] {
   return tasks.filter(task => task.kind !== 'member').sort((a, b) => compareTaskTimes(a.lastActivityAt, b.lastActivityAt, true) || a.epochId.localeCompare(b.epochId))
 }
 
+/**
+ * Sender and intended recipient of a message that did not arrive. A failed
+ * fate (`reply`) is filed under the member the message never reached.
+ */
+export function undeliveredParties(activity: TeamActivity): { senderAppId: string | null; recipientAppId: string | null } | null {
+  if (activity.status !== 'undelivered') return null
+  return activity.kind === 'reply'
+    ? { senderAppId: activity.targetAppId, recipientAppId: activity.actorAppId }
+    : { senderAppId: activity.actorAppId, recipientAppId: activity.targetAppId }
+}
+
 export function activityLevel(activity: TeamActivity): 'attention' | 'result' | 'process' | 'message' {
   if (['undelivered', 'timeout', 'error', 'escalation'].includes(activity.status ?? '')) return 'attention'
   if (activity.kind === 'message' || activity.kind === 'reply') return 'process'
@@ -122,32 +133,33 @@ export interface TaskActivityRow {
   message?: Message
   appId?: string
   activities?: TeamActivity[]
-  /** The message is a system notification sent to the member, not something it reported. */
-  notice?: boolean
+  notifications?: TaskMemberReport[]
 }
 
 export function taskActivityRows(reports: TaskMemberReport[], activities: TeamActivity[]): TaskActivityRow[] {
   const rows: TaskActivityRow[] = reports.map(({ appId, message }) => ({
-    id: `message:${appId}:${message.id}`, at: taskTime(message.timestamp), appId, message,
-    ...(isSystemNotification(message) ? { notice: true } : {}),
+    id: `message:${appId}:${message.id}`, at: taskTime(message.timestamp), appId,
+    ...(isSystemNotification(message) ? { notifications: [{ appId, message }] } : { message }),
   }))
   rows.push(...activities.map(activity => ({ id: activity.id, at: taskTime(activity.createdAt), activities: [activity] })))
-  return rows.sort((a, b) => compareTaskTimes(a.at, b.at, true) || a.id.localeCompare(b.id))
-}
-
-export type TaskActivityKind = 'output' | 'decision' | 'failed'
-
-function activityKind(activity: TeamActivity): TaskActivityKind | null {
-  if (['undelivered', 'timeout', 'error'].includes(activity.status ?? '')) return 'failed'
-  if (activity.kind === 'decision') return 'decision'
-  if (activity.kind === 'finding' || activity.kind === 'run_end') return 'output'
-  return null
-}
-
-export function filterTaskActivityRows(rows: TaskActivityRow[], kind: TaskActivityKind | null): TaskActivityRow[] {
-  if (!kind) return rows
-  return rows.filter(row => row.message ? kind === 'failed' && !!row.message.error
-    : !!row.activities?.[0] && activityKind(row.activities[0]) === kind)
+  rows.sort((a, b) => compareTaskTimes(a.at, b.at) || a.id.localeCompare(b.id))
+  const grouped: TaskActivityRow[] = []
+  for (const row of rows) {
+    const previous = grouped[grouped.length - 1]
+    const act = row.activities?.[0]
+    const last = previous?.activities?.[previous.activities.length - 1]
+    const notification = row.notifications?.[0]
+    const lastNotification = previous?.notifications?.[previous.notifications.length - 1]
+    const lastNotificationAt = taskTime(lastNotification?.message.timestamp)
+    if (notification && lastNotification && previous.notifications!.length < 20 && notification.appId === lastNotification.appId && row.at !== null && lastNotificationAt !== null && row.at - lastNotificationAt < 300000) previous.notifications!.push(notification)
+    else if (act && last && previous.activities!.length < 20 && act.kind === last.kind && activityLevel(act) === 'process' && activityLevel(last) === 'process' && row.at !== null && taskTime(last.createdAt) !== null && row.at - taskTime(last.createdAt)! < 300000) previous.activities!.push(act)
+    else grouped.push(row)
+  }
+  return grouped.map(row => ({
+    ...row,
+    at: row.notifications?.length ? taskTime(row.notifications[row.notifications.length - 1].message.timestamp)
+      : row.activities?.length ? taskTime(row.activities[row.activities.length - 1].createdAt) : row.at,
+  })).sort((a, b) => compareTaskTimes(a.at, b.at, true) || a.id.localeCompare(b.id))
 }
 
 export function isTeamBackgroundTurn(messages: Message[]): boolean {
@@ -160,11 +172,9 @@ function isHumanInput(message: Message): boolean {
     && (!message.metadata?.teamTriggerKind || message.metadata.teamTriggerKind === 'human_message')
 }
 
-const systemTriggerKinds = ['member_stopped', 'periodic_check', 'run_start']
-
 function isSystemNotification(message: Message): boolean {
   return (message.role === 'user' || (message.role === 'system' && message.source === 'team-message'))
-    && systemTriggerKinds.includes(message.metadata?.teamTriggerKind ?? '')
+    && ['member_stopped', 'periodic_check', 'run_start'].includes(message.metadata?.teamTriggerKind ?? '')
 }
 
 export function conversationMessages(messages: Message[]): Message[] {
@@ -179,33 +189,14 @@ export function conversationMessages(messages: Message[]): Message[] {
   })
 }
 
-/**
- * The homepage reads a member as one chat: replies to teammates and to their
- * turn-end reports join the owner's dialogue, and what a teammate sent is drawn on
- * the reply from the collaboration record. Replies to checks stay in the execution
- * records; a run's replies to its start are how that run's conversation opens.
- */
-function homepageMessages(messages: Message[]): Message[] {
-  const conversation = new Set(conversationMessages(messages))
-  return messages.filter(message => conversation.has(message) || (message.role === 'assistant'
-    && !!(message.content.trim() || message.error)
-    && message.metadata?.teamTriggerKind !== 'periodic_check'))
-}
-
 export function taskReportMessages(messages: Message[]): Message[] {
   const conversation = new Set(conversationMessages(messages))
   return messages.filter(message => (message.content.trim() || message.error) &&
     (isSystemNotification(message) || (message.role === 'assistant' && !conversation.has(message))))
 }
 
-/** A member's last word in the task: its latest reply with text, replies to periodic checks aside. */
-export function finalReplyText(messages: readonly Message[]): string | undefined {
-  return messages.findLast(message => message.role === 'assistant' && !message.error
-    && message.metadata?.teamTriggerKind !== 'periodic_check' && message.content.trim())?.content.trim()
-}
-
 export type ConversationRow =
-  | { id: string; message: Message; openers?: TeamActivity[]; dispatches?: TeamActivity[]; activities?: never; decision?: never; sharedDecision?: never; additions?: never }
+  | { id: string; message: Message; activities?: never; decision?: never; sharedDecision?: never; additions?: never }
   | { id: string; activities: TeamActivity[]; message?: never; decision?: never; sharedDecision?: never; additions?: never }
   | { id: string; decision: ActivityEntry; message?: never; activities?: never; sharedDecision?: never; additions?: never }
   | { id: string; sharedDecision: SharedTaskDecision; message?: never; activities?: never; decision?: never; additions?: never }
@@ -267,28 +258,9 @@ function looseAdditions(messages: Message[], conversation: readonly Message[]): 
   return messages.filter(message => message.source === 'injection' && !carried.has(message))
 }
 
-/** Deliveries a shown reply already draws in its work, by the request id their activity shares. */
-function carriedDeliveries(messages: Message[], conversation: readonly Message[]): Set<string> {
-  const carriers = inputsByReply(messages)
-  const ids = new Set<string>()
-  for (const message of conversation) {
-    for (const arrival of carriers.get(message.id)?.arrivals ?? []) {
-      if (arrival.metadata?.correlationId) ids.add(arrival.metadata.correlationId)
-    }
-  }
-  return ids
-}
-
-/**
- * `compact` is the homepage conversation: replies to teammates are part of the
- * dialogue, failures are told by the progress card instead, and what a reply
- * handed on is drawn under that reply. `sharedDecisions` is off for a member on this
- * machine: its decisions reach the local inbox and are drawn as answerable cards.
- */
-export function taskConversationRows(messages: Message[], activities: TeamActivity[], epochId: string | null, appId?: string, decisions: ActivityEntry[] = [], { compact = false, sharedDecisions: withShared = true }: { compact?: boolean; sharedDecisions?: boolean } = {}): ConversationRow[] {
-  const sharedDecisions = withShared ? sharedTaskDecisions(activities, epochId, appId, new Set(decisions.map(decision => decision.id))) : []
-  const conversation = compact ? homepageMessages(messages) : conversationMessages(messages)
-  const carried = compact ? carriedDeliveries(messages, conversation) : new Set<string>()
+export function taskConversationRows(messages: Message[], activities: TeamActivity[], epochId: string | null, appId?: string, decisions: ActivityEntry[] = []): ConversationRow[] {
+  const sharedDecisions = sharedTaskDecisions(activities, epochId, appId, new Set(decisions.map(decision => decision.id)))
+  const conversation = conversationMessages(messages)
   const entries: Array<{
     id: string
     at: number | null
@@ -307,8 +279,7 @@ export function taskConversationRows(messages: Message[], activities: TeamActivi
         (activity.kind === 'message' || activity.kind === 'reply') && activity.targetAppId &&
         activity.actorAppId !== activity.targetAppId &&
         (activity.actorAppId === appId || activity.targetAppId === appId) &&
-        (activity.subject.trim() || activity.body?.trim()) && !(compact && activityLevel(activity) === 'attention') &&
-        !(activity.targetAppId === appId && activity.correlationId && carried.has(activity.correlationId)))
+        (activity.subject.trim() || activity.body?.trim()))
       .map(activity => ({ id: `activity:${activity.id}`, at: taskTime(activity.createdAt), activity, message: undefined, decision: undefined })),
   ].sort((a, b) => compareTaskTimes(a.at, b.at) || a.id.localeCompare(b.id))
   const rows: ConversationRow[] = []
@@ -326,67 +297,5 @@ export function taskConversationRows(messages: Message[], activities: TeamActivi
       else rows.push({ id: entry.id, activities: [entry.activity] })
     }
   }
-  const withOpeners = attachOpeners(rows, appId)
-  return compact ? attachDispatches(withOpeners, appId) : withOpeners
-}
-
-/**
- * Messages a member sent are drawn under the reply of the turn that sent them.
- * A reply is stamped when its text ends, so a message sent mid-turn sorts just
- * before its own reply; only when no reply follows does it belong to the one before.
- */
-function attachDispatches(rows: ConversationRow[], appId?: string): ConversationRow[] {
-  if (!appId) return rows
-  const result: ConversationRow[] = []
-  let reply: Extract<ConversationRow, { message: Message }> | null = null
-  let pending: TeamActivity[] = []
-  rows.forEach((row, index) => {
-    if (row.message) {
-      reply = row.message.role === 'assistant' ? { ...row, ...(pending.length ? { dispatches: pending } : {}) } : null
-      pending = []
-      result.push(reply ?? row)
-      return
-    }
-    let next = index + 1
-    while (rows[next]?.activities) next++
-    const replyFollows = rows[next]?.message?.role === 'assistant'
-    if ((!reply && !replyFollows) || !row.activities) {
-      reply = null
-      result.push(row)
-      return
-    }
-    const dispatched = row.activities.filter(activity => activity.kind === 'message' && activity.actorAppId === appId && activityLevel(activity) !== 'attention')
-    if (replyFollows) pending.push(...dispatched)
-    else if (dispatched.length && reply) reply.dispatches = [...(reply.dispatches ?? []), ...dispatched]
-    const rest = row.activities.filter(activity => !dispatched.includes(activity))
-    if (rest.length) result.push({ id: row.id, activities: rest })
-  })
-  return result
-}
-
-/** What a member received right before its reply is what started that reply, so it is drawn on the reply. */
-function attachOpeners(rows: ConversationRow[], appId?: string): ConversationRow[] {
-  if (!appId) return rows
-  const result: ConversationRow[] = []
-  for (const row of rows) {
-    if (row.message?.role !== 'assistant') {
-      result.push(row)
-      continue
-    }
-    let start = result.length
-    while (start > 0 && result[start - 1].activities) start--
-    const before = result.slice(start)
-    const openers = before.flatMap(item => item.activities ?? []).filter(activity => activity.targetAppId === appId && activityLevel(activity) !== 'attention')
-    if (!openers.length) {
-      result.push(row)
-      continue
-    }
-    result.length = start
-    for (const item of before) {
-      const rest = item.activities!.filter(activity => !openers.includes(activity))
-      if (rest.length) result.push({ id: item.id, activities: rest })
-    }
-    result.push({ id: row.id, message: row.message, openers })
-  }
-  return result
+  return rows
 }

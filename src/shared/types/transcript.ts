@@ -154,10 +154,7 @@ export interface TranscriptProvenanceMetadata {
   fromConversationId?: string
   fromConversationTitle?: string
   summary?: string
-  /**
-   * The `waitForReply` correlation and forward-chain depth. On a team delivery
-   * the correlation is also its team activity's, which the renderer matches.
-   */
+  /** Audit trail only: the `waitForReply` correlation and forward-chain depth. */
   correlationId?: string
   forwardDepth?: number
   /** Team delivery. `fromMemberName` is null for system-authored notices. */

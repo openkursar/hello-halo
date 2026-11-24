@@ -50,8 +50,7 @@ import type {
   UninstallOptions,
 } from './_shared'
 import { resolveAppChatTarget, resolveUserInjectTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
-import type { AppChatInjectRequest, EscalationAnswerPayload } from '../../../shared/apps/app-types'
-import { isImageAttachmentInput } from '../../../shared/types/image-attachment'
+import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
 import { resolveHttpImChat, buildImSessionKey } from '../../../shared/apps/im-keys'
 import { parseTurnReferences, toAppChatRequest } from '../../controllers/chat-turn-input'
 import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, readAppRunUpdate, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow, listAppReminders, cancelAppReminder, countClearableChats, clearAllChats } from '../../apps/runtime'
@@ -1103,18 +1102,13 @@ export function registerAppsRoutes(app: Express): void {
   app.post('/api/apps/:appId/chat/inject', async (req: Request, res: Response) => {
     try {
       const { appId } = req.params
-      const { conversationId, message, references: rawReferences, images } = (req.body ?? {}) as Partial<Record<keyof AppChatInjectRequest, unknown>>
+      const { conversationId, message, references: rawReferences } = (req.body ?? {}) as { conversationId?: unknown; message?: unknown; references?: unknown }
       const references = parseTurnReferences(rawReferences)
       if (!references.ok) {
         res.status(400).json({ success: false, error: references.error })
         return
       }
-      if (images !== undefined && (!Array.isArray(images) || !images.every(isImageAttachmentInput))) {
-        console.warn('[HTTP] chat/inject rejected: invalid images')
-        res.status(400).json({ success: false, error: 'Invalid images' })
-        return
-      }
-      if (typeof conversationId !== 'string' || typeof message !== 'string' || (!message.trim() && !references.references && !(images as AppChatInjectRequest['images'])?.length)) {
+      if (typeof conversationId !== 'string' || typeof message !== 'string' || (!message.trim() && !references.references)) {
         res.status(400).json({ success: false, error: 'Missing required fields: conversationId, message' })
         return
       }
@@ -1123,11 +1117,7 @@ export function registerAppsRoutes(app: Express): void {
         res.status(target.status).json({ success: false, error: target.error })
         return
       }
-      const outcome = await injectIntoAppChatWhenLive(target.conversationId, message.trim(), { source: 'injection' }, references.references, images as AppChatInjectRequest['images'])
-      if (outcome === 'refused') {
-        res.json({ success: false, error: 'The running turn could not accept this addition. Your message has not been sent.' })
-        return
-      }
+      const outcome = await injectIntoAppChatWhenLive(target.conversationId, message.trim(), { source: 'injection' }, references.references)
       console.log('[HTTP] POST /api/apps/%s/chat/inject (conversationId=%s, outcome=%s)', appId, conversationId, outcome)
       res.json({ success: true, data: { delivered: outcome === 'delivered', ...(outcome === 'stopped' ? { stopped: true } : {}) } })
     } catch (error) {

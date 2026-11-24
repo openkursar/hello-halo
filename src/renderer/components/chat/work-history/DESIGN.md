@@ -102,5 +102,5 @@ state. Both derive from the same incremental `ThoughtPanelModel`
   readers show it as a plain notice.
 
 Not part of this module: how a reply ended before its answer was done is the
-reply's own note (`../ReplyEndingNote.tsx`, from `metadata.ending`), and the
-conversation's temporary team bar is `../../team/TeamCollabBar.tsx`.
+reply's own note (`../ReplyEndingNote.tsx`, from `metadata.ending`), and the team
+summary at the end of the chat is `../team-collab/TeamCollabPanel.tsx`.

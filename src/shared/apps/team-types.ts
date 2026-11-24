@@ -28,8 +28,7 @@ export type MemberSourcing = 'manual' | 'ai'
 
 export type EscalationRouting = 'user' | 'lead'
 export type TeamStatus = 'idle' | 'running' | 'waiting_user' | 'error'
-/** 'ended': a person closed the task before it was done; final like 'completed', and only a person reopens it. */
-export type EpochEndReason = 'completed' | 'ended' | 'stopped' | 'timeout' | 'error' | 'cleared'
+export type EpochEndReason = 'completed' | 'stopped' | 'timeout' | 'error' | 'cleared'
 
 /**
  * Execution mode of an epoch:
@@ -175,16 +174,6 @@ export interface TeamParticipant extends TeamMember {
   isTemporary: true
 }
 
-/** A collaborator is addressed by its given name plus the start of its id, so alike names stay distinct. */
-export function temporaryMemberHandle(name: string, appId: string): string {
-  return `${name}-${appId.slice(0, 8)}`
-}
-
-/** The name people read: a collaborator's given name, without the id suffix that only addressing needs. */
-export function memberDisplayName(member: Pick<TeamMember, 'appId' | 'memberName' | 'role'>): string {
-  return member.role && member.memberName === temporaryMemberHandle(member.role, member.appId) ? member.role : member.memberName
-}
-
 /**
  * The owner's answer to "what may my teammates make this digital human do".
  * Read in permissive mode: an unset switch grants, so the switches only ever
@@ -260,8 +249,6 @@ export interface TeamWorkItem {
   title: string | null
   status: 'open' | 'completed'
   createdBy: string | null
-  /** Who closed it by hand; cleared whenever it opens again. */
-  endedBy?: string | null
   createdAt: number
   updatedAt: number
 }
@@ -299,12 +286,6 @@ export interface TeamEpoch {
    * to `startedAt` for rows written before migration v11.
    */
   lastActivityAt?: number
-  /**
-   * When a person first wrote into a run epoch; from then on the run is listed
-   * beside conversations. Null for runs nobody has written into and for
-   * conversation epochs. Replicated so every node lists the same runs.
-   */
-  firstHumanTurnAt?: number | null
 }
 
 // ── Periodic checks (member-level recurring wake, scoped to one epoch) ──
@@ -401,24 +382,11 @@ export type TeamConversationKind = 'native' | 'im' | 'member' | 'run' | 'collab'
 export interface TeamConversation {
   workItemId?: string
   completed?: boolean
-  /** When the work was ended as done or by a person; absent while open and again once it resumes. */
-  finishedAt?: number
-  /** A person ended it before it was done. */
-  endedManually?: boolean
-  /** Display name of whoever ended it by hand, when it was someone else and can be told. */
-  endedBy?: string
-  endedByMe?: boolean
   createdByMe?: boolean
-  /** Display name of the person who started the task, when it is someone else and can be told. */
-  startedBy?: string
   involvedMe?: boolean
   triggerType?: TeamRunTriggerType
   summary?: string | null
   artifactCount?: number
-  /** Board subtasks by outcome; absent when the work was never split. */
-  subtasks?: { done: number; open: number }
-  /** True once the lead brought another member into the work. */
-  teamwork?: boolean
 
   epochId: string
   teamId: string
@@ -444,22 +412,6 @@ export interface TeamConversation {
   waitingForMe?: boolean
   /** Members whose owners currently owe a decision in this task. */
   waitingMemberAppIds?: string[]
-  /** Members who took part in this task in roster order; only on a team's own task list. */
-  participantAppIds?: string[]
-  /** The newest failure still holding up unfinished work, read from the task's whole record. */
-  failure?: TeamMemberFailure
-}
-
-/** A member stopped in one task: a message that never reached it, or its own failed turn. */
-export interface TeamMemberFailure {
-  appId: string
-  /** The record that tells it. */
-  activityId: string
-  /** Whose message never arrived; absent when the member's own turn failed. */
-  senderAppId?: string | null
-  /** Failed own turn: why, as the engine reported it. */
-  reason?: string
-  timedOut?: boolean
 }
 
 /** One busy assignment of a member: which thing it is serving, with a label. */
@@ -836,13 +788,10 @@ export interface TeamLocalMember {
   isSystemCoordinator?: boolean
 }
 
-export type TeamRosterFace = Pick<TeamLocalMember, 'appId' | 'memberName' | 'isLead'>
-
 export interface TeamListItem {
   id: string
   name: string
   status: TeamStatus
-  /** Includes the lead. */
   memberCount: number
   hasWaitingUser: boolean
   /** How many decisions are waiting on the user (drives the "N waiting" badge). */
@@ -859,8 +808,6 @@ export interface TeamListItem {
    * `memberCount`.
    */
   localMembers: TeamLocalMember[]
-  /** Every member wherever it runs, lead first — for faces, not for picking targets. */
-  roster: TeamRosterFace[]
   /**
    * Set when this office is hosted by another node — this reader joined it.
    * `hostNodeId != null` is the established "did I join this, or do I own
@@ -963,36 +910,6 @@ export interface TeamArtifact {
   size?: number
 }
 
-/** One file the team produced, in the team-wide outputs listing. Opening goes by `epochId` + `ref`. */
-export interface TeamOutput {
-  epochId: string
-  appId: string
-  memberName: string
-  ref: string
-  name: string
-  /** Resolved against this machine; only a hint when the producer runs elsewhere. */
-  path: string
-  /** When it was last declared (ms). */
-  at: number
-}
-
-export interface TeamOutputPage {
-  outputs: TeamOutput[]
-  total: number
-}
-
-export interface TeamOutputFilter {
-  /** Only files last declared at or after this time (ms). */
-  since?: number
-  /** Matches file names and producer names. */
-  text?: string
-  /** Tasks the caller matched to `text` by title; their files match as well. */
-  textEpochIds?: string[]
-}
-
-/** Keeps a title-matched task list small enough for a query string. */
-export const TEAM_OUTPUT_TEXT_EPOCHS_MAX = 200
-
 /** Files produced by one member during a run, grouped for the team artifacts view. */
 export interface TeamArtifactGroup {
   appId: string
@@ -1065,10 +982,9 @@ export interface CollabSummary {
  * What a `team:updated` changed, so a listener reloads only that. 'status' is
  * the office row alone (carried on the event); 'members' the roster, members and
  * edges; 'board' the open board's tasks, findings, activity and checks; 'epochs'
- * the run history; 'conversations' the task list; 'work' who is working where
- * (members' busy state and which tasks are active), with membership unchanged.
+ * the run history; 'conversations' the task list.
  */
-export type TeamUpdatedChange = 'status' | 'members' | 'board' | 'epochs' | 'conversations' | 'work'
+export type TeamUpdatedChange = 'status' | 'members' | 'board' | 'epochs' | 'conversations'
 
 export interface TeamUpdatedEvent {
   teamId: string
@@ -1082,12 +998,6 @@ export interface TeamUpdatedEvent {
    * alone resets a working office back to idle — prefer this when present.
    */
   liveStatus?: TeamStatus
-  /**
-   * On a 'work' change: every open epoch some member is serving right now, so
-   * a task list can mark its rows without reading the team again. Absent on
-   * every other change, and on nodes that do not run the members themselves.
-   */
-  activeEpochIds?: string[]
   removed?: boolean
   /**
    * Why the office left this node's list. Only set for a removal the user did NOT
@@ -1353,30 +1263,7 @@ export const TEAM_EVENTS = {
   memberHistory: 'team:member-history',
 } as const
 
-export interface TeamListNativeTasksInput {
-  spaceId: string
-  limit?: number
-  cursor?: string
-  /** Resolve at most 100 nonempty IDs within the same scope; incompatible with cursor. */
-  epochIds?: string[]
-  /**
-   * `mine` keeps what concerns the viewer: tasks they started, tasks waiting on
-   * them, and recent tasks one of their digital humans took part in. Ignored
-   * when `epochIds` is given.
-   */
-  scope?: 'mine'
-}
-
-export interface TeamNativeTaskPage {
-  items: (TeamConversation & {
-    teamName: string
-    spaceId: string
-  })[]
-  nextCursor: string | null
-}
-
 export const TEAM_IPC = {
-  listNativeTasks: 'team:list-native-tasks',
   list: 'team:list',
   get: 'team:get',
   create: 'team:create',
@@ -1392,7 +1279,6 @@ export const TEAM_IPC = {
   pause: 'team:pause',
   getDetail: 'team:get-detail',
   listArtifacts: 'team:list-artifacts',
-  listOutputs: 'team:list-outputs',
   openArtifact: 'team:open-artifact',
   listTriggers: 'team:list-triggers',
   setTrigger: 'team:set-trigger',

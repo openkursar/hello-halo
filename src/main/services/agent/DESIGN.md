@@ -599,12 +599,9 @@ to the turn end and never refuses live input: the running turn keeps what it
 started with, and the next turn starts on the rebuilt session. A send that needs
 a rebuilt session takes the existing one or the existing explicit busy error; it
 never parks waiting for background work. `inject-message.ts` wraps
-it for a space user's concurrent message, preserving references, original images
-and the existing injection source. Image preparation reads the running session's
-captured model capabilities and OCR availability, not a newly selected model.
-A non-vision turn without OCR returns the whole draft rather than dropping images
-or restarting the turn. A late-turn refusal leaves no persisted duplicate: the
-UI's normal-send fallback starts the next turn with the original attachments.
+it for a space user's concurrent message, preserving references and the existing
+injection source. A refusal leaves no persisted duplicate: the UI's normal-send
+fallback starts the next turn.
 
 Every stop states its reason (`stopGeneration(id, { reason })`). A person's stop
 (`'user'`: the Stop button, a review stop, and whatever the surfaces classify so)

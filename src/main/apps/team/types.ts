@@ -31,7 +31,6 @@ import type {
   TeamCheck,
   TeamActivity,
   TeamToolAudit,
-  TeamOutputFilter,
 } from '../../../shared/apps/team-types'
 import type { TeamParticipants } from './participants'
 import type { CollaborationRequests } from './collaboration-requests'
@@ -230,8 +229,6 @@ export interface TeamEpochRow {
   outcome?: string | null
   /** Last turn into this epoch; added in migration v11 (null → started_at). */
   last_activity_at?: number | null
-  /** First person-written turn into a run; added in migration v27 (null → never). */
-  first_human_turn_at?: number | null
 }
 
 /** Row shape from the `team_triggers` table. */
@@ -276,24 +273,7 @@ export interface TaskPatch {
   note?: string | null
 }
 
-/** Narrows a native task listing to the work that concerns one viewer. */
-export interface NativeTaskScope {
-  /** Viewer identity stamped on `task_created_by`; null when unknown. */
-  viewer: string | null
-  /** Tasks the viewer only took part in count when active at or after this time (ms). */
-  involvedSince: number
-  /** Tasks a decision is waiting on the viewer for. */
-  attentionEpochIds: string[]
-}
-
 // ── TeamStore Interface ──
-
-export interface SubtaskStats {
-  /** Board subtasks per epoch that has any: how many are done and how many are still open. */
-  subtasks: Map<string, { done: number; open: number }>
-  /** Epochs where the lead messaged another member or heard back from one. */
-  teamwork: Set<string>
-}
 
 /**
  * Persistence contract for the Digital Team data layer.
@@ -443,27 +423,12 @@ export interface TeamStore {
   listRecentActivityByEpoch(teamId: string, epochId: string, limit: number): TeamActivity[]
   /** Acts of an epoch created strictly after `sinceCreatedAt`, oldest first. */
   listActivityByEpochSince(teamId: string, epochId: string, sinceCreatedAt: number): TeamActivity[]
-  /** Messages, replies and findings of the given epochs, oldest first, each body cut to its opening line: what settles delegated work. */
-  listExchangesByEpochs(teamId: string, epochIds: string[]): TeamActivity[]
-  /** Whole records, oldest first and without bodies, of those given epochs that hold any failure. */
-  listActivityOfFailedEpochs(teamId: string, epochIds: string[]): TeamActivity[]
-  /** Conversations people started here, and runs a person has since written into. */
-  listNativeTaskEpochs(spaceId: string, localAppIds: string[], limit: number, cursor?: { at: number; id: string }, epochIds?: string[], scope?: NativeTaskScope): TeamEpoch[]
-  /** `detailed` adds output counts and participants, which only a team's own task list shows. */
-  getConversationStats(teamId: string, ownAppIds: string[], epochIds?: string[], detailed?: boolean): SubtaskStats & {
+  /** Every act of a team, across epochs — the replication snapshot's source. */
+  getConversationStats(teamId: string, ownAppIds: string[]): {
     involved: Set<string>
     outputCounts: Map<string, number>
     unansweredDecisionMembers: Map<string, string[]>
-    /** Members with any trace per epoch: activity either way, board work created or taken, findings. */
-    participants: Map<string, string[]>
   }
-  getSubtaskStats(teamId: string, epochIds?: string[]): SubtaskStats
-  /** Declared files across the team's runs, newest first; `producers` keeps only those members' declarations. */
-  listOutputRefs(teamId: string, page: { offset: number; limit: number; producers?: string[] } & TeamOutputFilter): {
-    rows: Array<{ epochId: string; appId: string; ref: string; at: number }>
-    total: number
-  }
-  /** Every act of a team, across epochs — the replication snapshot's source. */
   listActivityByTeam(teamId: string): TeamActivity[]
   /**
    * How many acts an epoch holds, without loading them. Lets a bounded reader
@@ -484,7 +449,7 @@ export interface TeamStore {
   pruneToolAudit(olderThan: number): number
 
   // ── team_epochs ───────────────────────────────
-  updateWorkItem(epochId: string, patch: Partial<Pick<import('../../../shared/apps/team-types').TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId' | 'endedBy'>>): void
+  updateWorkItem(epochId: string, patch: Partial<Pick<import('../../../shared/apps/team-types').TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId'>>): void
   purgeJoinedOffice(officeId: string): boolean
   beginDisposal(teamId: string): () => void
   insertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void
@@ -500,8 +465,6 @@ export interface TeamStore {
   reopenEpoch(epochId: string): void
   /** Stamp a turn entering this epoch (monotonic; never moves backwards). */
   touchEpoch(epochId: string, at: number): void
-  /** Record the first time a person wrote into a run; true only for that first write. */
-  markRunHumanTurn(epochId: string, at: number): boolean
   /** Set a conversation epoch's user-facing title (rename). */
   renameEpoch(epochId: string, title: string | null): void
   /**
