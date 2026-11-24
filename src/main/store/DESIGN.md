@@ -457,6 +457,13 @@ a service), and the store stays the only owner of source transport.
   checked in the host). `installCliTool` applies the catalog again after the
   install, so a new version gets its override at once. The text never reaches
   the renderer.
+- **Tool skill.** A tool entry may carry `skill` in the same shape, the text
+  every version shares. Catalog versions already receive it through their
+  `guide`; the tool-level copy is for preset tools, which a registry lists
+  with no versions. `parseCliCatalog` checks it like a guide; a malformed one
+  is left out of the status (preset copies keep what they had), a missing one
+  is passed as `null` (cli-tools clears a skill it applied earlier). The
+  signature is checked in the host.
 - **Renderer view.** `CliCatalog` carries no URL, digest or token. The entry is
   gated on `capabilities.cliTools` (handshake `features.cliTools` and an
   identity provider in this build), per §3.1 the handshake gates the surface,

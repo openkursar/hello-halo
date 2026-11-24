@@ -464,3 +464,123 @@ describe('cli catalog: administrator guide overrides', () => {
     expect((await sessionGuide(host)).text).toBe(TEXT)
   })
 })
+
+describe('cli catalog: tool skill for preset copies', () => {
+  const SKILL = '---\ndescription: Open and track service tickets with the tool command\n---\n# Ticket notes\nRun `tool --check` first.\n'
+  const GUIDE = '# Version notes\nOnly for this build.\n'
+
+  function textOf(content: string, revision = 1, extra: Record<string, unknown> = {}) {
+    return { revision, sha256: createHash('sha256').update(content).digest('hex'), content, signature: null, ...extra }
+  }
+
+  /** A build whose preset directory carries version 1.0.0 of the tool, optionally with trusted keys. */
+  function presetBuild(keys: unknown[] | null = null): string {
+    const presetDir = join(dir, 'preset')
+    mkdirSync(presetDir)
+    writePackage(presetDir, { version: '1.0.0' })
+    if (keys) writeFileSync(join(presetDir, 'trusted-keys.json'), JSON.stringify({ schema: 'halo.cli.trust/1', keys }))
+    return presetDir
+  }
+
+  /** A catalog entry for a tool shipped in the installer: listed, with no versions. */
+  function builtin(skill: unknown, overrides: Record<string, unknown> = {}) {
+    return tool([], { source: 'builtin', latest: '', ...(skill === undefined ? {} : { skill }), ...overrides })
+  }
+
+  async function sessionSkill(host: Awaited<ReturnType<typeof load>>['host']): Promise<string> {
+    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
+    const binDir = await host.applyCliToolsEnv(env, { entry: 'chat', engine: 'claude' })
+    expect(binDir).not.toBeNull()
+    return readFileSync(join(binDir!, '..', 'skills', 'cli-tool', 'SKILL.md'), 'utf-8')
+  }
+
+  it('parses the tool skill and passes it on; a malformed one leaves copies as they are', async () => {
+    const { catalog } = await load(null)
+    const parsed = catalog.parseCliCatalog(catalogBody([
+      builtin(textOf(SKILL, 3)),
+      builtin({ ...textOf(SKILL), sha256: '0'.repeat(64) }, { id: 'com.example.bad' }),
+      builtin(undefined, { id: 'com.example.none' }),
+    ]))
+    expect(parsed.map(t => t.skill)).toEqual([
+      { revision: 3, sha256: textOf(SKILL).sha256, content: SKILL, signature: null },
+      'invalid',
+      null,
+    ])
+    const status = catalog.catalogStatusOf(parsed)
+    expect(status[0].skill?.revision).toBe(3)
+    expect('skill' in status[1]).toBe(false)
+    expect(status[2].skill).toBeNull()
+  })
+
+  it('gives the skill to the preset copy, uses its description, and clears it when the administrator resets it', async () => {
+    let skill: unknown = textOf(SKILL)
+    const fetchCliCatalog = vi.fn(async () => catalogBody([builtin(skill)]))
+    const { catalog, host } = await load({ fetchCliCatalog }, presetBuild())
+
+    // Status-only entries stay out of the store list, but their skill applies.
+    expect((await catalog.fetchCliCatalog()).tools).toEqual([])
+    const record = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
+    expect(record.source).toBe('preset')
+    expect(record.guideOverride).toEqual({ revision: 1, sha256: textOf(SKILL).sha256, tool: true })
+    const first = await sessionSkill(host)
+    expect(first).toContain('description: "Open and track service tickets with the tool command"')
+    expect(first).toContain('Ticket notes')
+    const overview = await host.getCliToolsOverview()
+    expect(overview.tools.find(t => t.id === ID)?.skill?.description).toBe('Open and track service tickets with the tool command')
+
+    skill = undefined
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
+    expect(await sessionSkill(host)).not.toContain('Ticket notes')
+  })
+
+  it('keeps a version guide over the tool skill, and leaves copies alone when the tool is not listed', async () => {
+    const integrity = buildManifest({ version: '1.0.0' }).integrity
+    let body = catalogBody([builtin(textOf(SKILL), {
+      versions: [versionEntry('1.0.0', new Uint8Array([1]), { integrity, guide: textOf(GUIDE, 4) })],
+      latest: '1.0.0',
+    })])
+    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => body) }, presetBuild())
+
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride)
+      .toEqual({ revision: 4, sha256: textOf(GUIDE).sha256 })
+
+    // The version leaves the catalog: its guide stays, the tool skill does not displace it.
+    body = catalogBody([builtin(textOf(SKILL, 2))])
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(4)
+
+    // A catalog that does not list the tool changes nothing.
+    body = catalogBody([])
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(4)
+  })
+
+  it('requires a skill signature when the build ships keys and never accepts a guide signature', async () => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+    const presetDir = presetBuild([
+      { keyId: 'k1', alg: 'ed25519', publicKey: Buffer.from(publicKey.export({ format: 'jwk' }).x as string, 'base64url').toString('base64') },
+    ])
+    const plain = textOf(SKILL, 2)
+    const sig = (message: string) => ({ alg: 'ed25519', keyId: 'k1', value: sign(null, Buffer.from(message), privateKey).toString('base64') })
+    let skill: unknown = plain
+    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => catalogBody([builtin(skill)])) }, presetDir)
+
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
+
+    skill = { ...plain, signature: sig(`halo.cli.guide/1\n${ID}\n1.0.0\n2\n${plain.sha256}\n`) }
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
+
+    skill = { ...plain, signature: sig(`halo.cli.skill/1\n${ID}\n2\n${plain.sha256}\n`) }
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toEqual({ revision: 2, sha256: plain.sha256, tool: true })
+
+    // A refused skill later leaves the applied one in place rather than reverting.
+    skill = { ...textOf(`${SKILL}More.\n`, 3), signature: sig('forged') }
+    await catalog.fetchCliCatalog()
+    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(2)
+  })
+})

@@ -30,8 +30,10 @@ import {
   assertCatalogSignature,
   guideSignatureAccepted,
   loadTrustStore,
+  skillSignatureAccepted,
   type CatalogSignature,
   type TrustMode,
+  type TrustStore,
 } from './signature'
 import type { CliToolView, CliToolsOverview, CliToolVersionView } from '../../../shared/types/cli-tools'
 
@@ -271,15 +273,18 @@ export async function applyCatalogStatus(catalog: CatalogToolStatus[]): Promise<
 }
 
 /**
- * Drop guide overrides whose signature the build does not accept, under the
- * same policy as packages (see signature.ts). A dropped version is left as it
- * is on this device rather than reverted to the package guide.
+ * Drop guide overrides and tool skills whose signature the build does not
+ * accept, under the same policy as packages (see signature.ts). What a dropped
+ * text would have reached is left as it is on this device rather than
+ * reverted to the package guide.
  */
 async function withAcceptedGuides(catalog: CatalogToolStatus[]): Promise<CatalogToolStatus[]> {
-  const hasOverride = catalog.some(tool => Object.values(tool.guides ?? {}).some(guide => guide.override))
+  const hasOverride = catalog.some(tool =>
+    tool.skill || Object.values(tool.guides ?? {}).some(guide => guide.override))
   if (!hasOverride) return catalog
   const trust = await loadTrustStore(trustFile())
-  return catalog.map(tool => {
+  return catalog.map(original => {
+    const tool = withAcceptedSkill(trust, original)
     if (!tool.guides) return tool
     const guides: NonNullable<CatalogToolStatus['guides']> = {}
     for (const [version, guide] of Object.entries(tool.guides)) {
@@ -297,6 +302,19 @@ async function withAcceptedGuides(catalog: CatalogToolStatus[]): Promise<Catalog
     }
     return { ...tool, guides }
   })
+}
+
+function withAcceptedSkill(trust: TrustStore, tool: CatalogToolStatus): CatalogToolStatus {
+  const skill = tool.skill
+  if (!skill) return tool
+  const fields = { id: tool.id, revision: skill.revision, sha256: skill.sha256 }
+  if (skillSignatureAccepted(trust, fields, skill.signature)) return tool
+  console.warn('[CliTools] Tool skill ignored: signature not accepted', {
+    tool: tool.id, revision: skill.revision, trust: trust.mode,
+  })
+  const rest = { ...tool }
+  delete rest.skill
+  return rest
 }
 
 function requireStore(): CliToolStore {

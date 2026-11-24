@@ -14,7 +14,8 @@
  * an update is only flagged, never downloaded. An administrator's guide
  * override of a version replaces the package guide for new executions once
  * its digest (and, when the build ships trusted keys, its signature) checks
- * out; a malformed one is ignored. Installing re-reads the catalog first and
+ * out; a malformed one is ignored. The tool's skill, carried on the tool
+ * entry, reaches installed preset copies the same way. Installing re-reads the catalog first and
  * refuses a revoked tool or a version the catalog no longer lists, checks the
  * version's signature when the build ships trusted keys, then checks
  * the archive sha256 here and hands the file to cli-tools, which checks the
@@ -80,6 +81,8 @@ interface CatalogToolRecord {
   /** Empty when the tool has no approved version (a status-only entry). */
   latest: string
   versions: CatalogVersionRecord[]
+  /** The tool's skill, for copies not installed from the catalog. */
+  skill: CatalogGuideOverride | null | 'invalid'
 }
 
 /**
@@ -186,6 +189,7 @@ function parseTool(raw: unknown): CatalogToolRecord | null {
     revoked: t.revoked === true,
     latest: latest && versions.some(v => v.view.version === latest) ? latest : versions[0]?.view.version ?? '',
     versions,
+    skill: parseGuide(t.skill),
   }
 }
 
@@ -251,7 +255,11 @@ export function catalogStatusOf(tools: CatalogToolRecord[]): CatalogToolStatus[]
       }
       guides[v.view.version] = { integrity: v.integrity, override: v.guide }
     }
-    return { id: tool.id, revoked: tool.revoked, versions: tool.versions.map(v => v.view.version), guides }
+    const status: CatalogToolStatus = { id: tool.id, revoked: tool.revoked, versions: tool.versions.map(v => v.view.version), guides }
+    // A malformed skill leaves preset copies as they are; a missing one clears it.
+    if (tool.skill === 'invalid') console.warn('[CliCatalog] Tool skill ignored: malformed', { tool: tool.id })
+    else status.skill = tool.skill
+    return status
   })
 }
 

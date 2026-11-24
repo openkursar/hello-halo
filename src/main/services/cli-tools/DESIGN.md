@@ -254,6 +254,18 @@ one gets the new revision. Guide files no record or lock refers to are
 deleted after each catalog apply. A missing or altered file is logged and that
 view falls back to the package guide.
 
+A catalog may also carry the tool's skill on the tool entry
+(`CatalogToolStatus.skill`). It is for installed `preset` versions, which are
+not catalog versions and so receive no version guide; a tool shipped with the
+build is listed with no versions so that its skill and revocation still reach
+it. The skill goes to each preset version that no listed version guide
+covers and that holds no version guide from earlier, stored the same way with
+`guideOverride.tool: true`. `skill: null` (the catalog sets none) clears only
+overrides marked `tool`; an absent value (a malformed or refused skill) leaves
+them as they are. The order is therefore version guide, then tool skill, then
+the package guide. A tool the catalog does not list is not touched. Locks pin
+only `{revision, sha256}`.
+
 Revocation excludes a tool from new pins. It is not credential revocation: a
 tool's authorization is checked when the tool uses its identity, which a
 version pin never freezes.
@@ -306,7 +318,8 @@ format is `v: 4`, so views built before skills existed are rebuilt.
   to 64 KiB; a longer one is cut and the skill names the full file.
 - **Versions.** The registry resolves a tool-level skill and a per-version
   override into the one guide override each version carries, so the client
-  sees a single text per version. A running execution keeps its view's skill;
+  sees a single text per version. A preset version takes the tool-level skill
+  from the tool entry instead (see "Administrator guide overrides"). A running execution keeps its view's skill;
   the next one gets the new text.
 
 `describeToolSkills(state)` gives the management view each tool's skill for its
@@ -498,6 +511,13 @@ it, `on` needs a valid signature from a listed key, `broken` accepts none. A
 refused override is dropped with a log line (no text) and the version keeps
 the guide it had. The registry's Go test and `signature.test.ts` share one
 RFC 8032 vector.
+
+A tool's skill has no version and is signed in its own domain, so neither
+signature passes for the other:
+`"halo.cli.skill/1\n" + id + "\n" + revision + "\n" + sha256 of the text (lowercase hex) + "\n"`.
+`withAcceptedGuides` checks it under the same trust modes; a refused skill is
+dropped with a log line and the preset versions keep what they had. It also
+has a shared vector (`TestSkillMessageAndVector`).
 
 **State compatibility.** All new fields are optional, and `schema` stays 1.
 An older build reads the state, ignores `disabled`, `delisted`, `withdrawn`,

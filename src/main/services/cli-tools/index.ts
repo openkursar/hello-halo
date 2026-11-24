@@ -28,7 +28,7 @@ export {
   readCliToolState,
 } from './host'
 export type { CatalogPackageExpectation, CliToolsHostOptions, UserPackagePreview } from './host'
-export { parseCatalogSignature, signedBytes, signedGuideBytes, guideSignatureAccepted, TRUSTED_KEYS_FILE } from './signature'
+export { parseCatalogSignature, signedBytes, signedGuideBytes, signedSkillBytes, guideSignatureAccepted, skillSignatureAccepted, TRUSTED_KEYS_FILE } from './signature'
 export type { CatalogSignature, TrustMode } from './signature'
 export type {
   CliExecutionEntry,

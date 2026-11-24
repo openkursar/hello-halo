@@ -9,6 +9,10 @@
  * can change after the package was approved:
  *   "halo.cli.guide/1\n" + id + "\n" + version + "\n" + revision + "\n" + sha256 of the text + "\n"
  *
+ * A tool's skill (one administrator text for every version, applied to copies
+ * that did not come from the catalog, such as preset ones) has no version:
+ *   "halo.cli.skill/1\n" + id + "\n" + revision + "\n" + sha256 of the text + "\n"
+ *
  * Trust file `trusted-keys.json` (next to the preset packages):
  *   {"schema":"halo.cli.trust/1","keys":[{"keyId":"…","alg":"ed25519","publicKey":"<base64 raw 32 bytes>"}]}
  *
@@ -25,6 +29,7 @@ import { CliToolError } from './errors'
 export const TRUST_SCHEMA = 'halo.cli.trust/1'
 export const SIGNATURE_DOMAIN = 'halo.cli.sig/1'
 export const GUIDE_SIGNATURE_DOMAIN = 'halo.cli.guide/1'
+export const SKILL_SIGNATURE_DOMAIN = 'halo.cli.skill/1'
 export const TRUSTED_KEYS_FILE = 'trusted-keys.json'
 
 export interface CatalogSignature {
@@ -75,6 +80,21 @@ export interface GuideSignedFields {
 export function signedGuideBytes(fields: GuideSignedFields): Buffer {
   return Buffer.from(
     `${GUIDE_SIGNATURE_DOMAIN}\n${fields.id}\n${fields.version}\n${fields.revision}\n${fields.sha256.toLowerCase()}\n`,
+    'utf-8',
+  )
+}
+
+export interface SkillSignedFields {
+  id: string
+  /** Positive integer; every administrator edit or reset increments it. */
+  revision: number
+  /** Lowercase hex sha256 of the skill's UTF-8 text. */
+  sha256: string
+}
+
+export function signedSkillBytes(fields: SkillSignedFields): Buffer {
+  return Buffer.from(
+    `${SKILL_SIGNATURE_DOMAIN}\n${fields.id}\n${fields.revision}\n${fields.sha256.toLowerCase()}\n`,
     'utf-8',
   )
 }
@@ -171,13 +191,30 @@ export function guideSignatureAccepted(
   fields: GuideSignedFields,
   signature: CatalogSignature | null | undefined,
 ): boolean {
+  return textSignatureAccepted(trust, signedGuideBytes(fields), signature)
+}
+
+/** The same verdict for a tool's skill. */
+export function skillSignatureAccepted(
+  trust: TrustStore,
+  fields: SkillSignedFields,
+  signature: CatalogSignature | null | undefined,
+): boolean {
+  return textSignatureAccepted(trust, signedSkillBytes(fields), signature)
+}
+
+function textSignatureAccepted(
+  trust: TrustStore,
+  bytes: Buffer,
+  signature: CatalogSignature | null | undefined,
+): boolean {
   if (trust.mode === 'off') return true
   if (trust.mode === 'broken' || !signature) return false
   const key = trust.keys.get(signature.keyId)
   if (!key) return false
   const value = Buffer.from(signature.value, 'base64')
   try {
-    return value.length === 64 && verify(null, signedGuideBytes(fields), key, value)
+    return value.length === 64 && verify(null, bytes, key, value)
   } catch {
     return false
   }

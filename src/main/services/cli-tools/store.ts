@@ -95,8 +95,10 @@ export interface CliToolVersionRecord {
   /**
    * The administrator's replacement for the package guide (`guides/<sha256>.md`).
    * Only preset and catalog versions take one; the text is never kept in state.
+   * `tool` marks a preset version's copy of the tool's skill rather than a
+   * guide set for this version, so clearing the skill never drops the latter.
    */
-  guideOverride?: { revision: number; sha256: string }
+  guideOverride?: { revision: number; sha256: string; tool?: true }
   /** Present only for `source: 'external'`; `dir` is then empty. */
   external?: CliExternalRecord
 }
@@ -184,6 +186,12 @@ export interface CatalogToolStatus {
    * integrity equals `integrity`.
    */
   guides?: Record<string, { integrity: string; override: CatalogGuideOverride | null }>
+  /**
+   * The tool's skill, for installed preset versions that `guides` does not
+   * cover. `null`: the catalog sets none, so a skill applied earlier is
+   * cleared. Absent: leave those versions as they are.
+   */
+  skill?: CatalogGuideOverride | null
 }
 
 export interface CliToolStoreOptions {
@@ -995,7 +1003,9 @@ export class CliToolStore {
    * versions: `delisted` when the catalog has neither an approved version
    * nor a revocation entry for it, `withdrawn` per version the catalog no
    * longer lists, and `catalogUpdate` when an approved version is above
-   * every installed one. Nothing is downloaded. Returns the ids that changed.
+   * every installed one. Administrator texts: each listed version's guide,
+   * and the tool's skill for preset versions (see `applyToolSkill`). Nothing
+   * is downloaded. Returns the ids that changed.
    */
   applyCatalogStatus(catalog: CatalogToolStatus[]): Promise<string[]> {
     return this.serialize(async () => {
@@ -1017,6 +1027,7 @@ export class CliToolStore {
           }
         }
         if (entry?.guides) await this.applyGuides(id, tool, entry.guides)
+        if (entry && entry.skill !== undefined) await this.applyToolSkill(id, tool, entry.skill, entry.guides ?? {})
         const installed = Object.keys(tool.versions).filter(v => v !== EXTERNAL_VERSION)
         const best = entry && !entry.revoked
           ? [...entry.versions].sort(compareVersions).pop()
@@ -1056,24 +1067,62 @@ export class CliToolStore {
         delete record.guideOverride
         continue
       }
-      const bytes = Buffer.byteLength(override.content, 'utf-8')
-      if (!GUIDE_SHA256.test(override.sha256) || !Number.isInteger(override.revision) || override.revision < 1 ||
-        bytes > GUIDE_MAX_BYTES || sha256(override.content) !== override.sha256) {
-        this.log.error('[CliTools] Guide override ignored: it does not match its digest or limits', {
-          tool: `${id}@${version}`, revision: override.revision,
-        })
-        continue
-      }
-      const file = this.path('guides', `${override.sha256}.md`)
-      if (!existsSync(file)) {
-        await fsp.mkdir(this.path('guides'), { recursive: true })
-        await writeFileAtomic(file, override.content)
-      }
+      if (!(await this.storeGuideText(`${id}@${version}`, override))) continue
       const current = record.guideOverride
-      if (current?.sha256 !== override.sha256 || current.revision !== override.revision) {
+      if (current?.sha256 !== override.sha256 || current.revision !== override.revision || current.tool) {
         record.guideOverride = { revision: override.revision, sha256: override.sha256 }
       }
     }
+  }
+
+  /**
+   * Give the tool's skill to installed preset versions: they are not in the
+   * catalog, so no version guide reaches them. A version `guides` applied to,
+   * or one holding a guide set for that version, keeps it.
+   */
+  private async applyToolSkill(
+    id: string,
+    tool: CliToolRecord,
+    skill: CatalogGuideOverride | null,
+    guides: NonNullable<CatalogToolStatus['guides']>,
+  ): Promise<void> {
+    const targets = Object.entries(tool.versions).filter(([version, record]) =>
+      record.source === 'preset' &&
+      guides[version]?.integrity !== record.integrity &&
+      (!record.guideOverride || record.guideOverride.tool))
+    if (targets.length === 0) return
+    if (!skill) {
+      for (const [, record] of targets) delete record.guideOverride
+      return
+    }
+    if (!(await this.storeGuideText(id, skill))) return
+    for (const [, record] of targets) {
+      const current = record.guideOverride
+      if (current?.sha256 !== skill.sha256 || current.revision !== skill.revision) {
+        record.guideOverride = { revision: skill.revision, sha256: skill.sha256, tool: true }
+      }
+    }
+  }
+
+  /**
+   * Check an administrator text against its digest and limits and keep it as
+   * `guides/<sha256>.md`, written once per content. False when it does not check out.
+   */
+  private async storeGuideText(label: string, override: CatalogGuideOverride): Promise<boolean> {
+    const bytes = Buffer.byteLength(override.content, 'utf-8')
+    if (!GUIDE_SHA256.test(override.sha256) || !Number.isInteger(override.revision) || override.revision < 1 ||
+      bytes > GUIDE_MAX_BYTES || sha256(override.content) !== override.sha256) {
+      this.log.error('[CliTools] Guide override ignored: it does not match its digest or limits', {
+        tool: label, revision: override.revision,
+      })
+      return false
+    }
+    const file = this.path('guides', `${override.sha256}.md`)
+    if (!existsSync(file)) {
+      await fsp.mkdir(this.path('guides'), { recursive: true })
+      await writeFileAtomic(file, override.content)
+    }
+    return true
   }
 
   /** Delete guide files no version record and no execution lock refers to. */
@@ -1220,7 +1269,9 @@ export class CliToolStore {
         version: tool.current,
         integrity: record.integrity,
         ...(record.guide ? { guide: record.guide } : {}),
-        ...(record.guideOverride ? { guideOverride: { ...record.guideOverride } } : {}),
+        ...(record.guideOverride
+          ? { guideOverride: { revision: record.guideOverride.revision, sha256: record.guideOverride.sha256 } }
+          : {}),
       })
       for (const command of record.commands) {
         const conflict = taken.has(command.name) ||
