@@ -364,6 +364,11 @@ export function registerStoreHandlers(): void {
       return storeController.installStoreCliTool(input)
     },
 
+    // ── store:sync-cli-catalog ─────────────────────────────────────────────
+    storeSyncCliCatalog: async (input?: { force?: boolean }) => {
+      return storeController.syncStoreCliCatalog(input)
+    },
+
     // ── store:ignore-version ───────────────────────────────────────────────
     storeIgnoreVersion: async (input: { appId: string; version: string }) => {
       return storeController.ignoreStoreVersion(input)

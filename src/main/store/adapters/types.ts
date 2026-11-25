@@ -187,10 +187,11 @@ export interface RegistryAdapter {
   unpublish?(source: RegistrySource, slug: string, auth: RegistryAuth): Promise<void>
 
   /**
-   * The administrator-reviewed CLI tool catalog. Null when the source serves
-   * none. Payload validated by the caller.
+   * The administrator-reviewed CLI tool catalog; `absent` when the source
+   * serves none. With `validator` (an earlier ETag) an unchanged catalog
+   * answers `unchanged` without a body. Payload validated by the caller.
    */
-  fetchCliCatalog?(source: RegistrySource, auth: RegistryAuth): Promise<unknown | null>
+  fetchCliCatalog?(source: RegistrySource, auth: RegistryAuth, validator?: string): Promise<PageDocumentResult>
 
   /**
    * Download one CLI package named by a catalog `downloadUrl`. The driver

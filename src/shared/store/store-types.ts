@@ -678,6 +678,18 @@ export interface CliCatalog {
   tools: CliCatalogTool[]
 }
 
+/** What one read of the CLI catalog changed on this device. */
+export interface CliCatalogSyncResult {
+  /** Versions the administrator delivers that this sync installed. */
+  installed: Array<{ id: string; version: string }>
+  /** Delivered versions that could not be installed; the installed ones are unchanged. */
+  failed: Array<{ id: string; version: string }>
+  /** Installed tools whose status, skill or current version changed. */
+  changed: number
+  /** Installed tools with a higher catalog version that waits for the user. */
+  updates: number
+}
+
 /** How publishing will handle one skill a digital human depends on. */
 export interface SkillDepInspection {
   id: string

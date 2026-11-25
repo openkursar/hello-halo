@@ -241,14 +241,19 @@ export class DhpV2Adapter implements RegistryAdapter {
 
   // ── CLI tool catalog ─────────────────────────────────────────────────────
 
-  async fetchCliCatalog(source: RegistrySource, auth: RegistryAuth): Promise<unknown | null> {
+  async fetchCliCatalog(source: RegistrySource, auth: RegistryAuth, validator?: string): Promise<PageDocumentResult> {
     const res = await fetchWithTimeout(`${baseUrl(source)}/clis.json`, {
-      headers: { ...JSON_HEADERS, Authorization: `Bearer ${auth.token}` },
+      headers: {
+        ...JSON_HEADERS,
+        Authorization: `Bearer ${auth.token}`,
+        ...(validator ? { 'If-None-Match': validator } : {}),
+      },
     })
-    if (res.status === 404 || res.status === 501) return null
+    if (res.status === 404 || res.status === 501) return { status: 'absent' }
     if (res.status === 401) throw new Error(STORE_NOT_SIGNED_IN)
+    if (res.status === 304) return { status: 'unchanged' }
     if (!res.ok) throw new Error(`cli-catalog failed: ${res.status}`)
-    return (await res.json()) as unknown
+    return { status: 'ok', document: (await res.json()) as unknown, validator: res.headers.get('ETag') ?? undefined }
   }
 
   /**

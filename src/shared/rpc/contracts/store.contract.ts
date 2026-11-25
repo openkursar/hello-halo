@@ -39,5 +39,6 @@ export const storeRpc = {
   storeUnpublish: rawRpcMethod('store:unpublish'),
   storeGetCliCatalog: rawRpcMethod('store:get-cli-catalog'),
   storeInstallCliTool: rawRpcMethod('store:install-cli-tool'),
+  storeSyncCliCatalog: rawRpcMethod('store:sync-cli-catalog'),
   storeIgnoreVersion: rawRpcMethod('store:ignore-version'),
 }

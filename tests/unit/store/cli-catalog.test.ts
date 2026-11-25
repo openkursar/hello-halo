@@ -39,7 +39,8 @@ async function load(driver: Driver | null, presetDir: string | null = null) {
   const host = await import('../../../src/main/services/cli-tools/host')
   host.initCliTools({ root: join(dir, 'cli'), runtimePath: process.execPath, presetDir })
   const catalog = await import('../../../src/main/store/backend/cli-catalog')
-  return { catalog, host, identity: vi.mocked(identity.getStoreIdentityToken) }
+  const sync = await import('../../../src/main/store/backend/cli-catalog-sync')
+  return { catalog, sync, host, identity: vi.mocked(identity.getStoreIdentityToken) }
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -67,6 +68,11 @@ function versionEntry(version: string, bytes: Uint8Array, overrides: Record<stri
 
 function catalogBody(tools: unknown[]) {
   return { schema: 'halo.cli.catalog/1', generatedAt: '2026-11-19T08:00:00Z', tools }
+}
+
+/** What the source driver answers for a catalog it serves. */
+function served(tools: unknown[]) {
+  return { status: 'ok', document: catalogBody(tools) }
 }
 
 function tool(versions: unknown[], overrides: Record<string, unknown> = {}) {
@@ -138,10 +144,10 @@ describe('cli catalog: listing', () => {
   })
 
   it('is empty when the source serves no catalog', async () => {
-    const fetchCliCatalog = vi.fn(async () => null)
+    const fetchCliCatalog = vi.fn(async () => ({ status: 'absent' }))
     const { catalog } = await load({ fetchCliCatalog })
     expect(await catalog.fetchCliCatalog()).toEqual({ tools: [] })
-    expect(fetchCliCatalog).toHaveBeenCalledWith(PRIMARY, { token: 'tok' })
+    expect(fetchCliCatalog).toHaveBeenCalledWith(PRIMARY, { token: 'tok' }, undefined)
   })
 
   it('reports a missing sign-in rather than an empty catalog', async () => {
@@ -154,7 +160,7 @@ describe('cli catalog: listing', () => {
 
   it('maps versions for the renderer without download paths or digests', async () => {
     const bytes = new Uint8Array([1])
-    const fetchCliCatalog = vi.fn(async () => catalogBody([
+    const fetchCliCatalog = vi.fn(async () => served([
       tool([
         versionEntry('1.0.0', bytes),
         versionEntry('0.9.0', bytes, { platforms: ['plan9-mips'], sideEffects: 'sometimes', auth: { method: 'magic' } }),
@@ -185,7 +191,7 @@ describe('cli catalog: listing', () => {
 describe('cli catalog: install and revocation', () => {
   it('installs only the version the user asked for, verified, and cleans its download', async () => {
     const bytes = packageBytes('1.0.0')
-    const fetchCliCatalog = vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes)])]))
+    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes)])]))
     const downloadCliPackage = vi.fn(async () => bytes)
     const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage })
     const before = downloadDirs()
@@ -203,7 +209,7 @@ describe('cli catalog: install and revocation', () => {
 
   it('refuses a download whose digest differs from the catalog and installs nothing', async () => {
     const bytes = packageBytes('1.0.0')
-    const fetchCliCatalog = vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes)])]))
+    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes)])]))
     const downloadCliPackage = vi.fn(async () => packageBytes('1.0.0').map((b, i) => (i === 0 ? b ^ 1 : b)))
     const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage })
 
@@ -214,7 +220,7 @@ describe('cli catalog: install and revocation', () => {
   it('refuses a package whose payload differs from the catalog integrity', async () => {
     const bytes = packageBytes('1.0.0')
     const entry = versionEntry('1.0.0', bytes, { integrity: `sha256-${'A'.repeat(43)}=` })
-    const fetchCliCatalog = vi.fn(async () => catalogBody([tool([entry])]))
+    const fetchCliCatalog = vi.fn(async () => served([tool([entry])]))
     const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
 
     await expect(catalog.installCliTool({ id: ID, version: '1.0.0' })).rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
@@ -228,7 +234,7 @@ describe('cli catalog: install and revocation', () => {
       tool([versionEntry('1.0.0', bytes, { platforms: ['plan9-mips'] })], { id: 'com.example.other' }),
     ])
     const downloadCliPackage = vi.fn()
-    const { catalog } = await load({ fetchCliCatalog: vi.fn(async () => body), downloadCliPackage })
+    const { catalog } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage })
 
     await expect(catalog.installCliTool({ id: ID, version: '1.0.0' })).rejects.toThrow('revoked')
     await expect(catalog.installCliTool({ id: 'com.example.absent', version: '1.0.0' })).rejects.toThrow('not in the store catalog')
@@ -240,12 +246,12 @@ describe('cli catalog: install and revocation', () => {
   it('applies a revocation to the installed tool on the next read and keeps it out of new executions', async () => {
     const bytes = packageBytes('1.0.0')
     let revoked = false
-    const fetchCliCatalog = vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes)], { revoked })]))
-    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
+    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes)], { revoked })]))
+    const { catalog, sync, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
 
     revoked = true
-    await catalog.syncCliCatalogRevocations()
+    await sync.requestCliCatalogSync('startup')
     expect((await host.readCliToolState())!.tools[ID].revoked).toBe(true)
     const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
     expect(await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })).toBeNull()
@@ -255,19 +261,21 @@ describe('cli catalog: install and revocation', () => {
     expect(tools[0].installed?.revoked).toBe(false)
   })
 
-  it('keeps the revocation sync silent when there is nothing to ask or the request fails', async () => {
+  it('keeps the background sync silent when there is nothing to ask or the request fails', async () => {
     const quiet = await load(null)
-    await expect(quiet.catalog.syncCliCatalogRevocations()).resolves.toBeUndefined()
+    await expect(quiet.sync.requestCliCatalogSync('startup')).resolves.toBeNull()
 
     const fetchCliCatalog = vi.fn()
     const signedOut = await load({ fetchCliCatalog })
     signedOut.identity.mockResolvedValue(null)
-    await signedOut.catalog.syncCliCatalogRevocations()
+    await expect(signedOut.sync.requestCliCatalogSync('startup')).resolves.toBeNull()
     expect(fetchCliCatalog).not.toHaveBeenCalled()
+    expect(console.warn).not.toHaveBeenCalled()
 
     const failing = await load({ fetchCliCatalog: vi.fn(async () => { throw new Error('cli-catalog failed: 503') }) })
-    await expect(failing.catalog.syncCliCatalogRevocations()).resolves.toBeUndefined()
-    expect(console.warn).toHaveBeenCalledWith('[CliCatalog] Revocation sync skipped:', 'cli-catalog failed: 503')
+    await expect(failing.sync.requestCliCatalogSync('startup')).resolves.toBeNull()
+    expect(console.warn).toHaveBeenCalledWith('[CliCatalog] Sync failed; installed tools unchanged', { trigger: 'startup', reason: 'cli-catalog failed: 503' })
+    await expect(failing.sync.syncCliCatalogNow()).rejects.toThrow('503')
   })
 })
 
@@ -276,7 +284,7 @@ describe('cli catalog: status and signatures', () => {
     const bytes1 = packageBytes('1.0.0')
     let body = catalogBody([tool([versionEntry('1.0.0', bytes1)])])
     const downloadCliPackage = vi.fn(async () => bytes1)
-    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => body), downloadCliPackage })
+    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage })
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
     expect(downloadCliPackage).toHaveBeenCalledTimes(1)
 
@@ -300,11 +308,11 @@ describe('cli catalog: status and signatures', () => {
   it('does not delist anything when the catalog cannot be read', async () => {
     const bytes = packageBytes('1.0.0')
     let fail = false
-    const fetchCliCatalog = vi.fn(async () => { if (fail) throw new Error('503'); return catalogBody([tool([versionEntry('1.0.0', bytes)])]) })
-    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
+    const fetchCliCatalog = vi.fn(async () => { if (fail) throw new Error('503'); return served([tool([versionEntry('1.0.0', bytes)])]) })
+    const { catalog, sync, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
     fail = true
-    await catalog.syncCliCatalogRevocations()
+    await sync.requestCliCatalogSync('startup')
     expect((await host.readCliToolState())!.tools[ID].delisted).toBeUndefined()
   })
 
@@ -322,7 +330,7 @@ describe('cli catalog: status and signatures', () => {
     let signature: unknown = null
     const downloadCliPackage = vi.fn(async () => bytes)
     const { catalog, host } = await load({
-      fetchCliCatalog: vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes, { signature })])])),
+      fetchCliCatalog: vi.fn(async () => served([tool([versionEntry('1.0.0', bytes, { signature })])])),
       downloadCliPackage,
     }, presetDir)
 
@@ -382,7 +390,7 @@ describe('cli catalog: administrator guide overrides', () => {
   it('applies an override on install, pins it per session, and reverts when the administrator resets it', async () => {
     const bytes = packageBytes('1.0.0')
     let guide: unknown = guideOf(TEXT)
-    const fetchCliCatalog = vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes, { guide })])]))
+    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes, { guide })])]))
     const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
 
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
@@ -414,7 +422,7 @@ describe('cli catalog: administrator guide overrides', () => {
   it('leaves the guide as it is when the override is malformed or for another payload', async () => {
     const bytes = packageBytes('1.0.0')
     let entry: Record<string, unknown> = { guide: guideOf(TEXT) }
-    const fetchCliCatalog = vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes, entry)])]))
+    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes, entry)])]))
     const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
 
@@ -448,7 +456,7 @@ describe('cli catalog: administrator guide overrides', () => {
       value: sign(null, Buffer.from(`halo.cli.guide/1\n${ID}\n1.0.0\n${revision}\n${plain.sha256}\n`), privateKey).toString('base64'),
     })
     let guide: unknown = plain
-    const fetchCliCatalog = vi.fn(async () => catalogBody([tool([versionEntry('1.0.0', bytes, { signature: packageSig, guide })])]))
+    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes, { signature: packageSig, guide })])]))
     const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) }, presetDir)
 
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
@@ -514,7 +522,7 @@ describe('cli catalog: tool skill for preset copies', () => {
 
   it('gives the skill to the preset copy, uses its description, and clears it when the administrator resets it', async () => {
     let skill: unknown = textOf(SKILL)
-    const fetchCliCatalog = vi.fn(async () => catalogBody([builtin(skill)]))
+    const fetchCliCatalog = vi.fn(async () => served([builtin(skill)]))
     const { catalog, host } = await load({ fetchCliCatalog }, presetBuild())
 
     // Status-only entries stay out of the store list, but their skill applies.
@@ -540,7 +548,7 @@ describe('cli catalog: tool skill for preset copies', () => {
       versions: [versionEntry('1.0.0', new Uint8Array([1]), { integrity, guide: textOf(GUIDE, 4) })],
       latest: '1.0.0',
     })])
-    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => body) }, presetBuild())
+    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })) }, presetBuild())
 
     await catalog.fetchCliCatalog()
     expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride)
@@ -565,7 +573,7 @@ describe('cli catalog: tool skill for preset copies', () => {
     const plain = textOf(SKILL, 2)
     const sig = (message: string) => ({ alg: 'ed25519', keyId: 'k1', value: sign(null, Buffer.from(message), privateKey).toString('base64') })
     let skill: unknown = plain
-    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => catalogBody([builtin(skill)])) }, presetDir)
+    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => served([builtin(skill)])) }, presetDir)
 
     await catalog.fetchCliCatalog()
     expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
@@ -582,5 +590,168 @@ describe('cli catalog: tool skill for preset copies', () => {
     skill = { ...textOf(`${SKILL}More.\n`, 3), signature: sig('forged') }
     await catalog.fetchCliCatalog()
     expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(2)
+  })
+})
+
+describe('cli catalog: revalidation', () => {
+  it('sends the previous ETag and reuses the parsed catalog when it is unchanged', async () => {
+    const bytes = new Uint8Array([1])
+    const fetchCliCatalog = vi.fn()
+      .mockResolvedValueOnce({ status: 'ok', document: catalogBody([tool([versionEntry('1.0.0', bytes)])]), validator: '"v1"' })
+      .mockResolvedValue({ status: 'unchanged' })
+    const { catalog } = await load({ fetchCliCatalog })
+
+    expect((await catalog.fetchCliCatalog()).tools.map(t => t.id)).toEqual([ID])
+    expect((await catalog.fetchCliCatalog()).tools.map(t => t.id)).toEqual([ID])
+    expect(fetchCliCatalog.mock.calls.map(call => call[2])).toEqual([undefined, '"v1"'])
+  })
+})
+
+describe('cli catalog: administrator delivery', () => {
+  const delivered = (versions: unknown[], overrides: Record<string, unknown> = {}) =>
+    tool(versions, { source: 'builtin', latest: '', autoInstall: versions.length > 0, ...overrides })
+
+  function presetOf(version: string): string {
+    const presetDir = join(dir, 'preset')
+    mkdirSync(presetDir)
+    writePackage(presetDir, { version })
+    return presetDir
+  }
+
+  it('installs a delivered tool on sync and keeps it from being deleted', async () => {
+    const bytes = packageBytes('1.0.0')
+    const downloadCliPackage = vi.fn(async () => bytes)
+    const { sync, host } = await load({ fetchCliCatalog: vi.fn(async () => served([delivered([versionEntry('1.0.0', bytes)])])), downloadCliPackage })
+
+    const result = await sync.syncCliCatalogNow()
+    expect(result.installed).toEqual([{ id: ID, version: '1.0.0' }])
+    expect(result.failed).toEqual([])
+    const record = (await host.readCliToolState())!.tools[ID]
+    expect(record.current).toBe('1.0.0')
+    expect(record.autoInstall).toBe(true)
+    const view = (await host.getCliToolsOverview()).tools.find(t => t.id === ID)!
+    expect(view.adminManaged).toBe(true)
+    expect(view.versions[0].removable).toBe(false)
+    await expect(host.removeCliTool(ID)).rejects.toMatchObject({ code: 'ADMIN_MANAGED' })
+    await expect(host.removeCliToolVersion(ID, '1.0.0')).rejects.toMatchObject({ code: 'ADMIN_MANAGED' })
+
+    expect((await sync.syncCliCatalogNow()).installed).toEqual([])
+    expect(downloadCliPackage).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves partner tools to the user and counts their updates', async () => {
+    const bytes = packageBytes('1.0.0')
+    let body = catalogBody([tool([versionEntry('1.0.0', bytes)])])
+    const downloadCliPackage = vi.fn(async () => bytes)
+    const { catalog, sync } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage })
+
+    expect((await sync.syncCliCatalogNow()).installed).toEqual([])
+    await catalog.installCliTool({ id: ID, version: '1.0.0' })
+    body = catalogBody([tool([versionEntry('2.0.0', packageBytes('2.0.0')), versionEntry('1.0.0', bytes)], { latest: '2.0.0' })])
+    const result = await sync.syncCliCatalogNow()
+    expect(result.installed).toEqual([])
+    expect(result.updates).toBe(1)
+    expect(downloadCliPackage).toHaveBeenCalledTimes(1)
+  })
+
+  it('moves past the shipped copy, falls back to it when the delivery is withdrawn, and never downgrades', async () => {
+    const bytes = packageBytes('2.0.0')
+    let body = catalogBody([delivered([versionEntry('2.0.0', bytes)])])
+    const downloadCliPackage = vi.fn(async () => bytes)
+    const { sync, host } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage }, presetOf('1.0.0'))
+
+    expect((await sync.syncCliCatalogNow()).installed).toEqual([{ id: ID, version: '2.0.0' }])
+    expect((await host.readCliToolState())!.tools[ID].current).toBe('2.0.0')
+
+    // Every approved version withdrawn: the catalog no longer marks the tool, the device still does.
+    body = catalogBody([delivered([])])
+    const result = await sync.syncCliCatalogNow()
+    expect(result.installed).toEqual([])
+    let record = (await host.readCliToolState())!.tools[ID]
+    expect(record.current).toBe('1.0.0')
+    expect(record.versions['2.0.0'].withdrawn).toBe(true)
+    expect(record.autoInstall).toBe(true)
+
+    body = catalogBody([delivered([versionEntry('0.9.0', packageBytes('0.9.0'))])])
+    await sync.syncCliCatalogNow()
+    record = (await host.readCliToolState())!.tools[ID]
+    expect(record.current).toBe('1.0.0')
+    expect(record.versions['0.9.0']).toBeUndefined()
+    expect(downloadCliPackage).toHaveBeenCalledTimes(1)
+  })
+
+  it('remembers a refused package for background reads until the catalog changes it, retries it on Sync, and retries a network fault', async () => {
+    const bytes = packageBytes('1.0.0')
+    const good = versionEntry('1.0.0', bytes)
+    let body = catalogBody([delivered([{ ...good, integrity: `sha256-${'A'.repeat(43)}=` }])])
+    const downloadCliPackage = vi.fn(async () => bytes)
+    const { sync, host } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage })
+
+    expect((await sync.requestCliCatalogSync('sign-in'))!.failed).toEqual([{ id: ID, version: '1.0.0' }])
+    expect((await host.getCliToolsOverview()).deliveryFailures).toEqual([{ id: ID, version: '1.0.0', code: 'DIGEST_MISMATCH' }])
+    expect((await sync.requestCliCatalogSync('sign-in'))!.failed).toEqual([])
+    expect(downloadCliPackage).toHaveBeenCalledTimes(1)
+    // The user's Sync tries the remembered version once more.
+    expect((await sync.syncCliCatalogNow()).failed).toEqual([{ id: ID, version: '1.0.0' }])
+    expect(downloadCliPackage).toHaveBeenCalledTimes(2)
+
+    body = catalogBody([delivered([good])])
+    downloadCliPackage.mockRejectedValueOnce(new Error('socket hang up'))
+    expect((await sync.requestCliCatalogSync('sign-in'))!.failed).toEqual([{ id: ID, version: '1.0.0' }])
+    expect((await host.getCliToolsOverview()).deliveryFailures).toEqual([])
+    expect((await sync.requestCliCatalogSync('sign-in'))!.installed).toEqual([{ id: ID, version: '1.0.0' }])
+    expect(downloadCliPackage).toHaveBeenCalledTimes(4)
+  })
+
+  it('installs a remembered refusal on Sync once the package arrives intact, and clears the record', async () => {
+    const bytes = packageBytes('1.0.0')
+    const downloadCliPackage = vi.fn(async () => bytes)
+    downloadCliPackage.mockResolvedValueOnce(Buffer.from('corrupted on the way'))
+    const body = catalogBody([delivered([versionEntry('1.0.0', bytes)])])
+    const { sync, host } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage })
+
+    expect((await sync.requestCliCatalogSync('startup'))!.failed).toEqual([{ id: ID, version: '1.0.0' }])
+    expect((await host.getCliToolsOverview()).deliveryFailures).toHaveLength(1)
+    expect((await sync.syncCliCatalogNow()).installed).toEqual([{ id: ID, version: '1.0.0' }])
+    expect((await host.getCliToolsOverview()).deliveryFailures).toEqual([])
+  })
+
+  it('reads on events only when due, except at sign-in', async () => {
+    const fetchCliCatalog = vi.fn(async () => served([]))
+    const { sync } = await load({ fetchCliCatalog })
+
+    expect(await sync.requestCliCatalogSync('startup')).not.toBeNull()
+    expect(await sync.requestCliCatalogSync('focus')).toBeNull()
+    expect(await sync.requestCliCatalogSync('sign-in')).not.toBeNull()
+    await sync.syncCliCatalogNow()
+    expect(fetchCliCatalog).toHaveBeenCalledTimes(3)
+  })
+
+  it('stays fresh after a read and backs off after failures', async () => {
+    const { sync } = await load(null)
+    let now = 0
+    const schedule = new sync.CliCatalogSchedule(() => now)
+    expect(schedule.isDue()).toBe(true)
+
+    schedule.succeeded()
+    now = sync.CLI_CATALOG_FRESH_MS - 1
+    expect(schedule.isDue()).toBe(false)
+    now += 1
+    expect(schedule.isDue()).toBe(true)
+
+    const waits: number[] = []
+    for (let i = 0; i < 7; i++) {
+      const start = now
+      schedule.failed()
+      while (!schedule.isDue()) now += 1000
+      waits.push(now - start)
+    }
+    expect(waits.slice(0, 3)).toEqual([sync.CLI_CATALOG_RETRY_MS, sync.CLI_CATALOG_RETRY_MS * 2, sync.CLI_CATALOG_RETRY_MS * 4])
+    expect(waits[6]).toBe(sync.CLI_CATALOG_MAX_RETRY_MS)
+
+    schedule.signedOut()
+    expect(schedule.isDue()).toBe(false)
+    now += sync.CLI_CATALOG_RETRY_MS
+    expect(schedule.isDue()).toBe(true)
   })
 })

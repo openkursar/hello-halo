@@ -361,7 +361,9 @@ change reaches the next session.
 - **Bundled tools.** Every `*.hcli` in the preset directory is imported with
   source `preset`. It becomes current only when the tool has no current version
   or the current one is itself a preset, so a version the user or a catalog
-  chose is kept. `preset-stamp.json` records the file names, sizes and mtimes;
+  chose is kept. One exception: a tool the administrator delivers
+  (`autoInstall`) takes a preset higher than its current catalog version, so
+  a newer installer is not held back by an older delivery. `preset-stamp.json` records the file names, sizes and mtimes;
   an unchanged directory is skipped. Any failure leaves the stamp unwritten so
   the next launch retries.
 - **Environments.** `applyCliToolsEnv(env, { entry, engine })` removes any
@@ -443,7 +445,10 @@ for 10 minutes. `preview` and `register` take that id.
 - `removeVersion` refuses the current version and preset versions
   (`PRESET_PROTECTED`). A preset can only be disabled, because the next launch
   would reinstall it anyway. `removeTool` refuses a tool that holds a preset
-  version.
+  version. Catalog versions of a tool the administrator delivers, and that
+  tool itself, are refused the same way (`ADMIN_MANAGED`): the next catalog
+  read would install them again. Disabling still works; a disabled delivered
+  tool keeps receiving updates.
 - **Reference-safe deletion.** The record is removed first. A store directory
   still named by a live execution lock or a view is written to
   `state.pendingCleanup` instead of being deleted, and the call returns
@@ -483,6 +488,16 @@ For each tool with a catalog version installed:
 - `catalogUpdate` holds the newest listed version that is higher than every
   installed one. A revoked tool gets none. Nothing is downloaded until the
   user confirms; the UI then calls the store's `installCliTool`.
+- `autoInstall` mirrors the catalog's mark (administrator delivery, see
+  `store/DESIGN.md` §3.13). It is kept while the catalog lists the tool with
+  no version, so the store can still fall back to the preset copy, and
+  dropped when the tool is listed with versions and no mark, or not listed.
+- `deliveryFailures` (`id@version` → `{integrity, code, at}`) records a
+  delivered version whose package was refused, so background reads skip it.
+  `recordDeliveryFailure` writes it; a catalog read drops entries whose
+  version is no longer listed with the same integrity; a successful import of
+  that version drops it too. The
+  overview returns them for the tools page.
 - A failed catalog read changes nothing.
 
 **Signatures (A07).** `signature.ts` checks catalog versions with Ed25519 over
@@ -521,7 +536,8 @@ has a shared vector (`TestSkillMessageAndVector`).
 
 **State compatibility.** All new fields are optional, and `schema` stays 1.
 An older build reads the state, ignores `disabled`, `delisted`, `withdrawn`,
-`catalogUpdate`, `guideOverride` and `pendingCleanup`, and would treat an `external` version as
+`catalogUpdate`, `guideOverride`, `pendingCleanup`, `autoInstall` and
+`deliveryFailures`, and would treat an `external` version as
 a broken store version: it fails that tool's pin, not the session. A
 downgrade therefore loses disables, and a registered program stops working
 until the newer build is back.

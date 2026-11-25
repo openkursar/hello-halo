@@ -309,13 +309,23 @@ describe('DhpV2Adapter — CLI tool catalog', () => {
 
   it('reads the catalog with the account token and treats absence as no catalog', async () => {
     const adapter = new DhpV2Adapter()
-    fetchMock.mockResolvedValueOnce(reply(200, { schema: 'halo.cli.catalog/1', tools: [] }))
-    expect(await adapter.fetchCliCatalog(SRC, { token: 'tok' })).toEqual({ schema: 'halo.cli.catalog/1', tools: [] })
+    fetchMock.mockResolvedValueOnce(reply(200, { schema: 'halo.cli.catalog/1', tools: [] }, { ETag: '"abc"' }))
+    expect(await adapter.fetchCliCatalog(SRC, { token: 'tok' }))
+      .toEqual({ status: 'ok', document: { schema: 'halo.cli.catalog/1', tools: [] }, validator: '"abc"' })
     expect(fetchMock.mock.calls[0][0]).toBe('http://reg.test/clis.json')
-    expect((fetchMock.mock.calls[0][1]?.headers as Record<string, string>).Authorization).toBe('Bearer tok')
+    const headers = fetchMock.mock.calls[0][1]?.headers as Record<string, string>
+    expect(headers.Authorization).toBe('Bearer tok')
+    expect(headers['If-None-Match']).toBeUndefined()
 
     fetchMock.mockResolvedValueOnce(reply(404))
-    expect(await adapter.fetchCliCatalog(SRC, { token: 'tok' })).toBeNull()
+    expect(await adapter.fetchCliCatalog(SRC, { token: 'tok' })).toEqual({ status: 'absent' })
+  })
+
+  it('revalidates with the previous ETag and reports an unchanged catalog without a body', async () => {
+    const adapter = new DhpV2Adapter()
+    fetchMock.mockResolvedValueOnce(reply(304))
+    expect(await adapter.fetchCliCatalog(SRC, { token: 'tok' }, '"abc"')).toEqual({ status: 'unchanged' })
+    expect((fetchMock.mock.calls[0][1]?.headers as Record<string, string>)['If-None-Match']).toBe('"abc"')
   })
 
   it('surfaces a rejected token as the signed-out sentinel and other faults as errors', async () => {

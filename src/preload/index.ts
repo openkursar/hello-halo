@@ -91,7 +91,7 @@ import type {
   ImageAttachment
 } from '../shared/types'
 import type { NotifyChannelsProductConfig } from '../shared/types/notification-channels'
-import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, StoreSignInStatus, SkillDepInspection, CliCatalog, CliCatalogTool } from '../shared/store/store-types'
+import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, StoreSignInStatus, SkillDepInspection, CliCatalog, CliCatalogTool, CliCatalogSyncResult } from '../shared/store/store-types'
 import type { AppType, AppSpec } from '../shared/apps/spec-types'
 
 type GitRpcClient = RpcClient<typeof gitRpc>
@@ -854,6 +854,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   storeUnpublish: (input: { slug: string }) => Promise<IpcResponse<null>>
   storeGetCliCatalog: () => Promise<IpcResponse<CliCatalog>>
   storeInstallCliTool: (input: { id: string; version: string }) => Promise<IpcResponse<CliCatalogTool>>
+  storeSyncCliCatalog: (input?: { force?: boolean }) => Promise<IpcResponse<CliCatalogSyncResult | null>>
   storeIgnoreVersion: (input: { appId: string; version: string }) => Promise<IpcResponse<null>>
   onStoreSyncStatusChanged: (callback: (data: { registryId: string; status: string; appCount: number; error?: string }) => void) => () => void
   onStoreUpgradeAvailable: (callback: (data: { appId: string; currentVersion: string; latestVersion: string; strategy: 'auto' | 'notify' | 'manual'; severity: 'patch' | 'minor' | 'major' }) => void) => () => void

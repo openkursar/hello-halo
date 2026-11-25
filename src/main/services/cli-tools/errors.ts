@@ -32,6 +32,8 @@ export type CliToolErrorCode =
   | 'STATE_CORRUPT'
   /** A version shipped with the build can be disabled but not deleted. */
   | 'PRESET_PROTECTED'
+  /** A version the administrator delivers to every device can be disabled but not deleted. */
+  | 'ADMIN_MANAGED'
   /** An existing program cannot be registered: path, interpreter or command name is unusable. */
   | 'EXTERNAL_INVALID'
   /** Signature checking is on and the catalog version carries no signature. */

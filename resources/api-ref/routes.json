@@ -1275,6 +1275,10 @@
   },
   {
     "method": "POST",
+    "path": "/api/store/cli-sync"
+  },
+  {
+    "method": "POST",
     "path": "/api/store/ignore-version",
     "group": "store"
   },

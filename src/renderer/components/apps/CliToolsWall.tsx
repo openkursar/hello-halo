@@ -4,20 +4,23 @@
  * catalog, packages the user imported, and programs already on the computer.
  *
  * It works without the enterprise store: everything here reads the local
- * tool store. The only store call is "Update", which the user confirms.
+ * tool store. Store calls are "Update", which the user confirms, and the
+ * catalog sync, which installs only what the administrator delivers.
  * Every change affects tasks started afterwards; running tasks keep the
  * command view they were started with (see services/cli-tools/DESIGN.md).
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, FilePlus2, Loader2, PackagePlus, ShieldOff, SquareTerminal } from 'lucide-react'
+import { AlertTriangle, FilePlus2, Loader2, PackagePlus, RefreshCw, ShieldOff, SquareTerminal } from 'lucide-react'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { useNotificationStore } from '../../stores/notification.store'
+import { useStoreCapabilities } from '../../hooks/useStoreCapabilities'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { CliImportDialog, CliExternalDialog } from './CliToolDialogs'
 import { cliToolsErrorText, skillSourceLabel, sourceLabel, statusClass, statusLabel } from './cli-tools-labels'
 import type { RpcResponse } from '../../../shared/rpc/define'
+import type { CliCatalogSyncResult } from '../../../shared/store/store-types'
 import type {
   CliExternalPick, CliPackagePreviewView, CliToolsErrorCode, CliToolsOverview, CliToolsResult, CliToolVersionView, CliToolView,
 } from '../../../shared/types/cli-tools'
@@ -29,6 +32,19 @@ async function call<T>(request: Promise<RpcResponse<CliToolsResult<T>>>): Promis
   return { ok: false, code: 'UNEXPECTED', message: res.error ?? '' }
 }
 
+type Translate = (key: string, options?: Record<string, unknown>) => string
+
+/** One line summing up a catalog sync. */
+function syncSummary(t: Translate, r: CliCatalogSyncResult): string {
+  const parts: string[] = []
+  if (r.installed.length) parts.push(t('{{count}} installed', { count: r.installed.length }))
+  const updated = r.changed - r.installed.length
+  if (updated > 0) parts.push(t('{{count}} updated', { count: updated }))
+  if (r.failed.length) parts.push(t('{{count}} could not be installed', { count: r.failed.length }))
+  if (r.updates) parts.push(t('{{count}} update(s) available to install', { count: r.updates }))
+  return parts.length ? parts.join(' · ') : t('Command-line tools are up to date.')
+}
+
 type Pending =
   | { kind: 'remove-version'; tool: CliToolView; version: CliToolVersionView }
   | { kind: 'remove-tool'; tool: CliToolView }
@@ -37,7 +53,9 @@ type Pending =
 export function CliToolsWall() {
   const { t } = useTranslation()
   const showToast = useNotificationStore(s => s.show)
+  const { cliTools: hasCatalog } = useStoreCapabilities()
   const [overview, setOverview] = useState<CliToolsOverview | null>(null)
+  const [syncing, setSyncing] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [pending, setPending] = useState<Pending | null>(null)
@@ -55,7 +73,29 @@ export function CliToolsWall() {
     }
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    void load()
+    // Opening the page reads the catalog when it is due; reload only if it was read.
+    void api.storeSyncCliCatalog().then(res => { if (res.success && res.data) void load() }, () => {})
+  }, [load])
+
+  const syncNow = async () => {
+    setBusy(true)
+    setSyncing(true)
+    try {
+      const res = await api.storeSyncCliCatalog({ force: true })
+      if (res.success && res.data) {
+        const r = res.data
+        showToast({ title: syncSummary(t, r), variant: r.failed.length ? 'warning' : 'success', duration: 5000 })
+      } else {
+        showToast({ title: res.error || t('Sync failed. Please try again.'), variant: 'error', duration: 6000 })
+      }
+    } finally {
+      setSyncing(false)
+      setBusy(false)
+      await load()
+    }
+  }
 
   const fail = useCallback((code: CliToolsErrorCode, message: string) => {
     showToast({ title: cliToolsErrorText(t, code, message), variant: 'error', duration: 6000 })
@@ -142,6 +182,12 @@ export function CliToolsWall() {
           {t('Command-line tools on this device that tasks can call. Changes apply to tasks started afterwards; running tasks keep the tools they started with.')}
         </p>
         <div className="flex flex-wrap gap-2">
+          {hasCatalog && (
+            <button disabled={busy || !overview.available} onClick={() => void syncNow()}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-[13px] hover:bg-secondary disabled:opacity-50">
+              <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />{t('Sync')}
+            </button>
+          )}
           <button disabled={busy || !overview.available} onClick={() => void pickPackage()}
             className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
             <PackagePlus className="h-4 w-4" />{t('Import package')}
@@ -161,6 +207,19 @@ export function CliToolsWall() {
               ? t('Signature verification is not enabled on this build. Catalog packages are checked against the catalog digest only.')
               : t('The trusted signing keys of this build are unusable, so installs from the enterprise catalog are refused.')}
           </span>
+        </div>
+      )}
+      {overview.deliveryFailures.length > 0 && (
+        <div role="status" className="mt-2 space-y-0.5 rounded-lg bg-halo-warning/10 px-3 py-2 text-xs text-halo-warning" data-testid="cli-delivery-failures">
+          {overview.deliveryFailures.map(f => (
+            <p key={`${f.id}@${f.version}`}>
+              {t('{{name}} {{version}} from your administrator was not installed: {{reason}}', {
+                name: overview.tools.find(tool => tool.id === f.id)?.name ?? f.id,
+                version: f.version,
+                reason: cliToolsErrorText(t, f.code, ''),
+              })}
+            </p>
+          ))}
         </div>
       )}
       {overview.pendingCleanup > 0 && (
@@ -265,7 +324,10 @@ function CliToolCard({ tool, busy, onSetCurrent, onToggle, onReconfirm, onRemove
           <h3 className="truncate text-sm font-semibold">{tool.name}</h3>
           <p className="truncate font-mono text-[11px] text-muted-foreground">{tool.id}</p>
         </div>
-        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClass(tool.status)}`}>{statusLabel(t, tool.status)}</span>
+        <span className="flex flex-wrap items-center gap-1.5">
+          {tool.adminManaged && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">{t('Delivered by your administrator')}</span>}
+          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClass(tool.status)}`}>{statusLabel(t, tool.status)}</span>
+        </span>
       </div>
       {tool.description && <p className="mt-1.5 text-xs text-muted-foreground">{tool.description}</p>}
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
@@ -339,9 +401,11 @@ function CliToolCard({ tool, busy, onSetCurrent, onToggle, onReconfirm, onRemove
         <button disabled={busy || tool.current === null} onClick={onToggle} className="text-foreground hover:underline disabled:opacity-50">
           {tool.disabled ? t('Enable') : t('Disable')}
         </button>
-        {tool.hasPreset
-          ? <span className="text-muted-foreground">{t('Shipped with Halo: can be disabled, not removed.')}</span>
-          : <button disabled={busy} onClick={onRemoveTool} className="text-halo-error hover:underline disabled:opacity-50">{t('Remove tool')}</button>}
+        {tool.adminManaged
+          ? <span className="text-muted-foreground">{t('Delivered by your administrator: can be disabled, not removed.')}</span>
+          : tool.hasPreset
+            ? <span className="text-muted-foreground">{t('Shipped with Halo: can be disabled, not removed.')}</span>
+            : <button disabled={busy} onClick={onRemoveTool} className="text-halo-error hover:underline disabled:opacity-50">{t('Remove tool')}</button>}
       </div>
     </li>
   )

@@ -20,6 +20,7 @@ export function cliToolsErrorText(t: Translate, code: CliToolsErrorCode, message
     case 'NOT_FOUND': return t('The tool or version no longer exists, or the program file is missing.')
     case 'IN_USE': return t('This is the current version. Choose another version first, or remove the whole tool.')
     case 'STATE_CORRUPT': return t('The local tool records could not be read.')
+    case 'ADMIN_MANAGED': return t('This tool is delivered by your administrator and cannot be deleted. You can disable it instead.')
     case 'PRESET_PROTECTED': return t('This version ships with Halo and cannot be deleted. You can disable the tool instead.')
     case 'EXTERNAL_INVALID': return t('The program could not be registered: {{reason}}', { reason: message })
     case 'SIGNATURE_MISSING': return t('This catalog version has no enterprise signature, and this build requires one.')

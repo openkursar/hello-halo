@@ -61,6 +61,13 @@ export async function completeLogin(
   }
   try {
     const result = await getAISourceManager().completeOAuthLogin(providerType as ProviderId, stateOrCode, loginId)
+    // The account may be the store identity, whose catalog may deliver tools.
+    // Loaded lazily: the store stays out of what loads before the window.
+    if (result.success) {
+      void import('../store')
+        .then(store => store.requestCliCatalogSync('sign-in'))
+        .catch((error: unknown) => console.warn(`[Auth] CLI catalog sync after sign-in not started (${errorKind(error)})`))
+    }
     return {
       success: result.success,
       error: result.error,

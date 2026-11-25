@@ -142,6 +142,7 @@ export const MODULE: RouteModuleMeta = {
       notes: "Empty when this store serves no CLI catalog (check capabilities.cliTools); fails with a sign-in error when no account is signed in. Installing is the user's decision: tell them to install from the store's CLI tools page. A revoked tool is not available to new tasks.",
     },
     'POST /api/store/cli-install': { expose: 'internal' },
+    'POST /api/store/cli-sync': { expose: 'internal' },
     'POST /api/store/ignore-version': {
       expose: 'ai',
       group: 'store',

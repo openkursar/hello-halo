@@ -22,7 +22,7 @@ export interface CliToolVersionView {
   withdrawn?: boolean
   /** Pinned by a running task; deleting it defers its files. */
   inUse: boolean
-  /** Whether a delete action is offered (not current, not shipped with Halo). */
+  /** Whether a delete action is offered (not current, not shipped with Halo or delivered by the administrator). */
   removable: boolean
   external?: {
     path: string
@@ -46,6 +46,8 @@ export interface CliToolView {
   catalogUpdate?: string
   /** Holds a version shipped with Halo: the tool can be disabled, not removed. */
   hasPreset: boolean
+  /** The administrator delivers it to every device and keeps it updated; it can be disabled, not removed. */
+  adminManaged: boolean
   /** Commands the current version exposes. */
   commands: string[]
   /** The skill new tasks get for the current version; absent without one. */
@@ -75,13 +77,21 @@ export interface CliToolsOverview {
   signature: CliSignatureMode
   /** Removed versions whose files wait for running tasks to finish. */
   pendingCleanup: number
+  /** Versions the administrator delivers that this device refused; retried once the administrator replaces them. */
+  deliveryFailures: CliDeliveryFailureView[]
+}
+
+export interface CliDeliveryFailureView {
+  id: string
+  version: string
+  code: CliToolsErrorCode
 }
 
 /** Machine code of a refused action; the renderer maps it to localized text. */
 export type CliToolsErrorCode =
   | 'PACKAGE_INVALID' | 'MANIFEST_INVALID' | 'DIGEST_MISMATCH' | 'PATH_UNSAFE' | 'PLATFORM_UNSUPPORTED'
   | 'NATIVE_NOT_ALLOWED' | 'RUNTIME_KIND_UNSUPPORTED' | 'RUNTIME_VERSION_UNSUPPORTED' | 'RUNTIME_MISSING'
-  | 'VERSION_CONFLICT' | 'NOT_FOUND' | 'IN_USE' | 'STATE_CORRUPT' | 'PRESET_PROTECTED' | 'EXTERNAL_INVALID'
+  | 'VERSION_CONFLICT' | 'NOT_FOUND' | 'IN_USE' | 'STATE_CORRUPT' | 'PRESET_PROTECTED' | 'ADMIN_MANAGED' | 'EXTERNAL_INVALID'
   | 'SIGNATURE_MISSING' | 'SIGNATURE_INVALID' | 'EXPIRED' | 'UNEXPECTED'
 
 export type CliToolsResult<T> = { ok: true; data: T } | { ok: false; code: CliToolsErrorCode; message: string }

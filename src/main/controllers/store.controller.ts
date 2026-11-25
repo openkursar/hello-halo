@@ -10,7 +10,7 @@
  */
 
 import type { StoreQuery, StoreQueryParams, StoreQueryResponse } from '../../shared/store/store-types'
-import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, CliCatalog, CliCatalogTool } from '../../shared/store/store-types'
+import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, CliCatalog, CliCatalogTool, CliCatalogSyncResult } from '../../shared/store/store-types'
 import { DISCOVER_CATALOG_PAGE_SIZE } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import {
@@ -35,6 +35,8 @@ import {
   unpublishApp,
   fetchCliCatalog,
   installCliTool,
+  requestCliCatalogSync,
+  syncCliCatalogNow,
   ensureStoreIdentity,
   // Aliased: this controller exports same-named wrappers, and an unaliased
   // import would bind to the wrapper instead of the store function.
@@ -509,6 +511,24 @@ export async function installStoreCliTool(
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] installStoreCliTool error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Read the CLI catalog and install what the administrator delivers. Forced
+ * reads ignore freshness and report failures; otherwise null means the
+ * catalog was still fresh and nothing was read.
+ */
+export async function syncStoreCliCatalog(
+  input?: { force?: boolean },
+): Promise<StoreControllerResponse<CliCatalogSyncResult | null>> {
+  try {
+    const data = input?.force === true ? await syncCliCatalogNow() : await requestCliCatalogSync('page')
+    return { success: true, data }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] syncStoreCliCatalog error:', err.message)
     return { success: false, error: err.message }
   }
 }

@@ -4,14 +4,16 @@
  *
  * Primary source only, like "my publications": the catalog and its packages
  * are read with the build's account token, and that token belongs to one
- * store. Nothing is downloaded until the user installs a version; listing the
- * catalog never fetches a package.
+ * store. Listing the catalog never fetches a package; a version is downloaded
+ * when the user installs it, or by the delivery pass (cli-catalog-sync.ts)
+ * for a tool the catalog marks `autoInstall`. A read sends the previous ETag,
+ * so an unchanged catalog costs no body.
  *
  * Every successful catalog read applies the catalog's status to installed
  * tools (`applyCatalogStatus`): revocation, delisting of catalog tools it no
  * longer lists, withdrawn versions and available updates. A revoked or
  * delisted tool leaves new executions as soon as this device learns of it;
- * an update is only flagged, never downloaded. An administrator's guide
+ * here an update is only flagged, never downloaded. An administrator's guide
  * override of a version replaces the package guide for new executions once
  * its digest (and, when the build ships trusted keys, its signature) checks
  * out; a malformed one is ignored. The tool's skill, carried on the tool
@@ -32,6 +34,7 @@ import { getPrimaryRegistry } from '../registry.service'
 import { getAdapter } from '../adapters'
 import { getStoreIdentityToken } from './identity'
 import {
+  CliToolError,
   DEFAULT_ARCHIVE_LIMITS,
   GUIDE_MAX_BYTES,
   applyCatalogStatus,
@@ -58,7 +61,7 @@ const SHA256_HEX = /^[0-9a-f]{64}$/
 const INTEGRITY = /^sha256-[A-Za-z0-9+/]{43}=$/
 
 /** A catalog version with the fields only the main process may see. */
-interface CatalogVersionRecord {
+export interface CatalogVersionRecord {
   view: CliCatalogVersion
   archiveSha256: string
   integrity: string
@@ -73,7 +76,7 @@ interface CatalogVersionRecord {
   guide: CatalogGuideOverride | null | 'invalid'
 }
 
-interface CatalogToolRecord {
+export interface CatalogToolRecord {
   id: string
   displayName: string
   source: string
@@ -83,7 +86,12 @@ interface CatalogToolRecord {
   versions: CatalogVersionRecord[]
   /** The tool's skill, for copies not installed from the catalog. */
   skill: CatalogGuideOverride | null | 'invalid'
+  /** Delivered to every device without asking (see cli-catalog-sync.ts). */
+  autoInstall: boolean
 }
+
+/** The last catalog read and its ETag, per source, so an unchanged catalog is not sent again. */
+let cached: { source: string; validator: string; tools: CatalogToolRecord[] } | null = null
 
 /**
  * The primary source's implementation of `method`, bound. Null when there is
@@ -190,6 +198,7 @@ function parseTool(raw: unknown): CatalogToolRecord | null {
     latest: latest && versions.some(v => v.view.version === latest) ? latest : versions[0]?.view.version ?? '',
     versions,
     skill: parseGuide(t.skill),
+    autoInstall: t.autoInstall === true,
   }
 }
 
@@ -229,19 +238,39 @@ function toView(tool: CatalogToolRecord, state: CliToolState | null): CliCatalog
   }
 }
 
+/** Whether the primary source can serve a CLI catalog at all; no request is made. */
+export function hasCliCatalogSource(): boolean {
+  return primaryEndpoint('fetchCliCatalog') !== null
+}
+
+async function readCatalog(): Promise<CatalogToolRecord[] | null> {
+  const endpoint = primaryEndpoint('fetchCliCatalog')
+  if (!endpoint) return null
+  const key = `${endpoint.source.id} ${endpoint.source.url}`
+  const validator = cached?.source === key ? cached.validator : undefined
+  const result = await endpoint.call(endpoint.source, await requireAuth(), validator)
+  if (result.status === 'absent') {
+    cached = null
+    return null
+  }
+  if (result.status === 'unchanged') {
+    if (cached?.source === key) return cached.tools
+    throw new Error('The store answered an unconditional CLI catalog read as unchanged')
+  }
+  const tools = parseCliCatalog(result.document)
+  cached = result.validator ? { source: key, validator: result.validator, tools } : null
+  return tools
+}
+
 /**
  * Fetch the catalog and apply its status to installed tools. Null when the
  * primary source has no catalog endpoint or does not serve one — then nothing
  * is applied, so an unavailable catalog never marks tools delisted.
  */
-async function loadCatalog(): Promise<CatalogToolRecord[] | null> {
-  const endpoint = primaryEndpoint('fetchCliCatalog')
-  if (!endpoint) return null
-  const raw = await endpoint.call(endpoint.source, await requireAuth())
-  if (raw == null) return null
-  const tools = parseCliCatalog(raw)
-  await applyStatus(tools)
-  return tools
+export async function loadCatalog(): Promise<{ tools: CatalogToolRecord[]; changed: string[] } | null> {
+  const tools = await readCatalog()
+  if (!tools) return null
+  return { tools, changed: await applyStatus(tools) }
 }
 
 /** What `applyCatalogStatus` needs from a parsed catalog; exported for tests. */
@@ -255,7 +284,13 @@ export function catalogStatusOf(tools: CatalogToolRecord[]): CatalogToolStatus[]
       }
       guides[v.view.version] = { integrity: v.integrity, override: v.guide }
     }
-    const status: CatalogToolStatus = { id: tool.id, revoked: tool.revoked, versions: tool.versions.map(v => v.view.version), guides }
+    const status: CatalogToolStatus = {
+      id: tool.id,
+      revoked: tool.revoked,
+      versions: tool.versions.map(v => v.view.version),
+      guides,
+      ...(tool.autoInstall ? { autoInstall: true } : {}),
+    }
     // A malformed skill leaves preset copies as they are; a missing one clears it.
     if (tool.skill === 'invalid') console.warn('[CliCatalog] Tool skill ignored: malformed', { tool: tool.id })
     else status.skill = tool.skill
@@ -263,14 +298,15 @@ export function catalogStatusOf(tools: CatalogToolRecord[]): CatalogToolStatus[]
   })
 }
 
-async function applyStatus(tools: CatalogToolRecord[]): Promise<void> {
+export async function applyStatus(tools: CatalogToolRecord[]): Promise<string[]> {
   const changed = await applyCatalogStatus(catalogStatusOf(tools))
   if (changed.length > 0) console.log('[CliCatalog] Catalog status updated for', changed)
+  return changed
 }
 
 /** The catalog merged with installed state; empty when the store serves none. */
 export async function fetchCliCatalog(): Promise<CliCatalog> {
-  const tools = await loadCatalog()
+  const tools = (await loadCatalog())?.tools
   if (!tools) return { tools: [] }
   const state = await readCliToolState()
   // Status-only entries (no approved version) have nothing to offer here.
@@ -283,7 +319,7 @@ export async function fetchCliCatalog(): Promise<CliCatalog> {
  * is refused rather than installed from a stale view.
  */
 export async function installCliTool(request: { id: string; version: string }): Promise<CliCatalogTool> {
-  const tools = await loadCatalog()
+  const tools = (await loadCatalog())?.tools
   if (!tools) throw new Error('This store does not offer CLI tools')
   const tool = tools.find(t => t.id === request.id)
   if (!tool) throw new Error('This CLI tool is not in the store catalog')
@@ -291,6 +327,17 @@ export async function installCliTool(request: { id: string; version: string }): 
   const entry = tool.versions.find(v => v.view.version === request.version)
   if (!entry) throw new Error('This CLI version is no longer available from the store')
   if (!entry.view.supported) throw new Error('This CLI version does not support this device')
+  await downloadAndInstall(tool, entry)
+  // The version was not installed when the catalog was applied above; give it its guide now.
+  await applyStatus(tools)
+  return toView(tool, await readCliToolState())
+}
+
+/**
+ * Download one listed version, check it against the catalog and make it
+ * current. Any refusal leaves the installed versions as they were.
+ */
+export async function downloadAndInstall(tool: CatalogToolRecord, entry: CatalogVersionRecord): Promise<void> {
   const expectation = {
     id: tool.id,
     version: entry.view.version,
@@ -311,7 +358,7 @@ export async function installCliTool(request: { id: string; version: string }): 
   )
   const digest = createHash('sha256').update(bytes).digest('hex')
   if (digest !== entry.archiveSha256) {
-    throw new Error('The downloaded CLI package does not match the store catalog')
+    throw new CliToolError('DIGEST_MISMATCH', 'The downloaded CLI package does not match the store catalog')
   }
 
   const dir = await mkdtemp(join(tmpdir(), 'halo-cli-download-'))
@@ -321,22 +368,5 @@ export async function installCliTool(request: { id: string; version: string }): 
     await installCatalogPackage(archive, expectation)
   } finally {
     await rm(dir, { recursive: true, force: true })
-  }
-  // The version was not installed when the catalog was applied above; give it its guide now.
-  await applyStatus(tools)
-  return toView(tool, await readCliToolState())
-}
-
-/**
- * Background revocation refresh. Silent when there is nothing to ask or no one
- * signed in; any failure is logged and leaves the flags as they were.
- */
-export async function syncCliCatalogRevocations(): Promise<void> {
-  if (!primaryEndpoint('fetchCliCatalog')) return
-  try {
-    if (!(await getStoreIdentityToken())) return
-    await loadCatalog()
-  } catch (error) {
-    console.warn('[CliCatalog] Revocation sync skipped:', error instanceof Error ? error.message : String(error))
   }
 }

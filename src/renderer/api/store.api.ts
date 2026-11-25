@@ -10,7 +10,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { StoreSignInStatus, SkillDepInspection, CliCatalog, CliCatalogTool } from '../../shared/store/store-types'
+import type { StoreSignInStatus, SkillDepInspection, CliCatalog, CliCatalogTool, CliCatalogSyncResult } from '../../shared/store/store-types'
 import type { AppType, AppSpec } from '../../shared/apps/spec-types'
 import type { SpecUpgradeOutcome } from '../../shared/apps/app-types'
 
@@ -281,6 +281,13 @@ export const storeApi = {
       return window.halo.storeInstallCliTool(input)
     }
     return httpRequest('POST', '/api/store/cli-install', input)
+  },
+
+  storeSyncCliCatalog: async (input?: { force?: boolean }): Promise<ApiResponse<CliCatalogSyncResult | null>> => {
+    if (isElectron()) {
+      return window.halo.storeSyncCliCatalog(input)
+    }
+    return httpRequest('POST', '/api/store/cli-sync', input ?? {})
   },
 
   storeIgnoreVersion: async (input: { appId: string; version: string }): Promise<ApiResponse> => {

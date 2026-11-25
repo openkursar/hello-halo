@@ -177,14 +177,17 @@ describe('cli-tools host: bundled tools across launches', () => {
 
   it('decides activation from the version that was current before the import', async () => {
     const host = await startHost({ presetDir: null })
-    const tool = (current: string | null, source: string) => ({
-      tools: { [ID]: { current, revoked: false, versions: current ? { [current]: { source } } : {} } },
+    const tool = (current: string | null, source: string, autoInstall = false) => ({
+      tools: { [ID]: { current, revoked: false, versions: current ? { [current]: { source } } : {}, ...(autoInstall ? { autoInstall: true } : {}) } },
     }) as never
-    expect(host.shouldActivatePreset({ tools: {} } as never, ID)).toBe(true)
-    expect(host.shouldActivatePreset(tool(null, 'preset'), ID)).toBe(true)
-    expect(host.shouldActivatePreset(tool('1.0.0', 'preset'), ID)).toBe(true)
-    expect(host.shouldActivatePreset(tool('1.0.0', 'user-import'), ID)).toBe(false)
-    expect(host.shouldActivatePreset(tool('1.0.0', 'catalog'), ID)).toBe(false)
+    expect(host.shouldActivatePreset({ tools: {} } as never, ID, '1.0.0')).toBe(true)
+    expect(host.shouldActivatePreset(tool(null, 'preset'), ID, '1.0.0')).toBe(true)
+    expect(host.shouldActivatePreset(tool('1.0.0', 'preset'), ID, '1.1.0')).toBe(true)
+    expect(host.shouldActivatePreset(tool('1.0.0', 'user-import'), ID, '2.0.0')).toBe(false)
+    expect(host.shouldActivatePreset(tool('1.0.0', 'catalog'), ID, '2.0.0')).toBe(false)
+    // A newer installer overtakes an older delivered version, never a newer one.
+    expect(host.shouldActivatePreset(tool('1.0.0', 'catalog', true), ID, '2.0.0')).toBe(true)
+    expect(host.shouldActivatePreset(tool('3.0.0', 'catalog', true), ID, '2.0.0')).toBe(false)
   })
 })
 

@@ -25,7 +25,7 @@ import { createHash, randomUUID } from 'crypto'
 import { existsSync, promises as fsp } from 'fs'
 import { isAbsolute, join } from 'path'
 import { extractPackageArchive, DEFAULT_ARCHIVE_LIMITS, type ArchiveLimits } from './archive'
-import { CliToolError, isCliToolError } from './errors'
+import { CliToolError, isCliToolError, type CliToolErrorCode } from './errors'
 import { assertManifestSupported, parseCliManifest, type CliManifest } from './manifest'
 import { inspectPayload, integrityOf, integrityShortHex, scanPayload } from './payload'
 import { ARGV_PRELOAD_FILE, launcherFiles, renderArgvPreload } from './shims'
@@ -113,7 +113,19 @@ export interface CliToolRecord {
   delisted?: boolean
   /** Highest approved catalog version above every installed one; never downloaded on its own. */
   catalogUpdate?: string
+  /**
+   * The catalog delivers this tool to every device: the host installs its
+   * versions without asking, and its catalog versions cannot be deleted.
+   */
+  autoInstall?: true
   versions: Record<string, CliToolVersionRecord>
+}
+
+/** A delivered version this device refused; not tried again while the catalog lists the same content. */
+export interface CliDeliveryFailure {
+  integrity: string
+  code: CliToolErrorCode
+  at: string
 }
 
 export interface CliToolState {
@@ -124,6 +136,8 @@ export interface CliToolState {
    * running execution still pinned them; deleted by `collectPendingCleanup`.
    */
   pendingCleanup?: string[]
+  /** Keyed `id@version`; dropped once the catalog stops listing that version. */
+  deliveryFailures?: Record<string, CliDeliveryFailure>
 }
 
 /** What a package would install, read in staging without running any of it. */
@@ -177,6 +191,8 @@ export interface CatalogGuideOverride {
 export interface CatalogToolStatus {
   id: string
   revoked: boolean
+  /** The catalog delivers this tool to every device (see `CliToolRecord.autoInstall`). */
+  autoInstall?: boolean
   /** Approved versions the catalog lists now. */
   versions: string[]
   /**
@@ -325,6 +341,27 @@ export function toolBlock(tool: CliToolRecord): 'no-current' | 'revoked' | 'deli
   if (record.external?.changed) return 'external-changed'
   if (tool.disabled) return 'disabled'
   return null
+}
+
+/** Drop failures of versions the catalog no longer lists as they failed; true when any was dropped. */
+function pruneDeliveryFailures(state: CliToolState, catalog: Map<string, CatalogToolStatus>): boolean {
+  const failures = state.deliveryFailures
+  if (!failures) return false
+  let pruned = false
+  for (const [key, failure] of Object.entries(failures)) {
+    const at = key.lastIndexOf('@')
+    const entry = catalog.get(key.slice(0, at))
+    const version = key.slice(at + 1)
+    // `guides` omits a version only when its guide is malformed; listing then decides.
+    const listed = entry?.guides?.[version]
+      ? entry.guides[version].integrity === failure.integrity
+      : entry?.versions.includes(version)
+    if (listed) continue
+    delete failures[key]
+    pruned = true
+  }
+  if (Object.keys(failures).length === 0) delete state.deliveryFailures
+  return pruned
 }
 
 async function fileSha256(path: string): Promise<string> {
@@ -686,6 +723,10 @@ export class CliToolStore {
       }
       // The offered update is now installed (or overtaken): stop offering it until the next catalog read.
       if (tool.catalogUpdate && compareVersions(manifest.version, tool.catalogUpdate) >= 0) delete tool.catalogUpdate
+      if (state.deliveryFailures?.[label]) {
+        delete state.deliveryFailures[label]
+        if (Object.keys(state.deliveryFailures).length === 0) delete state.deliveryFailures
+      }
       if (activate || tool.current === null) tool.current = manifest.version
       state.tools[manifest.id] = tool
       stage = 'state'
@@ -768,7 +809,8 @@ export class CliToolStore {
   /**
    * Delete one installed version's record. The current version is refused
    * (IN_USE: choose another first, or remove the whole tool), and so is a
-   * version shipped with the build (PRESET_PROTECTED: disable it instead).
+   * version shipped with the build (PRESET_PROTECTED) or delivered by the
+   * catalog (ADMIN_MANAGED): disable those instead.
    * Files a running execution still pins are kept and listed for cleanup at
    * the next start; a registered program's file is never touched.
    */
@@ -780,6 +822,9 @@ export class CliToolStore {
       if (!tool || !record) throw new CliToolError('NOT_FOUND', `${id}@${version} is not installed`)
       if (record.source === 'preset') {
         throw new CliToolError('PRESET_PROTECTED', `${id}@${version} ships with Halo; disable it instead`)
+      }
+      if (record.source === 'catalog' && tool.autoInstall) {
+        throw new CliToolError('ADMIN_MANAGED', `${id}@${version} is delivered by the administrator; disable it instead`)
       }
       if (tool.current === version) {
         throw new CliToolError('IN_USE', `${id}@${version} is the current version`)
@@ -794,7 +839,8 @@ export class CliToolStore {
 
   /**
    * Remove a tool and every version of it. Refused while it holds a version
-   * shipped with the build. Same reference rule as `removeVersion`.
+   * shipped with the build or the catalog delivers it. Same reference rule as
+   * `removeVersion`.
    */
   removeTool(id: string): Promise<{ deferred: number }> {
     return this.serialize(async () => {
@@ -803,6 +849,9 @@ export class CliToolStore {
       if (!tool) throw new CliToolError('NOT_FOUND', `${id} is not installed`)
       if (Object.values(tool.versions).some(v => v.source === 'preset')) {
         throw new CliToolError('PRESET_PROTECTED', `${id} ships with Halo; disable it instead`)
+      }
+      if (tool.autoInstall) {
+        throw new CliToolError('ADMIN_MANAGED', `${id} is delivered by the administrator; disable it instead`)
       }
       const victims = Object.entries(tool.versions).map(([version, record]) => ({ id, version, record }))
       delete state.tools[id]
@@ -1004,8 +1053,9 @@ export class CliToolStore {
    * nor a revocation entry for it, `withdrawn` per version the catalog no
    * longer lists, and `catalogUpdate` when an approved version is above
    * every installed one. Administrator texts: each listed version's guide,
-   * and the tool's skill for preset versions (see `applyToolSkill`). Nothing
-   * is downloaded. Returns the ids that changed.
+   * and the tool's skill for preset versions (see `applyToolSkill`). A
+   * delivered tool whose versions are all withdrawn stays listed, so it is not
+   * delisted. Nothing is downloaded. Returns the ids that changed.
    */
   applyCatalogStatus(catalog: CatalogToolStatus[]): Promise<string[]> {
     return this.serialize(async () => {
@@ -1016,9 +1066,12 @@ export class CliToolStore {
         const before = JSON.stringify(tool)
         const entry = byId.get(id)
         if (entry) tool.revoked = entry.revoked
+        // An entry without versions does not carry the flag, so it keeps the last one seen.
+        if (entry?.autoInstall) tool.autoInstall = true
+        else if (!entry || entry.versions.length > 0) delete tool.autoInstall
         const catalogVersions = Object.entries(tool.versions).filter(([, v]) => v.source === 'catalog')
         if (catalogVersions.length > 0) {
-          const gone = !entry || (!entry.revoked && entry.versions.length === 0)
+          const gone = !entry || (!entry.revoked && entry.versions.length === 0 && !tool.autoInstall)
           if (gone) tool.delisted = true
           else delete tool.delisted
           for (const [version, record] of catalogVersions) {
@@ -1039,12 +1092,25 @@ export class CliToolStore {
         }
         if (JSON.stringify(tool) !== before) changed.push(id)
       }
-      if (changed.length > 0) {
+      const prunedFailures = pruneDeliveryFailures(state, byId)
+      if (changed.length > 0 || prunedFailures) {
         await this.writeState(state)
-        this.log.log('[CliTools] Catalog status applied', { changed })
+        if (changed.length > 0) this.log.log('[CliTools] Catalog status applied', { changed })
       }
       await this.pruneGuides(state)
       return changed
+    })
+  }
+
+  /** Remember that a delivered version was refused here, so background reads do not try it again. */
+  recordDeliveryFailure(id: string, version: string, failure: Omit<CliDeliveryFailure, 'at'>): Promise<void> {
+    return this.serialize(async () => {
+      const state = await this.readState()
+      state.deliveryFailures = { ...state.deliveryFailures, [`${id}@${version}`]: { ...failure, at: new Date().toISOString() } }
+      await this.writeState(state)
+      this.log.error('[CliTools] Delivered version refused; retried when the catalog changes it or on the user\'s Sync', {
+        tool: `${id}@${version}`, code: failure.code,
+      })
     })
   }
 

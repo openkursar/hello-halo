@@ -23,7 +23,7 @@ import {
   type PackagePreview,
   type RegisterExternalOptions,
 } from './store'
-import { CliToolError, isCliToolError } from './errors'
+import { CliToolError, isCliToolError, type CliToolErrorCode } from './errors'
 import type { CliCredentialBinding } from './credentials'
 import {
   TRUSTED_KEYS_FILE,
@@ -35,7 +35,12 @@ import {
   type TrustMode,
   type TrustStore,
 } from './signature'
-import type { CliToolView, CliToolsOverview, CliToolVersionView } from '../../../shared/types/cli-tools'
+import type {
+  CliDeliveryFailureView,
+  CliToolView,
+  CliToolsOverview,
+  CliToolVersionView,
+} from '../../../shared/types/cli-tools'
 
 /** Launcher directory of the tool set an environment was given; also tells the agent where TOOLS.md is. */
 export const CLI_TOOLS_BIN_ENV = 'HALO_CLI_TOOLS_BIN'
@@ -157,7 +162,7 @@ async function importPresets(cliStore: CliToolStore, presetDir: string, root: st
         activate: false,
       })
       const tool = (await cliStore.readState()).tools[result.id]
-      if (shouldActivatePreset(state, result.id) && tool && tool.current !== result.version) {
+      if (shouldActivatePreset(state, result.id, result.version) && tool && tool.current !== result.version) {
         await cliStore.activateVersion(result.id, result.version)
       }
     } catch (err) {
@@ -327,12 +332,25 @@ function requireStore(): CliToolStore {
 export async function getCliToolsOverview(): Promise<CliToolsOverview> {
   const cliStore = getStore()
   const signature = await catalogSignatureMode()
-  if (!cliStore) return { available: false, tools: [], signature, pendingCleanup: 0 }
+  if (!cliStore) return { available: false, tools: [], signature, pendingCleanup: 0, deliveryFailures: [] }
   await prepareCliTools()
   const state = await cliStore.readState()
   const locks = await cliStore.listExecutionLocks()
   const skills = await cliStore.describeToolSkills(state)
-  return { available: true, tools: buildToolViews(state, locks, skills), signature, pendingCleanup: state.pendingCleanup?.length ?? 0 }
+  return {
+    available: true,
+    tools: buildToolViews(state, locks, skills),
+    signature,
+    pendingCleanup: state.pendingCleanup?.length ?? 0,
+    deliveryFailures: deliveryFailureViews(state),
+  }
+}
+
+function deliveryFailureViews(state: CliToolState): CliDeliveryFailureView[] {
+  return Object.entries(state.deliveryFailures ?? {}).map(([key, failure]) => {
+    const at = key.lastIndexOf('@')
+    return { id: key.slice(0, at), version: key.slice(at + 1), code: failure.code }
+  })
 }
 
 /** Pure projection of state + locks; exported for tests. */
@@ -358,7 +376,7 @@ export function buildToolViews(
         ...(record.auth ? { auth: record.auth } : {}),
         ...(record.withdrawn ? { withdrawn: true } : {}),
         inUse: pinned.has(`${id}@${version}`),
-        removable: tool.current !== version && record.source !== 'preset',
+        removable: tool.current !== version && record.source !== 'preset' && !(record.source === 'catalog' && tool.autoInstall),
         ...(record.external
           ? {
               external: {
@@ -382,6 +400,7 @@ export function buildToolViews(
       delisted: tool.delisted === true,
       ...(tool.catalogUpdate ? { catalogUpdate: tool.catalogUpdate } : {}),
       hasPreset: Object.values(tool.versions).some(v => v.source === 'preset'),
+      adminManaged: tool.autoInstall === true,
       commands: current?.commands.map(c => c.name) ?? [],
       ...(skills[id] ? { skill: { ...skills[id] } } : {}),
       versions,
@@ -465,6 +484,16 @@ export async function removeCliTool(id: string): Promise<{ deferred: number }> {
   return cliStore.removeTool(id)
 }
 
+export async function recordCliDeliveryFailure(
+  id: string,
+  version: string,
+  failure: { integrity: string; code: CliToolErrorCode },
+): Promise<void> {
+  const cliStore = requireStore()
+  await prepareCliTools()
+  await cliStore.recordDeliveryFailure(id, version, failure)
+}
+
 export async function registerExternalProgram(request: RegisterExternalOptions): Promise<{ id: string; current: string | null }> {
   const cliStore = requireStore()
   await prepareCliTools()
@@ -477,11 +506,17 @@ export async function reconfirmExternalProgram(id: string): Promise<void> {
   await cliStore.reconfirmExternal(id)
 }
 
-/** Whether a bundled version may replace a tool's current version. */
-export function shouldActivatePreset(stateBefore: CliToolState, toolId: string): boolean {
+/**
+ * Whether a bundled version may replace a tool's current version: when it has
+ * none, when that also came from a preset, or when a newer build ships a
+ * higher version of a tool the administrator delivers.
+ */
+export function shouldActivatePreset(stateBefore: CliToolState, toolId: string, version: string): boolean {
   const tool = stateBefore.tools[toolId]
   if (!tool?.current) return true
-  return tool.versions[tool.current]?.source === 'preset'
+  const source = tool.versions[tool.current]?.source
+  if (source === 'preset') return true
+  return source === 'catalog' && tool.autoInstall === true && compareVersions(version, tool.current) > 0
 }
 
 /** PATH as a child would get it; Windows names are case-insensitive (see child-env). */

@@ -408,7 +408,7 @@ Server side the *mechanism* (`auth.type`: `token` / `introspect` /
 (`identityBinding`). A future mechanism (mTLS, mutual OIDC, …) that also
 reaches account strength changes `auth.type` only; no client changes.
 
-### 3.13 The CLI tool catalog installs through cli-tools, on demand
+### 3.13 The CLI tool catalog installs through cli-tools
 
 `backend/cli-catalog.ts` reads the primary source's administrator-reviewed CLI
 catalog (`GET /clis.json`, schema `halo.cli.catalog/1`) with the identity
@@ -417,7 +417,9 @@ token, like "my publications" (§3.4). It is the only store file that depends on
 stores, URLs or tokens. The dependency points downward (a domain module calling
 a service), and the store stays the only owner of source transport.
 
-- **On demand.** Listing never downloads a package. `installCliTool({id,
+- **On demand.** Listing never downloads a package. Partner tools install
+  only when the user asks; administrator-delivered tools are below.
+  `installCliTool({id,
   version})` re-reads the catalog, refuses a tool that is revoked, missing,
   withdrawn or unsupported on this platform, downloads the archive through the
   driver (capped at the cli-tools archive limit), checks its sha256 against the
@@ -427,9 +429,7 @@ a service), and the store stays the only owner of source transport.
   accepts only a plain absolute path and joins it to the source URL, so the
   token never leaves the source and a gateway prefix is kept.
 - **Revocation.** Every catalog read applies the catalog's `revoked` flags to
-  the installed tools it lists (`applyCatalogRevocations`). The idle task
-  `sync-cli-catalog` does one read per launch when someone is signed in; the
-  catalog view and installs read it again. A revoked tool is excluded from new
+  the installed tools it lists. A revoked tool is excluded from new
   executions; running ones finish. A tool that disappears from the catalog
   is not revoked; it is marked delisted (below). A withdrawn version stays
   installed.
@@ -441,6 +441,48 @@ a service), and the store stays the only owner of source transport.
   (a newer listed version; nothing is downloaded until the user confirms).
   Parsing keeps zero-version tools for this purpose. `fetchCliCatalog` drops
   them from the view, and a failed read applies nothing.
+- **When the catalog is read.** `backend/cli-catalog-sync.ts` decides.
+  Events ask for a read: the launch idle task, sign-in, window focus, wake
+  (`watchCatalogSignals`, shared with the AI source catalog), opening the
+  tools page, and an hourly backstop (±3 min) for machines that only run
+  scheduled work. `CliCatalogSchedule` lets an event through only when the
+  last read is older than 15 minutes; a failed read backs off from 2 minutes,
+  doubling to 60. Sign-in and the user's "Sync" ignore freshness. Concurrent
+  requests share one read. Each read sends the previous `ETag` as
+  `If-None-Match` (`fetchCliCatalog(source, auth, validator?)` answers
+  `ok | unchanged | absent`); on `304` the cached parse is reused and the
+  status is applied again. There is no server push and no unauthenticated
+  revision endpoint; with this cadence and a cached server response, many
+  clients cost a conditional GET each per quarter hour at most.
+- **Administrator delivery.** A tool the catalog marks `autoInstall` (the
+  registry sets it on built-in tools with an approved version) is installed
+  by the read itself, one tool at a time, through the same download and
+  checks as `installCliTool`. Per tool it takes the highest listed version
+  this device supports (platform, `minNode`) and installs it only when it is
+  above every usable installed version, the preset copy included: it never
+  downgrades. A current version the user imported or registered is left
+  alone. When the current delivered version is withdrawn, the highest
+  remaining one is made current (usually the preset copy); with none it
+  stays, marked withdrawn. The device keeps the `autoInstall` mark while the
+  catalog lists the tool with no version, so that fallback still runs after
+  the last version is withdrawn. Delivered versions cannot be deleted
+  (`ADMIN_MANAGED`); the tool can be disabled and still updates.
+- **Delivery failures.** A refusal that would repeat (digest, manifest,
+  path, platform, runtime, signature, `VERSION_CONFLICT`) is recorded per
+  `id@version` with the catalog integrity and not tried again by background
+  reads until the catalog lists that version with different content or stops
+  listing it. The user's "Sync" tries it once more, since a transfer corrupted
+  on the way looks the same as a bad package; success clears the record, as
+  does a successful manual import. Network and server faults are not recorded
+  and retry at the next read. Failures reach only the log and the tools page,
+  which lists them quietly. A recorded failure survives app upgrades: a build
+  that would now accept the package waits for the catalog to change or for
+  the user's "Sync".
+- **Sync result.** `syncCliCatalogNow()` (the tools page "Sync",
+  `store:sync-cli-catalog` with `force`) returns what was installed, what
+  failed, how many tools changed and how many partner updates wait for the
+  user; the page shows it as one line. Without `force` the call is an event
+  and answers `null` when nothing was read.
 - **Signatures.** Each version's `signature` (`{alg: 'ed25519', keyId,
   value}`) is parsed and passed with the expectation. When the build ships
   `cli-preset/trusted-keys.json` with keys, `installCliTool` refuses a missing
@@ -513,8 +555,9 @@ backend/                  consumers of the backend surface
   install-orders.ts       install ledger: installId, backfill queue, retry policy
   collections.ts          federated aggregation + payload mapping
   publications.ts         federated read / primary write + NOT_SIGNED_IN semantics
-  cli-catalog.ts          CLI tool catalog: validate, on-demand install via
-                          services/cli-tools, revocation sync (§3.13)
+  cli-catalog.ts          CLI tool catalog: validate, ETag cache, status,
+                          on-demand install via services/cli-tools (§3.13)
+  cli-catalog-sync.ts     when to read the catalog; administrator delivery (§3.13)
   taxonomy.ts             server ?? product.json ?? built-in
   discover.ts             server ?? built-in
   identity.ts             identity-token resolution (product.json → AI-source OAuth)

@@ -131,7 +131,8 @@ import {
   flushPendingInstallOrders,
   getRegistryById,
   getPrimaryRegistry,
-  syncCliCatalogRevocations,
+  requestCliCatalogSync,
+  startCliCatalogBackstop,
 } from '../store'
 import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
 import { startAnnouncementScheduler, stopAnnouncementScheduler } from '../services/announcement.service'
@@ -159,6 +160,7 @@ let stopConversationLifecycle: (() => void) | null = null
 let stopOwnedCollaborationSources: (() => void) | null = null
 let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
 let stopModelCatalogFreshness: (() => void) | null = null
+let stopCliCatalogFreshness: (() => void) | null = null
 let stopGroupRouting: (() => void) | null = null
 
 /**
@@ -184,6 +186,16 @@ function startModelCatalogFreshness(): void {
     changes.dispose()
   }
   void manager.refreshStaleCatalogs('startup')
+}
+
+/** The CLI catalog follows the same focus and wake moments; its startup read is an idle task. */
+function startCliCatalogFreshness(): void {
+  const stopSignals = watchCatalogSignals(signal => void requestCliCatalogSync(signal))
+  const stopBackstop = startCliCatalogBackstop()
+  stopCliCatalogFreshness = () => {
+    stopSignals()
+    stopBackstop()
+  }
 }
 
 /**
@@ -1485,9 +1497,9 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
   registerIdleTask('verify-office-runtime', () => verifyOfficeRuntime())
   // Imports the CLI tools shipped with this build; the first session waits for it if earlier.
   registerIdleTask('prepare-cli-tools', () => prepareCliTools())
-  // Applies the enterprise store's CLI revocations once per launch; no request
-  // without a catalog-capable source and a signed-in account, never a download.
-  registerIdleTask('sync-cli-catalog', () => syncCliCatalogRevocations())
+  // Applies the enterprise store's CLI catalog and installs the tools it
+  // delivers; no request without a catalog-capable source and a signed-in account.
+  registerIdleTask('sync-cli-catalog', async () => { await requestCliCatalogSync('startup') })
   // The knowledge base chat's conversations left by a run that quit mid-chat;
   // only those created before this process started, so none is in use now.
   registerIdleTask('delete-ephemeral-conversations', () => { deleteEphemeralConversations(performance.timeOrigin) })
@@ -1565,6 +1577,7 @@ export function initializeExtendedServices(): void {
   // focus and wake ask for out-of-date catalogs, and a changed list reaches
   // every window (IPC) and remote client (WS).
   startModelCatalogFreshness()
+  startCliCatalogFreshness()
 
   // Push credential decode failures to renderer (IPC) and remote clients (WS).
   // Registered before the migration task so failures surfaced during it reach a
@@ -1794,6 +1807,8 @@ export async function cleanupExtendedServices(): Promise<void> {
 
     stopModelCatalogFreshness?.()
     stopModelCatalogFreshness = null
+    stopCliCatalogFreshness?.()
+    stopCliCatalogFreshness = null
     stopGroupRouting?.()
     stopGroupRouting = null
 
