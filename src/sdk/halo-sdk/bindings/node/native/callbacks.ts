@@ -24,6 +24,7 @@ import { prepareHttpAttempt } from './http-trust.js';
 import { decodeWire } from './wire.js';
 import type { LocalModelSelectionHost } from '../contracts/collaboration/sdk/index.js';
 import { createProvider } from './provider-factory.js';
+import { realPath } from '../utils/read-deny.js';
 
 const CALLBACK = '__haloSdkNativeCallback';
 const SIGNAL = '__haloSdkNativeSignal';
@@ -41,6 +42,89 @@ interface HookChain {
 }
 
 type Server = SdkMcpServerInstance & { _registeredTools?: Record<string, any> };
+
+/**
+ * Which file each host read-state entry recorded by the SDK describes, kept per
+ * caller Map for the Map's lifetime. The file is fixed when the entry is
+ * recorded (links resolved, case folded where the platform's default filesystem
+ * ignores case), so an entry is found under any spelling of that file, and a
+ * spelling that later names another file does not carry it along. Entries the
+ * caller added itself are found by their exact key only. Each operation
+ * resolves one path, whatever the Map's size.
+ */
+interface ReadStateIndex {
+  files: Map<string, string>;
+  keys: Map<string, Set<string>>;
+}
+const readStateIndexes = new WeakMap<Map<string, unknown>, ReadStateIndex>();
+
+function fileIdentity(path: string): string {
+  const real = realPath(path);
+  return process.platform === 'darwin' || process.platform === 'win32' ? real.toLowerCase() : real;
+}
+
+function unindex(index: ReadStateIndex, key: string): void {
+  const file = index.files.get(key);
+  if (file === undefined) return;
+  index.files.delete(key);
+  const keys = index.keys.get(file);
+  keys?.delete(key);
+  if (keys?.size === 0) index.keys.delete(file);
+}
+
+const hostReadStates = {
+  /** The newest entry for the file `path` names now. */
+  find(state: Map<string, unknown> | undefined, path: string): unknown {
+    if (!state) return undefined;
+    const index = readStateIndexes.get(state);
+    if (!index?.files.has(path) && state.has(path)) return state.get(path);
+    if (!index) return undefined;
+    let found: unknown;
+    for (const key of [...(index.keys.get(fileIdentity(path)) ?? [])]) {
+      if (state.has(key)) found = state.get(key);
+      else unindex(index, key);
+    }
+    return found;
+  },
+
+  /** Records `value` for `path`, replacing entries for the same file under other spellings. */
+  record(state: Map<string, unknown>, path: string, value: unknown, maxEntries: number): void {
+    let index = readStateIndexes.get(state);
+    if (!index) readStateIndexes.set(state, index = { files: new Map(), keys: new Map() });
+    const file = fileIdentity(path);
+    for (const key of [...(index.keys.get(file) ?? [])]) {
+      state.delete(key);
+      unindex(index, key);
+    }
+    state.delete(path);
+    unindex(index, path);
+    while (state.size >= maxEntries) {
+      const oldest = state.keys().next().value!;
+      state.delete(oldest);
+      unindex(index, oldest);
+    }
+    state.set(path, value);
+    index.files.set(path, file);
+    const keys = index.keys.get(file) ?? new Set<string>();
+    index.keys.set(file, keys.add(path));
+    if (index.files.size > 2 * maxEntries) {
+      for (const key of [...index.files.keys()]) if (!state.has(key)) unindex(index, key);
+    }
+  },
+
+  /** Removes the entry for `path` and every entry for the file it names now. */
+  forget(state: Map<string, unknown>, path: string): boolean {
+    const index = readStateIndexes.get(state);
+    if (index) {
+      unindex(index, path);
+      for (const key of [...(index.keys.get(fileIdentity(path)) ?? [])]) {
+        state.delete(key);
+        unindex(index, key);
+      }
+    }
+    return state.delete(path);
+  },
+};
 
 export class NativeCallbacks {
   private readonly context = new AsyncResource('AgentSdkNativeSession');
@@ -70,7 +154,7 @@ export class NativeCallbacks {
   private readonly backgroundEntryIds = new WeakMap<BackgroundTask, string>();
   bindDirectContext(context: ToolContext): void { this.directContext = context; }
   captureDirectReadState(path: string): void {
-    this.directReadState = { path, value: this.directContext?.readFileState?.get(path) };
+    this.directReadState = { path, value: hostReadStates.find(this.directContext?.readFileState, path) };
   }
   bindLoop(config: QueryConfig, options: QueryLoopOptions): void {
     this.loop = { config, options };
@@ -315,14 +399,13 @@ export class NativeCallbacks {
           if (!captured || captured.path !== params.path) throw new Error('External file read state is no longer available');
           return captured.value;
         }
-        return state.get(params.path);
+        return hostReadStates.find(state, params.path);
       }
-      if (method === 'file.readState.delete') return state.delete(params.path);
+      if (method === 'file.readState.delete') return hostReadStates.forget(state, params.path);
       if (method === 'file.readState.set') {
         if (!Number.isSafeInteger(params.maxEntries) || params.maxEntries < 1) throw new Error('Invalid native file read state capacity');
-        state.delete(params.path);
-        while (state.size >= params.maxEntries) state.delete(state.keys().next().value!);
-        state.set(params.path, this.restore(params.value, signal)); return undefined;
+        hostReadStates.record(state, params.path, this.restore(params.value, signal), params.maxEntries);
+        return undefined;
       }
     }
     if (method === 'direct.emit') return this.directContext?.onToolMessage?.(this.restore(params.event, signal));
@@ -471,7 +554,7 @@ export class NativeCallbacks {
       if (!this.handle) throw new Error('Native tool context transport is not attached');
       const reads = this.loop?.options.readFileState;
       const context = createToolContext(this.handle, this.restore(params.context, signal), signal, this.toolContextCache, reads ? {
-        capture: (id, path) => { this.contextReadStates.set(id, { path, value: reads.get(path) }); },
+        capture: (id, path) => { this.contextReadStates.set(id, { path, value: hostReadStates.find(reads, path) }); },
         release: id => { this.contextReadStates.delete(id); },
       } : undefined);
       if (this.loop) {

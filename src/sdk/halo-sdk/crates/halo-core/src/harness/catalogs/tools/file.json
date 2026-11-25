@@ -3,6 +3,54 @@
     "text": "The file changed after your last Read. This includes changes made through Bash. Nothing was written. Call Read again, then retry.",
     "slots": []
   },
+  "tools.file.undecodable": {
+    "text": "This file is not valid UTF-8 or UTF-16 text, so saving it here would replace the bytes that cannot be decoded. Nothing was written. Change it with a program that reads and writes the file's actual encoding.",
+    "slots": []
+  },
+  "tools.file.partial_write": {
+    "text": "{error}. Restoring the previous content also failed ({restore}), so the file may now be partially written. Inspect it before retrying.",
+    "slots": [
+      "error",
+      "restore"
+    ]
+  },
+  "tools.file.partial_new_file": {
+    "text": "{error}. A partially written file may remain at this path; inspect or remove it before retrying.",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.file.replaced_during_write": {
+    "text": "Another program replaced or removed the file at this path during the write, so the path does not hold the written content. Read the file before retrying.",
+    "slots": []
+  },
+  "tools.file.edit_no_change": {
+    "text": "The replacement equals the matched text once the file's line endings are applied, so the file would not change. Nothing was written.",
+    "slots": []
+  },
+  "tools.file.read_undecodable": {
+    "text": "[This file is not valid UTF-8 or UTF-16 text. Bytes that cannot be decoded are shown as U+FFFD (�), and Edit and Write will not change the file. Use a program that handles its actual encoding to change it.]",
+    "slots": []
+  },
+  "tools.file.read_encoding": {
+    "text": "[Decoded from {encoding}; Edit and Write keep this encoding. Shell text tools such as grep and sed see its encoded bytes, not this text.]",
+    "slots": [
+      "encoding"
+    ]
+  },
+  "tools.file.kept_encoding": {
+    "text": " The file keeps its {encoding} encoding.",
+    "slots": [
+      "encoding"
+    ]
+  },
+  "tools.file.utf16_range": {
+    "text": "This {encoding} file exceeds the {limit} byte limit for decoded reads. Convert a copy to UTF-8 with a program, then read that copy in ranges.",
+    "slots": [
+      "encoding",
+      "limit"
+    ]
+  },
   "tools.file.queued_change": {
     "text": "The file changed while this write was waiting. Nothing was written by this call. Check the current file before retrying.",
     "slots": []

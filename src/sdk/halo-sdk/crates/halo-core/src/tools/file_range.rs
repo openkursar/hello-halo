@@ -47,6 +47,8 @@ pub struct RangeOutcome {
     pub line_truncated: bool,
     pub cancelled: bool,
     pub beyond_end: bool,
+    /// A delivered line had bytes that are not valid UTF-8.
+    pub undecodable: bool,
 }
 
 pub fn read_token_limit(context_window: f64) -> usize {
@@ -95,6 +97,7 @@ struct Cursor {
     last_terminated: bool,
     done: bool,
     abandoned: bool,
+    undecodable: bool,
 }
 
 impl Cursor {
@@ -108,7 +111,19 @@ impl Cursor {
             last_terminated: false,
             done: false,
             abandoned: false,
+            undecodable: false,
         }
+    }
+
+    /// Lossy UTF-8 for display. A line cut at the buffer bound may end inside a
+    /// character; that partial character is dropped rather than reported as invalid.
+    fn decode(&mut self, mut bytes: Vec<u8>, bounded: bool) -> String {
+        match std::str::from_utf8(&bytes) {
+            Ok(_) => {}
+            Err(error) if bounded && error.error_len().is_none() => bytes.truncate(error.valid_up_to()),
+            Err(_) => self.undecodable = true,
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     async fn fill(&mut self, cancellation: &CancellationToken) -> Result<bool> {
@@ -161,14 +176,18 @@ impl Cursor {
                     return Ok(None);
                 }
                 self.line += 1;
-                return Ok(Some((number, decode(bytes), bounded)));
+                return Ok(Some((number, self.decode(bytes, bounded), bounded)));
             }
             let byte = self.buffer[self.position];
             self.position += 1;
             if byte == b'\n' {
                 self.last_terminated = true;
                 self.line += 1;
-                return Ok(Some((number, decode(bytes), bounded)));
+                // CRLF reads as LF, as in whole-file reads.
+                if bytes.last() == Some(&b'\r') {
+                    bytes.pop();
+                }
+                return Ok(Some((number, self.decode(bytes, bounded), bounded)));
             }
             self.last_terminated = false;
             if store {
@@ -179,7 +198,7 @@ impl Cursor {
                     self.done = true;
                     self.abandoned = true;
                     self.line += 1;
-                    return Ok(Some((number, decode(bytes), true)));
+                    return Ok(Some((number, self.decode(bytes, true), true)));
                 }
             }
         }
@@ -197,10 +216,6 @@ impl Cursor {
         }
         Ok(self.fill(cancellation).await?)
     }
-}
-
-fn decode(bytes: Vec<u8>) -> String {
-    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 pub fn line_overflow(
@@ -283,7 +298,26 @@ pub async fn read(request: &RangeRequest<'_>) -> Result<RangeOutcome> {
             &[("path", request.path.to_string_lossy().into_owned().into())],
         ));
     }
-    file.seek(std::io::SeekFrom::Start(0))
+    let mut head = [0u8; 3];
+    let mut filled = 0;
+    while filled < head.len() {
+        match file.read(&mut head[filled..]).await.map_err(Error::from)? {
+            0 => break,
+            count => filled += count,
+        }
+    }
+    let encoding = file::text::sniff(&head[..filled]);
+    if encoding.is_utf16() {
+        return Err(Error::new("FILE_READ", "").with_harness(
+            TextId::ToolsFileUtf16Range,
+            &[
+                ("encoding", encoding.label().into()),
+                ("limit", file::MAX_BYTES.to_string().into()),
+            ],
+        ));
+    }
+    let body = if encoding == file::text::Encoding::Utf8Bom { 3 } else { 0 };
+    file.seek(std::io::SeekFrom::Start(body))
         .await
         .map_err(Error::from)?;
     let mut cursor = Cursor::new(file);
@@ -496,6 +530,7 @@ pub async fn read(request: &RangeRequest<'_>) -> Result<RangeOutcome> {
         line_truncated: truncated_line.is_some(),
         cancelled,
         beyond_end: beyond_end && lines.is_empty(),
+        undecodable: cursor.undecodable,
     })
 }
 
@@ -620,7 +655,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preserves_crlf_and_emoji_prefixes_without_replacement_characters() {
+    async fn reads_crlf_as_lf_and_emoji_prefixes_without_replacement_characters() {
         let (root, path) = fixture("", "crlf.txt").await;
         tokio::fs::write(&path, "alpha\r\nbeta\r\n").await.unwrap();
         let harness = crate::harness::baseline();
@@ -635,7 +670,8 @@ mod tests {
             harness: &harness,
         };
         let outcome = read(&request).await.unwrap();
-        assert!(outcome.text.contains("1\talpha\r\n2\tbeta\r\n"));
+        assert!(outcome.text.starts_with("1\talpha\n2\tbeta\n"));
+        assert!(!outcome.text.contains('\r'));
         assert_eq!(outcome.total, Some(3));
 
         let (emoji_root, emoji_path) = fixture("", "emoji.txt").await;
@@ -651,9 +687,42 @@ mod tests {
         };
         let outcome = read(&request).await.unwrap();
         assert!(!outcome.text.contains('\u{fffd}'));
+        assert!(!outcome.undecodable);
         assert!(outcome.text.contains("alone exceeds the"));
         tokio::fs::remove_dir_all(root).await.unwrap();
         tokio::fs::remove_dir_all(emoji_root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn range_reads_strip_the_bom_flag_undecodable_bytes_and_refuse_utf16() {
+        let harness = crate::harness::baseline();
+        let cancellation = CancellationToken::new();
+        let request = |path| RangeRequest {
+            path,
+            start: 1,
+            limit: 10,
+            token_limit: 30_000,
+            character_limit: None,
+            cancellation: &cancellation,
+            harness: &harness,
+        };
+        let (root, path) = fixture("", "bom.txt").await;
+        tokio::fs::write(&path, b"\xEF\xBB\xBFfirst\r\nsecond\n").await.unwrap();
+        let outcome = read(&request(&path)).await.unwrap();
+        assert!(outcome.text.starts_with("1\tfirst\n2\tsecond\n"));
+        assert!(!outcome.undecodable);
+
+        tokio::fs::write(&path, b"// \xd6\xd0\xce\xc4\nint x;\n").await.unwrap();
+        let outcome = read(&request(&path)).await.unwrap();
+        assert!(outcome.undecodable);
+        assert!(outcome.text.contains("2\tint x;\n"));
+
+        tokio::fs::write(&path, [0xFF, 0xFE, b'a', 0, b'\n', 0]).await.unwrap();
+        let error = read(&request(&path)).await.err().unwrap();
+        let rendered = error.render_for(&harness);
+        assert!(rendered.contains("UTF-16LE"), "{rendered}");
+        assert!(rendered.contains("Convert a copy to UTF-8"), "{rendered}");
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 
     #[tokio::test]

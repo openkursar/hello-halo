@@ -5,7 +5,7 @@ use crate::{
 };
 use base64::Engine;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
+use sha2::{Digest as _, Sha256};
 #[cfg(not(unix))]
 use std::time::UNIX_EPOCH;
 use std::{
@@ -22,7 +22,10 @@ use tokio::{
     sync::{Mutex, OwnedMutexGuard},
 };
 
-const MAX_BYTES: usize = 8 * 1024 * 1024;
+pub(super) mod text;
+mod tool_path;
+
+pub(super) const MAX_BYTES: usize = 8 * 1024 * 1024;
 struct FileLock {
     mutex: Arc<Mutex<()>>,
     revision: AtomicU64,
@@ -48,6 +51,16 @@ pub fn resolve(cwd: &str, value: &str) -> PathBuf {
         }
     }
     out
+}
+/// Resolves a file tool's path exactly as the host's permission check does, so
+/// the file changed is the file that was approved.
+pub fn resolve_tool_path(cwd: &str, value: &str) -> PathBuf {
+    PathBuf::from(tool_path::resolve_tool_path(
+        cwd,
+        value,
+        tool_path::home_directory,
+        cfg!(windows),
+    ))
 }
 pub fn real_path(path: &Path) -> PathBuf {
     let mut head = path.to_path_buf();
@@ -101,11 +114,14 @@ struct FileGuard {
     owner: Option<Arc<FileLock>>,
     revision: u64,
     writing: bool,
-    _entry: FileLockEntry,
+    entry: FileLockEntry,
 }
 impl FileGuard {
     fn changed(&self) -> bool {
         self.owner.as_ref().unwrap().revision.load(Ordering::Acquire) != self.revision
+    }
+    fn identity(&self) -> &str {
+        &self.entry.key
     }
 }
 impl Drop for FileGuard {
@@ -117,8 +133,13 @@ impl Drop for FileGuard {
         drop(self.owner.take());
     }
 }
+/// One key for every spelling of a file: links resolved, case folded where the
+/// platform's default filesystem ignores case.
+fn file_identity(path: &Path) -> String {
+    folded(&real_path(path))
+}
 fn file_lock(path: &Path) -> (Arc<FileLock>, FileLockEntry) {
-    let key = folded(&real_path(path));
+    let key = file_identity(path);
     let lock = {
         let mut map = FILE_LOCKS
             .get_or_init(Default::default)
@@ -195,7 +216,7 @@ impl FileReservation {
             owner: self.owner.take(),
             revision: self.revision,
             writing: false,
-            _entry: self.entry.take().unwrap(),
+            entry: self.entry.take().unwrap(),
         }
     }
 }
@@ -244,7 +265,7 @@ impl FileAdmission {
         } else {
             captures_read_state(name, input)
         })
-        .then(|| resolve(cwd, raw))
+        .then(|| resolve_tool_path(cwd, raw))
     }
     pub fn reads_state(name: &str, input: &Value) -> bool {
         captures_read_state(name, input)
@@ -353,18 +374,43 @@ pub fn deny_roots(options: &Value) -> Vec<PathBuf> {
     }
     roots
 }
+/// What a recorded read says about the file's content.
+#[derive(Clone, Default)]
+enum ReadDigest {
+    #[default]
+    None,
+    /// SHA-256 of the file's raw bytes (`contentHash`).
+    Raw(String),
+    /// SHA-256 of the `content` a host recorded without a `contentHash`. Hosts
+    /// keeping Claude Code's read-state shape store LF-normalized text there.
+    Text(String),
+}
+impl ReadDigest {
+    fn of(public: &Value, partial: bool) -> Self {
+        if let Some(digest) = public["contentHash"].as_str() {
+            return Self::Raw(digest.to_owned());
+        }
+        match public["content"].as_str() {
+            Some(content) if !partial => Self::Text(hash(content.as_bytes())),
+            _ => Self::None,
+        }
+    }
+}
 #[derive(Clone)]
 struct ReadState {
-    hash: String,
+    digest: ReadDigest,
     modified: f64,
     partial: bool,
     public: Value,
     sequence: u64,
     value_version: u64,
+    /// `file_identity` of the file this entry describes, fixed when it was recorded:
+    /// a spelling that later names another file does not carry the entry along.
+    identity: String,
 }
 #[derive(Clone)]
 struct ReadValidation {
-    hash: String,
+    digest: ReadDigest,
     modified: f64,
     partial: bool,
     partial_view: Value,
@@ -372,21 +418,8 @@ struct ReadValidation {
 impl ReadValidation {
     fn from_public(public: &Value) -> Self {
         let partial = public["isPartialView"] == true;
-        let hash = public["contentHash"]
-            .as_str()
-            .map(str::to_owned)
-            .or_else(|| {
-                (!partial)
-                    .then(|| {
-                        public["content"]
-                            .as_str()
-                            .map(|content| hash(content.as_bytes()))
-                    })
-                    .flatten()
-            })
-            .unwrap_or_default();
         Self {
-            hash,
+            digest: ReadDigest::of(public, partial),
             modified: public["timestamp"].as_f64().unwrap_or(f64::NAN),
             partial,
             partial_view: public
@@ -403,7 +436,7 @@ struct ReadExport {
 impl ReadState {
     fn validation(&self) -> ReadValidation {
         ReadValidation {
-            hash: self.hash.clone(),
+            digest: self.digest.clone(),
             modified: self.modified,
             partial: self.partial,
             partial_view: self
@@ -422,7 +455,17 @@ struct ReadStates {
     next_value_version: u64,
 }
 impl ReadStates {
-    fn insert(&mut self, path: PathBuf, mut state: ReadState) {
+    fn insert(&mut self, path: PathBuf, identity: String, mut state: ReadState) {
+        let aliases: Vec<PathBuf> = self
+            .values
+            .iter()
+            .filter(|(key, value)| **key != path && value.identity == identity)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for alias in aliases {
+            self.remove(&alias);
+        }
+        state.identity = identity;
         self.order.retain(|p| p != &path);
         while self.order.len() >= 512 {
             if let Some(old) = self.order.pop_front() {
@@ -435,6 +478,29 @@ impl ReadStates {
         state.value_version = self.next_value_version;
         self.order.push_back(path.clone());
         self.values.insert(path, state);
+    }
+    fn remove(&mut self, path: &Path) -> bool {
+        self.order.retain(|entry| entry != path);
+        self.values.remove(path).is_some()
+    }
+    /// The newest entry recorded for the file `identity` names, under any spelling.
+    fn find(&self, identity: &str) -> Option<&ReadState> {
+        self.values
+            .values()
+            .filter(|value| value.identity == identity)
+            .max_by_key(|value| value.value_version)
+    }
+    /// Removes the entry under `path` and every entry for the file `identity` names.
+    fn forget(&mut self, path: &Path, identity: &str) {
+        let keys: Vec<PathBuf> = self
+            .values
+            .iter()
+            .filter(|(key, value)| *key == path || value.identity == identity)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in keys {
+            self.remove(&key);
+        }
     }
 }
 #[derive(Default)]
@@ -455,6 +521,7 @@ impl FileReadStateStore {
             let key = key()?;
             let public = args[1].clone();
             let validation = ReadValidation::from_public(&public);
+            let identity = file_identity(&key);
             let mut state = self.reads.lock().unwrap_or_else(|e| e.into_inner());
             let sequence = if let Some(existing) = state.values.get(&key) {
                 existing.sequence
@@ -468,12 +535,13 @@ impl FileReadStateStore {
             state.values.insert(
                 key,
                 ReadState {
-                    hash: validation.hash,
+                    digest: validation.digest,
                     modified: validation.modified,
                     partial: validation.partial,
                     public,
                     sequence,
                     value_version,
+                    identity,
                 },
             );
             return Ok(Value::Null);
@@ -490,7 +558,7 @@ impl FileReadStateStore {
                     else { value.public[property] = args[3].clone(); }
                     value.partial = value.public["isPartialView"] == true;
                     value.modified = value.public["timestamp"].as_f64().unwrap_or(f64::NAN);
-                    value.hash = value.public["contentHash"].as_str().map(str::to_owned).or_else(||(!value.partial).then(||value.public["content"].as_str().map(|s|hash(s.as_bytes()))).flatten()).unwrap_or_default();
+                    value.digest = ReadDigest::of(&value.public, value.partial);
                     json!(true)
                 } else { json!(false) }
             },
@@ -500,11 +568,7 @@ impl FileReadStateStore {
                 .map(|s| s.public.clone())
                 .unwrap_or(Value::Null),
             "readFileState.has" => json!(state.values.contains_key(&key()?)),
-            "readFileState.delete" => {
-                let key = key()?;
-                state.order.retain(|p| p != &key);
-                json!(state.values.remove(&key).is_some())
-            }
+            "readFileState.delete" => json!(state.remove(&key()?)),
             "readFileState.clear" => {
                 state.values.clear();
                 state.order.clear();
@@ -560,6 +624,11 @@ struct Snapshot {
     bytes: Vec<u8>,
     metadata: std::fs::Metadata,
 }
+/// The file a call operates on: the path as resolved, and its `file_identity`.
+struct Target<'a> {
+    path: &'a Path,
+    identity: String,
+}
 pub(super) fn modified(m: &std::fs::Metadata) -> f64 {
     #[cfg(unix)]
     {
@@ -597,6 +666,21 @@ fn same_content_version(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+/// The file is as the recorded read saw it. A full read may outlive a timestamp
+/// change when the raw bytes are unchanged, since sync clients and scanners touch
+/// files without changing them; a partial view also requires the same timestamp.
+fn unchanged(state: &ReadValidation, snapshot: &Snapshot) -> bool {
+    let same_content = match &state.digest {
+        ReadDigest::Raw(digest) => *digest == hash(&snapshot.bytes),
+        ReadDigest::Text(digest) => {
+            *digest == hash(&snapshot.bytes)
+                || text::decode(&snapshot.bytes)
+                    .is_some_and(|decoded| *digest == hash(text::lf(&decoded.text).as_bytes()))
+        }
+        ReadDigest::None => false,
+    };
+    same_content && (!state.partial || state.modified == modified(&snapshot.metadata))
 }
 fn size_error() -> Error {
     Error::new("FILE_LIMIT", "").with_harness(
@@ -690,11 +774,57 @@ async fn write_snapshot(
         }
     }
     guard.writing = true;
-    file.write_all(bytes).await.map_err(Error::from)?;
-    file.set_len(bytes.len() as u64)
-        .await
-        .map_err(Error::from)?;
-    file.metadata().await.map_err(Error::from)
+    // Writing in place keeps the file's identity, permissions and attributes,
+    // and works while other programs hold it open; a failure must therefore
+    // put the previous bytes back.
+    let outcome = match replace_contents(&mut file, bytes).await {
+        Ok(()) => file.metadata().await.map_err(Error::from),
+        Err(error) => Err(match previous {
+            Some(previous) => match replace_contents(&mut file, &previous.bytes).await {
+                Ok(()) => Error::from(error),
+                Err(restore) => {
+                    tracing::warn!(file_path = %path.display(), error = %error, restore_error = %restore, "file write failed and its previous content could not be restored");
+                    Error::new("FILE_WRITE_PARTIAL", "").with_harness(
+                        TextId::ToolsFilePartialWrite,
+                        &[("error", error.to_string().into()), ("restore", restore.to_string().into())],
+                    )
+                }
+            },
+            // Removing by path could delete a file another program saved there meanwhile.
+            None => Error::new("FILE_WRITE_PARTIAL", "").with_harness(
+                TextId::ToolsFilePartialNewFile,
+                &[("error", error.to_string().into())],
+            ),
+        }),
+    };
+    // Some filesystems set the final write time when the handle closes.
+    drop(file.into_std().await);
+    confirm_written(path, &outcome?).await
+}
+/// The path's metadata after a write, if the path still names the file that was
+/// written; another program may have replaced it while the handle was open.
+async fn confirm_written(path: &Path, written: &std::fs::Metadata) -> Result<std::fs::Metadata> {
+    let current = fs::metadata(path).await.ok();
+    #[cfg(unix)]
+    let current = current.filter(|current| {
+        use std::os::unix::fs::MetadataExt;
+        current.dev() == written.dev() && current.ino() == written.ino()
+    });
+    #[cfg(not(unix))]
+    let _ = written;
+    current.ok_or_else(|| {
+        tracing::warn!(file_path = %path.display(), "file was replaced during a write; no read state recorded");
+        Error::new("FILE_REPLACED", "").with_harness(TextId::ToolsFileReplacedDuringWrite, &[])
+    })
+}
+/// Makes the open file hold exactly `bytes`. A Tokio file reports the failure of
+/// its last queued write only on a later flush; without one, a full disk would
+/// leave the file unwritten while the write appeared to succeed.
+async fn replace_contents(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
+    file.seek(std::io::SeekFrom::Start(0)).await?;
+    file.write_all(bytes).await?;
+    file.flush().await?;
+    file.set_len(bytes.len() as u64).await
 }
 impl FileTools {
     pub fn new(options: &Value, bridge: Arc<dyn crate::bridge::HostBridge>) -> Self {
@@ -730,14 +860,8 @@ impl FileTools {
     ) -> Option<FileAdmissionPreparation> {
         let path = FileAdmission::path(name, input, cwd)?;
         let capture = captures_read_state(name, input);
-        let captured = (capture && self.external_reads.is_none()).then(|| {
-            self.reads
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .values
-                .get(&path)
-                .map(ReadState::validation)
-        });
+        let captured = (capture && self.external_reads.is_none())
+            .then(|| self.recorded(&file_identity(&path)));
         Some(FileAdmissionPreparation {
             path,
             captured,
@@ -755,7 +879,7 @@ impl FileTools {
         let Some(raw) = input["file_path"].as_str().filter(|s| !s.is_empty()) else {
             return Ok(failure(harness.text(TextId::ToolsFileMissingPath)));
         };
-        let path = resolve(&ctx.cwd, raw);
+        let path = resolve_tool_path(&ctx.cwd, raw);
         let read_state = captures_read_state(name, input);
         let receipt = admitted
             .as_mut()
@@ -788,10 +912,14 @@ impl FileTools {
             version: self.read_version(&path),
             invalidated: false,
         };
+        let target = Target {
+            path: &path,
+            identity: guard.identity().to_owned(),
+        };
         let result = match name {
-            "Read" => Ok(self.read(&path, input, harness, &mut exported, &ctx.cancellation).await),
-            "Write" => self.write(&path, input, ctx, captured, &mut exported, &mut guard).await,
-            "Edit" => self.edit(&path, input, ctx, captured, &mut exported, &mut guard).await,
+            "Read" => Ok(self.read(&target, input, harness, &mut exported, &ctx.cancellation).await),
+            "Write" => self.write(&target, input, ctx, captured, &mut exported, &mut guard).await,
+            "Edit" => self.edit(&target, input, ctx, captured, &mut exported, &mut guard).await,
             _ => unreachable!(),
         };
         self.export_read_state(&path, &mut exported).await?;
@@ -868,43 +996,30 @@ impl FileTools {
         }
         Ok(())
     }
-    fn forget(&self, path: &Path, exported: &mut ReadExport) {
+    /// The read recorded for this file under any spelling.
+    fn recorded(&self, identity: &str) -> Option<ReadValidation> {
+        self.reads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .find(identity)
+            .map(ReadState::validation)
+    }
+    fn forget(&self, target: &Target<'_>, exported: &mut ReadExport) {
         if !self.track_reads {
             return;
         }
-        let mut reads = self.reads.lock().unwrap_or_else(|error| error.into_inner());
-        reads.values.remove(path);
-        reads.order.retain(|entry| entry != path);
+        self.reads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .forget(target.path, &target.identity);
         exported.invalidated = true;
     }
-    async fn record(&self, path: &Path, bytes: &[u8], metadata: &std::fs::Metadata, partial: bool) {
-        if !self.track_reads {
-            return;
-        }
-        let content = String::from_utf8_lossy(bytes);
-        let mut public = json!({"content":if partial { crate::js::undefined() } else { json!(content) },"contentHash":hash(bytes),"timestamp":modified(metadata)});
-        if partial {
-            public["isPartialView"] = json!(true);
-        }
-        self.record_public(path, public);
-    }
-    fn record_public(&self, path: &Path, mut public: Value) {
+    fn record_public(&self, target: &Target<'_>, mut public: Value) {
         if !self.track_reads {
             return;
         }
         let partial = public["isPartialView"] == true;
-        let content_hash = public["contentHash"]
-            .as_str()
-            .map(str::to_owned)
-            .or_else(|| {
-                (!partial)
-                    .then(|| public["content"].as_str().map(|s| hash(s.as_bytes())))
-                    .flatten()
-            })
-            .unwrap_or_default();
-        if !content_hash.is_empty() {
-            public["contentHash"] = json!(content_hash);
-        }
+        let digest = ReadDigest::of(&public, partial);
         if public["content"]
             .as_str()
             .is_some_and(|content| content.encode_utf16().count() * 2 > 4096)
@@ -913,14 +1028,16 @@ impl FileTools {
         }
         let modified = public["timestamp"].as_f64().unwrap_or(f64::NAN);
         self.reads.lock().unwrap_or_else(|e| e.into_inner()).insert(
-            path.to_owned(),
+            target.path.to_owned(),
+            target.identity.clone(),
             ReadState {
-                hash: content_hash,
+                digest,
                 modified,
                 partial,
                 public,
                 sequence: 0,
                 value_version: 0,
+                identity: String::new(),
             },
         );
     }
@@ -932,12 +1049,13 @@ impl FileTools {
     }
     async fn read(
         &self,
-        path: &Path,
+        target: &Target<'_>,
         input: &Value,
         harness: &ResolvedHarness,
         exported: &mut ReadExport,
         cancellation: &tokio_util::sync::CancellationToken,
     ) -> Value {
+        let path = target.path;
         for key in ["offset", "limit"] {
             if let Some(v) = input
                 .get(key)
@@ -967,7 +1085,7 @@ impl FileTools {
             Err(error) => {
                 if error.kind() == std::io::ErrorKind::NotFound {
                     // Seeing the file missing replaces any earlier record; otherwise Write could not recreate it.
-                    self.forget(path, exported);
+                    self.forget(target, exported);
                 }
                 return failure(harness.render(
                     TextId::ToolsFileNotFound,
@@ -997,7 +1115,7 @@ impl FileTools {
         let start = offset.saturating_sub(1);
         if stat.len() > MAX_BYTES as u64 && ext != "ipynb" {
             return self
-                .read_range(path, input, harness, offset, limit, start, cancellation)
+                .read_range(target, input, harness, offset, limit, start, cancellation)
                 .await;
         }
         let snap = match snapshot(path).await {
@@ -1013,13 +1131,36 @@ impl FileTools {
                 ));
             }
         };
-        let content = String::from_utf8_lossy(&snap.bytes);
+        let decoded = text::decode(&snap.bytes);
+        let lossy;
+        let source: &str = match &decoded {
+            Some(decoded) => &decoded.text,
+            None => {
+                lossy = text::lossy(&snap.bytes);
+                &lossy
+            }
+        };
+        let notice = match &decoded {
+            Some(decoded) if decoded.encoding.is_utf16() => Some(harness.render(
+                TextId::ToolsFileReadEncoding,
+                &[("encoding", decoded.encoding.label())],
+            )),
+            Some(_) => None,
+            None => Some(harness.text(TextId::ToolsFileReadUndecodable).to_owned()),
+        };
+        let content = text::lf(source);
         if ext == "ipynb" {
             match notebook(&content, harness) {
                 Ok(text) => {
                     let state = json!({"content":text,"contentHash":hash(&snap.bytes),"timestamp":modified(&snap.metadata),"isPartialView":true});
-                    self.record_public(path, state);
-                    return success(text, None);
+                    self.record_public(target, state);
+                    return success(
+                        match notice {
+                            Some(notice) => format!("{text}\n{notice}"),
+                            None => text,
+                        },
+                        None,
+                    );
                 }
                 Err(e) => {
                     return failure(
@@ -1029,7 +1170,7 @@ impl FileTools {
             }
         }
         if content.is_empty() {
-            self.record_public(path, json!({"content":"","contentHash":hash(&snap.bytes),"timestamp":modified(&snap.metadata),"offset":input.get("offset").cloned().unwrap_or_else(crate::js::undefined),"limit":input.get("limit").cloned().unwrap_or_else(crate::js::undefined)}));
+            self.record_public(target, json!({"content":"","contentHash":hash(&snap.bytes),"timestamp":modified(&snap.metadata),"offset":input.get("offset").cloned().unwrap_or_else(crate::js::undefined),"limit":input.get("limit").cloned().unwrap_or_else(crate::js::undefined)}));
             return success(harness.text(TextId::ToolsFileEmpty), None);
         }
         let lines: Vec<&str> = content.split('\n').collect();
@@ -1149,8 +1290,9 @@ impl FileTools {
             ));
             output.push('\n');
         }
+        let (notice, body_limit) = self.read_notice(notice);
         let mut clamped = false;
-        if let Some(limit) = self.explicit_result_budget {
+        if let Some(limit) = body_limit {
             if crate::js::utf16_len(&output) > limit {
                 let (fitted_output, delivered_end, truncated) = fit_explicit_read(
                     &output,
@@ -1166,6 +1308,10 @@ impl FileTools {
                 clamped = truncated;
             }
         }
+        if let Some(notice) = notice {
+            output.push_str(&notice);
+            output.push('\n');
+        }
         let partial =
             truncated_line.is_some() || budget.is_some() || more || start > 0 || clamped;
         let retained = if truncated_line.is_some() || budget.is_some() || clamped {
@@ -1175,15 +1321,27 @@ impl FileTools {
         } else {
             json!(content)
         };
-        self.record_public(path, json!({"content":retained,"contentHash":hash(&snap.bytes),"timestamp":modified(&snap.metadata),"offset":input.get("offset").cloned().unwrap_or_else(crate::js::undefined),"limit":input.get("limit").cloned().unwrap_or_else(crate::js::undefined),"isPartialView":if partial {json!(true)}else{crate::js::undefined()}}));
+        self.record_public(target, json!({"content":retained,"contentHash":hash(&snap.bytes),"timestamp":modified(&snap.metadata),"offset":input.get("offset").cloned().unwrap_or_else(crate::js::undefined),"limit":input.get("limit").cloned().unwrap_or_else(crate::js::undefined),"isPartialView":if partial {json!(true)}else{crate::js::undefined()}}));
         let mut result = success(output, None);
         result["__haloSdkNativeOutput"] = json!("read_text");
         result
     }
 
+    /// A notice that fits the explicit result budget, and the budget left for the lines.
+    fn read_notice(&self, notice: Option<String>) -> (Option<String>, Option<usize>) {
+        let notice = notice.filter(|notice| {
+            self.explicit_result_budget
+                .is_none_or(|limit| crate::js::utf16_len(notice) < limit)
+        });
+        let body_limit = self.explicit_result_budget.map(|limit| {
+            limit - notice.as_deref().map_or(0, |notice| crate::js::utf16_len(notice) + 1)
+        });
+        (notice, body_limit)
+    }
+
     async fn read_range(
         &self,
-        path: &Path,
+        target: &Target<'_>,
         input: &Value,
         harness: &ResolvedHarness,
         offset: usize,
@@ -1191,6 +1349,7 @@ impl FileTools {
         start: usize,
         cancellation: &tokio_util::sync::CancellationToken,
     ) -> Value {
+        let path = target.path;
         let request = file_range::RangeRequest {
             path,
             start: start + 1,
@@ -1222,7 +1381,12 @@ impl FileTools {
                     .unwrap_or(f64::NAN);
                 let mut text = outcome.text;
                 let mut delivered_end = outcome.end;
-                if let Some(limit) = self.explicit_result_budget {
+                let (notice, body_limit) = self.read_notice(
+                    outcome
+                        .undecodable
+                        .then(|| harness.text(TextId::ToolsFileReadUndecodable).to_owned()),
+                );
+                if let Some(limit) = body_limit {
                     if crate::js::utf16_len(&text) > limit {
                         let fitted = fit_explicit_read(
                             &text,
@@ -1237,12 +1401,16 @@ impl FileTools {
                         delivered_end = fitted.1;
                     }
                 }
+                if let Some(notice) = notice {
+                    text.push_str(&notice);
+                    text.push('\n');
+                }
                 let delivered_start = if delivered_end == 0 { 0 } else { outcome.start };
                 let mut state = json!({"content":crate::js::undefined(),"timestamp":timestamp,"isPartialView":true,"offset":input.get("offset").cloned().unwrap_or_else(crate::js::undefined),"limit":input.get("limit").cloned().unwrap_or_else(crate::js::undefined),"deliveredStart":delivered_start,"deliveredEnd":delivered_end});
                 if let Some(total) = outcome.total {
                     state["totalLines"] = json!(total);
                 }
-                self.record_public(path, state);
+                self.record_public(target, state);
                 let mut result = success(text, None);
                 result["__haloSdkNativeOutput"] = json!("read_text");
                 result
@@ -1263,13 +1431,14 @@ impl FileTools {
 
     async fn write(
         &self,
-        path: &Path,
+        target: &Target<'_>,
         input: &Value,
         ctx: &ToolContext,
         captured: Option<Option<ReadValidation>>,
         exported: &mut ReadExport,
         guard: &mut FileGuard,
     ) -> crate::error::Result<Value> {
+        let path = target.path;
         let harness = &ctx.harness;
         let Some(content) = input["content"].as_str() else {
             return Ok(failure(harness.text(TextId::ToolsFileMissingContent)));
@@ -1277,14 +1446,7 @@ impl FileTools {
         if content.len() > MAX_BYTES {
             return Ok(failure(size_error().render_for(harness)));
         }
-        let state = captured.unwrap_or_else(|| {
-            self.reads
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .values
-                .get(path)
-                .map(ReadState::validation)
-        });
+        let state = captured.unwrap_or_else(|| self.recorded(&target.identity));
         let exists = fs::try_exists(path).await.unwrap_or(false);
         let old = if exists {
             match snapshot(path).await {
@@ -1303,16 +1465,28 @@ impl FileTools {
             None
         };
         if let Some(state) = state.filter(|_| self.track_reads) {
-            if old.as_ref().is_none_or(|s| {
-                state.hash != hash(&s.bytes) || state.modified != modified(&s.metadata)
-            }) {
+            if old.as_ref().is_none_or(|snapshot| !unchanged(&state, snapshot)) {
                 return Ok(failure(harness.text(TextId::ToolsFileChanged)));
             }
         }
-        let stat = match write_snapshot(path, content.as_bytes(), old.as_ref(), guard).await {
+        let encoding = match &old {
+            None => text::Encoding::Utf8,
+            Some(old) => match text::decode(&old.bytes) {
+                Some(decoded) => decoded.encoding,
+                None => {
+                    tracing::warn!(file_path = %path.display(), "Write refused: the existing file is not lossless text");
+                    return Ok(failure(harness.text(TextId::ToolsFileUndecodable)));
+                }
+            },
+        };
+        let written = text::encode(content, encoding);
+        if written.len() > MAX_BYTES {
+            return Ok(failure(size_error().render_for(harness)));
+        }
+        let stat = match write_snapshot(path, &written, old.as_ref(), guard).await {
             Ok(s) => s,
             Err(e) => {
-                self.forget(path, exported);
+                self.forget(target, exported);
                 return Ok(failure(harness.render(
                     TextId::ToolsFileWriteFailed,
                     &[
@@ -1322,48 +1496,56 @@ impl FileTools {
                 )));
             }
         };
-        self.record(path, content.as_bytes(), &stat, false).await;
+        self.record_public(target, json!({"content":content,"contentHash":hash(&written),"timestamp":modified(&stat)}));
         self.export_read_state(path, exported).await?;
         self.record_change(
             path,
             old.as_ref()
                 .map(|snapshot| snapshot.bytes.as_slice())
                 .unwrap_or(&[]),
-            content.as_bytes(),
+            &written,
             ctx,
         )
         .await?;
-        let lines = content.bytes().filter(|b| *b == b'\n').count() + 1;
-        let bytes = content.len();
+        let lines = content.split_terminator('\n').count();
+        let bytes = written.len();
+        let mut message = harness.render(
+            TextId::ToolsFileWritten,
+            &[
+                (
+                    "action",
+                    harness.text(if old.is_some() {
+                        TextId::ToolsFileWrote
+                    } else {
+                        TextId::ToolsFileCreated
+                    }),
+                ),
+                ("path", &path.to_string_lossy()),
+                ("lines", &lines.to_string()),
+                ("bytes", &bytes.to_string()),
+            ],
+        );
+        if encoding != text::Encoding::Utf8 {
+            message.push_str(&harness.render(
+                TextId::ToolsFileKeptEncoding,
+                &[("encoding", encoding.label())],
+            ));
+        }
         Ok(success(
-            harness.render(
-                TextId::ToolsFileWritten,
-                &[
-                    (
-                        "action",
-                        harness.text(if old.is_some() {
-                            TextId::ToolsFileWrote
-                        } else {
-                            TextId::ToolsFileCreated
-                        }),
-                    ),
-                    ("path", &path.to_string_lossy()),
-                    ("lines", &lines.to_string()),
-                    ("bytes", &bytes.to_string()),
-                ],
-            ),
+            message,
             Some(json!({"file_path":path,"is_new":old.is_none(),"lines":lines,"bytes":bytes})),
         ))
     }
     async fn edit(
         &self,
-        path: &Path,
+        target: &Target<'_>,
         input: &Value,
         ctx: &ToolContext,
         captured: Option<Option<ReadValidation>>,
         exported: &mut ReadExport,
         guard: &mut FileGuard,
     ) -> crate::error::Result<Value> {
+        let path = target.path;
         let harness = &ctx.harness;
         let Some(old) = input["old_string"].as_str().filter(|s| !s.is_empty()) else {
             return Ok(failure(harness.text(TextId::ToolsFileMissingOld)));
@@ -1374,14 +1556,7 @@ impl FileTools {
         if old == new {
             return Ok(failure(harness.text(TextId::ToolsFileIdenticalEdit)));
         }
-        let state = captured.unwrap_or_else(|| {
-            self.reads
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .values
-                .get(path)
-                .map(ReadState::validation)
-        });
+        let state = captured.unwrap_or_else(|| self.recorded(&target.identity));
         if self.track_reads && state.is_none() {
             return Ok(failure(harness.text(TextId::ToolsFileEditRead)));
         }
@@ -1398,14 +1573,17 @@ impl FileTools {
             }
         };
         if let Some(state) = state.as_ref().filter(|_| self.track_reads) {
-            if state.hash != hash(&snap.bytes)
-                || (state.partial && state.modified != modified(&snap.metadata))
-            {
+            if !unchanged(state, &snap) {
                 return Ok(failure(harness.text(TextId::ToolsFileChanged)));
             }
         }
-        let content = String::from_utf8_lossy(&snap.bytes);
-        let count = content.matches(old).count();
+        let Some(decoded) = text::decode(&snap.bytes) else {
+            tracing::warn!(file_path = %path.display(), "Edit refused: the file is not lossless text");
+            return Ok(failure(harness.text(TextId::ToolsFileUndecodable)));
+        };
+        let view = text::LfView::new(&decoded.text);
+        let wanted = text::lf(old);
+        let count = view.text().matches(wanted.as_ref()).count();
         if count == 0 {
             return Ok(failure(
                 harness.render(TextId::ToolsFileNoMatch, &[("old", old)]),
@@ -1419,14 +1597,29 @@ impl FileTools {
             )));
         }
         let replacements = if all { count } else { 1 };
-        let content = content.replacen(old, new, replacements);
-        if content.len() > MAX_BYTES {
+        let insertion = text::with_ending(new, text::dominant_ending(&decoded.text));
+        // Size the result before building it: a replace_all multiplies the insertion.
+        let mut removed = 0usize;
+        let mut identical = true;
+        for original in view.originals(&wanted, replacements) {
+            removed += text::encoded_len(original, decoded.encoding);
+            identical &= original == insertion.as_ref();
+        }
+        if identical {
+            return Ok(failure(harness.text(TextId::ToolsFileEditNoChange)));
+        }
+        let size = text::encoded_len(&insertion, decoded.encoding)
+            .checked_mul(replacements)
+            .and_then(|added| snap.bytes.len().checked_sub(removed)?.checked_add(added));
+        if size.is_none_or(|size| size > MAX_BYTES) {
             return Ok(failure(size_error().render_for(harness)));
         }
-        match write_snapshot(path, content.as_bytes(), Some(&snap), guard).await {
+        let updated = view.replace(&wanted, replacements, &insertion);
+        let written = text::encode(&updated, decoded.encoding);
+        match write_snapshot(path, &written, Some(&snap), guard).await {
             Ok(_) => {}
             Err(e) => {
-                self.forget(path, exported);
+                self.forget(target, exported);
                 return Ok(failure(harness.render(
                     TextId::ToolsFileWriteFailed,
                     &[
@@ -1436,7 +1629,7 @@ impl FileTools {
                 )));
             }
         };
-        self.record_change(path, &snap.bytes, content.as_bytes(), ctx)
+        self.record_change(path, &snap.bytes, &written, ctx)
             .await?;
         let mut message = harness.render(
             TextId::ToolsFileEdited,
@@ -1448,16 +1641,16 @@ impl FileTools {
         );
         if let Some(state) = state.filter(|_| self.track_reads) {
             match snapshot(path).await {
-                Ok(final_snapshot) if final_snapshot.bytes != content.as_bytes() => {
-                    self.forget(path, exported);
+                Ok(final_snapshot) if final_snapshot.bytes != written => {
+                    self.forget(target, exported);
                     tracing::warn!(file_path = %path.display(), "file changed after edit; read authorization revoked");
                     message.push_str(harness.text(TextId::ToolsFileChangedAfterEdit));
                 }
                 Ok(final_snapshot) => {
-                    self.record_public(path, json!({"content":if state.partial {crate::js::undefined()}else{json!(content)},"contentHash":hash(content.as_bytes()),"timestamp":modified(&final_snapshot.metadata),"isPartialView":state.partial_view}));
+                    self.record_public(target, json!({"content":if state.partial {crate::js::undefined()}else{json!(text::lf(&updated))},"contentHash":hash(&written),"timestamp":modified(&final_snapshot.metadata),"isPartialView":state.partial_view}));
                 }
                 Err(error) => {
-                    self.forget(path, exported);
+                    self.forget(target, exported);
                     tracing::warn!(file_path = %path.display(),error = %error, "post-edit read state invalidated");
                     message.push_str(harness.text(TextId::ToolsFileRefreshFailed));
                 }
@@ -1803,6 +1996,8 @@ fn notebook(raw: &str, harness: &ResolvedHarness) -> std::result::Result<String,
 }
 
 #[cfg(test)]
+mod tests;
+#[cfg(test)]
 mod admission_tests {
     use super::*;
     use std::time::Duration;
@@ -1811,23 +2006,49 @@ mod admission_tests {
     fn read_states_refresh_automatic_order_and_evict_at_512_entries() {
         let mut states = ReadStates::default();
         let entry = |content: &str| ReadState {
-            hash: hash(content.as_bytes()), modified: 1.0, partial: false,
-            public: json!({"content":content,"timestamp":1}), sequence: 0, value_version: 0,
+            digest: ReadDigest::Raw(hash(content.as_bytes())), modified: 1.0, partial: false,
+            public: json!({"content":content,"timestamp":1}), sequence: 0, value_version: 0, identity: String::new(),
         };
-        states.insert(PathBuf::from("/a"), entry("a"));
-        states.insert(PathBuf::from("/b"), entry("b"));
-        states.insert(PathBuf::from("/a"), entry("a2"));
+        let insert = |states: &mut ReadStates, path: &str, content: &str| {
+            states.insert(PathBuf::from(path), path.to_owned(), entry(content));
+        };
+        insert(&mut states, "/a", "a");
+        insert(&mut states, "/b", "b");
+        insert(&mut states, "/a", "a2");
         assert_eq!(states.order, VecDeque::from([PathBuf::from("/b"), PathBuf::from("/a")]));
         assert_eq!(states.values[&PathBuf::from("/a")].public["content"], "a2");
         for index in 0..512 {
-            states.insert(PathBuf::from(format!("/file-{index}")), entry("content"));
+            insert(&mut states, &format!("/file-{index}"), "content");
         }
         assert_eq!(states.values.len(), 512);
-        states.insert(PathBuf::from("/new"), entry("new"));
+        insert(&mut states, "/new", "new");
         assert_eq!(states.values.len(), 512);
         assert!(!states.values.contains_key(&PathBuf::from("/file-0")));
         assert!(states.values.contains_key(&PathBuf::from("/file-1")));
         assert!(states.values.contains_key(&PathBuf::from("/new")));
+    }
+
+    #[test]
+    fn read_states_keep_one_entry_per_file_identity() {
+        let mut states = ReadStates::default();
+        let entry = |content: &str| ReadState {
+            digest: ReadDigest::Raw(hash(content.as_bytes())), modified: 1.0, partial: false,
+            public: json!({"content":content}), sequence: 0, value_version: 0, identity: String::new(),
+        };
+        states.insert(PathBuf::from("/W/A.txt"), "/w/a.txt".into(), entry("old"));
+        states.insert(PathBuf::from("/w/a.txt"), "/w/a.txt".into(), entry("new"));
+        assert_eq!(states.values.len(), 1);
+        assert_eq!(states.order, VecDeque::from([PathBuf::from("/w/a.txt")]));
+        let found = states.find("/w/a.txt").unwrap();
+        assert_eq!(found.public["content"], "new");
+        // An entry describes the file it was recorded for, not whatever its key names now.
+        states.insert(PathBuf::from("/link"), "/w/b.txt".into(), entry("b"));
+        assert!(states.find("/w/c.txt").is_none());
+        assert_eq!(states.find("/w/b.txt").unwrap().public["content"], "b");
+        states.forget(Path::new("/w/A.TXT"), "/w/a.txt");
+        assert_eq!(states.values.len(), 1);
+        states.forget(Path::new("/link"), "/w/c.txt");
+        assert!(states.values.is_empty() && states.order.is_empty());
     }
 
     #[test]
@@ -1870,11 +2091,13 @@ mod admission_tests {
     #[test]
     fn partial_read_content_never_creates_a_whole_file_digest() {
         let complete = ReadValidation::from_public(&json!({"content":"fragment","timestamp":1}));
-        assert_eq!(complete.hash, hash(b"fragment"));
+        assert!(matches!(&complete.digest, ReadDigest::Text(digest) if *digest == hash(b"fragment")));
         assert!(!complete.partial);
+        let raw = ReadValidation::from_public(&json!({"content":"fragment","contentHash":"raw","timestamp":1}));
+        assert!(matches!(&raw.digest, ReadDigest::Raw(digest) if digest == "raw"));
         let partial = ReadValidation::from_public(&json!({"content":"fragment","timestamp":1,"isPartialView":true}));
         assert!(partial.partial);
-        assert!(partial.hash.is_empty());
+        assert!(matches!(partial.digest, ReadDigest::None));
     }
 
     #[tokio::test]

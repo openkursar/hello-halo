@@ -162,12 +162,12 @@
           "content": "first\nsecond\nthird\n"
         },
         "expected": {
-          "content": "Wrote <root>/file.txt (4 lines, 19 bytes)",
+          "content": "Wrote <root>/file.txt (3 lines, 19 bytes)",
           "isError": false,
           "metadata": {
             "file_path": "<root>/file.txt",
             "is_new": false,
-            "lines": 4,
+            "lines": 3,
             "bytes": 19
           }
         }
@@ -229,12 +229,12 @@
           "content": "created\n"
         },
         "expected": {
-          "content": "Created <root>/new.txt (2 lines, 8 bytes)",
+          "content": "Created <root>/new.txt (1 lines, 8 bytes)",
           "isError": false,
           "metadata": {
             "file_path": "<root>/new.txt",
             "is_new": true,
-            "lines": 2,
+            "lines": 1,
             "bytes": 8
           }
         }

@@ -101,7 +101,7 @@ impl HostBridge for ExternalReads {
             "file.recordChange" => {
                 assert_eq!(values[path]["content"], "written");
                 if self.mutation_after_write {
-                    values.get_mut(path).unwrap()["timestamp"] = json!(0);
+                    values.get_mut(path).unwrap()["contentHash"] = json!("observer");
                 }
                 Ok(Value::Null)
             }
@@ -907,8 +907,8 @@ async fn external_read_state_is_authoritative_and_write_observers_see_its_commit
     assert_eq!(written["isError"], false);
     assert_eq!(bridge.writes.load(std::sync::atomic::Ordering::Relaxed), 1);
     assert_eq!(
-        bridge.values.lock().unwrap()[path.to_str().unwrap()]["timestamp"],
-        0,
+        bridge.values.lock().unwrap()[path.to_str().unwrap()]["contentHash"],
+        "observer",
         "finalization must not overwrite an observer's mutation of the external Map"
     );
     let refused = runtime

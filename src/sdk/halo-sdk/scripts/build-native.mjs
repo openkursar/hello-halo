@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFile, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireBuildLock, createStagingDirectory, prepareBuildWorkspace, publishDistribution } from './build-distribution.mjs';
 
@@ -49,9 +49,9 @@ async function notices(output, targetTriples) {
     }
     sections.push(`${pkg.name}@${pkg.version}\nLicense: ${pkg.license ?? 'See upstream license'}\n${texts.join('\n')}`);
   }
-  for (const name of ['LICENSE.minimatch', 'LICENSE.braces']) {
-    const source = join(workspace, 'crates/halo-core/src/tools/glob_matcher', name);
-    sections.push(`Ported source: ${name}\n${await readFile(source, 'utf8')}`);
+  for (const file of ['glob_matcher/LICENSE.minimatch', 'glob_matcher/LICENSE.braces', 'file/LICENSE.node-path']) {
+    const source = join(workspace, 'crates/halo-core/src/tools', file);
+    sections.push(`Ported source: ${basename(file)}\n${await readFile(source, 'utf8')}`);
   }
   await writeFile(join(output, 'THIRD-PARTY-NOTICES.txt'), `${sections.join('\n\n')}\n`);
 }

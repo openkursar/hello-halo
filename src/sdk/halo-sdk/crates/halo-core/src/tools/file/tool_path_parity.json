@@ -1,0 +1,1237 @@
+{
+  "source": "resolveToolPath in src/main/foundation/path-containment.ts, run by Node v22.18.0",
+  "cases": [
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~",
+      "expected": "/home/u"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/",
+      "expected": "/home/u"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/notes.md",
+      "expected": "/home/u/notes.md"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~//etc",
+      "expected": "/home/u/etc"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~///etc/passwd",
+      "expected": "/home/u/etc/passwd"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/a//b/../c/",
+      "expected": "/home/u/a/c/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/./x",
+      "expected": "/home/u/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/../other",
+      "expected": "/home/other"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/../../..",
+      "expected": "/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~\\x",
+      "expected": "/work/proj/~\\x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~user/x",
+      "expected": "/work/proj/~user/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~x",
+      "expected": "/work/proj/~x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "  ~/trim.txt \n",
+      "expected": "/home/u/trim.txt"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "　~/ideographic",
+      "expected": "/home/u/ideographic"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "﻿~/bom",
+      "expected": "/home/u/bom"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/café.txt",
+      "expected": "/home/u/café.txt"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "café/café",
+      "expected": "/work/proj/café/café"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "/abs/café",
+      "expected": "/abs/café"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "src/./a.txt",
+      "expected": "/work/proj/src/a.txt"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "src//a.txt/",
+      "expected": "/work/proj/src/a.txt"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "../up",
+      "expected": "/work/up"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "../../../../x",
+      "expected": "/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "/c/Users/me/a.txt",
+      "expected": "/c/Users/me/a.txt"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "/cygdrive/c/x",
+      "expected": "/cygdrive/c/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "/tmp/x",
+      "expected": "/tmp/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "//double/x",
+      "expected": "/double/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": ".",
+      "expected": "/work/proj"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "./",
+      "expected": "/work/proj"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "a/..",
+      "expected": "/work/proj"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "   ",
+      "expected": "/work/proj"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/..",
+      "expected": "/home"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/../..",
+      "expected": "/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/.",
+      "expected": "/home/u"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/a/./../b/",
+      "expected": "/home/u/b/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/😀/x",
+      "expected": "/home/u/😀/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/./",
+      "expected": "/home/u/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/...",
+      "expected": "/home/u/..."
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u",
+      "raw": "~/a/../../..",
+      "expected": "/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~",
+      "expected": "/home/u/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/",
+      "expected": "/home/u/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/notes.md",
+      "expected": "/home/u/notes.md"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~//etc",
+      "expected": "/home/u/etc"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~///etc/passwd",
+      "expected": "/home/u/etc/passwd"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/a//b/../c/",
+      "expected": "/home/u/a/c/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/./x",
+      "expected": "/home/u/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/../other",
+      "expected": "/home/other"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/../../..",
+      "expected": "/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~\\x",
+      "expected": "/work/proj/~\\x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~user/x",
+      "expected": "/work/proj/~user/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~x",
+      "expected": "/work/proj/~x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "  ~/trim.txt \n",
+      "expected": "/home/u/trim.txt"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "　~/ideographic",
+      "expected": "/home/u/ideographic"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "﻿~/bom",
+      "expected": "/home/u/bom"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/café.txt",
+      "expected": "/home/u/café.txt"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/..",
+      "expected": "/home"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/../..",
+      "expected": "/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/.",
+      "expected": "/home/u"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/a/./../b/",
+      "expected": "/home/u/b/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/😀/x",
+      "expected": "/home/u/😀/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/./",
+      "expected": "/home/u/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/...",
+      "expected": "/home/u/..."
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "/home/u/",
+      "raw": "~/a/../../..",
+      "expected": "/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~",
+      "expected": ""
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/",
+      "expected": "."
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/notes.md",
+      "expected": "notes.md"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~//etc",
+      "expected": "/etc"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~///etc/passwd",
+      "expected": "/etc/passwd"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/a//b/../c/",
+      "expected": "a/c/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/./x",
+      "expected": "x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/../other",
+      "expected": "../other"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/../../..",
+      "expected": "../../.."
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~\\x",
+      "expected": "/work/proj/~\\x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~user/x",
+      "expected": "/work/proj/~user/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~x",
+      "expected": "/work/proj/~x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "  ~/trim.txt \n",
+      "expected": "trim.txt"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "　~/ideographic",
+      "expected": "ideographic"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "﻿~/bom",
+      "expected": "bom"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/café.txt",
+      "expected": "café.txt"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/..",
+      "expected": ".."
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/../..",
+      "expected": "../.."
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/.",
+      "expected": "."
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/a/./../b/",
+      "expected": "b/"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/😀/x",
+      "expected": "😀/x"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/./",
+      "expected": "./"
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/...",
+      "expected": "..."
+    },
+    {
+      "platform": "posix",
+      "cwd": "/work/proj",
+      "home": "",
+      "raw": "~/a/../../..",
+      "expected": "../.."
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~",
+      "expected": "C:\\Users\\me"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~/",
+      "expected": "C:\\Users\\me"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~\\",
+      "expected": "C:\\Users\\me"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~/notes.md",
+      "expected": "C:\\Users\\me\\notes.md"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~\\notes.md",
+      "expected": "C:\\Users\\me\\notes.md"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~//etc",
+      "expected": "C:\\Users\\me\\etc"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~\\\\etc",
+      "expected": "C:\\Users\\me\\etc"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~/a//b/../c/",
+      "expected": "C:\\Users\\me\\a\\c\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~\\..\\other",
+      "expected": "C:\\Users\\other"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~\\..\\..\\..",
+      "expected": "C:\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~user\\x",
+      "expected": "C:\\Users\\me\\proj\\~user\\x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~/café.txt",
+      "expected": "C:\\Users\\me\\café.txt"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "/c/Users/me/a.txt",
+      "expected": "C:\\Users\\me\\a.txt"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "/C/Users/me/a.txt",
+      "expected": "C:\\Users\\me\\a.txt"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "/d/",
+      "expected": "D:\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "/c",
+      "expected": "C:\\c"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "/c/",
+      "expected": "C:\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "/1/x",
+      "expected": "C:\\1\\x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "/cygdrive/c/x",
+      "expected": "C:\\cygdrive\\c\\x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "/tmp/x",
+      "expected": "C:\\tmp\\x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "C:\\x\\..\\y",
+      "expected": "C:\\y"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "C:/x/./y",
+      "expected": "C:\\x\\y"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "c:\\Mixed/Sep\\a.txt",
+      "expected": "c:\\Mixed\\Sep\\a.txt"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "\\rooted\\a.txt",
+      "expected": "C:\\rooted\\a.txt"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "/rooted/a.txt",
+      "expected": "C:\\rooted\\a.txt"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "\\\\server\\share\\x",
+      "expected": "\\\\server\\share\\x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "//server/share/x",
+      "expected": "\\\\server\\share\\x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "src\\a.txt",
+      "expected": "C:\\Users\\me\\proj\\src\\a.txt"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "src/a.txt",
+      "expected": "C:\\Users\\me\\proj\\src\\a.txt"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "..\\up",
+      "expected": "C:\\Users\\me\\up"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "..\\..\\..\\..\\x",
+      "expected": "C:\\x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "café\\a",
+      "expected": "C:\\Users\\me\\proj\\café\\a"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "C:\\",
+      "expected": "C:\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "C:",
+      "expected": "C:\\Users\\me\\proj"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "c:\\x\\",
+      "expected": "c:\\x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "  C:\\trim  ",
+      "expected": "C:\\trim"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~\\AUXfile",
+      "expected": "C:\\Users\\me\\AUXfile"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~/CON",
+      "expected": "C:\\Users\\me\\CON"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~/CONx",
+      "expected": "C:\\Users\\me\\CONx"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~\\nul:x",
+      "expected": "C:\\Users\\me\\nul:x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~/a:b",
+      "expected": "C:\\Users\\me\\a:b"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~/C:x",
+      "expected": "C:\\Users\\me\\C:x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~\\..\\C:x",
+      "expected": "C:\\Users\\C:x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~/x/😀",
+      "expected": "C:\\Users\\me\\x\\😀"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "\\\\server",
+      "expected": "C:\\server"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "\\\\server\\share",
+      "expected": "\\\\server\\share\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "~///server/share",
+      "expected": "C:\\Users\\me\\server\\share"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me",
+      "raw": "C:\\a\\..\\..\\..\\b",
+      "expected": "C:\\b"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~",
+      "expected": "C:\\Users\\me\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~/",
+      "expected": "C:\\Users\\me\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~\\",
+      "expected": "C:\\Users\\me\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~/notes.md",
+      "expected": "C:\\Users\\me\\notes.md"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~\\notes.md",
+      "expected": "C:\\Users\\me\\notes.md"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~//etc",
+      "expected": "C:\\Users\\me\\etc"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~\\\\etc",
+      "expected": "C:\\Users\\me\\etc"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~/a//b/../c/",
+      "expected": "C:\\Users\\me\\a\\c\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~\\..\\other",
+      "expected": "C:\\Users\\other"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~\\..\\..\\..",
+      "expected": "C:\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~user\\x",
+      "expected": "C:\\Users\\me\\proj\\~user\\x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~/café.txt",
+      "expected": "C:\\Users\\me\\café.txt"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~\\AUXfile",
+      "expected": "C:\\Users\\me\\AUXfile"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~/CON",
+      "expected": "C:\\Users\\me\\CON"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~/CONx",
+      "expected": "C:\\Users\\me\\CONx"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~\\nul:x",
+      "expected": "C:\\Users\\me\\nul:x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~/a:b",
+      "expected": "C:\\Users\\me\\a:b"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~/C:x",
+      "expected": "C:\\Users\\me\\C:x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~\\..\\C:x",
+      "expected": "C:\\Users\\C:x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~/x/😀",
+      "expected": "C:\\Users\\me\\x\\😀"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "C:\\Users\\me\\",
+      "raw": "~///server/share",
+      "expected": "C:\\Users\\me\\server\\share"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~",
+      "expected": ""
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~/",
+      "expected": "."
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~\\",
+      "expected": "."
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~/notes.md",
+      "expected": "notes.md"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~\\notes.md",
+      "expected": "notes.md"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~//etc",
+      "expected": "\\etc"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~\\\\etc",
+      "expected": "\\etc"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~/a//b/../c/",
+      "expected": "a\\c\\"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~\\..\\other",
+      "expected": "..\\other"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~\\..\\..\\..",
+      "expected": "..\\..\\.."
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~user\\x",
+      "expected": "C:\\Users\\me\\proj\\~user\\x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~/café.txt",
+      "expected": "café.txt"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~\\AUXfile",
+      "expected": "AUXfile"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~/CON",
+      "expected": "CON"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~/CONx",
+      "expected": ".\\CONx"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~\\nul:x",
+      "expected": ".\\nul:x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~/a:b",
+      "expected": "a:b"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~/C:x",
+      "expected": "C:x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~\\..\\C:x",
+      "expected": "..\\C:x"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~/x/😀",
+      "expected": "x\\😀"
+    },
+    {
+      "platform": "win32",
+      "cwd": "C:\\Users\\me\\proj",
+      "home": "",
+      "raw": "~///server/share",
+      "expected": "\\\\server\\share\\"
+    }
+  ]
+}
