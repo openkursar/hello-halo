@@ -35,7 +35,12 @@ struct StateFile {
 
 impl StateFile {
     fn create(directory: &Path) -> std::io::Result<Self> {
-        let path = directory.join(format!("agent-shell-{}.state", uuid::Uuid::new_v4()));
+        Self::create_with(directory, "state", b"")
+    }
+
+    fn create_with(directory: &Path, extension: &str, contents: &[u8]) -> std::io::Result<Self> {
+        use std::io::Write;
+        let path = directory.join(format!("agent-shell-{}.{extension}", uuid::Uuid::new_v4()));
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -43,11 +48,15 @@ impl StateFile {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        options.open(&path)?;
-        Ok(Self {
+        let mut handle = options.open(&path)?;
+        let file = Self {
             path,
             cleaned: false,
-        })
+        };
+        if !contents.is_empty() {
+            handle.write_all(contents)?;
+        }
+        Ok(file)
     }
 
     async fn cleanup(&mut self) {
@@ -296,27 +305,6 @@ async fn resolve_directory(
         ))
     }
 }
-fn extract_exports(command: &str) -> HashMap<String, String> {
-    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let pattern = PATTERN.get_or_init(|| {
-        let whitespace = r"\x09-\x0d\x20\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}";
-        regex::Regex::new(&format!(r#"(?m)^[{whitespace}]*export[{whitespace}]+([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|'([^']*)'|([^{whitespace}]*))"#)).unwrap()
-    });
-    pattern
-        .captures_iter(command)
-        .map(|capture| {
-            (
-                capture[1].to_owned(),
-                capture
-                    .get(2)
-                    .or_else(|| capture.get(3))
-                    .or_else(|| capture.get(4))
-                    .map(|value| value.as_str().to_owned())
-                    .unwrap_or_default(),
-            )
-        })
-        .collect()
-}
 async fn create_output_directory(path: &Path) -> std::io::Result<()> {
     let mut builder = tokio::fs::DirBuilder::new();
     builder.recursive(true);
@@ -324,11 +312,17 @@ async fn create_output_directory(path: &Path) -> std::io::Result<()> {
     builder.mode(0o700);
     builder.create(path).await
 }
+/// The start record holds PENDING until restore has finished and the shell replaces it with STARTED.
+/// Only an untouched PENDING proves the command never ran; anything else leaves that unknown.
+const PENDING: &str = "pending";
+const STARTED: &str = "started";
+
 fn wrapper(
     command: &str,
     shell: &str,
     state: &ShellState,
-    file: Option<&Path>,
+    start: Option<&Path>,
+    snapshot: Option<&Path>,
     harness: &ResolvedHarness,
     environment: &mut HashMap<String, String>,
 ) -> String {
@@ -367,10 +361,17 @@ fn wrapper(
             quote(harness.text(TextId::ToolsShellWrapperCwdMissing))
         ),
         exports,
-        command.into(),
-        "__agent_ec=$?".into(),
     ]);
-    if let Some(file) = file {
+    if let Some(start) = start {
+        // The command runs only once its start is recorded, so an empty record always means it did not run.
+        script.push(format!(
+            "builtin printf {STARTED} 2>/dev/null >| {} || {{ printf '%s\\n' {} >&2; exit 125; }}",
+            quote(&windows_posix(&start.to_string_lossy())),
+            quote(harness.text(TextId::ToolsShellWrapperStartUnrecorded))
+        ));
+    }
+    script.extend([command.into(), "__agent_ec=$?".into()]);
+    if let Some(file) = snapshot {
         let pwd = if cfg!(windows) { "pwd -P -W" } else { "pwd -P" };
         script.push(format!(
             "__agent_cwd=$({pwd} 2>/dev/null) || {{ __agent_cwd={}; printf '%s\\n' {} >&2; }}",
@@ -401,6 +402,37 @@ done < <(compgen -e)"#
     script.push("exit $__agent_ec".into());
     script.join("\n")
 }
+#[derive(Clone, Copy, PartialEq)]
+enum Started {
+    No,
+    Yes,
+    Unknown,
+}
+
+async fn read_start(file: &Path) -> Started {
+    async fn read(file: &Path) -> std::io::Result<Vec<u8>> {
+        // Only a regular file is read, and only enough of it to compare, so a replaced record cannot block or flood.
+        if !tokio::fs::symlink_metadata(file).await?.file_type().is_file() {
+            return Err(std::io::Error::other("not a regular file"));
+        }
+        let mut raw = Vec::with_capacity(8);
+        tokio::fs::File::open(file).await?.take(8).read_to_end(&mut raw).await?;
+        Ok(raw)
+    }
+    match read(file).await {
+        Ok(raw) if raw == PENDING.as_bytes() => Started::No,
+        Ok(raw) if raw == STARTED.as_bytes() => Started::Yes,
+        Ok(_) => {
+            tracing::warn!("command start record was altered");
+            Started::Unknown
+        }
+        Err(error) => {
+            tracing::warn!(%error, "command start record could not be read");
+            Started::Unknown
+        }
+    }
+}
+
 async fn read_state(file: &Path) -> Option<ShellState> {
     let raw = match tokio::fs::read_to_string(file).await {
         Ok(raw) => raw,
@@ -414,6 +446,24 @@ async fn read_state(file: &Path) -> Option<ShellState> {
         tracing::warn!("shell state discarded: malformed or incomplete snapshot");
     }
     state
+}
+
+/// Applies only what one command changed relative to the state it started from, so a command
+/// running alongside keeps its changes once the session holds a snapshot.
+fn apply_snapshot(state: &mut ShellState, before: &ShellState, after: ShellState) {
+    if after.cwd != before.cwd {
+        state.cwd = after.cwd;
+    }
+    for key in before.env.keys() {
+        if !after.env.contains_key(key) {
+            state.env.remove(key);
+        }
+    }
+    for (key, value) in after.env {
+        if before.env.get(&key) != Some(&value) {
+            state.env.insert(key, value);
+        }
+    }
 }
 
 fn parse_state(raw: &str) -> Option<ShellState> {
@@ -509,7 +559,7 @@ mod migration_tests {
         let merged=crate::core::conventions::merged_environment(&base,&[&overrides],false);
         assert_eq!(shell_path(&json!(merged)).unwrap(),second.to_string_lossy());
         let state=ShellState{cwd:ctx.cwd,env:HashMap::from([("FILTER".into(),"select(.x != .y) 'quote'".into())])};let mut env=HashMap::new();
-        let script=wrapper("printf wrapper-command-marker >nul","bash",&state,None,&crate::harness::baseline(),&mut env);
+        let script=wrapper("printf wrapper-command-marker >nul","bash",&state,None,None,&crate::harness::baseline(),&mut env);
         assert!(script.find("cd ").unwrap()<script.find("printf wrapper-command-marker").unwrap());assert!(script.find("export FILTER=").unwrap()<script.find("printf wrapper-command-marker").unwrap());
         assert!(script.contains("printf wrapper-command-marker >/dev/null"));assert!(!script.contains("\\!"));assert!(!script.contains("select(.x != .y)"));assert!(env.values().any(|value|value=="select(.x != .y) 'quote'"));assert_eq!(state.env["FILTER"],"select(.x != .y) 'quote'");
         let mut file=StateFile::create(&root).unwrap();let path=file.path.clone();assert!(path.exists());file.cleanup().await;file.cleanup().await;assert!(!path.exists());finish(root,shell).await;
@@ -648,6 +698,227 @@ mod migration_tests {
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
 
+    async fn fake_shell(root: &Path, body: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join("fake-bash");
+        tokio::fs::write(&path, format!("#!/bin/sh\n{body}\n")).await.unwrap();
+        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).await.unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn script_file_transport_keeps_the_shell_argument_short_however_large_the_state() {
+        let (root, shell, mut ctx) = fixture().await;
+        let log = root.join("argv-log");
+        let bash = fake_shell(&root, &format!(
+            "printf '%s %s\\n' \"$#\" \"${{#1}}\" >> {}\nexec /bin/bash \"$@\"", quote(&log.to_string_lossy()))).await;
+        ctx.env = json!({"AGENT_SHELL": bash, "AGENT_TEST_SCRIPT_FILE": "1"});
+        let exports = (0..150).map(|index| format!("export RESTORED_VARIABLE_{index:03}=value-{index}")).collect::<Vec<_>>().join("; ");
+        let first = shell.execute(&json!({"command": exports}), ctx.clone()).await;
+        assert_eq!(first["isError"], false);
+        let padding = "x".repeat(20_000);
+        let next = shell.execute(
+            &json!({"command": format!(": {padding}\nprintf '%s %s' \"$RESTORED_VARIABLE_000\" \"$RESTORED_VARIABLE_149\"")}), ctx.clone()).await;
+        assert_eq!(next["isError"], false);
+        assert_eq!(next["content"], "value-0 value-149");
+        let background = shell.execute(&json!({"command": "printf \"$RESTORED_VARIABLE_149\"", "run_in_background": true}), ctx.clone()).await;
+        let task = tokio::time::timeout(Duration::from_secs(10), wait(&shell, &background["metadata"]["task_id"], &ctx)).await.unwrap();
+        assert_eq!(task["status"], "completed");
+        assert_eq!(tokio::fs::read_to_string(task["outputFile"].as_str().unwrap()).await.unwrap(), "value-149");
+        let calls = tokio::fs::read_to_string(&log).await.unwrap();
+        assert_eq!(calls.lines().count(), 3);
+        for call in calls.lines() {
+            let (count, length) = call.split_once(' ').unwrap();
+            assert_eq!(count, "1");
+            assert!(length.parse::<usize>().unwrap() < 512, "{call}");
+        }
+        finish(root, shell).await;
+    }
+
+    #[tokio::test]
+    async fn posix_shells_keep_the_released_invocation() {
+        let (root, shell, ctx) = fixture().await;
+        let result = shell.execute(&json!({"command": "\"$0\" -c 'printf inner'"}), ctx.clone()).await;
+        assert_eq!(result["isError"], false);
+        assert_eq!(result["content"], "inner");
+        finish(root, shell).await;
+    }
+
+    #[tokio::test]
+    async fn later_commands_see_only_state_the_previous_command_actually_left() {
+        let (root, shell, ctx) = fixture().await;
+        tokio::fs::create_dir(root.join("sub")).await.unwrap();
+        let run = |command: &str| {
+            let (input, ctx, shell) = (json!({"command": command}), ctx.clone(), &shell);
+            async move { shell.execute(&input, ctx).await }
+        };
+        assert_eq!(run("export KEPT=one REMOVED=two").await["isError"], false);
+        assert_eq!(run("unset REMOVED").await["isError"], false);
+        assert_eq!(run("printf '%s:%s' \"${KEPT-unset}\" \"${REMOVED-unset}\"").await["content"], "one:unset");
+        let exited = run("exit 7\nexport NEVER_RUN=yes").await;
+        assert_eq!(exited["isError"], true);
+        assert_eq!(run("cd sub && exit 0").await["isError"], false);
+        let next = run("printf '%s:%s' \"${NEVER_RUN-unset}\" \"$PWD\"").await;
+        assert_eq!(next["content"], format!("unset:{}", root.display()));
+        let (slow, changed) = tokio::join!(run("sleep 0.6; echo plain"), run("export HOME=changed-home"));
+        assert_eq!((slow["isError"].clone(), changed["isError"].clone()), (json!(false), json!(false)));
+        assert_eq!(run("printf '%s' \"$HOME\"").await["content"], "changed-home");
+        let (first, second) = tokio::join!(run("sleep 0.6; export FIRST=one"), run("export SECOND=two"));
+        assert_eq!((first["isError"].clone(), second["isError"].clone()), (json!(false), json!(false)));
+        assert_eq!(run("printf '%s:%s' \"${FIRST-missing}\" \"${SECOND-missing}\"").await["content"], "one:two");
+        finish(root, shell).await;
+    }
+
+    #[tokio::test]
+    async fn output_beyond_the_capture_window_is_never_reported_as_no_output() {
+        let (root, shell, ctx) = fixture().await;
+        for redirect in ["", " >&2"] {
+            let command = format!("{{ printf '\\n%.0s' $(seq 1 33000); echo MIDDLE_MARKER; printf '\\n%.0s' $(seq 1 33000); }}{redirect}");
+            let result = shell.execute(&json!({"command": command}), ctx.clone()).await;
+            assert_eq!(result["isError"], false);
+            let content = result["content"].as_str().unwrap();
+            assert_ne!(content, "(No output)");
+            assert_eq!(content.matches("characters of output omitted here").count(), 1, "{redirect}");
+            assert_eq!(content.matches("[Command output reached").count(), 1, "{redirect}");
+        }
+        finish(root, shell).await;
+    }
+
+    #[tokio::test]
+    async fn a_process_holding_one_output_stream_ends_at_the_deadline_with_its_output() {
+        let (root, shell, ctx) = fixture().await;
+        for held in ["sleep 30 2>/dev/null &", "sleep 30 >/dev/null &"] {
+            let command = format!("echo one-pipe; {held}");
+            let started = std::time::Instant::now();
+            let result = tokio::time::timeout(Duration::from_secs(10),
+                shell.execute(&json!({"command": command, "timeout": 300}), ctx.clone())).await.unwrap();
+            assert!(started.elapsed() < Duration::from_secs(4), "{held}: {:?}", started.elapsed());
+            let content = result["content"].as_str().unwrap();
+            assert!(content.contains("timed out after 300ms") && content.contains("one-pipe"), "{held}: {content}");
+            assert!(!content.contains("still running after forced termination"), "{held}: {content}");
+            let background = shell.execute(&json!({"command": command, "timeout": 300, "run_in_background": true}), ctx.clone()).await;
+            let task = tokio::time::timeout(Duration::from_secs(10), wait(&shell, &background["metadata"]["task_id"], &ctx)).await.unwrap();
+            assert_eq!(task["status"], "failed", "{held}");
+            assert_eq!(tokio::fs::read_to_string(task["outputFile"].as_str().unwrap()).await.unwrap(), "one-pipe\n");
+        }
+        finish(root, shell).await;
+    }
+
+    #[tokio::test]
+    async fn a_process_that_survives_forced_termination_cannot_hang_the_command() {
+        let (root, shell, ctx) = fixture().await;
+        let command = "echo before; perl -e 'use POSIX; POSIX::setsid(); sleep 4' &";
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(Duration::from_secs(10),
+            shell.execute(&json!({"command": command, "timeout": 300}), ctx.clone())).await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(6), "{:?}", started.elapsed());
+        assert_eq!(result["isError"], true);
+        let content = result["content"].as_str().unwrap();
+        assert!(content.starts_with("Command reached its 300ms deadline"), "{content}");
+        assert!(content.contains("before") && !content.contains("was terminated"), "{content}");
+        let background = shell.execute(&json!({"command": command, "timeout": 300, "run_in_background": true}), ctx.clone()).await;
+        let task = tokio::time::timeout(Duration::from_secs(10), wait(&shell, &background["metadata"]["task_id"], &ctx)).await.unwrap();
+        assert_eq!(task["status"], "failed");
+        assert!(task["error"].as_str().unwrap().contains("could not all be confirmed stopped"), "{}", task["error"]);
+        finish(root, shell).await;
+    }
+
+    #[tokio::test]
+    async fn a_command_that_ran_is_never_reported_as_not_started() {
+        let (root, shell, mut ctx) = fixture().await;
+        let startup = root.join("startup.sh");
+        tokio::fs::write(&startup, "printf() { return 1; }\n").await.unwrap();
+        ctx.env = json!({"AGENT_SHELL": "/bin/bash", "BASH_ENV": startup});
+        let result = shell.execute(&json!({"command": "echo ran > ran-file; echo visible"}), ctx.clone()).await;
+        assert_eq!(result["isError"], false, "{}", result["content"]);
+        assert_eq!(result["content"], "visible");
+        assert!(root.join("ran-file").exists());
+        ctx.env = json!({"AGENT_SHELL": "/bin/bash"});
+        let limited = shell.execute(&json!({"command": "echo touched > happened; ulimit -f 0"}), ctx.clone()).await;
+        assert!(!limited["content"].as_str().unwrap().contains("not started"), "{}", limited["content"]);
+        assert!(root.join("happened").exists());
+        finish(root, shell).await;
+    }
+
+    async fn private_temp_fixture() -> (PathBuf, PathBuf, ShellTools, ToolContext) {
+        let (root, _, ctx) = fixture().await;
+        let temp = root.join("private-temp");
+        tokio::fs::create_dir(&temp).await.unwrap();
+        let shell = ShellTools::new_with_activity(&json!({"persistSession":false,"nativeTempDirectory":temp,
+            "nativeProcessEnv":{"PATH":"/usr/bin:/bin","HOME":root,"AGENT_SHELL":"/bin/bash"}}), None);
+        (root, temp, shell, ctx)
+    }
+
+    #[tokio::test]
+    async fn a_missing_start_record_is_reported_as_unconfirmed_not_as_success() {
+        let (root, temp, shell, mut ctx) = private_temp_fixture().await;
+        let startup = root.join("startup.sh");
+        tokio::fs::write(&startup, "rm -f \"$PRIVATE_TEMP\"/agent-shell-*.start; exit 0\n").await.unwrap();
+        ctx.env = json!({"AGENT_SHELL": "/bin/bash", "BASH_ENV": startup, "PRIVATE_TEMP": temp});
+        let foreground = shell.execute(&json!({"command": "echo ran > actual"}), ctx.clone()).await;
+        assert_eq!(foreground["isError"], true);
+        assert!(foreground["content"].as_str().unwrap().starts_with("Command result unconfirmed"), "{}", foreground["content"]);
+        let background = shell.execute(&json!({"command": "echo ran > actual", "run_in_background": true}), ctx.clone()).await;
+        let task = tokio::time::timeout(Duration::from_secs(10), wait(&shell, &background["metadata"]["task_id"], &ctx)).await.unwrap();
+        assert_eq!(task["status"], "failed");
+        assert!(task["error"].as_str().unwrap().starts_with("Unconfirmed:"), "{}", task["error"]);
+        assert!(!root.join("actual").exists());
+        finish(root, shell).await;
+    }
+
+    #[tokio::test]
+    async fn a_command_that_empties_temporary_files_is_not_reported_as_not_started() {
+        let (root, temp, shell, mut ctx) = private_temp_fixture().await;
+        ctx.env = json!({"AGENT_SHELL": "/bin/bash", "PRIVATE_TEMP": temp});
+        let result = shell.execute(
+            &json!({"command": "echo ran > actual; for f in \"$PRIVATE_TEMP\"/*; do : > \"$f\"; done"}), ctx.clone()).await;
+        assert_eq!(result["isError"], true);
+        assert!(result["content"].as_str().unwrap().starts_with("Command result unconfirmed"), "{}", result["content"]);
+        assert!(root.join("actual").exists());
+        finish(root, shell).await;
+    }
+
+    #[tokio::test]
+    async fn a_start_that_cannot_be_recorded_keeps_the_command_from_running() {
+        let (root, temp, shell, mut ctx) = private_temp_fixture().await;
+        let startup = root.join("startup.sh");
+        // A directory cannot be written as a file even by root.
+        tokio::fs::write(&startup, "for f in \"$PRIVATE_TEMP\"/agent-shell-*.start; do rm -f \"$f\"; mkdir \"$f\"; done\n").await.unwrap();
+        ctx.env = json!({"AGENT_SHELL": "/bin/bash", "BASH_ENV": startup, "PRIVATE_TEMP": temp});
+        let result = shell.execute(&json!({"command": "echo ran > actual"}), ctx.clone()).await;
+        assert_eq!(result["isError"], true);
+        let content = result["content"].as_str().unwrap();
+        assert!(content.ends_with("agent-sdk: the command start could not be recorded; command not started"), "{content}");
+        assert!(!root.join("actual").exists());
+        finish(root, shell).await;
+    }
+
+    #[tokio::test]
+    async fn a_shell_that_ends_before_the_command_is_reported_as_not_started() {
+        let (root, shell, mut ctx) = fixture().await;
+        let marker = root.join("ran");
+        ctx.env = json!({"AGENT_SHELL": fake_shell(&root, "exit 0").await});
+        let command = format!("printf ran > {}", quote(&marker.to_string_lossy()));
+        let foreground = shell.execute(&json!({"command": command}), ctx.clone()).await;
+        assert_eq!(foreground["isError"], true);
+        let content = foreground["content"].as_str().unwrap();
+        assert!(content.starts_with("Command not started: the shell ended with code 0"), "{content}");
+        assert!(!content.contains("(No output)"));
+        let background = shell.execute(&json!({"command": command, "run_in_background": true}), ctx.clone()).await;
+        let task = wait(&shell, &background["metadata"]["task_id"], &ctx).await;
+        assert_eq!(task["status"], "failed");
+        assert!(task["error"].as_str().unwrap().starts_with("Not started: the shell ended with code 0"));
+        assert!(!marker.exists());
+        ctx.env = json!({"AGENT_SHELL": fake_shell(&root, "printf 'restore failed' >&2; exit 2").await});
+        let failed = shell.execute(&json!({"command": command}), ctx.clone()).await;
+        assert_eq!(failed["content"], "Command not started: the shell ended with code 2 before reaching it, so no part of the command ran.\nrestore failed");
+        ctx.env = json!({"AGENT_SHELL": "/bin/bash"});
+        let exited = shell.execute(&json!({"command": "printf partial; exit 0"}), ctx.clone()).await;
+        assert_eq!(exited["isError"], false);
+        assert_eq!(exited["content"], "partial");
+        finish(root, shell).await;
+    }
+
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn zsh_nonportable_export_keeps_the_working_directory_path_and_other_exports() {
@@ -771,9 +1042,17 @@ mod restore_tests {
     use super::*;
 
     #[test]
+    fn windows_script_path_is_one_quoted_forward_slash_argument() {
+        assert_eq!(
+            windows_script_argument(Path::new(r"C:\Users\dev{1} x\AppData\Local\Temp\agent-shell-1.sh")),
+            "\"C:/Users/dev{1} x/AppData/Local/Temp/agent-shell-1.sh\""
+        );
+    }
+
+    #[test]
     fn only_zsh_gets_the_option_that_lets_unmatched_globs_through() {
         let state = ShellState { cwd: "/".into(), env: HashMap::new() };
-        let script = |shell: &str| wrapper("echo x", shell, &state, None, &crate::harness::baseline(), &mut HashMap::new());
+        let script = |shell: &str| wrapper("echo x", shell, &state, None, None, &crate::harness::baseline(), &mut HashMap::new());
         assert!(script("/bin/zsh").starts_with("setopt NO_NOMATCH\n"));
         assert!(script("/usr/local/bin/zsh-5.9").starts_with("setopt NO_NOMATCH\n"));
         assert!(!script("/bin/bash").contains("setopt"));
@@ -820,7 +1099,7 @@ mod restore_tests {
         let file = StateFile::create(&root).unwrap();
         let script = wrapper(
             "cd sub && printf x >> command-calls && export KEEP='first\nPATH=/missing' && (exit 7)",
-            shell, &state, Some(&file.path), &crate::harness::baseline(), &mut HashMap::new(),
+            shell, &state, None, Some(&file.path), &crate::harness::baseline(), &mut HashMap::new(),
         ).replace("/usr/bin/env", &quote(env.to_str().unwrap()));
         let output = Command::new(shell).args(["-c", &script]).env_clear()
             .env("HOME", &root).env("PATH", "/missing").output().await.unwrap();
@@ -860,7 +1139,7 @@ mod restore_tests {
                 if round == 0 {
                     env.insert("Z_DIAGNOSTIC".into(), value.into());
                 }
-                let script = wrapper("printf '%s\\0%s' \"$PATH\" \"$Z_DIAGNOSTIC\"", shell, &state, Some(&file),
+                let script = wrapper("printf '%s\\0%s' \"$PATH\" \"$Z_DIAGNOSTIC\"", shell, &state, None, Some(&file),
                     &crate::harness::baseline(), &mut env);
                 let output = Command::new(shell).args(["-c", &script]).env_clear().envs(env).output().await.unwrap();
                 assert!(output.status.success());
@@ -902,6 +1181,7 @@ mod restore_tests {
             "if read -r received; then exit 9; fi; printf '%s' \"$RESTORED\"",
             "/bin/bash",
             &state,
+            None,
             Some(&file),
             &crate::harness::baseline(),
             &mut environment,
@@ -935,6 +1215,7 @@ mod restore_tests {
 struct Capture {
     head: Vec<u16>,
     tail: Vec<u16>,
+    omitted: usize,
 }
 impl Capture {
     fn push(&mut self, s: &str) {
@@ -943,16 +1224,30 @@ impl Capture {
         self.head.extend_from_slice(&units[..head]);
         self.tail.extend_from_slice(&units[head..]);
         if self.tail.len() > 32768 {
-            self.tail.drain(..self.tail.len() - 32768);
+            let excess = self.tail.len() - 32768;
+            self.tail.drain(..excess);
+            self.omitted += excess;
         }
     }
-    fn text(&self) -> String {
+    fn text(&self, harness: &ResolvedHarness) -> String {
+        let marker = if self.omitted == 0 {
+            String::new()
+        } else {
+            harness.render(
+                TextId::ToolsShellCaptureOmitted,
+                &[("omitted", &self.omitted.to_string())],
+            )
+        };
         format!(
-            "{}{}",
+            "{}{marker}{}",
             String::from_utf16_lossy(&self.head),
             String::from_utf16_lossy(&self.tail)
         )
     }
+}
+struct Drained {
+    text: String,
+    omitted: bool,
 }
 
 struct CaptureSinkState {
@@ -1033,6 +1328,8 @@ impl CaptureSink {
         }
     }
 }
+/// Collects one output pipe until EOF, or until `detach` fires because processes that survived
+/// forced termination still hold it; the pipe is then closed.
 async fn drain<R: AsyncRead + Unpin>(
     mut reader: R,
     output: Option<Arc<Mutex<PersistedOutput>>>,
@@ -1040,12 +1337,20 @@ async fn drain<R: AsyncRead + Unpin>(
     cancel: CancellationToken,
     harness: Arc<ResolvedHarness>,
     _activity: Option<crate::resource_activity::ResourceLease>,
-) -> String {
+    detach: CancellationToken,
+) -> Drained {
     let mut buffer = [0u8; 8192];
     let mut pending = Vec::new();
     let mut capture = Capture::default();
     loop {
-        let count = match reader.read(&mut buffer).await {
+        let read = tokio::select! {
+            read = reader.read(&mut buffer) => Some(read),
+            _ = detach.cancelled() => None,
+        };
+        let Some(read) = read else {
+            break;
+        };
+        let count = match read {
             Ok(0) => break,
             Ok(n) => n,
             Err(e) => {
@@ -1117,7 +1422,54 @@ async fn drain<R: AsyncRead + Unpin>(
     if !pending.is_empty() {
         capture.push(&String::from_utf8_lossy(&pending));
     }
-    capture.text()
+    Drained {
+        text: capture.text(&harness),
+        omitted: capture.omitted > 0,
+    }
+}
+/// How long a terminated command may take to exit and close its output before termination escalates.
+const TERMINATION_GRACE: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(5)
+};
+async fn settle<P: std::future::Future, E: std::future::Future>(
+    pipes: &mut std::pin::Pin<&mut P>,
+    exit: &mut std::pin::Pin<&mut E>,
+    output: &mut Option<P::Output>,
+    status: &mut Option<E::Output>,
+) {
+    // The shell is reaped only after its output closes, so its process group can still be signalled.
+    if output.is_none() {
+        *output = Some(pipes.as_mut().await);
+    }
+    if status.is_none() {
+        *status = Some(exit.as_mut().await);
+    }
+}
+/// Git for Windows' runtime silently truncates a long argument, so there the script goes in a file.
+fn script_in_file(ctx: &ToolContext) -> bool {
+    #[cfg(test)]
+    if ctx.env.get("AGENT_TEST_SCRIPT_FILE").is_some() {
+        return true;
+    }
+    let _ = ctx;
+    cfg!(windows)
+}
+fn script_argument(cmd: &mut Command, shell: &str, path: &Path) {
+    #[cfg(windows)]
+    {
+        // A batch file runs under cmd.exe, which needs the standard library's escaping instead.
+        let batch = Path::new(shell).extension().is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        });
+        if !batch {
+            cmd.raw_arg(windows_script_argument(path));
+            return;
+        }
+    }
+    let _ = shell;
+    cmd.arg(path);
 }
 struct RunResult {
     pid: u32,
@@ -1125,6 +1477,10 @@ struct RunResult {
     stdout: String,
     stderr: String,
     timed_out: bool,
+    aborted: bool,
+    started: Started,
+    unconfirmed: bool,
+    omitted: bool,
     state: Option<ShellState>,
     saved: Option<super::output::SaveState>,
 }
@@ -1159,7 +1515,18 @@ async fn run(
         cfg!(windows),
     );
     let shell = shell_path(&json!(environment))?;
+    if command.contains('\0') {
+        return Err(Error::from(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "nul byte found in provided data",
+        )));
+    }
     let background = output.is_some();
+    let mut start_file = StateFile::create_with(&temporary_directory, "start", PENDING.as_bytes()).map_err(|error| {
+        tracing::warn!(session_id=%ctx.session_id,tool_use_id=%ctx.tool_use_id,error=%error,
+            "shell private start record creation failed");
+        Error::from(error)
+    })?;
     let mut state_file = if background {
         None
     } else {
@@ -1173,14 +1540,30 @@ async fn run(
         command,
         &shell,
         &state,
+        Some(&start_file.path),
         state_file.as_ref().map(|file| file.path.as_path()),
         &ctx.harness,
         &mut environment,
     );
-    let mut cmd = Command::new(shell);
-    cmd.arg("-c")
-        .arg(script)
-        .current_dir(&state.cwd)
+    let mut script_file = if script_in_file(ctx) {
+        Some(
+            StateFile::create_with(&temporary_directory, "sh", script.as_bytes()).map_err(|error| {
+                tracing::warn!(session_id=%ctx.session_id,tool_use_id=%ctx.tool_use_id,error=%error,
+                    "shell private script file creation failed");
+                Error::from(error)
+            })?,
+        )
+    } else {
+        None
+    };
+    let mut cmd = Command::new(&shell);
+    match &script_file {
+        Some(file) => script_argument(&mut cmd, &shell, &file.path),
+        None => {
+            cmd.arg("-c").arg(&script);
+        }
+    }
+    cmd.current_dir(&state.cwd)
         .stdin(Stdio::null())
         .env_clear()
         .envs(&environment)
@@ -1218,6 +1601,7 @@ async fn run(
     if let Some(launch) = launch {
         let _ = launch.send(Ok(pid));
     }
+    let detach = CancellationToken::new();
     let stdout = crate::runtime::spawn(drain(
         stdout_pipe,
         output.clone(),
@@ -1225,6 +1609,7 @@ async fn run(
         cancel.clone(),
         ctx.harness.clone(),
         stdout_activity,
+        detach.clone(),
     ));
     let stderr = crate::runtime::spawn(drain(
         stderr_pipe,
@@ -1233,6 +1618,7 @@ async fn run(
         cancel.clone(),
         ctx.harness.clone(),
         stderr_activity,
+        detach.clone(),
     ));
     let mut timed_out = false;
     let mut aborted = false;
@@ -1242,34 +1628,57 @@ async fn run(
             None => std::future::pending().await,
         }
     };
-    let completion = async {
-        let output = tokio::join!(stdout, stderr);
-        let status = owned_process.wait().await;
-        (status, output)
+    let pipes = async { tokio::join!(stdout, stderr) };
+    tokio::pin!(pipes);
+    let exit = owned_process.wait();
+    tokio::pin!(exit);
+    let mut output = None;
+    let mut status = None;
+    let finished = tokio::select! {
+        _ = settle(&mut pipes, &mut exit, &mut output, &mut status) => true,
+        _ = cancel.cancelled() => { aborted = true; false },
+        _ = deadline => { timed_out = true; false },
     };
-    tokio::pin!(completion);
-    let result = tokio::select! {
-        result = &mut completion => Some(result),
-        _ = cancel.cancelled() => { aborted = true; None },
-        _ = deadline => { timed_out = true; None },
-    };
-    let (status, (stdout, stderr)) = match result {
-        Some(result) => result,
-        None => {
-            owned_process.terminate(background).await;
-            if background {
-                completion.await
-            } else {
-                match tokio::time::timeout(Duration::from_secs(5), &mut completion).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        owned_process.terminate(true).await;
-                        completion.await
-                    }
+    let mut unconfirmed = false;
+    if !finished {
+        owned_process.terminate(background).await;
+        let settled = tokio::time::timeout(
+            TERMINATION_GRACE,
+            settle(&mut pipes, &mut exit, &mut output, &mut status),
+        )
+        .await
+        .is_ok();
+        if !settled {
+            owned_process.terminate(true).await;
+            let settled = tokio::time::timeout(
+                TERMINATION_GRACE,
+                settle(&mut pipes, &mut exit, &mut output, &mut status),
+            )
+            .await
+            .is_ok();
+            if !settled {
+                unconfirmed = true;
+                tracing::warn!(session_id=%ctx.session_id,tool_use_id=%ctx.tool_use_id,pid,background,
+                    "command processes still running after forced termination");
+                detach.cancel();
+                if output.is_none() {
+                    output = Some(pipes.as_mut().await);
                 }
             }
         }
-    };
+    }
+    let (stdout, stderr) = output.expect("output is collected or detached");
+    let status = status.unwrap_or_else(|| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "process did not exit after forced termination",
+        ))
+    });
+    let omitted = [&stdout, &stderr]
+        .iter()
+        .any(|pipe| matches!(pipe, Ok(drained) if drained.omitted));
+    let stdout = stdout.map(|drained| drained.text);
+    let stderr = stderr.map(|drained| drained.text);
     let stdout = stdout.map_err(|e| {
         Error::template(
             "SHELL_CAPTURE",
@@ -1285,13 +1694,34 @@ async fn run(
             &[("error", e.to_string().into())]
         ))?
     );
-    let parsed = if let Some(file) = &mut state_file {
-        let parsed = read_state(&file.path).await;
+    if let Some(file) = &mut script_file {
         file.cleanup().await;
-        parsed
-    } else {
-        None
+    }
+    let started = read_start(&start_file.path).await;
+    start_file.cleanup().await;
+    let parsed = match &mut state_file {
+        Some(file) => {
+            let parsed = if started == Started::Yes {
+                read_state(&file.path).await
+            } else {
+                None
+            };
+            file.cleanup().await;
+            parsed
+        }
+        None => None,
     };
+    match started {
+        Started::No if !timed_out && !aborted => {
+            tracing::warn!(session_id=%ctx.session_id,tool_use_id=%ctx.tool_use_id,background,
+                script_chars=script.len(),"command not started: shell ended before reaching it")
+        }
+        Started::Unknown => {
+            tracing::warn!(session_id=%ctx.session_id,tool_use_id=%ctx.tool_use_id,background,
+                "command start unconfirmed: start record missing")
+        }
+        _ => {}
+    }
     let saved = match sink {
         Some(sink) => sink.finish().await,
         None => None,
@@ -1308,9 +1738,20 @@ async fn run(
         stdout,
         stderr,
         timed_out,
+        aborted,
+        started,
+        unconfirmed,
+        omitted,
         state: parsed,
         saved,
     })
+}
+/// Git for Windows' runtime rewrites its command line: unquoted braces and tildes are expanded and a
+/// doubled backslash collapses even inside quotes. A double-quoted forward-slash path passes through
+/// verbatim; Windows paths cannot contain a double quote.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_script_argument(path: &Path) -> String {
+    format!("\"{}\"", path.to_string_lossy().replace('\\', "/"))
 }
 fn stored_message(value: &Value) -> Message {
     serde_json::from_value::<Message>(value.clone())
@@ -1383,6 +1824,10 @@ fn fit_shell_text(
         .saturating_add(crate::js::utf16_len(output));
     if notice.is_empty() && fixed <= budget {
         return format!("{prefix}{output}{suffix}");
+    }
+    // Output that fits is shown once, followed by the notice, rather than split into overlapping halves.
+    if fixed.saturating_add(crate::js::utf16_len(notice)).saturating_add(1) <= budget {
+        return format!("{prefix}{output}\n{notice}{suffix}");
     }
     let reserve = crate::js::utf16_len(prefix)
         .saturating_add(crate::js::utf16_len(suffix))
@@ -1823,6 +2268,7 @@ impl ShellTools {
                 )),
             ))
         });
+        let before = start.clone();
         let running = run(
             command,
             start,
@@ -1847,12 +2293,10 @@ impl ShellTools {
         };
         match result {
             Ok(r) => {
+                let not_started = r.started == Started::No && !r.timed_out && !r.aborted;
+                let unknown = r.started == Started::Unknown && !r.timed_out && !r.aborted;
                 if let Some(next) = r.state {
-                    let mut state = self.state.lock().await;
-                    state.cwd = next.cwd;
-                    state.env.extend(next.env);
-                } else {
-                    self.state.lock().await.env.extend(extract_exports(command));
+                    apply_snapshot(&mut *self.state.lock().await, &before, next);
                 }
                 let mut output = r.stdout.trim_end_matches(['\r', '\n']).to_owned();
                 let stderr = crate::js::trim_js(&r.stderr);
@@ -1862,11 +2306,24 @@ impl ShellTools {
                     }
                     output.push_str(stderr);
                 }
-                if output.is_empty() {
+                if output.is_empty() && !not_started && !unknown {
                     output = harness.text(TextId::ToolsShellNoOutput).into();
                 }
                 let label = budget_label(&harness, self.result_budget, self.configured_budget);
-                let (prefix, suffix) = if r.timed_out {
+                let (prefix, suffix) = if r.unconfirmed {
+                    let rendered = if r.timed_out {
+                        harness.render(
+                            TextId::ToolsShellTimedOutUnconfirmed,
+                            &[("timeout", &timeout.to_string()), ("output", "\u{0}")],
+                        )
+                    } else {
+                        harness.render(TextId::ToolsShellStoppedUnconfirmed, &[("output", "\u{0}")])
+                    };
+                    let (prefix, suffix) = rendered
+                        .split_once('\u{0}')
+                        .expect("termination template carries one output slot");
+                    (prefix.to_owned(), suffix.to_owned())
+                } else if r.timed_out {
                     let rendered = harness.render(
                         TextId::ToolsShellTimedOut,
                         &[("timeout", &timeout.to_string()), ("output", "\u{0}")],
@@ -1874,6 +2331,19 @@ impl ShellTools {
                     let (prefix, suffix) = rendered
                         .split_once('\u{0}')
                         .expect("timeout template carries one output slot");
+                    (prefix.to_owned(), suffix.to_owned())
+                } else if not_started || unknown {
+                    let id = if not_started {
+                        TextId::ToolsShellNotStarted
+                    } else {
+                        TextId::ToolsShellUnconfirmed
+                    };
+                    let rendered =
+                        harness.render(id, &[("code", &r.code.to_string()), ("output", "\u{0}")]);
+                    let (prefix, suffix) = rendered
+                        .split_once('\u{0}')
+                        .expect("start template carries one output slot");
+                    let prefix = if output.is_empty() { prefix.trim_end() } else { prefix };
                     (prefix.to_owned(), suffix.to_owned())
                 } else if r.code == 0 {
                     (String::new(), String::new())
@@ -1890,7 +2360,7 @@ impl ShellTools {
                 let fixed = crate::js::utf16_len(&prefix)
                     .saturating_add(crate::js::utf16_len(&output))
                     .saturating_add(crate::js::utf16_len(&suffix));
-                let notice = if fixed > self.result_budget {
+                let notice = if fixed > self.result_budget || r.omitted {
                     saved_notice(r.saved.as_ref(), &label, &harness)
                 } else {
                     String::new()
@@ -1911,7 +2381,7 @@ impl ShellTools {
                         super::output::remove_saved(path).await;
                     }
                 }
-                let mut result = if r.code == 0 && !r.timed_out {
+                let mut result = if r.code == 0 && !r.timed_out && !not_started && !unknown {
                     success(text, None)
                 } else {
                     failure(text)
@@ -2077,17 +2547,38 @@ impl ShellTools {
                     } else {
                         json!(r.code)
                     };
+                    let settled = !task.cancel.is_cancelled() && !r.timed_out;
+                    let start_problem = match r.started {
+                        Started::No if settled => Some(TextId::ToolsShellTaskNotStarted),
+                        Started::Unknown if settled => Some(TextId::ToolsShellTaskUnconfirmed),
+                        _ => None,
+                    };
                     value["status"] = json!(if task.cancel.is_cancelled() {
                         "stopped"
-                    } else if r.code == 0 {
+                    } else if r.code == 0 && start_problem.is_none() {
                         "completed"
                     } else {
                         "failed"
                     });
+                    if let Some(id) = start_problem {
+                        value["error"] =
+                            json!(Message::template(id, &[("code", r.code.to_string().into())]));
+                    }
                     if r.timed_out {
                         value["error"] = json!(Message::template(
                             TextId::ToolsShellTaskTimedOut,
                             &[("timeout", timeout.unwrap_or(0).to_string().into())]
+                        ));
+                    }
+                    if r.unconfirmed {
+                        let reason = if value["error"].is_null() {
+                            Message::template(TextId::ToolsShellStopped, &[])
+                        } else {
+                            stored_message(&value["error"])
+                        };
+                        value["error"] = json!(Message::template(
+                            TextId::ToolsShellTaskTerminationUnconfirmed,
+                            &[("reason", reason)]
                         ));
                     }
                 }

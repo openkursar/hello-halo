@@ -76,6 +76,15 @@ describe('Bash native facade', () => {
     expect(result.isError).toBe(false);
     expect(result.content.trim()).toBe('hello123');
   });
+  it('runs later commands in full however many variables and command text are carried over', async () => {
+    const ctx = makeCtx();
+    const exports = Array.from({ length: 150 }, (_, index) => `export CARRIED_VARIABLE_${index}=value-${index}`).join('; ');
+    expect((await tool().execute({ command: exports }, ctx)).isError).toBe(false);
+    const padding = 'x'.repeat(20_000);
+    const result = await tool().execute({ command: `: ${padding}\nprintf '%s %s' "$CARRIED_VARIABLE_0 $CARRIED_VARIABLE_149" 'a\\\\b'` }, ctx);
+    expect(result.isError).toBe(false);
+    expect(result.content.trim()).toBe('value-0 value-149 a\\\\b');
+  });
   it('isolates state between different sessions', async () => {
     await tool().execute({ command: 'export ISOLATED_VAR=from_A' }, makeCtx());
     const result = await tool().execute({ command: 'echo "${ISOLATED_VAR:-not_set}"' }, makeCtx());

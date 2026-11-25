@@ -36,7 +36,7 @@ jobs:
         run: rustup toolchain install 1.90.0 --profile minimal
       - run: npm ci
       - run: npm run build
-      - run: npm test -- worker tools/mcp tools/bash tools/file-access.test.ts utils/windows-process-tree.test.ts --maxWorkers=2 --minWorkers=1
+      - run: npm test -- worker tools/mcp tools/bash tools/grep tools/read tools/file-access.test.ts tools/file-tools.test.ts utils/windows-process-tree.test.ts --maxWorkers=2 --minWorkers=1
       - run: node scripts/benchmark-workers.mjs --sessions=10 > worker-benchmark.json
       - uses: actions/upload-artifact@v7
         if: always()

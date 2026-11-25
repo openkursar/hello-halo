@@ -26,6 +26,12 @@
       "omitted"
     ]
   },
+  "tools.shell.capture_omitted": {
+    "text": "\n... [{omitted} characters of output omitted here] ...\n",
+    "slots": [
+      "omitted"
+    ]
+  },
   "tools.shell.output_truncated": {
     "text": "[Saved output reached the {byte_limit}-byte file limit. This file contains only the beginning of the output; later output was not saved here.]",
     "slots": [
@@ -93,6 +99,19 @@
       "output"
     ]
   },
+  "tools.shell.timed_out_unconfirmed": {
+    "text": "Command reached its {timeout}ms deadline, but not every process it started could be confirmed stopped. Their later output is unavailable and they may still be changing files; check the command's effects before running it again.\n{output}",
+    "slots": [
+      "timeout",
+      "output"
+    ]
+  },
+  "tools.shell.stopped_unconfirmed": {
+    "text": "Command was stopped, but not every process it started could be confirmed stopped. Their later output is unavailable and they may still be changing files; check the command's effects before running it again.\n{output}",
+    "slots": [
+      "output"
+    ]
+  },
   "tools.shell.recovery": {
     "text": "Inspect any saved command output. If repeating the command is safe, filter its output or redirect it to a file.",
     "slots": []
@@ -108,6 +127,20 @@
     "text": "Command exited with code 127\n{error}",
     "slots": [
       "error"
+    ]
+  },
+  "tools.shell.not_started": {
+    "text": "Command not started: the shell ended with code {code} before reaching it, so no part of the command ran.\n{output}",
+    "slots": [
+      "code",
+      "output"
+    ]
+  },
+  "tools.shell.unconfirmed": {
+    "text": "Command result unconfirmed: its start could not be verified, so whether it ran is unknown (shell exit code {code}). Check its effects before running it again.\n{output}",
+    "slots": [
+      "code",
+      "output"
     ]
   },
   "tools.shell.registry_closed": {
@@ -132,6 +165,24 @@
     "text": "Timed out after {timeout}ms",
     "slots": [
       "timeout"
+    ]
+  },
+  "tools.shell.task_not_started": {
+    "text": "Not started: the shell ended with code {code} before reaching the command, so no part of it ran",
+    "slots": [
+      "code"
+    ]
+  },
+  "tools.shell.task_unconfirmed": {
+    "text": "Unconfirmed: its start could not be verified, so whether the command ran is unknown (shell exit code {code}); check its effects before running it again",
+    "slots": [
+      "code"
+    ]
+  },
+  "tools.shell.task_termination_unconfirmed": {
+    "text": "{reason}; processes it started could not all be confirmed stopped, so later output is not captured and they may still be changing files",
+    "slots": [
+      "reason"
     ]
   },
   "tools.shell.output_persistence_failed": {
@@ -232,6 +283,10 @@
   },
   "tools.shell.wrapper_cwd_retained": {
     "text": "agent-sdk: current directory is unavailable; retaining previous directory state",
+    "slots": []
+  },
+  "tools.shell.wrapper_start_unrecorded": {
+    "text": "agent-sdk: the command start could not be recorded; command not started",
     "slots": []
   },
   "tools.shell.services_required": {
