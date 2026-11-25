@@ -77,7 +77,10 @@ function resultText(messages: SDKMessage[]): string {
   throw new Error('No tool result');
 }
 function backendDetails(messages: SDKMessage[]): { pid: number; indexes: number } {
-  return JSON.parse(resultText(messages).split('\n').find(line => line.startsWith('{'))!);
+  const text = resultText(messages);
+  const details = text.split('\n').find(line => line.startsWith('{'));
+  if (!details) throw new Error(`CodeSearch did not return fixture details:\n${text}`);
+  return JSON.parse(details);
 }
 async function eventually(check: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 4000;

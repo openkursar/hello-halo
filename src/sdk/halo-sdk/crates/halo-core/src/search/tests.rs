@@ -8,6 +8,34 @@ async fn bridge_owned_errors_render_late_and_external_messages_remain_data(){
     std::fs::write(&module,"export async function createZvecGrep(){throw new Error('The configured module does not expose createZvecGrep.');}\n").unwrap();let external=service.search(request,&CancellationToken::new()).await.unwrap_err();assert!(external.harness.is_none());assert_eq!(external.render_for(&text.for_model("second")),"The configured module does not expose createZvecGrep.");
     service.dispose().await;pool.dispose().await;std::fs::remove_dir_all(base).unwrap();
 }
+#[tokio::test]
+async fn backend_exit_reports_only_the_bounded_redacted_stderr_tail() {
+    let base = std::env::temp_dir().join(format!("native-search-stderr-{}", uuid::Uuid::new_v4()));
+    let root = base.join("workspace");
+    let cache = base.join("cache");
+    std::fs::create_dir_all(&root).unwrap();
+    let module = base.join("backend.cjs");
+    std::fs::write(&module, r#"
+const text = 'old-prefix\n' + 'x'.repeat(64 * 1024) + '\nbackend fixture exit\nBearer very-long-fixture-token-12345\n';
+process.stderr.write(text, () => process.exit(23));
+"#).unwrap();
+    let pool = Arc::new(CodeSearchPool::new());
+    let options = json!({"backend":"zvec-grep","nodePath":node(),"modulePath":module,"workerPath":module,"cachePath":cache});
+    let service = CodeSearchService::new_with_pool(options, pool.clone()).unwrap();
+    let result = service.search(json!({"root":root,"query":"fixture"}), &CancellationToken::new()).await;
+    service.dispose().await;
+    pool.dispose().await;
+    std::fs::remove_dir_all(base).unwrap();
+    let error = result.unwrap_err();
+    let tail = error.details.as_ref().unwrap()["stderrTail"].as_str().unwrap();
+    assert_eq!(error.code, "backend");
+    assert!(error.message.contains("before completing its request (23)"));
+    assert!(error.message.contains("backend fixture exit"));
+    assert!(tail.len() <= STDERR_TAIL_BYTES);
+    assert!(!tail.contains("old-prefix"));
+    assert!(!error.message.contains("very-long-fixture-token-12345"));
+}
+
 #[test]
 fn nullable_timeouts_keep_defaults_and_reject_other_invalid_numbers() {
     let base = json!({"backend":"zvec-grep","nodePath":"/node","modulePath":"/backend","cachePath":"/cache"});
