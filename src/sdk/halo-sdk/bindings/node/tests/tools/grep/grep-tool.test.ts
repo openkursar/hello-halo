@@ -25,25 +25,176 @@ afterEach(async () => {
 });
 
 async function executable(body: string, mode = 0o755): Promise<ToolContext> {
-  const path = join(root, 'search fixture');
-  await writeFile(path, `#!/bin/sh\n${body}\n`);
-  await chmod(path, mode);
+  const script = join(root, 'search fixture.cjs');
+  await writeFile(script, `#!/usr/bin/env node\n${body}\n`);
+  let path = script;
+  if (process.platform === 'win32') {
+    path = join(root, 'search fixture.cmd');
+    await writeFile(path, `@echo off\r\n"${process.execPath}" "%~dp0search fixture.cjs"\r\n`);
+  } else {
+    await chmod(script, mode);
+  }
   const ctx = context();
   ctx.env = { AGENT_RIPGREP_PATH: path };
   return ctx;
 }
 
 describe('Grep native facade', () => {
-  it('treats successful empty stdout as no matches', async () => {
-    const ctx = await executable('exit 0');
-    const result = await tool().execute({ pattern: 'empty' }, ctx);
+  it('reports exit zero without stdout without claiming the search found nothing', async () => {
+    const result = await tool().execute({ pattern: 'empty' }, await executable(''));
     expect(result.isError).toBe(false);
-    expect(result.content).toContain('No matches found');
-    expect(result.content).toContain('empty');
+    expect(result.content).toContain('reported a match');
+    expect(result.content).not.toContain('No matches');
+  });
+
+  it('does not ignore filters when the search path is an explicit file', async () => {
+    const input = { pattern: 'needle', path: 'src/a.ts' };
+    const typed = await tool().execute({ ...input, type: 'ps' }, context());
+    expect(typed.isError).toBe(true);
+    expect(typed.content).toContain('directory');
+    for (const glob of ['*.ps1', '!src']) {
+      const excluded = await tool().execute({ ...input, glob }, context());
+      expect(excluded.content).toContain('not searched');
+    }
+    for (const glob of ['*.ts', 'src/*.ts']) {
+      const included = await tool().execute({ ...input, glob }, context());
+      expect(included).toMatchObject({ isError: false, content: join(root, 'src', 'a.ts') });
+    }
+  });
+
+  it('keeps a successful whitespace-only match distinct from no matches', async () => {
+    await writeFile(join(root, 'spaces.txt'), '   \n');
+    const result = await tool().execute({ pattern: '^ +$', path: 'spaces.txt', output_mode: 'content', '-n': false }, context());
+    expect(result).toMatchObject({ isError: false, content: '   ' });
+    await writeFile(join(root, 'blank.txt'), '\n');
+    const blank = await tool().execute({ pattern: '^$', path: 'blank.txt', output_mode: 'content', '-n': false }, context());
+    expect(blank).toMatchObject({ isError: false, content: 'The matching line is empty.' });
+  });
+
+  it('ignores the user ripgrep configuration', async () => {
+    const config = join(root, 'rg.conf');
+    await writeFile(config, '--quiet\n');
+    const ctx = context();
+    ctx.env.RIPGREP_CONFIG_PATH = config;
+    const result = await tool().execute({ pattern: 'needle' }, ctx);
+    expect(result.isError).toBe(false);
+    expect(result.content).toContain(join(root, 'src', 'a.ts'));
+  });
+
+  it('matches the end of a line in both CRLF and LF files', async () => {
+    for (const [name, ending] of [['dos.txt', '\r\n'], ['unix.txt', '\n']]) {
+      await writeFile(join(root, name), `anchored${ending}`);
+    }
+    const result = await tool().execute({ pattern: '^anchored$' }, context());
+    expect(result.isError).toBe(false);
+    expect(result.content.split('\n').sort()).toEqual(['dos.txt', 'unix.txt'].map(name => join(root, name)));
+  });
+
+  it.each(['needle\\r?$', '\\r$', '[\\r]', '\\x0D', '\\x{d}', '\\u000d', '\\U0000000D', '\r'])('preserves explicit CR in %j', async pattern => {
+    await writeFile(join(root, 'dos.txt'), 'needle\r\n');
+    for (const multiline of [false, true]) {
+      const result = await tool().execute({ pattern, multiline, path: 'dos.txt' }, context());
+      expect(result).toMatchObject({ isError: false, content: join(root, 'dos.txt') });
+    }
+  });
+
+  it('treats a lone CR as data for dots, including before a CRLF line anchor', async () => {
+    await writeFile(join(root, 'mixed.txt'), 'foo\rbar\r\n');
+    for (const pattern of ['foo.bar', '^foo.bar$']) {
+      const result = await tool().execute({ pattern, path: 'mixed.txt' }, context());
+      expect(result).toMatchObject({ isError: false, content: join(root, 'mixed.txt') });
+    }
+  });
+
+  it('changes line-end assertions without changing caret, literal dollar, or dot semantics', async () => {
+    await writeFile(join(root, 'mixed.txt'), 'foo\rbar\n$1\r\n');
+    for (const pattern of ['[$]1$', '\\$1$']) {
+      const result = await tool().execute({ pattern, path: 'mixed.txt' }, context());
+      expect(result).toMatchObject({ isError: false, content: join(root, 'mixed.txt') });
+    }
+    const unrelated = await tool().execute({ pattern: '^bar$', path: 'mixed.txt' }, context());
+    expect(unrelated.content).toContain('No matches found');
+  });
+
+  it('keeps real anchors after x-mode comments and reports invalid patterns', async () => {
+    const path = join(root, 'comments.txt');
+    await writeFile(path, 'needle\r\nneedle#\r\n');
+    for (const pattern of ['(?x)^needle # [ \\r $\n $', '(?x:^needle # [ \\r $\n)#$']) {
+      expect(await tool().execute({ pattern, path }, context())).toMatchObject({ isError: false, content: path });
+    }
+    const invalid = await tool().execute({ pattern: '(?x)needle$(', path }, context());
+    expect(invalid.isError).toBe(true);
+    expect(invalid.content).toContain('rg exit code 2');
+  });
+
+  it('does not invent a relative directory for a file outside the search cwd', async () => {
+    const file = join(root, 'src', 'a.ts');
+    const ctx = { ...context(), cwd: join(root, 'neighbour') };
+    await mkdir(ctx.cwd);
+    const result = await tool().execute({ pattern: 'needle', path: file, glob: 'src/*.ts' }, ctx);
+    expect(result).toMatchObject({ isError: false, content: file });
+  });
+
+  it('combines a native file type with an exclusion glob', async () => {
+    await writeFile(join(root, 'src', 'a.test.ts'), 'needle');
+    await writeFile(join(root, 'also.txt'), 'needle');
+    const result = await tool().execute({ pattern: 'needle', type: 'ts', glob: '!*.test.ts' }, context());
+    expect(result.isError).toBe(false);
+    expect(result.content.split('\n').sort()).toEqual(['a.ts', 'b.tsx'].map(name => join(root, 'src', name)));
+  });
+
+  it('filters by native file types and rejects unknown types', async () => {
+    const ps = join(root, 'tool.ps1');
+    await writeFile(ps, 'needle');
+    const result = await tool().execute({ pattern: 'needle', type: 'ps' }, context());
+    expect(result).toMatchObject({ isError: false, content: ps });
+    const invalid = await tool().execute({ pattern: 'needle', type: 'unknownhalotype' }, context());
+    expect(invalid.isError).toBe(true);
+    expect(invalid.content).toContain('unknownhalotype');
+  });
+
+  it('refuses a type and glob together instead of widening the search', async () => {
+    const result = await tool().execute({ pattern: 'needle', type: 'ts', glob: '*.txt' }, context());
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/type.*glob/i);
+    expect(result.content).not.toContain('a.ts');
+  });
+
+  it.runIf(process.platform === 'win32')('accepts Windows path separators in a glob', async () => {
+    const result = await tool().execute({ pattern: 'needle', glob: 'src\\*.ts' }, context());
+    expect(result).toMatchObject({ isError: false, content: join(root, 'src', 'a.ts') });
+  });
+
+  it('keeps matches and the stderr reason when rg exits 2', async () => {
+    const ctx = await executable("console.log('found.ts'); console.error('permission denied'); process.exitCode = 2;");
+    const result = await tool().execute({ pattern: 'needle' }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/^Incomplete search:.*permission denied\n\nfound\.ts$/);
+  });
+
+  it.each([false, true])('bounds error details while retaining matches and an exact omitted count (matches=%s)', async matches => {
+    const ctx = await executable(`
+      if (${matches}) console.log('first-hit.ts');
+      for (let i = 0; i < 800; i++) console.error('unreadable-' + i + ': ' + 'x'.repeat(i === 0 ? 90_000 : 200));
+      process.exitCode = 2;
+    `);
+    const result = await tool().execute({ pattern: 'needle' }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content.length).toBeLessThan(5_000);
+    expect(result.content).toContain('unreadable-0:');
+    expect(result.content).toContain('unreadable-2:');
+    expect(result.content).toContain('+797 more');
+    expect(result.content).not.toContain('unreadable-3:');
+    if (matches) expect(result.content).toContain('first-hit.ts');
+  });
+
+  it('decodes a UTF-8 path across pipe writes', async () => {
+    const ctx = await executable("process.stdout.write(Buffer.from([0xe4])); setTimeout(() => process.stdout.write(Buffer.concat([Buffer.from([0xb8, 0xad]), Buffer.from('.txt\\n')])), 100);");
+    expect(await tool().execute({ pattern: 'needle' }, ctx)).toMatchObject({ isError: false, content: '中.txt' });
   });
 
   it('does not confuse exit code 12 with the no-match status', async () => {
-    const ctx = await executable("printf 'fixture failed' >&2; exit 12");
+    const ctx = await executable("console.error('fixture failed'); process.exitCode = 12;");
     const result = await tool().execute({ pattern: 'needle' }, ctx);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('exit code 12');
@@ -52,7 +203,7 @@ describe('Grep native facade', () => {
   });
 
   it('does not confuse not-found stderr with executable startup failure', async () => {
-    const ctx = await executable("printf 'search input not found: missing-file' >&2; exit 2");
+    const ctx = await executable("console.error('search input not found: missing-file'); process.exitCode = 2;");
     const result = await tool().execute({ pattern: 'needle' }, ctx);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('exit code 2');
@@ -61,8 +212,8 @@ describe('Grep native facade', () => {
     expect(result.content).not.toContain('not installed');
   });
 
-  it('keeps nonmissing startup permission errors distinct from executable absence', async () => {
-    const ctx = await executable('exit 0', 0o644);
+  it.skipIf(process.platform === 'win32')('keeps POSIX startup permission errors distinct from executable absence', async () => {
+    const ctx = await executable('', 0o644);
     const result = await tool().execute({ pattern: 'private-pattern' }, ctx);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Grep failed');

@@ -397,6 +397,17 @@ impl Matcher {
             empty: pattern.is_empty(),
         })
     }
+    pub(super) fn can_descend(&self, depth: usize, name: &str) -> bool {
+        self.patterns.iter().any(|pattern| {
+            if pattern[..depth.min(pattern.len())].iter().any(|part| matches!(part, Component::Globstar)) {
+                return true;
+            }
+            pattern.get(depth).is_some_and(|part| {
+                matches!(part, Component::Globstar) || (depth + 1 < pattern.len() && part.matches(name))
+            })
+        })
+    }
+
     pub(super) fn matches(&self, value: &str) -> bool {
         if self.empty {
             return value.is_empty();
@@ -472,6 +483,17 @@ impl Matcher {
 mod tests {
     use super::*;
     use serde_json::Value;
+    #[test]
+    fn pruning_preserves_every_matched_paths_ancestors() {
+        let matcher = Matcher::new("src/{web,lib}/**/*.ts", true).unwrap();
+        assert!(!matcher.can_descend(0, "other"));
+        assert!(matcher.can_descend(0, "SRC"));
+        assert!(!matcher.can_descend(1, "other"));
+        assert!(matcher.can_descend(1, "Web"));
+        assert!(matcher.can_descend(2, "any"));
+        assert!(!Matcher::new("safe.txt", false).unwrap().can_descend(0, "private"));
+    }
+
     #[test]
     fn matches_installed_minimatch_flags_across_syntax_and_platforms() {
         let fixture: Value =

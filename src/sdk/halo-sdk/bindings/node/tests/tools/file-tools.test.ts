@@ -578,6 +578,40 @@ describe('GlobTool — pattern matching', () => {
     expect(result.content).toMatch(/no files matched/i);
   });
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('retains matches and reports unreadable directories, but fails for an unreadable root', async () => {
+    const blocked = path.join(tmpDir, 'blocked');
+    await fs.mkdir(blocked);
+    const visible = path.join(tmpDir, 'safe.txt');
+    await fs.writeFile(visible, '');
+    await fs.chmod(blocked, 0);
+    try {
+      const result = await tool.execute({ pattern: '**/*.txt' }, makeCtx(tmpDir));
+      expect(result.isError).toBe(false);
+      expect(result.content).toContain(visible);
+      expect(result.content).toMatch(/directories[^\n]*1|1 director/i);
+      const empty = await tool.execute({ pattern: '**/*.none' }, makeCtx(tmpDir));
+      expect(empty.content).toMatch(/directories[^\n]*1|1 director/i);
+      expect(empty.content).toContain('No files matched in the readable directories');
+      expect(empty.content).toContain(blocked);
+      expect(result.content).toContain(blocked);
+      const root = await tool.execute({ pattern: '**/*.txt', path: blocked }, makeCtx(tmpDir));
+      expect(root.isError).toBe(true);
+      const pruned = await tool.execute({ pattern: 'safe.txt' }, makeCtx(tmpDir));
+      expect(pruned.content.trim()).toBe(visible);
+    } finally { await fs.chmod(blocked, 0o700); }
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('samples only the first unreadable directories and counts every skipped directory', async () => {
+    const paths = ['blocked-a', 'blocked-b', 'blocked-c', 'blocked-d'].map(name => path.join(tmpDir, name));
+    try {
+      for (const dir of paths) { await fs.mkdir(dir); await fs.chmod(dir, 0); }
+      const result = await tool.execute({ pattern: '**/*.none' }, makeCtx(tmpDir));
+      expect(result.content).toContain('Directories not fully read: 4');
+      for (const dir of paths.slice(0, 3)) expect(result.content).toContain(dir);
+      expect(result.content).not.toContain(paths[3]);
+    } finally { for (const dir of paths) await fs.chmod(dir, 0o700); }
+  });
+
   it('matches files by extension', async () => {
     await fs.writeFile(path.join(tmpDir, 'a.ts'), '', 'utf-8');
     await fs.writeFile(path.join(tmpDir, 'b.ts'), '', 'utf-8');

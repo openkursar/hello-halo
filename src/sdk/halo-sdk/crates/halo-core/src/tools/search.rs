@@ -1,8 +1,79 @@
 use super::{failure, file, success, ToolContext};
 use crate::harness::TextId;
 use serde_json::Value;
-use std::process::Stdio;
-use tokio::{io::AsyncReadExt, process::Command};
+use std::{borrow::Cow, path::Path, process::Stdio};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt},
+    process::Command,
+};
+
+const ERROR_EXAMPLES: usize = 3;
+const ERROR_LINE_BYTES: usize = 1024;
+
+#[derive(Default)]
+struct SearchErrors {
+    total: usize,
+    examples: Vec<String>,
+}
+
+impl SearchErrors {
+    fn record(&mut self, describe: impl FnOnce() -> String) {
+        self.total += 1;
+        if self.examples.len() < ERROR_EXAMPLES {
+            self.examples.push(describe());
+        }
+    }
+
+    async fn stderr(mut source: impl AsyncRead + Unpin) -> Self {
+        let mut errors = Self::default();
+        let mut line = Vec::new();
+        let mut continued = false;
+        let mut buffer = [0; 8192];
+        loop {
+            let read = match source.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(error) => {
+                    tracing::warn!(error=%error, "Content search stderr could not be read");
+                    break;
+                }
+            };
+            for part in buffer[..read].split_inclusive(|&b| b == b'\n') {
+                let terminated = part.ends_with(b"\n");
+                let content = if terminated { &part[..part.len() - 1] } else { part };
+                if errors.examples.len() < ERROR_EXAMPLES {
+                    let take = content.len().min(ERROR_LINE_BYTES + 1 - line.len());
+                    line.extend_from_slice(&content[..take]);
+                }
+                continued = !terminated;
+                if terminated {
+                    errors.record(|| diagnostic_line(&line));
+                    line.clear();
+                }
+            }
+        }
+        if continued { errors.record(|| diagnostic_line(&line)); }
+        errors
+    }
+
+    fn grep_summary(&self, harness: &crate::harness::ResolvedHarness) -> String {
+        let mut text = self.examples.join("\n");
+        let omitted = self.total - self.examples.len();
+        if omitted > 0 {
+            text.push_str(&harness.render(TextId::ToolsGrepMoreErrors, &[("count", &omitted.to_string())]));
+        }
+        text
+    }
+}
+
+fn diagnostic_line(line: &[u8]) -> String {
+    if line.len() <= ERROR_LINE_BYTES {
+        String::from_utf8_lossy(line.strip_suffix(b"\r").unwrap_or(line)).into_owned()
+    } else {
+        format!("{}…", String::from_utf8_lossy(&line[..ERROR_LINE_BYTES]))
+    }
+}
+
 pub async fn glob(input: &Value, ctx: &ToolContext, denials: &[std::path::PathBuf]) -> Value {
     let harness = &ctx.harness;
     let Some(pattern) = input["pattern"].as_str().filter(|s| !s.is_empty()) else {
@@ -55,9 +126,10 @@ pub async fn glob(input: &Value, ctx: &ToolContext, denials: &[std::path::PathBu
     } else {
         file::real_path(&base)
     };
-    let mut pending = vec![(base.clone(), real_base, true)];
+    let mut pending = vec![(base.clone(), real_base, true, 0)];
     let mut entries = Vec::new();
-    while let Some((path, real_path, directory)) = pending.pop() {
+    let mut unreadable = SearchErrors::default();
+    while let Some((path, real_path, directory, depth)) = pending.pop() {
         if ctx.cancellation.is_cancelled() {
             return failure(harness.text(TextId::ToolsGlobAborted));
         }
@@ -67,6 +139,10 @@ pub async fn glob(input: &Value, ctx: &ToolContext, denials: &[std::path::PathBu
         if directory {
             let mut reader = match tokio::fs::read_dir(&path).await {
                 Ok(reader) => reader,
+                Err(_) if depth > 0 => {
+                    unreadable.record(|| diagnostic_line(path.to_string_lossy().as_bytes()));
+                    continue;
+                }
                 Err(error) => {
                     return failure(
                         harness.render(TextId::ToolsGlobFailed, &[("error", &error.to_string())]),
@@ -78,6 +154,10 @@ pub async fn glob(input: &Value, ctx: &ToolContext, denials: &[std::path::PathBu
                 match reader.next_entry().await {
                     Ok(Some(entry)) => children.push(entry),
                     Ok(None) => break,
+                    Err(_) if depth > 0 => {
+                        unreadable.record(|| diagnostic_line(path.to_string_lossy().as_bytes()));
+                        break;
+                    }
                     Err(error) => {
                         return failure(
                             harness
@@ -96,10 +176,13 @@ pub async fn glob(input: &Value, ctx: &ToolContext, denials: &[std::path::PathBu
                         continue;
                     }
                 };
-                if kind.is_dir() && !skip.contains(&name.to_string_lossy().as_ref()) {
-                    pending.push((entry.path(), real_path.join(&name), true));
+                if kind.is_dir() {
+                    let display = name.to_string_lossy();
+                    if !skip.contains(&display.as_ref()) && matcher.can_descend(depth, &display) {
+                        pending.push((entry.path(), real_path.join(&name), true, depth + 1));
+                    }
                 } else if kind.is_file() {
-                    pending.push((entry.path(), real_path.join(&name), false));
+                    pending.push((entry.path(), real_path.join(&name), false, depth + 1));
                 }
             }
         } else if matcher.matches(&path.strip_prefix(&base).unwrap_or(&path).to_string_lossy()) {
@@ -109,7 +192,7 @@ pub async fn glob(input: &Value, ctx: &ToolContext, denials: &[std::path::PathBu
             }
         }
     }
-    if entries.is_empty() {
+    if entries.is_empty() && unreadable.total == 0 {
         return success(
             harness.render(
                 TextId::ToolsGlobNoFiles,
@@ -133,8 +216,105 @@ pub async fn glob(input: &Value, ctx: &ToolContext, denials: &[std::path::PathBu
             ],
         ));
     }
+    if unreadable.total > 0 {
+        tracing::warn!(directories = unreadable.total, "Glob could not read all directories");
+        if entries.is_empty() {
+            output.push_str(harness.text(TextId::ToolsGlobNoReadableMatches));
+            output.push('\n');
+        }
+        output.push_str(&harness.render(TextId::ToolsGlobPartial, &[
+            ("count", &unreadable.total.to_string()), ("paths", &unreadable.examples.join("\n")),
+        ]));
+    }
     success(output, None)
 }
+
+fn grep_pattern(pattern: &str) -> Cow<'_, str> {
+    if !pattern.contains('$') { return pattern.into(); }
+    static CARRIAGE_RETURN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)^\\(?:r|x0d|u000d|u0000000d|[xu]\{0*d\})").unwrap()
+    });
+    // Only change line-end assertions; the global --crlf flag also changes dot and literal CR matches.
+    let mut result = String::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut extended = false;
+    let mut groups = Vec::new();
+    let mut chars = pattern.char_indices();
+    while let Some((index, character)) = chars.next() {
+        match character {
+            '#' if extended => { chars.by_ref().find(|(_, c)| *c == '\n'); }
+            '\r' if !extended => return pattern.into(),
+            '\\' => {
+                if CARRIAGE_RETURN.is_match(&pattern[index..]) { return pattern.into(); }
+                chars.next();
+            }
+            '(' if depth == 0 => {
+                let previous = extended;
+                let mut flags = chars.clone();
+                let mut standalone = false;
+                if matches!(flags.next(), Some((_, '?'))) {
+                    let mut enabled = true;
+                    let mut next = extended;
+                    for (_, flag) in flags.by_ref() {
+                        match flag {
+                            'x' => next = enabled,
+                            '-' => enabled = false,
+                            'i' | 'm' | 's' | 'R' | 'U' | 'u' => {}
+                            ':' | ')' => {
+                                extended = next;
+                                standalone = flag == ')';
+                                chars = flags;
+                                break;
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+                if !standalone { groups.push(previous); }
+            }
+            ')' if depth == 0 => extended = groups.pop().unwrap_or(false),
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            '$' if depth == 0 => {
+                result.push_str(&pattern[start..index]);
+                result.push_str("(?R:$)");
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if start == 0 { return pattern.into(); }
+    result.push_str(&pattern[start..]);
+    result.into()
+}
+
+fn grep_glob(pattern: &str, windows: bool) -> Cow<'_, str> {
+    if windows && pattern.contains('\\') {
+        pattern.replace('\\', "/").into()
+    } else {
+        pattern.into()
+    }
+}
+
+fn grep_file_matches(glob: &str, relative: &Path) -> Result<bool, globset::Error> {
+    let (exclude, glob) = glob.strip_prefix('!').map_or((false, glob), |glob| (true, glob));
+    let directories_only = glob.ends_with('/');
+    let anchored = glob.trim_end_matches('/').contains('/');
+    let matcher = globset::GlobBuilder::new(glob.trim_matches('/'))
+        .literal_separator(true)
+        .backslash_escape(true)
+        .build()?
+        .compile_matcher();
+    let matches = |path: &Path| {
+        let candidate = if anchored { path } else { Path::new(path.file_name().unwrap_or_default()) };
+        matcher.is_match(candidate)
+    };
+    let matched = !directories_only && matches(relative);
+    let excluded_parent = exclude && relative.ancestors().skip(1).any(matches);
+    Ok((matched || excluded_parent) != exclude)
+}
+
 pub async fn grep(
     input: &Value,
     ctx: &ToolContext,
@@ -161,6 +341,7 @@ pub async fn grep(
         .filter(|path| std::path::Path::new(path).is_absolute())
         .unwrap_or("rg");
     let mut cmd = Command::new(executable);
+    cmd.arg("--no-config");
     let mode = input["output_mode"]
         .as_str()
         .filter(|mode| !mode.is_empty())
@@ -192,31 +373,42 @@ pub async fn grep(
             }
         }
     }
-    if let Some(kind) = input["type"].as_str() {
-        let normalized = kind.to_lowercase();
-        let kinds = match normalized.as_str() {
-            "js" => vec!["js", "jsx", "mjs", "cjs"],
-            "ts" => vec!["ts", "tsx", "mts", "cts"],
-            "py" | "python" => vec!["py", "pyi"],
-            "rust" | "rs" => vec!["rs"],
-            "sh" | "shell" | "bash" => vec!["sh", "bash", "zsh"],
-            "yaml" | "yml" => vec!["yaml", "yml"],
-            "md" | "markdown" => vec!["md", "markdown"],
-            "c" => vec!["c", "h"],
-            "cpp" => vec!["cpp", "hpp", "cc", "hh", "cxx"],
-            "rb" | "ruby" => vec!["rb"],
-            "kt" | "kotlin" => vec!["kt", "kts"],
-            "css" => vec!["css", "scss", "sass", "less"],
-            "html" => vec!["html", "htm"],
-            "go" | "java" | "php" | "swift" | "json" | "toml" | "xml" => vec![normalized.as_str()],
-            _ => vec![],
-        };
-        for ext in kinds {
-            cmd.args(["--glob", &format!("*.{ext}")]);
-        }
+    let kind = input["type"].as_str().filter(|value| !value.is_empty());
+    let glob = input["glob"].as_str().filter(|value| !value.is_empty());
+    if kind.is_some() && glob.is_some_and(|glob| !glob.starts_with('!')) {
+        return failure(harness.text(TextId::ToolsGrepCombinedFilters));
     }
-    if let Some(glob) = input["glob"].as_str().filter(|glob| !glob.is_empty()) {
-        cmd.args(["--glob", glob]);
+    if kind.is_some() && path.is_file() {
+        return failure(harness.text(TextId::ToolsGrepSingleFileFilter));
+    }
+    if let Some(kind) = kind {
+        let normalized = kind.to_lowercase();
+        let kind = match normalized.as_str() {
+            "rs" => "rust",
+            "shell" | "bash" => "sh",
+            "yml" => "yaml",
+            "rb" => "ruby",
+            "kt" => "kotlin",
+            other => other,
+        };
+        if kind == "css" {
+            cmd.args(["--type-add", "css:*.sass", "--type-add", "css:*.less"]);
+        }
+        cmd.args(["--type", kind]);
+    }
+    if let Some(glob) = glob {
+        let glob = grep_glob(glob, cfg!(windows));
+        // rg bypasses file filters for an explicit file. Only precheck a known relative path.
+        if let Some(relative) = path.strip_prefix(&ctx.cwd).ok().filter(|_| path.is_file()) {
+            match grep_file_matches(&glob, relative) {
+                Ok(false) => return success(harness.text(TextId::ToolsGrepFileExcluded), None),
+                Err(error) => return failure(harness.render(
+                    TextId::ToolsGrepFailed, &[("error", &error.to_string())],
+                )),
+                Ok(true) => {}
+            }
+        }
+        cmd.arg("--glob").arg(glob.as_ref());
     }
     let root = file::real_path(&path);
     for denied in denials.iter().filter(|_| root.is_dir()) {
@@ -242,7 +434,7 @@ pub async fn grep(
     }
     // rg reads globs relative to its working directory: start it where the search starts.
     let scope = SearchScope::new(&path);
-    cmd.arg("--").arg(pattern).arg(scope.argument());
+    cmd.arg("--").arg(grep_pattern(pattern).as_ref()).arg(scope.argument());
     if let Some(directory) = scope.directory() {
         cmd.current_dir(directory);
     }
@@ -266,17 +458,11 @@ pub async fn grep(
         }
     };
     let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
     let owned_process = processes.track(child, false);
-    let errors = crate::runtime::spawn(async move {
-        let mut bytes = Vec::new();
-        if let Err(error) = stderr.read_to_end(&mut bytes).await {
-            tracing::warn!(error=%error,"Content search stderr could not be read");
-        }
-        bytes
-    });
-    let mut output = String::new();
-    let mut characters = 0;
+    let errors = crate::runtime::spawn(SearchErrors::stderr(stderr));
+    let mut bytes = Vec::new();
+    let mut next_size_check = 100_000;
     let mut early = false;
     let mut buffer = [0u8; 65536];
     loop {
@@ -302,25 +488,26 @@ pub async fn grep(
         if count == 0 {
             break;
         }
-        let chunk = String::from_utf8_lossy(&buffer[..count]);
-        characters += chunk.encode_utf16().count();
-        output.push_str(&chunk);
-        if characters > 100000 {
-            early = true;
-            owned_process.terminate(false).await;
+        bytes.extend_from_slice(&buffer[..count]);
+        if bytes.len() > next_size_check {
+            let units = String::from_utf8_lossy(&bytes).encode_utf16().count();
+            if units > 100_000 {
+                early = true;
+                owned_process.terminate(false).await;
+                break;
+            }
+            next_size_check = bytes.len() + (100_000 - units);
         }
     }
+    drop(stdout);
     let status = owned_process.wait().await;
     let errors = errors.await.unwrap_or_default();
-    if !early
-        && !status
-            .as_ref()
-            .is_ok_and(|status| matches!(status.code(), Some(0 | 1)))
-    {
-        let code = status
-            .as_ref()
-            .ok()
-            .and_then(|status| status.code())
+    let exit_code = status.as_ref().ok().and_then(|status| status.code());
+    let partial = exit_code == Some(2) && !bytes.is_empty();
+    if partial {
+        tracing::warn!(exit_code = 2, "Content search returned partial results");
+    } else if !early && !matches!(exit_code, Some(0 | 1)) {
+        let code = exit_code
             .map(|code| code.to_string())
             .unwrap_or_else(|| "null".into());
         let signal = status
@@ -335,11 +522,11 @@ pub async fn grep(
             &[
                 ("code", &code),
                 ("signal", &signal),
-                ("error", &String::from_utf8_lossy(&errors)),
+                ("error", &errors.grep_summary(harness)),
             ],
         ));
     }
-    if crate::js::trim_js(&output).is_empty() {
+    if !early && exit_code == Some(1) {
         let shown = path.to_string_lossy();
         let filters = [("glob", &input["glob"]), ("type", &input["type"])]
             .iter()
@@ -358,12 +545,11 @@ pub async fn grep(
             None,
         );
     }
-    let output = scope.display(&output);
-    let lines: Vec<_> = output
-        .strip_suffix('\n')
-        .unwrap_or(&output)
-        .split('\n')
-        .collect();
+    if bytes.is_empty() {
+        return success(harness.text(TextId::ToolsGrepEmptyOutput), None);
+    }
+    let output = scope.display(&String::from_utf8_lossy(&bytes));
+    let lines: Vec<_> = output.lines().collect();
     let offset = input["offset"].as_f64().unwrap_or(0.0);
     let limit = input["head_limit"].as_f64().unwrap_or(250.0);
     let shown: Vec<_> = lines
@@ -376,7 +562,11 @@ pub async fn grep(
         })
         .copied()
         .collect();
-    let mut result = shown.join("\n");
+    let mut result = if matches!(shown.as_slice(), [""]) {
+        harness.text(TextId::ToolsGrepEmptyLine).to_owned()
+    } else {
+        shown.join("\n")
+    };
     if offset > 0.0 || shown.len() < lines.len() || early {
         let first = crate::js::to_string(&serde_json::json!(offset + 1.0));
         let last = crate::js::to_string(&serde_json::json!(offset + shown.len() as f64));
@@ -397,15 +587,16 @@ pub async fn grep(
             ],
         ));
     }
-    success(
-        crate::core::truncate::truncate_content_with_harness(
-            &result,
-            50000,
-            harness.text(TextId::ToolsGrepRecovery),
-            harness,
-        ),
-        None,
-    )
+    if partial {
+        let note = harness.render(TextId::ToolsGrepPartial, &[
+            ("error", &errors.grep_summary(harness)),
+        ]);
+        result = format!("{note}\n\n{result}");
+    }
+    let result = crate::core::truncate::truncate_content_with_harness(
+        &result, 50000, harness.text(TextId::ToolsGrepRecovery), harness,
+    );
+    if partial { failure(result) } else { success(result, None) }
 }
 
 /// A directory search runs inside the directory, so a glob is read relative to it; rg then prints
@@ -466,6 +657,23 @@ fn status_signal(status: &std::process::ExitStatus) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stderr_preview_drains_long_lines_and_counts_an_unterminated_tail() {
+        let bytes = format!("first\r\n{}\nlast visible\n\nlast omitted", "x".repeat(40_000));
+        let errors = SearchErrors::stderr(bytes.as_bytes()).await;
+        assert_eq!(errors.total, 5);
+        assert_eq!(errors.examples.len(), ERROR_EXAMPLES);
+        assert_eq!(errors.examples[0], "first");
+        assert_eq!(errors.examples[1], format!("{}…", "x".repeat(ERROR_LINE_BYTES)));
+        assert_eq!(errors.examples[2], "last visible");
+    }
+
+    #[test]
+    fn windows_grep_globs_use_path_separators_without_changing_posix_escapes() {
+        assert_eq!(grep_glob(r"src\**\*.rs", true), "src/**/*.rs");
+        assert_eq!(grep_glob(r"src/\*.rs", false), r"src/\*.rs");
+    }
 
     #[test]
     fn grep_environment_inherits_without_mutating_and_removes_explicit_undefined() {
