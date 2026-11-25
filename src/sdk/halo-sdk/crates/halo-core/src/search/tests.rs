@@ -22,6 +22,29 @@ fn code_search_converts_only_normalizable_verbatim_node_entry_paths() {
 }
 
 #[test]
+fn windows_search_environment_matches_effective_values_not_key_spelling() {
+    let direct = json!({"nativeProcessEnv": {
+        "Path": "fixture-bin", "SystemRoot": "fixture-system", "ComSpec": "fixture-shell",
+        "SDK_TEST_API_KEY": "fixture-secret"
+    }});
+    let host_callback = json!({"nativeProcessEnv": {
+        "PATH": "fixture-bin", "SystemRoot": "fixture-system", "SYSTEMROOT": "fixture-system",
+        "COMSPEC": "fixture-shell"
+    }});
+    let expected = json!({"PATH": "fixture-bin", "SYSTEMROOT": "fixture-system", "COMSPEC": "fixture-shell"});
+    assert_eq!(search_environment(&direct, true).to_string(), expected.to_string());
+    assert_eq!(search_environment(&host_callback, true).to_string(), expected.to_string());
+    let mut different = host_callback.clone();
+    different["nativeProcessEnv"]["PATH"] = json!("other-fixture-bin");
+    assert_ne!(search_environment(&direct, true), search_environment(&different, true));
+    different["nativeProcessEnv"]["PATH"] = json!("");
+    assert_eq!(search_environment(&different, true)["PATH"], "");
+    different["nativeProcessEnv"]["Path"] = json!("ignored-duplicate");
+    assert_eq!(search_environment(&different, true)["PATH"], "");
+    assert_eq!(search_environment(&direct, false), json!({"SystemRoot": "fixture-system"}));
+}
+
+#[test]
 fn nullable_timeouts_keep_defaults_and_reject_other_invalid_numbers() {
     let base = json!({"backend":"zvec-grep","nodePath":"/node","modulePath":"/backend","cachePath":"/cache"});
     for absent in [Value::Null, crate::js::undefined()] {
@@ -54,6 +77,60 @@ fn node() -> String {
         .to_string_lossy()
         .into_owned()
 }
+#[tokio::test]
+async fn backend_reuse_preserves_effective_search_environment() {
+    let base = std::env::temp_dir().join(format!("search-env-{}", uuid::Uuid::new_v4()));
+    let root = base.join("workspace");
+    let cache = base.join("cache");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("sample.ts"), "export const sample = true;\n").unwrap();
+    let module = base.join("backend.cjs");
+    std::fs::write(&module, r#"
+const { join } = require('node:path');
+const { root } = JSON.parse(process.argv[2]);
+process.on('message', request => {
+  if (request.type === 'close') { process.disconnect(); return; }
+  const matches = process.env.PATH === request.query;
+  const hit = { path: join(root, 'sample.ts'), lineStart: 1, lineEnd: 1,
+    snippet: JSON.stringify({ pid: process.pid, matches }), truncated: false };
+  process.send({ type: 'result', id: request.id, result: { hits: [hit], freshness: 'fresh', exhaustive: false } });
+});
+process.send({ type: 'ready' });
+"#).unwrap();
+    let pool = Arc::new(CodeSearchPool::new());
+    let mut environment = search_environment(&Value::Null, cfg!(windows));
+    environment.as_object_mut().unwrap().remove("PATH");
+    let make_service = |key: &str, bin: &str| {
+        let mut supplied = environment.clone();
+        supplied[key] = json!(bin);
+        let options = json!({"backend":"zvec-grep","nodePath":node(),"modulePath":module,
+            "workerPath":module,"cachePath":cache,"nativeProcessEnv":supplied});
+        CodeSearchService::new_with_pool(options, pool.clone()).unwrap()
+    };
+    let direct = make_service(if cfg!(windows) { "Path" } else { "PATH" }, "fixture-bin-a");
+    let via_host = make_service("PATH", "fixture-bin-a");
+    let different = make_service("PATH", "fixture-bin-b");
+    let search = |owner: CodeSearchService, bin: &'static str| {
+        let request = json!({"root":root,"query":bin});
+        async move {
+            let result = owner.search(request, &CancellationToken::new()).await.unwrap();
+            let details: Value = serde_json::from_str(result["hits"][0]["snippet"].as_str().unwrap()).unwrap();
+            assert_eq!(details["matches"], true);
+            (owner, details["pid"].as_u64().unwrap())
+        }
+    };
+    let (direct, first) = search(direct, "fixture-bin-a").await;
+    let (via_host, second) = search(via_host, "fixture-bin-a").await;
+    assert_eq!(second, first);
+    let (different, third) = search(different, "fixture-bin-b").await;
+    assert_ne!(third, first);
+    for owner in [direct, via_host, different] {
+        owner.dispose().await;
+    }
+    pool.dispose().await;
+    std::fs::remove_dir_all(base).unwrap();
+}
+
 #[tokio::test]
 async fn optional_backend_is_shared_scoped_refreshable_and_cancelled() {
     let base = std::env::temp_dir().join(format!("native-search-test-{}", uuid::Uuid::new_v4()));

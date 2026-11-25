@@ -193,6 +193,30 @@ fn real(path: &Path) -> PathBuf {
 fn cancelled() -> Error {
     Error::template("cancelled", TextId::ToolsCodeSearchCancelled, &[])
 }
+fn search_environment(options: &Value, windows: bool) -> Value {
+    let mut environment = serde_json::Map::new();
+    let supplied = options.get("nativeProcessEnv").and_then(Value::as_object);
+    for name in ["PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR"] {
+        if windows && name == "SystemRoot" {
+            continue;
+        }
+        let content = match supplied {
+            Some(values) if windows => values
+                .iter()
+                .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+                .filter_map(|(key, value)| value.as_str().map(|content| (key, content)))
+                // Node uses the first lexicographically sorted Windows key when spellings collide.
+                .min_by_key(|(key, _)| *key)
+                .map(|(_, content)| content.to_owned()),
+            _ => crate::core::conventions::process_value(options, name),
+        };
+        if let Some(content) = content {
+            environment.insert(name.to_owned(), Value::String(content));
+        }
+    }
+    Value::Object(environment)
+}
+
 fn settings(mut value: Value) -> Result<Settings> {
     if value["backend"] != "zvec-grep" {
         return Err(Error::template(
@@ -243,21 +267,7 @@ fn settings(mut value: Value) -> Result<Settings> {
     };
     let idle_ms = timeout("idleTimeoutMs", 30000.0)?;
     let timeout_ms = timeout("timeoutMs", 300000.0)?;
-    let mut environment = json!({});
-    for name in [
-        "PATH",
-        "SystemRoot",
-        "SYSTEMROOT",
-        "WINDIR",
-        "COMSPEC",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
-    ] {
-        if let Some(content) = crate::core::conventions::process_value(&value, name) {
-            environment[name] = json!(content);
-        }
-    }
+    let environment = search_environment(&value, cfg!(windows));
     if let Some(object) = value.as_object_mut() {
         object.remove("nativeProcessEnv");
     }
