@@ -326,6 +326,54 @@
       "reason"
     ]
   },
+  "tools.shell.invalid_utf8_output_omitted": {
+    "text": "[Some command output was omitted to fit the {budget}.]",
+    "slots": ["budget"]
+  },
+  "tools.shell.invalid_utf8": {
+    "text": "Some output was not valid UTF-8; the text preview cannot preserve those bytes.",
+    "slots": []
+  },
+  "tools.shell.withheld_utf8": {
+    "text": "The preview omitted {bytes} bytes received at the end of output streams because capture ended inside a multibyte character.",
+    "slots": ["bytes"]
+  },
+  "tools.shell.encoding_saved": {
+    "text": "{issue} The exact captured bytes of stdout and stderr, combined, are in {path}.",
+    "slots": ["issue", "path"]
+  },
+  "tools.shell.encoding_prefix": {
+    "text": "{issue} Only a captured prefix of stdout and stderr, combined, is available as raw bytes at {path}.",
+    "slots": ["issue", "path"]
+  },
+  "tools.shell.encoding_no_save": {
+    "text": "{issue} A complete raw copy could not be saved: {reason}.",
+    "slots": ["issue", "reason"]
+  },
+  "tools.shell.task_output_live": {
+    "text": "[Output is still being captured. This preview represents {shown_bytes} bytes received so far.]",
+    "slots": ["shown_bytes"]
+  },
+  "tools.shell.task_output_capture_ended": {
+    "text": "[Capture ended before all output streams closed normally. This preview represents {shown_bytes} captured bytes.]",
+    "slots": ["shown_bytes"]
+  },
+  "tools.shell.task_output_save_unconfirmed": {
+    "text": "[Saving the raw output failed. This preview may include bytes not recoverable from the output file.]",
+    "slots": []
+  },
+  "tools.shell.task_preview_expired": {
+    "text": "[The decoded preview is no longer retained. The raw output file may still be available at {path}.]",
+    "slots": ["path"]
+  },
+  "tools.shell.task_output_preview_cut": {
+    "text": "[The preview represents {shown_bytes} of {received_bytes} captured bytes; additional captured output is available at {path}.]",
+    "slots": ["shown_bytes", "received_bytes", "path"]
+  },
+  "tools.shell.task_output_file_limit": {
+    "text": "[The preview represents {shown_bytes} captured bytes. The saved file is also incomplete: {path}. Saving stopped at the {byte_limit}-byte file limit.]",
+    "slots": ["shown_bytes", "path", "byte_limit"]
+  },
   "tools.shell.task_output_more": {
     "text": "[Showing the first {shown_bytes} bytes of saved output. Additional captured output is available at {path}.]",
     "slots": [

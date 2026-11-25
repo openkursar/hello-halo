@@ -90,6 +90,7 @@ struct Task {
     pid: AtomicU32,
     cwd_warning: Option<Message>,
     settling: AtomicBool,
+    preview: Arc<StdMutex<BackgroundPreview>>,
 }
 struct Starting<'a>(&'a ShellTools);
 impl Drop for Starting<'_> {
@@ -103,6 +104,34 @@ struct PersistedOutput {
     written: usize,
     truncated: bool,
     failed: bool,
+    marker: String,
+    preview: Arc<StdMutex<BackgroundPreview>>,
+}
+impl PersistedOutput {
+    async fn push(&mut self, bytes: &[u8]) -> bool {
+        if self.failed {
+            return false;
+        }
+        let remaining = BACKGROUND_FILE_LIMIT.saturating_sub(self.marker.len() + self.written);
+        let count = bytes.len().min(remaining);
+        let result = async {
+            if count > 0 {
+                self.file.write_all(&bytes[..count]).await?;
+                self.written += count;
+            }
+            if count < bytes.len() && !self.truncated {
+                self.truncated = true;
+                self.file.write_all(self.marker.as_bytes()).await?;
+                tracing::warn!(limit_bytes = BACKGROUND_FILE_LIMIT, "background command output truncated");
+            }
+            std::io::Result::Ok(())
+        }.await;
+        if let Err(error) = result {
+            self.failed = true;
+            tracing::warn!(error=%error, "background command output write failed");
+        }
+        !self.failed
+    }
 }
 #[derive(Default)]
 pub struct ShellTools {
@@ -568,6 +597,10 @@ mod migration_tests {
         shell.context_async_call("backgroundTasks.wait", &json!([id]), &json!({}),
             &CancellationToken::new(), ctx.harness.clone()).await.unwrap()
     }
+    async fn read_preview(shell: &ShellTools, task: &Value, ctx: &ToolContext) -> Value {
+        shell.context_async_call("backgroundTasks.readOutput", &json!([task]), &json!({}),
+            &CancellationToken::new(), ctx.harness.clone()).await.unwrap()
+    }
     #[tokio::test]
     async fn background_output_is_exact_bounded_and_independent_of_invoking_cancel() {
         let (root,shell,ctx)=fixture().await;
@@ -580,7 +613,7 @@ mod migration_tests {
         assert_eq!(shell.execute(&json!({"command":"printf \"$BACKGROUND_SAVED\""}),ctx.clone()).await["content"],"saved-value");
         let result=shell.execute(&json!({"command":"printf '%040000d' 0","run_in_background":true}),ctx.clone()).await;
         let task=wait(&shell,&result["metadata"]["task_id"],&ctx).await;
-        let output=shell.read_output(&task,&ctx.harness,32768).await.unwrap();assert_eq!(output["truncated"],true);assert_eq!(output["output"].as_str().unwrap().len(),32768);assert_eq!(tokio::fs::metadata(task["outputFile"].as_str().unwrap()).await.unwrap().len(),40000);assert!(task.get("output").is_none());
+        let output=read_preview(&shell,&task,&ctx).await;assert_eq!(output["truncated"],true);assert_eq!(output["shownBytes"],32768);assert_eq!(tokio::fs::metadata(task["outputFile"].as_str().unwrap()).await.unwrap().len(),40000);assert!(task.get("output").is_none());
         let result=shell.execute(&json!({"command":"sleep 30","run_in_background":true}),launch.clone()).await;
         assert!(result["content"].as_str().unwrap().contains("No execution deadline was set"));assert!(result["content"].as_str().unwrap().contains("session is closed or interrupted"));
         let id=result["metadata"]["task_id"].clone();launch.cancellation.cancel();assert_eq!(shell.context_call("backgroundTasks.get",&json!([id]),&ctx.harness).unwrap()["status"],"running");
@@ -663,7 +696,7 @@ mod migration_tests {
         let path = task["outputFile"].as_str().unwrap();
         assert!(tokio::fs::metadata(path).await.unwrap().len() <= 8 * 1024 * 1024);
         assert_eq!(task["outputTruncated"], true);
-        let output = shell.read_output(&task, &ctx.harness, 32768).await.unwrap();
+        let output = read_preview(&shell, &task, &ctx).await;
         assert_eq!(output["truncated"], true);
         assert!(tokio::fs::read_to_string(path).await.unwrap().ends_with("later output was not saved here.]"));
         let task_output=shell.task("TaskOutput",&json!({"task_id":task["id"],"block":false}),&ctx).await;
@@ -672,7 +705,7 @@ mod migration_tests {
         assert!(preview.contains("The saved file is also incomplete"));
         assert!(preview.contains("8388608-byte file limit"));
         tokio::fs::remove_file(path).await.unwrap();
-        let output = shell.read_output(&task, &ctx.harness, 32768).await.unwrap();
+        let output = read_preview(&shell, &task, &ctx).await;
         assert_eq!(output["truncated"], true);
         assert!(output["output"].as_str().unwrap().contains("no longer available"));
         finish(root, shell).await;
@@ -979,7 +1012,7 @@ mod migration_tests {
         assert_eq!(result["isError"],false);assert!(result["content"].as_str().unwrap().contains("Running in session directory"));
         let task=wait(&shell,&result["metadata"]["task_id"],&ctx).await;
         assert_eq!(task["status"],"completed");
-        let output=shell.read_output(&task,&ctx.harness,32768).await.unwrap();
+        let output=read_preview(&shell,&task,&ctx).await;
         assert!(output["output"].as_str().unwrap().contains("background"));
         assert!(output["output"].as_str().unwrap().contains(&ctx.cwd));
         finish(root,shell).await;
@@ -996,8 +1029,8 @@ mod migration_tests {
         assert_eq!(output["isError"],false);
         let value:Value=serde_json::from_str(output["content"].as_str().unwrap()).unwrap();
         let preview=value["task"]["result"].as_str().unwrap();
-        assert!(preview.contains("Showing the first 32768 bytes of saved output"));
-        assert!(preview.contains("Additional captured output is available at"));
+        assert!(preview.contains("The preview represents 32768 of"));
+        assert!(preview.contains("additional captured output is available at"));
         assert!(preview.contains(task["outputFile"].as_str().unwrap()));
         finish(root,shell).await;
     }
@@ -1211,6 +1244,402 @@ mod restore_tests {
     }
 }
 
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+    use crate::tools::output::OutputStore;
+
+    const INVALID: &[u8] = &[0xd6, 0xd0, 0xce, 0xc4];
+    const PRINT_INVALID: &str = r"printf '\326\320\316\304'";
+    const NOTICE: &str = "Some output was not valid UTF-8";
+
+    struct TempDirectory(PathBuf);
+
+    impl TempDirectory {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn fixture() -> (TempDirectory, ShellTools, ToolContext) {
+        let path = std::env::temp_dir().join(format!("halo-shell-encoding-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&path).unwrap();
+        let directory = TempDirectory(path);
+        let options = json!({"persistSession": false, "nativeTempDirectory": directory.path()});
+        let shell = ShellTools::new_with_store(&options, None, Some(OutputStore::new(&options)));
+        let ctx = ToolContext {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            cwd: directory.path().to_string_lossy().into_owned(),
+            env: json!({}),
+            current_turn: 0,
+            tool_use_id: String::new(),
+            cancellation: CancellationToken::new(),
+            harness: crate::harness::baseline(),
+        };
+        (directory, shell, ctx)
+    }
+
+    #[tokio::test]
+    async fn foreground_invalid_stdout_saves_exact_bytes_without_replay() {
+        let (directory, shell, ctx) = fixture();
+        let output = shell.execute(&json!({"command": format!("printf run >> effect; {PRINT_INVALID}")}), ctx).await;
+        assert_eq!(output["isError"], false);
+        let text = output["content"].as_str().unwrap();
+        assert!(text.starts_with("����\n"), "{text}");
+        assert_eq!(text.matches(NOTICE).count(), 1, "{text}");
+        let path = output["__haloSdkNativeSavedOutput"].as_str().unwrap();
+        assert!(text.contains(path), "{text}");
+        assert_eq!(tokio::fs::read(path).await.unwrap(), INVALID);
+        assert_eq!(tokio::fs::read(directory.path().join("effect")).await.unwrap(), b"run");
+        shell.close().await;
+    }
+
+    #[tokio::test]
+    async fn foreground_checks_stderr_independently_and_preserves_exit_code() {
+        let (_directory, shell, ctx) = fixture();
+        let command = format!(r"printf '\302\251'; {PRINT_INVALID} >&2; exit 7");
+        let output = shell.execute(&json!({"command":command}), ctx).await;
+        assert_eq!(output["isError"], true);
+        let text = output["content"].as_str().unwrap();
+        assert!(text.starts_with("Command exited with code 7\n©\n����\n"), "{text}");
+        assert_eq!(text.matches(NOTICE).count(), 1, "{text}");
+        let path = output["__haloSdkNativeSavedOutput"].as_str().unwrap();
+        assert!(text.contains(path), "{text}");
+        let bytes = tokio::fs::read(path).await.unwrap();
+        // The shared raw sink can receive either pipe first.
+        assert!(bytes == ["©".as_bytes(), INVALID].concat() || bytes == [INVALID, "©".as_bytes()].concat(), "{bytes:?}");
+        shell.close().await;
+    }
+
+    #[tokio::test]
+    async fn foreground_keeps_valid_utf8_including_an_encoded_replacement_character() {
+        let (directory, shell, ctx) = fixture();
+        let command = r"printf '\344\270\255\346\226\207\360\237\230\200\357\277\275\302\251'";
+        let output = shell.execute(&json!({"command":command}), ctx).await;
+        assert_eq!(output["isError"], false);
+        assert_eq!(output["content"], "中文😀�©");
+        assert!(output.get("__haloSdkNativeSavedOutput").is_none());
+        assert!(tokio::fs::read_dir(directory.path()).await.unwrap().next_entry().await.unwrap().is_none());
+        shell.close().await;
+    }
+
+    #[tokio::test]
+    async fn task_output_identifies_invalid_utf8_and_points_to_raw_file() {
+        let (_directory, shell, ctx) = fixture();
+        let launch = shell.execute(&json!({"command":PRINT_INVALID,"run_in_background":true}), ctx.clone()).await;
+        assert_eq!(launch["isError"], false, "{}", launch["content"]);
+        let output = shell.task("TaskOutput", &json!({"task_id":launch["metadata"]["task_id"]}), &ctx).await;
+        assert_eq!(output["isError"], false, "{}", output["content"]);
+        let data: Value = serde_json::from_str(output["content"].as_str().unwrap()).unwrap();
+        let task = &data["task"];
+        assert_eq!(task["status"], "completed");
+        assert_eq!(task["exit_code"], 0);
+        let text = task["result"].as_str().unwrap();
+        assert!(text.starts_with("����\n"), "{text}");
+        assert_eq!(text.matches(NOTICE).count(), 1, "{text}");
+        let path = task["output_file"].as_str().unwrap();
+        assert!(text.contains(path), "{text}");
+        assert_eq!(tokio::fs::read(path).await.unwrap(), INVALID);
+        shell.close().await;
+    }
+
+    async fn wait_for_raw(path: &str, expected: &[u8]) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if tokio::fs::read(path).await.is_ok_and(|bytes| bytes == expected) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(15)).await;
+            }
+        }).await.unwrap();
+    }
+
+    async fn task_output(shell: &ShellTools, ctx: &ToolContext, id: &Value, block: bool) -> Value {
+        let output = shell.task("TaskOutput", &json!({"task_id": id, "block": block}), ctx).await;
+        assert_eq!(output["isError"], false, "{}", output["content"]);
+        serde_json::from_str(output["content"].as_str().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn background_preview_decodes_interleaved_stdout_and_stderr_separately() {
+        let (directory, shell, ctx) = fixture();
+        let command = r"printf '\302'; while [ ! -f first ]; do sleep 0.02; done; printf X >&2; while [ ! -f second ]; do sleep 0.02; done; printf '\251'";
+        let launch = shell.execute(&json!({"command": command, "timeout": 20000, "run_in_background": true}), ctx.clone()).await;
+        assert_eq!(launch["isError"], false, "{}", launch["content"]);
+        let path = launch["metadata"]["output_file"].as_str().unwrap();
+        wait_for_raw(path, b"\xc2").await;
+        tokio::fs::write(directory.path().join("first"), "").await.unwrap();
+        wait_for_raw(path, b"\xc2X").await;
+        tokio::fs::write(directory.path().join("second"), "").await.unwrap();
+        let output = task_output(&shell, &ctx, &launch["metadata"]["task_id"], true).await;
+        assert_eq!(output["task"]["result"], "X©");
+        assert_eq!(output["task"]["truncated"], false);
+        assert_eq!(tokio::fs::read(path).await.unwrap(), b"\xc2X\xa9");
+        shell.close().await;
+    }
+
+    #[tokio::test]
+    async fn background_preview_never_combines_invalid_bytes_from_different_pipes() {
+        let (directory, shell, ctx) = fixture();
+        let command = r"printf '\302'; while [ ! -f release ]; do sleep 0.02; done; printf '\251' >&2";
+        let launch = shell.execute(&json!({"command": command, "timeout": 20000, "run_in_background": true}), ctx.clone()).await;
+        assert_eq!(launch["isError"], false, "{}", launch["content"]);
+        let path = launch["metadata"]["output_file"].as_str().unwrap();
+        wait_for_raw(path, b"\xc2").await;
+        tokio::fs::write(directory.path().join("release"), "").await.unwrap();
+        let output = task_output(&shell, &ctx, &launch["metadata"]["task_id"], true).await;
+        let text = output["task"]["result"].as_str().unwrap();
+        assert!(text.starts_with("��\n"), "{text}");
+        assert_eq!(text.matches(NOTICE).count(), 1, "{text}");
+        assert!(text.contains(path), "{text}");
+        assert_eq!(tokio::fs::read(path).await.unwrap(), b"\xc2\xa9");
+        shell.close().await;
+    }
+
+    #[tokio::test]
+    async fn live_and_stopped_task_previews_do_not_claim_complete_output() {
+        let (_directory, shell, ctx) = fixture();
+        let command = r"printf '\360\237'; exec sleep 30";
+        let launch = shell.execute(&json!({"command": command, "run_in_background": true}), ctx.clone()).await;
+        assert_eq!(launch["isError"], false, "{}", launch["content"]);
+        let path = launch["metadata"]["output_file"].as_str().unwrap();
+        let id = &launch["metadata"]["task_id"];
+        wait_for_raw(path, b"\xf0\x9f").await;
+        let request = json!([{"id": id}]);
+        let native_preview = || shell.context_async_call(
+            "backgroundTasks.readOutput", &request, &Value::Null,
+            &ctx.cancellation, ctx.harness.clone(),
+        );
+        let live = task_output(&shell, &ctx, id, false).await;
+        let preview = native_preview().await.unwrap();
+        assert_eq!(preview["fileComplete"], false);
+        assert_eq!(preview["shownBytes"], 0);
+        assert_eq!(live["retrieval_status"], "not_ready");
+        assert_eq!(live["task"]["truncated"], true);
+        let text = live["task"]["result"].as_str().unwrap();
+        assert!(text.contains("still being captured"), "{text}");
+        assert!(!text.contains('�'), "{text}");
+        let stop = shell.task("TaskStop", &json!({"task_id":id}), &ctx).await;
+        assert_eq!(stop["isError"], false);
+        let stopped = task_output(&shell, &ctx, id, true).await;
+        let preview = native_preview().await.unwrap();
+        assert_eq!(preview["fileComplete"], false);
+        assert_eq!(preview["shownBytes"], 0);
+        assert_eq!(stopped["task"]["status"], "stopped");
+        assert_eq!(stopped["task"]["truncated"], true);
+        let text = stopped["task"]["result"].as_str().unwrap();
+        assert!(text.contains("2 bytes"), "{text}");
+        assert!(text.contains("inside a multibyte character"), "{text}");
+        assert!(text.contains(path), "{text}");
+        assert!(!text.contains("file limit") && !text.contains('�'), "{text}");
+        shell.close().await;
+    }
+
+    #[tokio::test]
+    async fn foreground_timeout_preserves_an_incomplete_utf8_tail() {
+        let (_directory, shell, ctx) = fixture();
+        let output = shell.execute(&json!({"command": r"printf '\360\237'; exec sleep 30", "timeout": 1500}), ctx).await;
+        assert_eq!(output["isError"], true);
+        let text = output["content"].as_str().unwrap();
+        assert!(text.contains("1500ms"), "{text}");
+        assert!(text.contains("2 bytes"), "{text}");
+        assert!(text.contains("inside a multibyte character"), "{text}");
+        assert!(!text.contains("(No output)") && !text.contains('�'), "{text}");
+        let path = output["__haloSdkNativeSavedOutput"].as_str().unwrap();
+        assert!(text.contains(path), "{text}");
+        assert_eq!(tokio::fs::read(path).await.unwrap(), b"\xf0\x9f");
+        shell.close().await;
+    }
+
+    #[tokio::test]
+    async fn encoding_notice_respects_the_result_budget_and_only_keeps_disclosed_files() {
+        let (_directory, mut shell, ctx) = fixture();
+        shell.result_budget = 512;
+        shell.configured_budget = true;
+        let output = shell.execute(&json!({"command": format!("{PRINT_INVALID}; printf '%0500d' 0")}), ctx.clone()).await;
+        let text = output["content"].as_str().unwrap();
+        assert!(crate::js::utf16_len(text) <= 512, "{text}");
+        assert!(text.ends_with('.'), "{text}");
+        assert!(text.contains(NOTICE), "{text}");
+        assert!(text.contains("command output was omitted"), "{text}");
+        let path = output["__haloSdkNativeSavedOutput"].as_str().unwrap();
+        assert!(text.contains(path), "{text}");
+        let mut expected = INVALID.to_vec();
+        expected.extend([b'0'; 500]);
+        assert_eq!(tokio::fs::read(path).await.unwrap(), expected);
+
+        shell.result_budget = 16;
+        let output = shell.execute(&json!({"command": PRINT_INVALID}), ctx).await;
+        let text = output["content"].as_str().unwrap();
+        assert!(crate::js::utf16_len(text) <= 16, "{text}");
+        assert!(!text.contains('�'), "{text}");
+        assert!(output.get("__haloSdkNativeSavedOutput").is_none());
+        let mut files = tokio::fs::read_dir(Path::new(path).parent().unwrap()).await.unwrap();
+        assert_eq!(files.next_entry().await.unwrap().unwrap().path(), Path::new(path));
+        assert!(files.next_entry().await.unwrap().is_none());
+        shell.close().await;
+    }
+
+    #[test]
+    fn decoder_preserves_utf8_across_every_multibyte_split() {
+        for expected in ["©", "中", "😀", "�"] {
+            for split in 1..expected.len() {
+                let mut decoder = Utf8Decoder::default();
+                let mut text = String::new();
+                let (head, tail) = expected.as_bytes().split_at(split);
+                decoder.push(head, |part, _| text.push_str(part));
+                assert!(text.is_empty());
+                decoder.push(tail, |part, _| text.push_str(part));
+                assert_eq!(decoder.finish(true, |part, _| text.push_str(part)), (false, 0));
+                assert_eq!(text, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn decoder_replaces_an_incomplete_sequence_only_at_eof() {
+        for (eof, invalid, omitted, expected) in [(true, true, 0, "a�"), (false, false, 2, "a")] {
+            let mut decoder = Utf8Decoder::default();
+            let mut text = String::new();
+            decoder.push(b"a\xf0\x9f", |part, _| text.push_str(part));
+            assert_eq!(decoder.finish(eof, |part, _| text.push_str(part)), (invalid, omitted));
+            assert_eq!(text, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_save_does_not_claim_a_path_or_change_success() {
+        let (_directory, shell, ctx) = fixture();
+        shell.output.as_ref().unwrap().close().await;
+        let output = shell.execute(&json!({"command":PRINT_INVALID}), ctx).await;
+        assert_eq!(output["isError"], false);
+        let text = output["content"].as_str().unwrap();
+        assert_eq!(text.matches(NOTICE).count(), 1, "{text}");
+        assert!(text.contains("A complete raw copy could not be saved"), "{text}");
+        assert!(output.get("__haloSdkNativeSavedOutput").is_none());
+        shell.close().await;
+    }
+
+    #[test]
+    fn file_limit_labels_raw_output_as_a_prefix() {
+        let mut preview = BackgroundPreview::new(64);
+        preview.push(0, "�", 1);
+        preview.push(0, "a", 1);
+        preview.pipes[0].invalid_utf8 = true;
+        preview.pipes[0].eof = Some(true);
+        preview.pipes[1].eof = Some(true);
+        preview.file_limited = true;
+        let output = preview.render("limited.output", false, &crate::harness::baseline());
+        let text = output["output"].as_str().unwrap();
+        assert!(text.starts_with("�a\n"), "{text}");
+        assert!(text.contains("Only a captured prefix"), "{text}");
+        assert!(text.contains("limited.output"), "{text}");
+        assert!(text.contains("8388608-byte file limit"), "{text}");
+        assert_eq!(output["shownBytes"], 2);
+        assert_eq!(output["truncated"], true);
+        assert_eq!(output["fileComplete"], false);
+    }
+
+    #[test]
+    fn capture_window_keeps_or_omits_whole_characters() {
+        let harness = crate::harness::baseline();
+        let prefix = "a".repeat(32767);
+        let mut capture = Capture::default();
+        capture.push(&prefix);
+        capture.push("😀");
+        assert_eq!(capture.text(&harness), format!("{prefix}😀"));
+
+        let mut capture = Capture::default();
+        capture.push(&prefix);
+        capture.push("😀😀");
+        capture.push(&"z".repeat(32767));
+        let text = capture.text(&harness);
+        assert!(text.starts_with(&prefix));
+        assert!(text.ends_with(&"z".repeat(32767)));
+        assert!(!text.contains('�'));
+    }
+
+    #[test]
+    fn preview_byte_cap_does_not_replace_part_of_a_valid_character() {
+        for cap in 2..=4 {
+            let mut preview = BackgroundPreview::new(cap);
+            preview.push(0, "a😀", 5);
+            preview.push(1, "z", 1);
+            preview.pipes[0].received = 5;
+            preview.pipes[1].received = 1;
+            preview.pipes[0].eof = Some(true);
+            preview.pipes[1].eof = Some(true);
+            let output = preview.render("preview.output", false, &crate::harness::baseline());
+            let text = output["output"].as_str().unwrap();
+            assert!(text.starts_with("a\n"), "{text}");
+            assert!(!text.contains('�') && !text.contains(NOTICE), "{text}");
+            assert!(text.contains("1 of 6 captured bytes"), "{text}");
+            assert_eq!(output["truncated"], true);
+            assert_eq!(output["fileComplete"], true);
+            assert_eq!(output["shownBytes"], 1);
+        }
+    }
+}
+
+#[derive(Default)]
+struct Utf8Decoder {
+    pending: Vec<u8>,
+    invalid: bool,
+}
+
+impl Utf8Decoder {
+    fn push(&mut self, bytes: &[u8], mut emit: impl FnMut(&str, usize)) {
+        let mut input = if self.pending.is_empty() {
+            bytes
+        } else {
+            self.pending.extend_from_slice(bytes);
+            &self.pending
+        };
+        let mut trailing = [0; 3];
+        let mut trailing_len = 0;
+        while !input.is_empty() {
+            match std::str::from_utf8(input) {
+                Ok(text) => {
+                    emit(text, text.len());
+                    break;
+                }
+                Err(error) => {
+                    let (valid, rest) = input.split_at(error.valid_up_to());
+                    if !valid.is_empty() {
+                        emit(std::str::from_utf8(valid).expect("validated UTF-8 prefix"), valid.len());
+                    }
+                    if let Some(length) = error.error_len() {
+                        self.invalid = true;
+                        emit("�", length);
+                        input = &rest[length..];
+                    } else {
+                        trailing_len = rest.len();
+                        trailing[..trailing_len].copy_from_slice(rest);
+                        break;
+                    }
+                }
+            }
+        }
+        self.pending.clear();
+        self.pending.extend_from_slice(&trailing[..trailing_len]);
+    }
+
+    fn finish(self, eof: bool, mut emit: impl FnMut(&str, usize)) -> (bool, usize) {
+        if eof && !self.pending.is_empty() {
+            emit("�", self.pending.len());
+            (true, 0)
+        } else {
+            (self.invalid, self.pending.len())
+        }
+    }
+}
+
 #[derive(Default)]
 struct Capture {
     head: Vec<u16>,
@@ -1229,25 +1658,126 @@ impl Capture {
             self.omitted += excess;
         }
     }
-    fn text(&self, harness: &ResolvedHarness) -> String {
-        let marker = if self.omitted == 0 {
-            String::new()
-        } else {
-            harness.render(
-                TextId::ToolsShellCaptureOmitted,
-                &[("omitted", &self.omitted.to_string())],
-            )
-        };
-        format!(
-            "{}{marker}{}",
-            String::from_utf16_lossy(&self.head),
-            String::from_utf16_lossy(&self.tail)
-        )
+    fn text(self, harness: &ResolvedHarness) -> String {
+        let mut head = self.head.as_slice();
+        let mut tail = self.tail.as_slice();
+        let split_head = head.last().is_some_and(|unit| (0xd800..=0xdbff).contains(unit));
+        if self.omitted == 0 {
+            if split_head {
+                return char::decode_utf16(self.head.into_iter().chain(self.tail))
+                    .map(|character| character.expect("captured text came from Unicode"))
+                    .collect();
+            }
+            return format!("{}{}", String::from_utf16_lossy(head), String::from_utf16_lossy(tail));
+        }
+        if split_head {
+            head = &head[..head.len() - 1];
+        }
+        if tail.first().is_some_and(|unit| (0xdc00..=0xdfff).contains(unit)) {
+            tail = &tail[1..];
+        }
+        let omitted = self.omitted + self.head.len() - head.len() + self.tail.len() - tail.len();
+        let marker = harness.render(
+            TextId::ToolsShellCaptureOmitted,
+            &[("omitted", &omitted.to_string())],
+        );
+        format!("{}{marker}{}", String::from_utf16_lossy(head), String::from_utf16_lossy(tail))
     }
 }
 struct Drained {
     text: String,
     omitted: bool,
+    invalid_utf8: bool,
+    withheld: usize,
+    eof: bool,
+}
+
+const BACKGROUND_FILE_LIMIT: usize = 8 * 1024 * 1024;
+const BACKGROUND_PREVIEW_LIMIT: usize = 32 * 1024;
+
+#[derive(Default)]
+struct PipePreview {
+    received: usize,
+    shown: usize,
+    withheld: usize,
+    invalid_utf8: bool,
+    eof: Option<bool>,
+}
+
+struct BackgroundPreview {
+    text: String,
+    pipes: [PipePreview; 2],
+    cap: usize,
+    display_cut: bool,
+    file_limited: bool,
+    save_failed: bool,
+}
+
+impl BackgroundPreview {
+    fn new(cap: usize) -> Self {
+        Self {
+            text: String::new(),
+            pipes: Default::default(),
+            cap,
+            display_cut: false,
+            file_limited: false,
+            save_failed: false,
+        }
+    }
+
+    fn push(&mut self, pipe: usize, text: &str, raw_bytes: usize) {
+        if self.display_cut {
+            return;
+        }
+        let mut end = self.cap.saturating_sub(self.text.len()).min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.display_cut = end < text.len();
+        self.text.push_str(&text[..end]);
+        self.pipes[pipe].shown += if self.display_cut { end } else { raw_bytes };
+    }
+
+    fn render(&self, path: &str, running: bool, harness: &ResolvedHarness) -> Value {
+        use super::output::SaveReason;
+        let received: usize = self.pipes.iter().map(|pipe| pipe.received).fold(0, usize::saturating_add);
+        let shown: usize = self.pipes.iter().map(|pipe| pipe.shown).sum();
+        let withheld = self.pipes.iter().filter(|pipe| pipe.eof == Some(false)).map(|pipe| pipe.withheld).sum();
+        let incomplete = !running && self.pipes.iter().any(|pipe| pipe.eof != Some(true));
+        let invalid = self.pipes.iter().any(|pipe| pipe.invalid_utf8);
+        let file_complete = !(running || incomplete || self.file_limited || self.save_failed);
+        let shown_bytes = shown.to_string();
+        let mut text = self.text.clone();
+        let mut append = |line: &str| {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str(line);
+        };
+        if let Some(notice) = encoding_notice(harness, invalid, withheld,
+            (!self.save_failed).then(|| Path::new(path)), file_complete,
+            self.save_failed.then_some(SaveReason::WriteFailed)) {
+            append(&notice);
+        }
+        if running {
+            append(&harness.render(TextId::ToolsShellTaskOutputLive, &[("shown_bytes", &shown_bytes)]));
+        } else if incomplete && withheld == 0 {
+            append(&harness.render(TextId::ToolsShellTaskOutputCaptureEnded, &[("shown_bytes", &shown_bytes)]));
+        }
+        if self.save_failed {
+            append(harness.text(TextId::ToolsShellTaskOutputSaveUnconfirmed));
+        } else if self.file_limited {
+            append(&harness.render(TextId::ToolsShellTaskOutputFileLimit, &[
+                ("shown_bytes", &shown_bytes), ("path", path), ("byte_limit", &BACKGROUND_FILE_LIMIT.to_string()),
+            ]));
+        } else if self.display_cut && file_complete {
+            append(&harness.render(TextId::ToolsShellTaskOutputPreviewCut, &[
+                ("shown_bytes", &shown_bytes), ("received_bytes", &received.to_string()), ("path", path),
+            ]));
+        }
+        json!({"output": text, "truncated": self.display_cut || !file_complete,
+            "shownBytes": shown, "fileComplete": file_complete, "noticesIncluded": true})
+    }
 }
 
 struct CaptureSinkState {
@@ -1309,23 +1839,31 @@ impl CaptureSink {
             }
         }
     }
-    async fn mark_incomplete(&self) {
+    async fn finish(&self, force_save: bool, complete: bool) -> Option<super::output::SaveState> {
+        use super::output::{SaveReason, SaveState};
         let mut state = self.state.lock().await;
-        if let Some(writer) = &mut state.writer {
-            writer.mark_incomplete(super::output::SaveReason::UnsafeCopy);
-        } else if state.failed.is_none() {
-            state.failed = Some(super::output::SaveReason::UnsafeCopy);
+        let mut writer = match state.writer.take() {
+            Some(writer) => writer,
+            None => {
+                if let Some(reason) = state.failed {
+                    return Some(SaveState::Failed { reason });
+                }
+                if !force_save {
+                    return (!complete).then_some(SaveState::Failed { reason: SaveReason::UnsafeCopy });
+                }
+                match self.store.begin("bash", self.marker.clone()).await {
+                    Ok(mut writer) => {
+                        writer.write_bytes(&state.pending).await;
+                        writer
+                    }
+                    Err(reason) => return Some(SaveState::Failed { reason }),
+                }
+            }
+        };
+        if !complete {
+            writer.mark_incomplete(SaveReason::UnsafeCopy);
         }
-    }
-    async fn finish(&self) -> Option<super::output::SaveState> {
-        let mut state = self.state.lock().await;
-        if let Some(writer) = state.writer.take() {
-            Some(writer.finish().await)
-        } else {
-            state
-                .failed
-                .map(|reason| super::output::SaveState::Failed { reason })
-        }
+        Some(writer.finish().await)
     }
 }
 /// Collects one output pipe until EOF, or until `detach` fires because processes that survived
@@ -1338,93 +1876,70 @@ async fn drain<R: AsyncRead + Unpin>(
     harness: Arc<ResolvedHarness>,
     _activity: Option<crate::resource_activity::ResourceLease>,
     detach: CancellationToken,
+    stopping: CancellationToken,
+    pipe: usize,
 ) -> Drained {
     let mut buffer = [0u8; 8192];
-    let mut pending = Vec::new();
+    let mut decoder = Utf8Decoder::default();
     let mut capture = Capture::default();
-    loop {
+    let eof = loop {
         let read = tokio::select! {
             read = reader.read(&mut buffer) => Some(read),
             _ = detach.cancelled() => None,
         };
         let Some(read) = read else {
-            break;
+            break false;
         };
         let count = match read {
-            Ok(0) => break,
+            Ok(0) => break !stopping.is_cancelled(),
             Ok(n) => n,
-            Err(e) => {
-                tracing::warn!(error=%e,"command output read failed");
-                if let Some(sink) = &sink {
-                    sink.mark_incomplete().await;
-                }
-                break;
+            Err(error) => {
+                tracing::warn!(error=%error,"command output read failed");
+                break false;
             }
         };
-        if let Some(file) = &output {
-            let mut state = file.lock().await;
-            let marker = harness
-                .render(TextId::ToolsShellOutputTruncated, &[("byte_limit", &(8 * 1024 * 1024).to_string())])
-                .as_bytes()
-                .to_vec();
-            let remaining = (8 * 1024 * 1024usize).saturating_sub(marker.len() + state.written);
-            let written = count.min(remaining);
-            if written > 0 {
-                if let Err(error) = state.file.write_all(&buffer[..written]).await {
-                    state.failed = true;
-                    cancel.cancel();
-                    tracing::warn!(error=%error,"background command output write failed");
-                    break;
-                }
-                state.written += written;
+        let bytes = &buffer[..count];
+        if let Some(output) = &output {
+            let mut state = output.lock().await;
+            let saved = state.push(bytes).await;
+            // Publish decoded fragments in capture order, releasing split characters only when complete.
+            let mut preview = state.preview.lock().unwrap_or_else(|error| error.into_inner());
+            decoder.push(bytes, |text, raw_bytes| preview.push(pipe, text, raw_bytes));
+            let stream = &mut preview.pipes[pipe];
+            stream.received = stream.received.saturating_add(count);
+            stream.invalid_utf8 = decoder.invalid;
+            stream.withheld = decoder.pending.len();
+            preview.save_failed = !saved;
+            preview.file_limited = state.truncated;
+            if !saved {
+                cancel.cancel();
+                break false;
             }
-            if written < count && !state.truncated {
-                state.truncated = true;
-                if let Err(error) = state.file.write_all(&marker).await {
-                    state.failed = true;
-                    cancel.cancel();
-                    tracing::warn!(error=%error,"background command output write failed");
-                    break;
-                }
-                tracing::warn!(
-                    limit_bytes = 8 * 1024 * 1024,
-                    "background command output truncated"
-                );
+        } else {
+            if let Some(sink) = &sink {
+                sink.push(bytes).await;
             }
+            decoder.push(bytes, |text, _| capture.push(text));
         }
-        if let Some(sink) = &sink {
-            sink.push(&buffer[..count]).await;
-        }
-        pending.extend_from_slice(&buffer[..count]);
-        loop {
-            match std::str::from_utf8(&pending) {
-                Ok(text) => {
-                    capture.push(text);
-                    pending.clear();
-                    break;
-                }
-                Err(e) => {
-                    let valid = e.valid_up_to();
-                    if valid > 0 {
-                        capture.push(std::str::from_utf8(&pending[..valid]).unwrap());
-                        pending.drain(..valid);
-                    }
-                    if let Some(invalid) = e.error_len() {
-                        capture.push("�");
-                        pending.drain(..invalid);
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    if !pending.is_empty() {
-        capture.push(&String::from_utf8_lossy(&pending));
-    }
+    };
+    let (invalid_utf8, withheld) = if let Some(output) = &output {
+        let state = output.lock().await;
+        let mut preview = state.preview.lock().unwrap_or_else(|error| error.into_inner());
+        let (invalid_utf8, withheld) = decoder.finish(eof, |text, raw_bytes| preview.push(pipe, text, raw_bytes));
+        let stream = &mut preview.pipes[pipe];
+        stream.invalid_utf8 = invalid_utf8;
+        stream.withheld = withheld;
+        stream.eof = Some(eof);
+        (invalid_utf8, withheld)
+    } else {
+        decoder.finish(eof, |text, _| capture.push(text))
+    };
     Drained {
-        text: capture.text(&harness),
         omitted: capture.omitted > 0,
+        text: capture.text(&harness),
+        invalid_utf8,
+        withheld,
+        eof,
     }
 }
 /// How long a terminated command may take to exit and close its output before termination escalates.
@@ -1481,6 +1996,8 @@ struct RunResult {
     started: Started,
     unconfirmed: bool,
     omitted: bool,
+    invalid_utf8: bool,
+    withheld: usize,
     state: Option<ShellState>,
     saved: Option<super::output::SaveState>,
 }
@@ -1602,6 +2119,7 @@ async fn run(
         let _ = launch.send(Ok(pid));
     }
     let detach = CancellationToken::new();
+    let stopping = CancellationToken::new();
     let stdout = crate::runtime::spawn(drain(
         stdout_pipe,
         output.clone(),
@@ -1610,6 +2128,8 @@ async fn run(
         ctx.harness.clone(),
         stdout_activity,
         detach.clone(),
+        stopping.clone(),
+        0,
     ));
     let stderr = crate::runtime::spawn(drain(
         stderr_pipe,
@@ -1619,6 +2139,8 @@ async fn run(
         ctx.harness.clone(),
         stderr_activity,
         detach.clone(),
+        stopping.clone(),
+        1,
     ));
     let mut timed_out = false;
     let mut aborted = false;
@@ -1641,6 +2163,7 @@ async fn run(
     };
     let mut unconfirmed = false;
     if !finished {
+        stopping.cancel();
         #[cfg(windows)]
         let terminate = |force| {
             super::shell_platform::terminate_windows_shell(&owned_process, Path::new(&shell), force)
@@ -1691,6 +2214,16 @@ async fn run(
     let omitted = [&stdout, &stderr]
         .iter()
         .any(|pipe| matches!(pipe, Ok(drained) if drained.omitted));
+    let invalid_utf8 = [&stdout, &stderr]
+        .iter()
+        .any(|pipe| matches!(pipe, Ok(drained) if drained.invalid_utf8));
+    let withheld = [&stdout, &stderr]
+        .iter()
+        .filter_map(|pipe| pipe.as_ref().ok().map(|drained| drained.withheld))
+        .sum();
+    let capture_complete = [&stdout, &stderr]
+        .iter()
+        .all(|pipe| matches!(pipe, Ok(drained) if drained.eof));
     let stdout = stdout.map(|drained| drained.text);
     let stderr = stderr.map(|drained| drained.text);
     let stdout = stdout.map_err(|e| {
@@ -1737,7 +2270,7 @@ async fn run(
         _ => {}
     }
     let saved = match sink {
-        Some(sink) => sink.finish().await,
+        Some(sink) => sink.finish(invalid_utf8 || withheld > 0, capture_complete).await,
         None => None,
     };
     Ok(RunResult {
@@ -1756,6 +2289,8 @@ async fn run(
         started,
         unconfirmed,
         omitted,
+        invalid_utf8,
+        withheld,
         state: parsed,
         saved,
     })
@@ -1824,6 +2359,33 @@ fn saved_notice(
     }
 }
 
+fn encoding_notice(
+    harness: &ResolvedHarness,
+    invalid_utf8: bool,
+    withheld: usize,
+    path: Option<&Path>,
+    complete: bool,
+    reason: Option<super::output::SaveReason>,
+) -> Option<String> {
+    let issue = match (invalid_utf8, withheld) {
+        (false, 0) => return None,
+        (true, 0) => harness.text(TextId::ToolsShellInvalidUtf8).to_owned(),
+        (false, bytes) => harness.render(TextId::ToolsShellWithheldUtf8, &[("bytes", &bytes.to_string())]),
+        (true, bytes) => format!("{} {}", harness.text(TextId::ToolsShellInvalidUtf8),
+            harness.render(TextId::ToolsShellWithheldUtf8, &[("bytes", &bytes.to_string())])),
+    };
+    Some(match path {
+        Some(path) => harness.render(
+            if complete { TextId::ToolsShellEncodingSaved } else { TextId::ToolsShellEncodingPrefix },
+            &[("issue", &issue), ("path", &path.to_string_lossy())],
+        ),
+        None => harness.render(
+            TextId::ToolsShellEncodingNoSave,
+            &[("issue", &issue), ("reason", &reason.unwrap_or(super::output::SaveReason::NoLocation).render(harness))],
+        ),
+    })
+}
+
 fn fit_shell_text(
     prefix: &str,
     suffix: &str,
@@ -1861,7 +2423,7 @@ fn fit_shell_text(
         );
     }
     let available = budget - reserve;
-    let head = crate::js::utf16_prefix(output, available / 2);
+    let head = crate::js::utf16_prefix_without_split(output, available / 2);
     let tail = crate::js::utf16_suffix(output, available - available / 2);
     format!("{prefix}{head}\n{notice}\n{tail}{suffix}")
 }
@@ -2047,37 +2609,44 @@ impl ShellTools {
             self.stop(&id, reason.clone());
         }
     }
+    fn background_preview_limit(&self) -> usize {
+        if self.configured_budget {
+            self.result_budget.saturating_sub(2048).min(BACKGROUND_PREVIEW_LIMIT)
+        } else {
+            BACKGROUND_PREVIEW_LIMIT
+        }
+    }
+
+    fn lookup_task(&self, id: &str) -> Option<Arc<Task>> {
+        self.tasks.lock().unwrap_or_else(|error| error.into_inner()).get(id).cloned()
+    }
+
     async fn read_output(
-        &self,
-        value: &Value,
+        task: Option<&Task>,
+        path: &str,
+        running: bool,
         harness: &ResolvedHarness,
-        cap: usize,
     ) -> std::result::Result<Value, String> {
-        let path = value["outputFile"]
-            .as_str()
-            .or_else(|| value["output_file"].as_str())
-            .unwrap_or("");
-        let mut file = match tokio::fs::File::open(path).await {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        use std::io::ErrorKind;
+        let missing = |output: String| json!({
+            "output": output, "truncated": true, "shownBytes": 0,
+            "fileComplete": false, "noticesIncluded": true
+        });
+        match tokio::fs::metadata(path).await {
+            Ok(metadata) if metadata.is_file() => {},
+            Ok(_) => return Err(std::io::Error::from(ErrorKind::InvalidData).to_string()),
+            Err(error) if error.kind() == ErrorKind::NotFound => {
                 tracing::warn!("command output is no longer retained");
-                return Ok(json!({"output":harness.text(TextId::ToolsShellOutputExpired),"truncated":true,"expired":true,"shownBytes":0,"fileComplete":false}));
+                return Ok(missing(harness.text(TextId::ToolsShellOutputExpired).into()));
             }
             Err(error) => return Err(error.to_string()),
+        }
+        let Some(task) = task else {
+            tracing::warn!("decoded command preview is no longer retained");
+            return Ok(missing(harness.render(TextId::ToolsShellTaskPreviewExpired, &[("path", path)])));
         };
-        let mut bytes = vec![0; cap + 1];
-        let count = file
-            .read(&mut bytes)
-            .await
-            .map_err(|error| error.to_string())?;
-        let shown = count.min(cap);
-        Ok(json!({
-            "output": String::from_utf8_lossy(&bytes[..shown]),
-            "truncated": value["outputTruncated"] == true || value["truncated"] == true || count > cap,
-            "expired": false,
-            "shownBytes": shown,
-            "fileComplete": value["outputTruncated"] != true && value["truncated"] != true
-        }))
+        let preview = task.preview.lock().unwrap_or_else(|error| error.into_inner());
+        Ok(preview.render(path, running, harness))
     }
     pub async fn context_async_call(
         &self,
@@ -2089,10 +2658,15 @@ impl ShellTools {
     ) -> crate::error::Result<Value> {
         use crate::error::Error;
         match method {
-            "backgroundTasks.readOutput" => self
-                .read_output(&args[0], &harness, 32768)
-                .await
-                .map_err(|error| Error::new("BACKGROUND_OUTPUT", error)),
+            "backgroundTasks.readOutput" => {
+                let task = self.lookup_task(args[0]["id"].as_str().unwrap_or(""));
+                let (path, running) = task.as_ref().map(|task| {
+                    let value = task.value.lock().unwrap_or_else(|error| error.into_inner());
+                    (value["output_file"].as_str().unwrap_or("").to_owned(), value["ended_at"].is_null())
+                }).unwrap_or_else(|| (args[0]["outputFile"].as_str().unwrap_or("").to_owned(), false));
+                Self::read_output(task.as_deref(), &path, running, &harness).await
+                    .map_err(|error| Error::new("BACKGROUND_OUTPUT", error))
+            }
             "backgroundTasks.wait" => {
                 let task = self
                     .tasks
@@ -2320,7 +2894,7 @@ impl ShellTools {
                     }
                     output.push_str(stderr);
                 }
-                if output.is_empty() && !not_started && !unknown {
+                if output.is_empty() && r.withheld == 0 && !not_started && !unknown {
                     output = harness.text(TextId::ToolsShellNoOutput).into();
                 }
                 let label = budget_label(&harness, self.result_budget, self.configured_budget);
@@ -2371,11 +2945,29 @@ impl ShellTools {
                         .expect("exit template carries one output slot");
                     (prefix.to_owned(), suffix.to_owned())
                 };
+                let saved_path = r.saved.as_ref().and_then(super::output::SaveState::path);
+                let encoding_notice = {
+                    use super::output::SaveState;
+                    let complete = matches!(&r.saved, Some(SaveState::Complete { .. }));
+                    let reason = match &r.saved {
+                        Some(SaveState::Failed { reason }) => Some(*reason),
+                        _ => None,
+                    };
+                    encoding_notice(&harness, r.invalid_utf8, r.withheld, saved_path, complete, reason)
+                };
+                let suffix = match &encoding_notice {
+                    Some(notice) => format!("{suffix}\n{notice}"),
+                    None => suffix,
+                };
                 let fixed = crate::js::utf16_len(&prefix)
                     .saturating_add(crate::js::utf16_len(&output))
                     .saturating_add(crate::js::utf16_len(&suffix));
                 let notice = if fixed > self.result_budget || r.omitted {
-                    saved_notice(r.saved.as_ref(), &label, &harness)
+                    if encoding_notice.is_some() {
+                        harness.render(TextId::ToolsShellInvalidUtf8OutputOmitted, &[("budget", &label)])
+                    } else {
+                        saved_notice(r.saved.as_ref(), &label, &harness)
+                    }
                 } else {
                     String::new()
                 };
@@ -2388,8 +2980,8 @@ impl ShellTools {
                     &notice,
                     &harness,
                 );
-                let notice_used = !notice.is_empty() && text.contains(&notice);
-                let saved_path = r.saved.as_ref().and_then(super::output::SaveState::path);
+                let notice_used = (!notice.is_empty() && text.contains(&notice))
+                    || encoding_notice.as_ref().is_some_and(|notice| text.ends_with(notice));
                 if !notice_used {
                     if let Some(path) = saved_path {
                         super::output::remove_saved(path).await;
@@ -2500,6 +3092,7 @@ impl ShellTools {
             return failure(harness.text(TextId::ToolsShellBackgroundCancelledLaunch));
         }
         let value = json!({"task_id":id,"type":"bash","description":utf16_prefix(command,4096),"status":"running","result":"","error":null,"output_file":path,"truncated":false,"exit_code":null,"started_at":chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis,true),"ended_at":null});
+        let preview = Arc::new(StdMutex::new(BackgroundPreview::new(self.background_preview_limit())));
         let task = Arc::new(Task {
             value: StdMutex::new(value),
             done: Notify::new(),
@@ -2508,6 +3101,7 @@ impl ShellTools {
             pid: AtomicU32::new(0),
             cwd_warning: cwd_warning.clone(),
             settling: AtomicBool::new(false),
+            preview: preview.clone(),
         });
         self.tasks
             .lock()
@@ -2519,6 +3113,8 @@ impl ShellTools {
             written: 0,
             truncated: false,
             failed: false,
+            marker: harness.render(TextId::ToolsShellOutputTruncated, &[("byte_limit", &BACKGROUND_FILE_LIMIT.to_string())]),
+            preview,
         }));
         let notices = self.notices.clone();
         let lifetime = self.lifetime.clone();
@@ -2609,6 +3205,7 @@ impl ShellTools {
                     tracing::warn!(error=%error,"background command output write failed");
                 }
                 if output.failed {
+                    output.preview.lock().unwrap_or_else(|error| error.into_inner()).save_failed = true;
                     value["status"] = json!("failed");
                     value["error"] = json!(Message::template(
                         TextId::ToolsShellOutputPersistenceFailed,
@@ -2759,13 +3356,7 @@ impl ShellTools {
         let Some(id) = input["task_id"].as_str().filter(|s| !s.is_empty()) else {
             return failure(harness.text(TextId::ToolsShellMissingTaskId));
         };
-        let Some(task) = self
-            .tasks
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(id)
-            .cloned()
-        else {
+        let Some(task) = self.lookup_task(id) else {
             return failure(harness.render(TextId::ToolsShellTaskNotFound, &[("id", id)]));
         };
         if name == "TaskStop" {
@@ -2805,40 +3396,10 @@ impl ShellTools {
             .unwrap_or_else(|error| error.into_inner())
             .clone();
         value["error"] = render_error(&value["error"], harness);
-        let cap = if self.configured_budget {
-            self.result_budget.saturating_sub(2048).min(32768)
-        } else {
-            32768
-        };
-        match self.read_output(&value, harness, cap).await {
+        let path = value["output_file"].as_str().unwrap_or("");
+        match Self::read_output(Some(&task), path, value["ended_at"].is_null(), harness).await {
             Ok(output) => {
-                let mut preview = output["output"].as_str().unwrap_or("").to_owned();
-                if output["expired"] != true && output["truncated"] == true {
-                    let path = value["output_file"].as_str().unwrap_or("");
-                    let notice = if output["fileComplete"] == true {
-                        harness.render(
-                            TextId::ToolsShellTaskOutputMore,
-                            &[
-                                ("shown_bytes", &output["shownBytes"].as_u64().unwrap_or(0).to_string()),
-                                ("path", path),
-                            ],
-                        )
-                    } else {
-                        harness.render(
-                            TextId::ToolsShellTaskOutputIncomplete,
-                            &[
-                                ("shown_bytes", &output["shownBytes"].as_u64().unwrap_or(0).to_string()),
-                                ("path", path),
-                                ("byte_limit", &(8 * 1024 * 1024).to_string()),
-                            ],
-                        )
-                    };
-                    if !preview.is_empty() {
-                        preview.push('\n');
-                    }
-                    preview.push_str(&notice);
-                }
-                value["result"] = json!(preview);
+                value["result"] = output["output"].clone();
                 value["truncated"] = output["truncated"].clone();
             }
             Err(error) => {

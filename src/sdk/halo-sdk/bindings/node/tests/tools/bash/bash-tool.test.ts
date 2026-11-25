@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import type { ToolContext } from '../../../types/tool.js';
 import { CostTracker } from '../../../native/values.js';
 import { getAllTools, releaseNativeToolOwner } from '../../../native/tools.js';
@@ -31,6 +32,16 @@ describe('Bash native facade', () => {
     const result = await tool().execute({ command: 'echo hello' }, makeCtx());
     expect(result.isError).toBe(false);
     expect(result.content).toContain('hello');
+  });
+  it('reports non-UTF-8 output with a path to the original bytes', async () => {
+    const result = await tool().execute({ command: "printf '\\326\\320\\316\\304'" }, makeCtx());
+    expect(result.isError).toBe(false);
+    const [text, notice] = result.content.split('\n');
+    expect(text).toBe('����');
+    expect(result.content).toContain('\nSome output was not valid UTF-8');
+    const path = /The exact captured bytes of stdout and stderr, combined, are in (.+)\.$/.exec(notice)?.[1];
+    expect(path).toBeDefined();
+    expect(await readFile(path!)).toEqual(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]));
   });
   it('returns toolError for non-zero exit code', async () => {
     const result = await tool().execute({ command: 'exit 42' }, makeCtx());

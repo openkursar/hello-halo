@@ -1695,7 +1695,11 @@ async fn background_registry_context_shares_metadata_output_and_shutdown() {
         .tool_context_async_call("backgroundTasks.readOutput", json!([task]), &cancel)
         .await
         .unwrap();
-    assert_eq!(output["truncated"], false);
+    assert_eq!(output["truncated"], true);
+    assert_eq!(output["fileComplete"], false);
+    let preview = output["output"].as_str().unwrap();
+    assert!(preview.contains("Capture ended before all output streams closed normally"));
+    assert!(!preview.contains("file limit"));
     runtime
         .tool_context_call("backgroundTasks.dispose", json!([]))
         .unwrap();
@@ -1734,7 +1738,10 @@ async fn background_timeout_terminates_ignoring_children_and_retains_persistent_
     let parsed: Value = serde_json::from_str(result["content"].as_str().unwrap()).unwrap();
     assert_eq!(parsed["task"]["status"], "failed");
     assert_eq!(parsed["task"]["error"], "Timed out after 100ms");
-    assert_eq!(parsed["task"]["result"], "saved");
+    let preview = parsed["task"]["result"].as_str().unwrap();
+    assert!(preview.starts_with("saved\n"));
+    assert!(preview.contains("Capture ended before all output streams closed normally"));
+    assert_eq!(parsed["task"]["truncated"], true);
     let path = std::path::PathBuf::from(launched["metadata"]["output_file"].as_str().unwrap());
     assert!(std::path::Path::new(&format!("{}.done", path.display())).exists());
     assert!(!std::fs::read_dir(path.parent().unwrap())
