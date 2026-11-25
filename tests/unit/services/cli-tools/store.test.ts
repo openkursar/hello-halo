@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { spawnSync } from 'child_process'
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { createHash } from 'crypto'
 import { dirname, join } from 'path'
 import { strToU8, zipSync } from 'fflate'
@@ -415,6 +415,31 @@ describe('cli-tools store: launchers', () => {
     expect(cmd).toContain('%*')
     expect(cmd).toContain('exit /b %ERRORLEVEL%')
     expect(cmd.includes('\r\n')).toBe(true)
+  })
+
+  it('reaches a runtime in a non-ASCII folder through a link, so the .cmd holds only ASCII', async () => {
+    const runtimeDir = join(dir, 'Halo内测版本')
+    mkdirSync(runtimeDir, { recursive: true })
+    writeFileSync(join(runtimeDir, 'Halo.exe'), '')
+    const nonAsciiRoot = join(dir, '张三', 'cli')
+    const store = newStore({ root: nonAsciiRoot, platform: 'win32', arch: 'x64', runtimePath: join(runtimeDir, 'Halo.exe') })
+    await store.importPackage(writePackage(pkgs), { source: 'catalog' })
+    const pinned = await store.pinExecution({ executionId: 'w', entry: 'chat', engine: 'claude' })
+    const cmd = readFileSync(join(pinned.binDir!, 'tool.cmd'), 'utf-8')
+    expect(/^[\x00-\x7f]*$/.test(cmd)).toBe(true)
+    const runtimeRef = /"%~dp0([^"]*Halo\.exe)"/.exec(cmd)?.[1]
+    expect(runtimeRef).toMatch(/^\.\.\\\.\.\\\.\.\\runtime\\[0-9a-f]{16}\\Halo\.exe$/)
+    const link = join(nonAsciiRoot, 'runtime', runtimeRef!.split('\\')[4])
+    expect(realpathSync(link)).toBe(realpathSync(runtimeDir))
+    expect(cmd).toContain('--require "%~dp0..\\argv-preload.cjs"')
+
+    // A second view reuses the link; a wrong one is replaced, never followed.
+    rmSync(link)
+    symlinkSync(dir, link)
+    await store.importPackage(writePackage(pkgs, { version: '1.1.0' }), { source: 'catalog' })
+    await store.pinExecution({ executionId: 'w2', entry: 'chat', engine: 'claude' })
+    expect(realpathSync(link)).toBe(realpathSync(runtimeDir))
+    expect(existsSync(join(dir, '张三'))).toBe(true)
   })
 
   it.skipIf(process.platform === 'win32')('runs a tool through the sh launcher with args, cwd, stdin and exit code', async () => {

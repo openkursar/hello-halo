@@ -23,7 +23,7 @@
 
 import { createHash, randomUUID } from 'crypto'
 import { existsSync, promises as fsp } from 'fs'
-import { isAbsolute, join } from 'path'
+import { basename, dirname, isAbsolute, join } from 'path'
 import { extractPackageArchive, DEFAULT_ARCHIVE_LIMITS, type ArchiveLimits } from './archive'
 import { CliToolError, isCliToolError, type CliToolErrorCode } from './errors'
 import { assertManifestSupported, parseCliManifest, type CliManifest } from './manifest'
@@ -381,6 +381,20 @@ async function fileSha256(path: string): Promise<string> {
 }
 const MAX_PATH_ENTRIES = 256
 const EXECUTION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/
+
+/**
+ * Whether `link` is a link to `target`. A stale link is removed, never
+ * followed; anything else at that path is left alone and reported.
+ */
+async function linksTo(link: string, target: string): Promise<boolean> {
+  const stat = await fsp.lstat(link).catch(() => null)
+  if (!stat) return false
+  if (!stat.isSymbolicLink()) throw new Error('the runtime link path is taken by something else')
+  const normalize = (value: string) => value.replace(/^\\\\\?\\/, '').replace(/[\\/]+$/, '').toLowerCase()
+  if (normalize(await fsp.readlink(link)) === normalize(target)) return true
+  await fsp.unlink(link)
+  return false
+}
 
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex')
@@ -1404,8 +1418,35 @@ export class CliToolStore {
     // Only present when an override is pinned, so views without one keep their keys.
     const guides = lock.tools.filter(t => t.guideOverride).map(t => [t.id, t.guideOverride?.sha256])
     return sha256(JSON.stringify({
-      v: 4, platform: this.platform, runtime: this.runtimePath, targets, ...(guides.length > 0 ? { guides } : {}),
+      v: 5, platform: this.platform, runtime: this.runtimePath, targets, ...(guides.length > 0 ? { guides } : {}),
     })).slice(0, 20)
+  }
+
+  /**
+   * The runtime path Windows launchers name. cmd.exe can misread a non-ASCII
+   * path in a batch file, so a runtime in such a folder is reached through a
+   * junction under the store root, which a launcher names by a plain-ASCII
+   * relative path. Anything that keeps the junction from being made leaves the
+   * real path in the launchers.
+   */
+  private async launcherRuntimePath(): Promise<string> {
+    if (this.platform !== 'win32' || /^[\x20-\x7e]*$/.test(this.runtimePath)) return this.runtimePath
+    const target = dirname(this.runtimePath)
+    const link = this.path('runtime', sha256(target).slice(0, 16))
+    try {
+      if (!(await linksTo(link, target))) {
+        await fsp.mkdir(dirname(link), { recursive: true })
+        await fsp.symlink(target, link, 'junction').catch(async (err: NodeJS.ErrnoException) => {
+          if (err.code !== 'EEXIST' || !(await linksTo(link, target))) throw err
+        })
+      }
+      return join(link, basename(this.runtimePath))
+    } catch (err) {
+      this.log.error('[CliTools] Runtime link could not be created', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return this.runtimePath
+    }
   }
 
   /**
@@ -1424,6 +1465,7 @@ export class CliToolStore {
       // Launchers name the preload by its final path, where the view lands after the rename.
       await fsp.writeFile(join(tmp, ARGV_PRELOAD_FILE), renderArgvPreload(), 'utf-8')
       const preloadPath = join(viewDir, ARGV_PRELOAD_FILE)
+      const runtimePath = await this.launcherRuntimePath()
       for (const [index, target] of this.launcherTargets(lock, state).entries()) {
         let credentialPreloadPath: string | undefined
         if (target.credential) {
@@ -1431,7 +1473,7 @@ export class CliToolStore {
           await fsp.writeFile(join(tmp, file), renderCredentialPreload(target.credential), 'utf-8')
           credentialPreloadPath = join(viewDir, file)
         }
-        const paths = { runtimePath: this.runtimePath, preloadPath, entryPath: target.entry, direct: target.direct === true, credentialPreloadPath }
+        const paths = { runtimePath, preloadPath, entryPath: target.entry, direct: target.direct === true, credentialPreloadPath, binDir }
         for (const file of launcherFiles(this.platform, target.exposedAs, paths)) {
           const path = join(tmp, 'bin', file.name)
           await fsp.writeFile(path, file.content, { encoding: 'utf-8', mode: file.executable ? 0o755 : 0o644 })
@@ -1543,6 +1585,7 @@ export class CliToolStore {
         sideEffects: record?.external ? 'unknown' : record?.sideEffects ?? 'unknown',
         signIn: signIn.text,
         enterpriseSignIn: signIn.enterprise,
+        platform: this.platform,
         ...(usesAdmin
           ? { guide: admin.body, guidePath: join(viewDir, 'guides', `${tool.id}.md`) }
           : packaged

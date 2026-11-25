@@ -32,6 +32,7 @@ const base: CliSkillInput = {
   sideEffects: 'writes',
   signIn: 'none',
   enterpriseSignIn: false,
+  platform: 'darwin',
 }
 
 describe('cli-tools skills: guide frontmatter', () => {
@@ -112,6 +113,17 @@ describe('cli-tools skills: rendering', () => {
     expect(text).toContain('Where the guide below says `itsm`, run `halo-itsm`.')
     expect(text).toContain('Settings > Enterprise identity')
     expect(text).toContain('Run `itsm todo`.')
+  })
+
+  it('tells the agent to run the command by name, with the shell syntax of the platform', () => {
+    const posix = renderCliSkill(base)
+    expect(posix).toContain('Run `itsm` by name from the shell')
+    expect(posix).toContain('Do not start Halo\'s executable')
+    expect(posix).toContain('The launcher directory is `$HALO_CLI_TOOLS_BIN`.')
+    expect(posix).not.toContain('$env:')
+    const windows = renderCliSkill({ ...base, platform: 'win32' })
+    expect(windows).toContain('`$env:HALO_CLI_TOOLS_BIN` in PowerShell')
+    expect(windows).toContain('`$LASTEXITCODE`')
   })
 
   it('says a registered program is not managed', () => {

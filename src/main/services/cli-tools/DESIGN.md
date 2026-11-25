@@ -203,6 +203,14 @@ the fixed entry and passes arguments through. The sh launcher uses `exec`, so
 cwd, stdio, exit status and signals belong to the tool. On Windows, a `.cmd`
 launcher and an extensionless sh twin for Git Bash are both written.
 
+cmd.exe reads a batch file in the console code page, so a `.cmd` launcher holds
+no non-ASCII text. A path under the launcher's own root is written relative to
+`%~dp0` when that relative path is ASCII. A runtime in a non-ASCII folder (for
+example an install directory with Chinese characters) is reached through a
+junction at `runtime/<hash of its folder>` in the root; a wrong link there is
+replaced, and anything else at that path is left alone and the absolute path is
+used. ASCII paths are written as before.
+
 The runtime also gets `--require <view>/argv-preload.cjs`, which only sets
 `process.defaultApp = true`. Running as Node, Electron still reports
 `process.versions.electron` but leaves `defaultApp` unset, so yargs and
@@ -295,7 +303,8 @@ A tool's AI guidance is a skill that belongs to the tool, not a store skill. For
 every pinned tool that exposes a command, view creation writes
 `views/<viewKey>/skills/<name>/SKILL.md` and records
 `{name, description, toolId, version, source}` in `view.json`. The view key
-format is `v: 4`, so views built before skills existed are rebuilt.
+format is `v: 5`, so views built before the current launcher and skill text
+are rebuilt.
 
 - **Name.** `cli-` plus the tool's first command, lowercased, with runs of
   other characters folded to `-` and at most 56 characters; tools whose names
@@ -311,7 +320,10 @@ format is `v: 4`, so views built before skills existed are rebuilt.
   block is always removed from the body. It is folded to one line and cut to
   300 characters, the limit the registry enforces.
 - **Body.** The tool's commands, side effects and sign-in (the same text as
-  TOOLS.md), the meaning of a `halo-` alias, the rules (no install or npm, no
+  TOOLS.md), the meaning of a `halo-` alias, how to run it (by name from the
+session PATH, never the Halo executable or another copy, the launcher
+directory variable and exit status in the current platform's shell syntax,
+and the AI terminal as the fallback when the shell returns nothing), the rules (no install or npm, no
   credentials, no rerun of a write whose outcome is unknown, where to sign in),
   then the usage text: the administrator override when its body is not empty,
   otherwise the package guide, otherwise a `--help` hint. A guide is inlined up
@@ -597,6 +609,10 @@ scan. fflate is loaded only when an archive is extracted.
   that way sees its script path as an argument.
 - On Ctrl+C, cmd.exe may ask "Terminate batch job".
 - Paths containing `"` or line breaks are refused for launchers.
+- A `.cmd` launcher that uses `%~dp0` can resolve wrongly when cmd.exe finds it
+  through PATH and the command name is typed in quotes.
+- A registered program in a non-ASCII folder outside the launcher root keeps
+  its absolute path in the `.cmd` launcher and may not start from cmd.exe.
 - Windows behavior has unit-test coverage only, until it is verified on a real
   machine.
 - A removed version used by a closed session is deleted one to two grace

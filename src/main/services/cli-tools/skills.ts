@@ -125,6 +125,8 @@ export interface CliSkillInput {
   guidePath?: string
   /** The guide was already cut when read. */
   guideCut?: boolean
+  /** Platform the session runs on; decides how the shell names variables. */
+  platform: NodeJS.Platform
 }
 
 /** The SKILL.md text of one tool. */
@@ -143,7 +145,6 @@ export function renderCliSkill(input: CliSkillInput): string {
     input.external
       ? 'An existing program on this computer that the user registered. Halo does not manage it or its dependencies.'
       : 'Halo installed this command-line tool for this session and runs it on its bundled runtime.',
-    `Run it from the shell; the session's launcher directory is \`$HALO_CLI_TOOLS_BIN\`.`,
     '',
     `- Commands: ${input.commands.map(c => `\`${c.exposedAs}\``).join(', ')}`,
     `- Side effects: ${input.sideEffects}`,
@@ -157,6 +158,15 @@ export function renderCliSkill(input: CliSkillInput): string {
     )
   }
   lines.push(
+    '',
+    '## Running it',
+    '',
+    `- Run \`${primary.exposedAs}\` by name from the shell: it is already on this session's PATH, pinned for this session. Do not start Halo's executable, a runtime or the tool's files yourself, and do not look for other copies in Halo's data folder.`,
+    input.platform === 'win32'
+      ? '- The launcher directory is `$env:HALO_CLI_TOOLS_BIN` in PowerShell and `%HALO_CLI_TOOLS_BIN%` in cmd; the exit status is `$LASTEXITCODE` or `%ERRORLEVEL%`.'
+      : '- The launcher directory is `$HALO_CLI_TOOLS_BIN`.',
+    '- Its output arrives on stdout and stderr like any program\'s and can be piped or redirected. Prefer machine-readable output when the guide offers it.',
+    '- If the shell returns nothing even for `echo`, run the command in Halo\'s AI terminal (`terminal_create`, `terminal_write`, `terminal_read`) and read the result there.',
     '',
     '## Rules',
     '',
