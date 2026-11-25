@@ -42,11 +42,14 @@ describe('Grep environment boundary', () => {
         for (const directory of (process.env.PATH ?? '').split(delimiter).map(path => path.replace(/^"|"$/g, '')).filter(isAbsolute)) {
           const candidate = join(directory, 'rg.exe');
           if (await access(candidate).then(() => true, () => false)) {
-            await copyFile(candidate, join(bin, 'rg.exe'));
+            await copyFile(candidate, join(cwd, 'rg.exe'));
             break;
           }
         }
-        await expect(access(join(bin, 'rg.exe')), 'Windows CI must provide ripgrep').resolves.toBeUndefined();
+        await expect(access(join(cwd, 'rg.exe')), 'Windows CI must provide ripgrep').resolves.toBeUndefined();
+        const cwdOnly = await tool.execute({ pattern: 'needle' }, ctx);
+        expect(cwdOnly).toMatchObject({ isError: true, content: expect.stringContaining('session PATH') });
+        await copyFile(join(cwd, 'rg.exe'), join(bin, 'rg.exe'));
       } else {
         const executable = join(bin, 'rg');
         await writeFile(join(cwd, 'rg'), '#!/bin/sh\nprintf "cwd-ripgrep-marker\\n"\n');

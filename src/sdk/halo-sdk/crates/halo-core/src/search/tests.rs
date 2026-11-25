@@ -8,6 +8,19 @@ async fn bridge_owned_errors_render_late_and_external_messages_remain_data(){
     std::fs::write(&module,"export async function createZvecGrep(){throw new Error('The configured module does not expose createZvecGrep.');}\n").unwrap();let external=service.search(request,&CancellationToken::new()).await.unwrap_err();assert!(external.harness.is_none());assert_eq!(external.render_for(&text.for_model("second")),"The configured module does not expose createZvecGrep.");
     service.dispose().await;pool.dispose().await;std::fs::remove_dir_all(base).unwrap();
 }
+#[cfg(windows)]
+#[test]
+fn code_search_converts_only_normalizable_verbatim_node_entry_paths() {
+    for (input, expected) in [
+        (r"\\?\D:\space (测试)\worker.cjs", r"D:\space (测试)\worker.cjs"),
+        (r"\\?\UNC\server\share\worker.cjs", r"\\server\share\worker.cjs"),
+        (r"\\?\D:\keep trailing.\worker.cjs", r"\\?\D:\keep trailing.\worker.cjs"),
+        (r"\\?\Volume{11111111-1111-1111-1111-111111111111}\worker.cjs", r"\\?\Volume{11111111-1111-1111-1111-111111111111}\worker.cjs"),
+    ] {
+        assert_eq!(node_visible_path(Path::new(input)), PathBuf::from(expected));
+    }
+}
+
 #[test]
 fn nullable_timeouts_keep_defaults_and_reject_other_invalid_numbers() {
     let base = json!({"backend":"zvec-grep","nodePath":"/node","modulePath":"/backend","cachePath":"/cache"});

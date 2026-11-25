@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm, access, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdtemp, mkdir, writeFile, rm, access, readFile, copyFile } from 'node:fs/promises';
+import { join, toNamespacedPath } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -88,6 +88,67 @@ async function eventually(check: () => boolean | Promise<boolean>) {
 }
 
 describe('host-owned CodeSearch across SDK workers', () => {
+  it('launches a backend in a spaced directory through its native absolute path', async () => {
+    const scripts = join(directory, 'backend space 测试');
+    await mkdir(scripts);
+    const workerPath = join(scripts, 'fixture worker.cjs');
+    await copyFile(backend, workerPath);
+    const configured = options();
+    configured.codeSearch = { ...configured.codeSearch!, workerPath: toNamespacedPath(workerPath), modulePath: toNamespacedPath(workerPath) };
+    const current = await session(runtime(), configured);
+    const messages = await turn(current);
+    const details = backendDetails(messages);
+    expect(details.indexes).toBe(1);
+    expect(details.pid).toBeGreaterThan(0);
+    expect(resultText(messages)).toContain(join(workspace, 'sample.ts'));
+  });
+
+  it('runs the generated adapter and returns the real indexed candidate', async () => {
+    const modulePath = join(directory, 'strategy fixture.mjs');
+    const supervisorPath = join(directory, 'generated adapter loader.cjs');
+    await writeFile(supervisorPath, `const c = JSON.parse(process.argv[2]); require(c.workerPath);`);
+    await writeFile(modulePath, `
+      import { readFile } from 'node:fs/promises';
+      import { join } from 'node:path';
+      export async function createZvecGrep() {
+        let source;
+        return {
+          async index(options) { source = join(options.rootPaths[0].absolutePath, 'sample.ts'); },
+          async context() { return {items: [{file: {absolutePath: source}, range: {kind: 'text', startLine: 1, endLine: 1}, content: (await readFile(source, 'utf8')).trim(), status: 'fresh'}]}; },
+          async close() {},
+        };
+      }
+    `);
+    const configured = options();
+    configured.codeSearch = { ...configured.codeSearch!, workerPath: undefined, modulePath: toNamespacedPath(modulePath), supervisorPath: toNamespacedPath(supervisorPath) };
+    const current = await session(runtime(), configured);
+    const text = resultText(await turn(current));
+    if (Number(process.versions.node.split('.')[0]) < 22) {
+      expect(text).toContain('requires a Node 22 or newer executable');
+    } else {
+      expect(text).toContain(join(workspace, 'sample.ts'));
+      expect(text).toContain('export const sample = true;');
+    }
+  });
+
+  it('reports a long backend launch path without rewriting it into a different file', async () => {
+    const scripts = join(directory, 'segment'.repeat(18), 'segment'.repeat(19));
+    await mkdir(toNamespacedPath(scripts), { recursive: true });
+    const workerPath = join(scripts, 'fixture.cjs');
+    expect(workerPath.length).toBeGreaterThan(260);
+    await copyFile(backend, toNamespacedPath(workerPath));
+    const configured = options();
+    configured.codeSearch = { ...configured.codeSearch!, workerPath: toNamespacedPath(workerPath), modulePath: toNamespacedPath(workerPath) };
+    const current = await session(runtime(), configured);
+    const messages = await turn(current);
+    if (process.platform === 'win32') {
+      expect(resultText(messages)).toContain('cannot be represented as a standard path under 260 UTF-16 code units');
+    } else {
+      expect(backendDetails(messages).indexes).toBe(1);
+      expect(resultText(messages)).toContain(join(workspace, 'sample.ts'));
+    }
+  });
+
   it('starts lazily, shares one backend across separate SDK workers, and releases the last owner', async () => {
     const pool = runtime();
     const first = await session(pool);
