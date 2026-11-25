@@ -1641,15 +1641,29 @@ async fn run(
     };
     let mut unconfirmed = false;
     if !finished {
-        owned_process.terminate(background).await;
+        #[cfg(windows)]
+        let terminate = |force| {
+            super::shell_platform::terminate_windows_shell(&owned_process, Path::new(&shell), force)
+        };
+        #[cfg(not(windows))]
+        let terminate = |force| {
+            let process = &owned_process;
+            async move {
+                process.terminate(force).await;
+                None::<bool>
+            }
+        };
+        unconfirmed = terminate(background).await == Some(false);
         let settled = tokio::time::timeout(
             TERMINATION_GRACE,
             settle(&mut pipes, &mut exit, &mut output, &mut status),
         )
         .await
         .is_ok();
-        if !settled {
-            owned_process.terminate(true).await;
+        if !settled || unconfirmed {
+            if let Some(confirmed) = terminate(true).await {
+                unconfirmed = !confirmed;
+            }
             let settled = tokio::time::timeout(
                 TERMINATION_GRACE,
                 settle(&mut pipes, &mut exit, &mut output, &mut status),

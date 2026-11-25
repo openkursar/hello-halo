@@ -40,12 +40,65 @@ pub(crate) struct OwnedProcess {
 const REAP_GRACE: Duration = Duration::from_millis(250);
 
 #[cfg(any(windows, test))]
-fn taskkill_result(status: std::process::ExitStatus) -> std::io::Result<()> {
+fn taskkill_result(
+    status: std::process::ExitStatus,
+    pids: &[u32],
+    mut still_running: impl FnMut(u32) -> bool,
+) -> std::io::Result<()> {
     if status.success() {
+        return Ok(());
+    }
+    let remaining: Vec<_> = pids.iter().copied().filter(|pid| still_running(*pid)).collect();
+    if remaining.is_empty() {
         Ok(())
     } else {
-        Err(std::io::Error::other(status.to_string()))
+        Err(std::io::Error::other(format!("{status}; remaining PIDs: {remaining:?}")))
     }
+}
+
+#[cfg(any(windows, test))]
+fn taskkill_args(pids: &[u32]) -> Vec<String> {
+    pids.iter()
+        .flat_map(|pid| ["/PID".to_owned(), pid.to_string()])
+        .chain(["/T".to_owned(), "/F".to_owned()])
+        .collect()
+}
+
+#[cfg(windows)]
+pub(crate) fn windows_system_directory() -> std::io::Result<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
+    }
+    let mut buffer = [0u16; 260];
+    let size = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    match size {
+        0 => Err(std::io::Error::last_os_error()),
+        size if size < buffer.len() => Ok(std::ffi::OsString::from_wide(&buffer[..size]).into()),
+        _ => Err(std::io::Error::other("Windows system directory exceeds the path buffer")),
+    }
+}
+
+#[cfg(windows)]
+fn windows_process_still_running(pid: u32) -> bool {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> RawHandle;
+        fn WaitForSingleObject(handle: RawHandle, milliseconds: u32) -> u32;
+    }
+    const SYNCHRONIZE: u32 = 0x00100000;
+    const ERROR_INVALID_PARAMETER: i32 = 87;
+    const WAIT_OBJECT_0: u32 = 0;
+    let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return std::io::Error::last_os_error().raw_os_error() != Some(ERROR_INVALID_PARAMETER);
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+    (unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) }) != WAIT_OBJECT_0
 }
 
 #[cfg(any(windows, test))]
@@ -63,10 +116,10 @@ fn finish_tree_termination(
 }
 
 #[cfg(windows)]
-fn kill_windows_tree(pid: u32) -> std::io::Result<()> {
+fn kill_windows_tree(root: u32, pids: &[u32]) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
-    let mut child = std::process::Command::new("taskkill.exe")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
+    let mut child = std::process::Command::new(windows_system_directory()?.join("taskkill.exe"))
+        .args(taskkill_args(pids))
         .creation_flags(0x08000000)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -75,7 +128,7 @@ fn kill_windows_tree(pid: u32) -> std::io::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(2);
     let error = loop {
         match child.try_wait() {
-            Ok(Some(status)) => return taskkill_result(status),
+            Ok(Some(status)) => return taskkill_result(status, pids, windows_process_still_running),
             Err(error) => break error,
             Ok(None) if Instant::now() >= deadline => {
                 break std::io::Error::new(std::io::ErrorKind::TimedOut, "taskkill timed out");
@@ -84,7 +137,7 @@ fn kill_windows_tree(pid: u32) -> std::io::Result<()> {
         }
     };
     if let Err(error) = child.kill() {
-        tracing::warn!(pid, error=%error, "Taskkill helper could not be stopped");
+        tracing::warn!(pid = root, error=%error, "Taskkill helper could not be stopped");
     }
     Err(error)
 }
@@ -105,7 +158,7 @@ fn signal(state: &mut ChildState, pid: u32, group: bool, force: bool) {
     }
     #[cfg(windows)]
     {
-        finish_tree_termination(pid, kill_windows_tree(pid), || state.child.start_kill());
+        finish_tree_termination(pid, kill_windows_tree(pid, &[pid]), || state.child.start_kill());
         let _ = (group, force);
     }
 }
@@ -403,6 +456,30 @@ impl OwnedProcess {
             }
         }
     }
+    #[cfg(windows)]
+    pub(crate) async fn terminate_windows_tree(&self, pids: Vec<u32>) -> bool {
+        let pid = self.pid;
+        let child = self.child.clone();
+        match tokio::task::spawn_blocking(move || {
+            let mut state = child.lock().unwrap_or_else(|error| error.into_inner());
+            if state.child.id().is_some() {
+                let tree = kill_windows_tree(pid, &pids);
+                if tree.is_ok() {
+                    return true;
+                }
+                finish_tree_termination(pid, tree, || state.child.start_kill());
+            }
+            // Only the root's exit can be confirmed by the caller's child handle.
+            !pids.into_iter().any(|member| member != pid && windows_process_still_running(member))
+        }).await {
+            Ok(confirmed) => confirmed,
+            Err(error) => {
+                tracing::warn!(pid, error=%error, "Owned process tree termination task failed");
+                false
+            }
+        }
+    }
+
     pub(crate) fn abort_now(&self) {
         if self.active.swap(false, Ordering::AcqRel) {
             if let Some(owner) = self.owner.upgrade() {
@@ -452,13 +529,17 @@ mod retirement_tests {
         use std::os::windows::process::ExitStatusExt;
         use std::process::ExitStatus;
 
-        assert!(taskkill_result(ExitStatus::from_raw(0)).is_ok());
-        let nonzero = taskkill_result(ExitStatus::from_raw(256));
-        assert!(nonzero.is_err());
+        let pids = [123, 456, 789];
+        assert_eq!(taskkill_args(&pids), ["/PID", "123", "/PID", "456", "/PID", "789", "/T", "/F"]);
+        assert!(taskkill_result(ExitStatus::from_raw(0), &pids, |_| panic!("successful taskkill needs no liveness probe")).is_ok());
+        let nonzero = ExitStatus::from_raw(256);
+        assert!(taskkill_result(nonzero, &pids, |_| false).is_ok());
+        let incomplete = taskkill_result(nonzero, &pids, |pid| pid == 456);
+        assert!(incomplete.as_ref().unwrap_err().to_string().contains("remaining PIDs: [456]"));
         let mut root_kills = 0;
         for outcome in [
             Ok(()),
-            nonzero,
+            incomplete,
             Err(Error::from(ErrorKind::TimedOut)),
             Err(Error::from(ErrorKind::NotFound)),
         ] {
