@@ -25,10 +25,6 @@
       "status"
     ]
   },
-  "tools.code_search.worker_stderr": {
-    "text": "{error}\nBackend stderr tail (diagnostic output):\n{stderr}",
-    "slots": ["error", "stderr"]
-  },
   "tools.code_search.bridge.invalid_request": {
     "text": "Unexpected code search request.",
     "slots": []

@@ -13,8 +13,8 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    process::{ChildStderr, ChildStdin, ChildStdout, Command},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{ChildStdin, ChildStdout, Command},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -133,63 +133,7 @@ struct Worker {
     alive: Arc<AtomicBool>,
     requests: Arc<AtomicU64>,
     observer: Option<tokio::task::JoinHandle<()>>,
-    stderr: SearchStderr,
     owned_error_token: String,
-}
-
-const STDERR_TAIL_BYTES: usize = 4096;
-
-struct SearchStderr {
-    tail: Arc<Mutex<Vec<u8>>>,
-    reader: tokio::task::JoinHandle<()>,
-}
-
-impl SearchStderr {
-    fn capture(mut pipe: ChildStderr) -> Self {
-        let tail = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let pending = tail.clone();
-        let reader = crate::runtime::spawn(async move {
-            let mut buffer = [0; STDERR_TAIL_BYTES];
-            loop {
-                let size = match pipe.read(&mut buffer).await {
-                    Ok(0) => break,
-                    Ok(size) => size,
-                    Err(error) => {
-                        tracing::warn!(%error, "Code search worker stderr capture ended early");
-                        break;
-                    }
-                };
-                let mut tail = pending.lock().unwrap();
-                let discard = (tail.len() + size).saturating_sub(STDERR_TAIL_BYTES);
-                tail.drain(..discard);
-                tail.extend_from_slice(&buffer[..size]);
-            }
-        });
-        Self { tail, reader }
-    }
-
-    async fn exit_error(&mut self, error: Error) -> Error {
-        // The exit frame and stderr travel on different pipes.
-        let _ = tokio::time::timeout(Duration::from_millis(200), &mut self.reader).await;
-        let bytes = self.tail.lock().unwrap();
-        let text: crate::js::text::JsText = String::from_utf8_lossy(&bytes).trim().into();
-        let redacted = crate::redaction::redact_secrets(&text);
-        let tail = redacted.as_utf8().unwrap_or_default();
-        if tail.is_empty() {
-            return error;
-        }
-        Error::template(
-            error.code.clone(),
-            TextId::ToolsCodeSearchWorkerStderr,
-            &[("error", error.as_harness_message()), ("stderr", tail.into())],
-        ).with_details(json!({"stderrTail": tail}))
-    }
-}
-
-impl Drop for SearchStderr {
-    fn drop(&mut self) {
-        self.reader.abort();
-    }
 }
 struct Entry {
     pool: Weak<CodeSearchPool>,
@@ -340,11 +284,7 @@ impl CodeSearchService {
     pub async fn search(&self, request: Value, caller: &CancellationToken) -> Result<Value> {
         let result = self.search_inner(request, caller).await;
         if let Err(error) = &result {
-            if let Some(stderr) = error.details.as_ref().and_then(|details| details["stderrTail"].as_str()) {
-                tracing::warn!(reason=%error.code, ?stderr, "Code search did not complete");
-            } else {
-                tracing::warn!(reason=%error.code,"Code search did not complete");
-            }
+            tracing::warn!(reason=%error.code,"Code search did not complete");
         }
         result
     }
@@ -699,23 +639,17 @@ async fn stop_worker(
 async fn read_message(worker: &mut Worker, id: Option<u64>) -> Result<Value> {
     loop {
         let Some(line) = worker.output.next_line().await? else {
-            let error = Error::template("exit", TextId::ToolsCodeSearchWorkerExited, &[]);
-            return Err(worker.stderr.exit_error(error).await);
+            return Err(Error::template(
+                "exit",
+                TextId::ToolsCodeSearchWorkerExited,
+                &[],
+            ));
         };
         let value: Value = serde_json::from_str(&line).map_err(|_| {
             Error::template("protocol", TextId::ToolsCodeSearchUnexpectedResponse, &[])
         })?;
         if value["type"] == "error" {
-            let report = &value["sdkError"];
-            if report["token"] == worker.owned_error_token {
-                if let Some(error) = bridge_error(report) {
-                    return Err(if report["kind"] == "worker_exited" {
-                        worker.stderr.exit_error(error).await
-                    } else {
-                        error
-                    });
-                }
-            }
+            if value["sdkError"]["token"]==worker.owned_error_token {if let Some(error)=bridge_error(&value["sdkError"]){return Err(error);}}
             return Err(match value["message"].as_str() {
                 Some(message) => Error::new("backend", message),
                 None => Error::template("backend", TextId::ToolsCodeSearchBackendFailed, &[]),
@@ -802,7 +736,7 @@ async fn execute(
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::null())
             .kill_on_drop(true);
         command.envs(crate::core::conventions::merged_environment(
             &entry.settings.environment,
@@ -828,7 +762,6 @@ async fn execute(
             .map_err(|_| Error::template("launch", TextId::ToolsCodeSearchLaunchFailed, &[]))?;
         let input = child.stdin.take().unwrap();
         let output = BufReader::new(child.stdout.take().unwrap()).lines();
-        let stderr = SearchStderr::capture(child.stderr.take().unwrap());
         let owned_process = Arc::new(entry.processes.track(child, cfg!(unix)));
         let alive = Arc::new(AtomicBool::new(true));
         let generation = entry.worker_sequence.fetch_add(1, Ordering::AcqRel) + 1;
@@ -860,7 +793,6 @@ async fn execute(
             alive,
             requests,
             observer: Some(observer),
-            stderr,
             owned_error_token,
         });
         let worker = slot.as_mut().unwrap();
