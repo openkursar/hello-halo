@@ -195,8 +195,13 @@ async fn probe_git_branch(cwd: &str, options: &Value) -> Option<String> {
     match tokio::time::timeout(std::time::Duration::from_secs(2), operation).await {
         Ok(Ok(branch)) => branch,
         outcome => {
+            let pid = process.id();
             process.abort_now();
-            let _ = process.wait().await;
+            match tokio::time::timeout(std::time::Duration::from_millis(250), process.wait()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => tracing::warn!(?pid, error=%error, "Git branch probe exit could not be observed after termination"),
+                Err(_) => tracing::warn!(?pid, "Git branch probe exit remained unconfirmed after termination"),
+            }
             match outcome {
                 Ok(Err(error)) => tracing::warn!(error=%error,"Git branch probe could not finish"),
                 Err(_) => tracing::warn!("Git branch probe exceeded its deadline"),

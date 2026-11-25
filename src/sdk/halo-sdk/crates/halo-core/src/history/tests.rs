@@ -861,6 +861,28 @@ async fn only_persisted_sessions_probe_git_and_store_the_observed_branch() {
     assert_eq!(entry["gitBranch"], "fixture-branch");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn timed_out_git_probe_returns_no_branch_and_reaps_the_child() {
+    use std::{os::unix::fs::PermissionsExt, time::Duration};
+    let directory = Directory::new();
+    let executable = directory.0.join("git");
+    let pid_file = directory.0.join("probe.pid");
+    std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$PROBE_PID\"\nexec /bin/sleep 30\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let options = json!({"nativeProcessEnv":{"PATH":directory.0,"PROBE_PID":pid_file}});
+    let branch = tokio::time::timeout(
+        Duration::from_secs(5),
+        super::probe_git_branch(directory.0.to_str().unwrap(), &options),
+    )
+    .await
+    .expect("a timed out probe must not block session preparation");
+    assert_eq!(branch, None);
+    let pid: i32 = std::fs::read_to_string(pid_file).unwrap().trim().parse().unwrap();
+    assert_ne!(unsafe { libc::kill(pid, 0) }, 0);
+    assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+}
+
 #[tokio::test]
 async fn public_pages_and_line_offsets_match_fixtures() {
     let fixture: Value = serde_json::from_str(include_str!("fixtures/public-pages.json")).unwrap();

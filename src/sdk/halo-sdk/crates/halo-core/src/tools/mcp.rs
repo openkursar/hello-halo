@@ -68,6 +68,95 @@ struct Connection {
     lifetime: CancellationToken,
     handler: Arc<rpc::RpcHandler>,
 }
+
+#[cfg(any(windows, test))]
+fn is_windows_bare_program(program: &str) -> bool {
+    !program.is_empty() && !program.contains(['/', '\\', ':', '.', '\0'])
+}
+
+#[cfg(any(windows, test))]
+fn resolve_windows_program(
+    program: &str,
+    paths: impl IntoIterator<Item = std::path::PathBuf>,
+    extensions: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    if !is_windows_bare_program(program) {
+        return None;
+    }
+    let extensions: Vec<_> = extensions
+        .filter(|value| value.split(';').any(|entry| !entry.trim().is_empty()))
+        .unwrap_or(".COM;.EXE;.BAT;.CMD")
+        .split(';')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            let extension = entry.strip_prefix('.').unwrap_or(entry);
+            [".COM", ".EXE", ".BAT", ".CMD"]
+                .into_iter()
+                .find(|candidate| candidate[1..].eq_ignore_ascii_case(extension))
+        })
+        .collect();
+    for directory in paths.into_iter().filter(|path| path.is_absolute()) {
+        for extension in &extensions {
+            let candidate = directory.join(format!("{program}{extension}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(any(windows, test))]
+async fn select_windows_program(
+    executable: &str,
+    server: &str,
+    lookup: impl std::future::Future<Output = std::result::Result<Option<std::path::PathBuf>, tokio::task::JoinError>>,
+    cancel: &CancellationToken,
+    deadline: Duration,
+) -> Result<std::path::PathBuf> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(Error::cancelled()),
+        result = tokio::time::timeout(deadline, lookup) => match result {
+            Ok(Ok(Some(path))) => {
+                tracing::debug!(%server, program = %path.display(), "Resolved Windows MCP program");
+                Ok(path)
+            }
+            Ok(Ok(None)) => Ok(executable.into()),
+            Ok(Err(error)) => Err(Error::new("MCP_SPAWN", error.to_string())),
+            Err(_) => {
+                tracing::warn!(%server, "Windows MCP program lookup timed out; using standard executable lookup");
+                Ok(executable.into())
+            }
+        }
+    }
+}
+
+async fn settle_stdio_watcher(
+    mut watcher: tokio::task::JoinHandle<()>,
+    force: impl FnOnce(),
+    grace: Duration,
+    after_force: Duration,
+) -> std::io::Result<()> {
+    let result = match tokio::time::timeout(grace, &mut watcher).await {
+        Ok(result) => result,
+        Err(_) => {
+            force();
+            match tokio::time::timeout(after_force, &mut watcher).await {
+                Ok(result) => result,
+                Err(_) => {
+                    watcher.abort();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "MCP process exit remained unconfirmed after forced cleanup",
+                    ));
+                }
+            }
+        }
+    };
+    result.map_err(std::io::Error::other)
+}
+
 impl Connection {
     async fn open(
         bridge: Arc<dyn HostBridge>,
@@ -125,6 +214,26 @@ impl Connection {
             let executable = config["command"].as_str().ok_or_else(|| {
                 Error::template("MCP_CONFIG", TextId::ToolsMcpMissingCommand, &[])
             })?;
+            let environment = crate::core::conventions::merged_environment(
+                &crate::core::conventions::process_environment(options),
+                &[&config["env"]],
+                cfg!(windows),
+            );
+            #[cfg(windows)]
+            let executable = if let Some(paths) = environment
+                .get("PATH")
+                .filter(|_| is_windows_bare_program(executable))
+            {
+                let paths = paths.clone();
+                let extensions = environment.get("PATHEXT").cloned();
+                let program = executable.to_owned();
+                let lookup = tokio::task::spawn_blocking(move || {
+                    resolve_windows_program(&program, std::env::split_paths(&paths), extensions.as_deref())
+                });
+                select_windows_program(executable, server, lookup, cancel, Duration::from_secs(5)).await?
+            } else {
+                executable.into()
+            };
             let mut command = Command::new(executable);
             if let Some(args) = config["args"].as_array() {
                 command.args(args.iter().filter_map(Value::as_str));
@@ -137,11 +246,6 @@ impl Connection {
             if let Some(cwd) = config["cwd"].as_str() {
                 command.current_dir(cwd);
             }
-            let environment = crate::core::conventions::merged_environment(
-                &crate::core::conventions::process_environment(options),
-                &[&config["env"]],
-                cfg!(windows),
-            );
             command.env_clear().envs(environment);
             #[cfg(windows)]
             {
@@ -557,13 +661,22 @@ impl Connection {
         }
         if let Transport::Stdio(c) = &self.transport {
             c.process.terminate(false).await;
-            if let Some(mut watcher) = c.watcher.lock().await.take() {
-                if tokio::time::timeout(Duration::from_secs(5), &mut watcher)
-                    .await
-                    .is_err()
+            let watcher = c.watcher.lock().await.take();
+            if let Some(watcher) = watcher {
+                let pid = c.process.id();
+                if let Err(error) = settle_stdio_watcher(
+                    watcher,
+                    || {
+                        c.reader.abort();
+                        c.stderr.abort();
+                        c.process.abort_now();
+                    },
+                    Duration::from_secs(5),
+                    Duration::from_millis(250),
+                )
+                .await
                 {
-                    c.process.abort_now();
-                    let _ = watcher.await;
+                    tracing::warn!(server = %self.handler.server, ?pid, error = %error, "MCP stdio retirement could not be confirmed");
                 }
             }
             c.reader.abort();
@@ -579,6 +692,98 @@ impl Connection {
         }
     }
 }
+#[cfg(test)]
+mod stdio_tests {
+    use super::*;
+    use std::io::ErrorKind;
+
+    #[test]
+    fn windows_bare_program_uses_path_and_extension_order() {
+        let root = std::env::temp_dir().join(format!("halo-mcp-{}", uuid::Uuid::new_v4()));
+        let first = root.join("with spaces (测试)");
+        let second = root.join("other");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        for file in ["runner.CMD", "runner.BAT", "runner.JS"] {
+            std::fs::write(first.join(file), "fixture").unwrap();
+        }
+        std::fs::write(second.join("runner.EXE"), "fixture").unwrap();
+        let resolve = |program, extensions| {
+            resolve_windows_program(
+                program,
+                ["".into(), "relative".into(), first.clone(), second.clone()],
+                extensions,
+            )
+        };
+        assert_eq!(resolve("runner", Some(".js;.exe;.cmd;.bat")), Some(first.join("runner.CMD")));
+        assert_eq!(resolve("runner", None), Some(first.join("runner.BAT")));
+        assert_eq!(resolve("runner", Some(".exe")), Some(second.join("runner.EXE")));
+        assert_eq!(resolve("runner", Some("EXE; cmd ;.BAT")), Some(first.join("runner.CMD")));
+        assert_eq!(resolve("runner", Some("CMD;EXE")), Some(first.join("runner.CMD")));
+        for empty in ["", "   ", "; ;"] {
+            assert_eq!(resolve("runner", Some(empty)), Some(first.join("runner.BAT")));
+        }
+        assert_eq!(resolve("runner", Some("JS")), None);
+        for explicit in ["runner.cmd", "C:runner", r".\runner", "somewhere/runner"] {
+            assert_eq!(resolve(explicit, None), None, "{explicit}");
+        }
+        assert!(resolve("not-installed", None).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn windows_program_lookup_falls_back_on_timeout_but_not_on_cancellation() {
+        use std::path::PathBuf;
+
+        let cancel = CancellationToken::new();
+        let pending = std::future::pending;
+        let result = select_windows_program("npx", "fixture", pending(), &cancel, Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(result, PathBuf::from("npx"));
+
+        let path = PathBuf::from("fixture/npx.cmd");
+        let resolved = || std::future::ready(Ok(Some(path.clone())));
+        let result = select_windows_program("npx", "fixture", resolved(), &cancel, Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(result, path);
+
+        cancel.cancel();
+        let error = select_windows_program("npx", "fixture", resolved(), &cancel, Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Error::cancelled().code);
+    }
+
+    #[tokio::test]
+    async fn stuck_stdio_watcher_is_aborted_after_the_second_deadline() {
+        let (started, ready) = oneshot::channel();
+        let (dropped, finished) = oneshot::channel::<()>();
+        let watcher = tokio::spawn(async move {
+            let _dropped = dropped;
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        ready.await.unwrap();
+        let mut forced = false;
+        let error = settle_stdio_watcher(
+            watcher,
+            || forced = true,
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap_err();
+        assert!(forced);
+        assert_eq!(error.kind(), ErrorKind::TimedOut);
+        assert!(tokio::time::timeout(Duration::from_secs(2), finished)
+            .await
+            .unwrap()
+            .is_err());
+    }
+}
+
 pub(super) fn rpc_id(value: &Value) -> Option<String> {
     value.is_number().then(|| crate::js::stringify(value))
 }
