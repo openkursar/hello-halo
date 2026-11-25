@@ -333,14 +333,78 @@ pub async fn grep(
             &[("path", &path.to_string_lossy())],
         ));
     }
+    let kind = input["type"].as_str().filter(|value| !value.is_empty());
+    let glob = input["glob"].as_str().filter(|value| !value.is_empty());
+    if kind.is_some() && glob.is_some_and(|glob| !glob.starts_with('!')) {
+        return failure(harness.text(TextId::ToolsGrepCombinedFilters));
+    }
+    if kind.is_some() && path.is_file() {
+        return failure(harness.text(TextId::ToolsGrepSingleFileFilter));
+    }
+    let glob = glob.map(|glob| grep_glob(glob, cfg!(windows)));
+    if let Some(glob) = &glob {
+        // rg bypasses file filters for an explicit file. Only precheck a known relative path.
+        if let Some(relative) = path.strip_prefix(&ctx.cwd).ok().filter(|_| path.is_file()) {
+            match grep_file_matches(glob, relative) {
+                Ok(false) => return success(harness.text(TextId::ToolsGrepFileExcluded), None),
+                Err(error) => return failure(harness.render(
+                    TextId::ToolsGrepFailed, &[("error", &error.to_string())],
+                )),
+                Ok(true) => {}
+            }
+        }
+    }
     let env =
         crate::core::conventions::merged_environment(base_environment, &[&ctx.env], cfg!(windows));
     let executable = env
         .get("AGENT_RIPGREP_PATH")
         .map(String::as_str)
-        .filter(|path| std::path::Path::new(path).is_absolute())
+        .filter(|path| Path::new(path).is_absolute())
         .unwrap_or("rg");
-    let mut cmd = Command::new(executable);
+    #[cfg(windows)]
+    let program = if executable == "rg" {
+        let path = env.get("PATH").filter(|path| !path.is_empty()).cloned();
+        let resolved = if let Some(path) = path {
+            let timeout = std::time::Duration::from_secs(5);
+            let deadline = std::time::Instant::now() + timeout;
+            let cancel = ctx.cancellation.clone();
+            let lookup = tokio::task::spawn_blocking(move || {
+                super::windows_executable::resolve("rg", &path, Some(".EXE"), || {
+                    !cancel.is_cancelled() && std::time::Instant::now() < deadline
+                })
+            });
+            tokio::select! {
+                biased;
+                _ = ctx.cancellation.cancelled() => {
+                    tracing::warn!(reason = "aborted", "Content search executable lookup interrupted");
+                    return failure(harness.text(TextId::ToolsGrepAborted));
+                }
+                result = tokio::time::timeout(timeout, lookup) => match result {
+                    Ok(Ok(path)) => path,
+                    Ok(Err(error)) => {
+                        tracing::warn!(%error, "Content search executable lookup failed");
+                        return failure(harness.render(TextId::ToolsGrepFailed, &[("error", &error.to_string())]));
+                    }
+                    Err(_) => {
+                        tracing::warn!(reason = "deadline", "Content search executable lookup timed out");
+                        return failure(harness.text(TextId::ToolsGrepUnavailable));
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        let Some(program) = resolved else {
+            tracing::warn!(reason = "not_found", "Ripgrep is not available on the session PATH");
+            return failure(harness.text(TextId::ToolsGrepUnavailable));
+        };
+        program
+    } else {
+        std::path::PathBuf::from(executable)
+    };
+    #[cfg(not(windows))]
+    let program = executable;
+    let mut cmd = Command::new(program);
     cmd.arg("--no-config");
     let mode = input["output_mode"]
         .as_str()
@@ -373,14 +437,6 @@ pub async fn grep(
             }
         }
     }
-    let kind = input["type"].as_str().filter(|value| !value.is_empty());
-    let glob = input["glob"].as_str().filter(|value| !value.is_empty());
-    if kind.is_some() && glob.is_some_and(|glob| !glob.starts_with('!')) {
-        return failure(harness.text(TextId::ToolsGrepCombinedFilters));
-    }
-    if kind.is_some() && path.is_file() {
-        return failure(harness.text(TextId::ToolsGrepSingleFileFilter));
-    }
     if let Some(kind) = kind {
         let normalized = kind.to_lowercase();
         let kind = match normalized.as_str() {
@@ -397,17 +453,6 @@ pub async fn grep(
         cmd.args(["--type", kind]);
     }
     if let Some(glob) = glob {
-        let glob = grep_glob(glob, cfg!(windows));
-        // rg bypasses file filters for an explicit file. Only precheck a known relative path.
-        if let Some(relative) = path.strip_prefix(&ctx.cwd).ok().filter(|_| path.is_file()) {
-            match grep_file_matches(&glob, relative) {
-                Ok(false) => return success(harness.text(TextId::ToolsGrepFileExcluded), None),
-                Err(error) => return failure(harness.render(
-                    TextId::ToolsGrepFailed, &[("error", &error.to_string())],
-                )),
-                Ok(true) => {}
-            }
-        }
         cmd.arg("--glob").arg(glob.as_ref());
     }
     let root = file::real_path(&path);

@@ -70,43 +70,6 @@ struct Connection {
 }
 
 #[cfg(any(windows, test))]
-fn is_windows_bare_program(program: &str) -> bool {
-    !program.is_empty() && !program.contains(['/', '\\', ':', '.', '\0'])
-}
-
-#[cfg(any(windows, test))]
-fn resolve_windows_program(
-    program: &str,
-    paths: impl IntoIterator<Item = std::path::PathBuf>,
-    extensions: Option<&str>,
-) -> Option<std::path::PathBuf> {
-    if !is_windows_bare_program(program) {
-        return None;
-    }
-    let extensions: Vec<_> = extensions
-        .filter(|value| value.split(';').any(|entry| !entry.trim().is_empty()))
-        .unwrap_or(".COM;.EXE;.BAT;.CMD")
-        .split(';')
-        .filter_map(|entry| {
-            let entry = entry.trim();
-            let extension = entry.strip_prefix('.').unwrap_or(entry);
-            [".COM", ".EXE", ".BAT", ".CMD"]
-                .into_iter()
-                .find(|candidate| candidate[1..].eq_ignore_ascii_case(extension))
-        })
-        .collect();
-    for directory in paths.into_iter().filter(|path| path.is_absolute()) {
-        for extension in &extensions {
-            let candidate = directory.join(format!("{program}{extension}"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-#[cfg(any(windows, test))]
 async fn select_windows_program(
     executable: &str,
     server: &str,
@@ -222,15 +185,21 @@ impl Connection {
             #[cfg(windows)]
             let executable = if let Some(paths) = environment
                 .get("PATH")
-                .filter(|_| is_windows_bare_program(executable))
+                .filter(|_| super::windows_executable::is_bare_program(executable))
             {
                 let paths = paths.clone();
                 let extensions = environment.get("PATHEXT").cloned();
                 let program = executable.to_owned();
+                let lookup_cancel = cancel.clone();
+                let timeout = Duration::from_secs(5);
+                let deadline = std::time::Instant::now() + timeout;
+                // MCP launchers such as npx require .cmd; Command handles batch argument escaping.
                 let lookup = tokio::task::spawn_blocking(move || {
-                    resolve_windows_program(&program, std::env::split_paths(&paths), extensions.as_deref())
+                    super::windows_executable::resolve(&program, &paths, extensions.as_deref(), || {
+                        !lookup_cancel.is_cancelled() && std::time::Instant::now() < deadline
+                    })
                 });
-                select_windows_program(executable, server, lookup, cancel, Duration::from_secs(5)).await?
+                select_windows_program(executable, server, lookup, cancel, timeout).await?
             } else {
                 executable.into()
             };
@@ -696,40 +665,6 @@ impl Connection {
 mod stdio_tests {
     use super::*;
     use std::io::ErrorKind;
-
-    #[test]
-    fn windows_bare_program_uses_path_and_extension_order() {
-        let root = std::env::temp_dir().join(format!("halo-mcp-{}", uuid::Uuid::new_v4()));
-        let first = root.join("with spaces (测试)");
-        let second = root.join("other");
-        std::fs::create_dir_all(&first).unwrap();
-        std::fs::create_dir_all(&second).unwrap();
-        for file in ["runner.CMD", "runner.BAT", "runner.JS"] {
-            std::fs::write(first.join(file), "fixture").unwrap();
-        }
-        std::fs::write(second.join("runner.EXE"), "fixture").unwrap();
-        let resolve = |program, extensions| {
-            resolve_windows_program(
-                program,
-                ["".into(), "relative".into(), first.clone(), second.clone()],
-                extensions,
-            )
-        };
-        assert_eq!(resolve("runner", Some(".js;.exe;.cmd;.bat")), Some(first.join("runner.CMD")));
-        assert_eq!(resolve("runner", None), Some(first.join("runner.BAT")));
-        assert_eq!(resolve("runner", Some(".exe")), Some(second.join("runner.EXE")));
-        assert_eq!(resolve("runner", Some("EXE; cmd ;.BAT")), Some(first.join("runner.CMD")));
-        assert_eq!(resolve("runner", Some("CMD;EXE")), Some(first.join("runner.CMD")));
-        for empty in ["", "   ", "; ;"] {
-            assert_eq!(resolve("runner", Some(empty)), Some(first.join("runner.BAT")));
-        }
-        assert_eq!(resolve("runner", Some("JS")), None);
-        for explicit in ["runner.cmd", "C:runner", r".\runner", "somewhere/runner"] {
-            assert_eq!(resolve(explicit, None), None, "{explicit}");
-        }
-        assert!(resolve("not-installed", None).is_none());
-        std::fs::remove_dir_all(root).unwrap();
-    }
 
     #[tokio::test]
     async fn windows_program_lookup_falls_back_on_timeout_but_not_on_cancellation() {

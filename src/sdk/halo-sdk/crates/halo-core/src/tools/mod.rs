@@ -14,6 +14,8 @@ mod shell_retention;
 mod skill;
 mod supplied;
 mod web;
+#[cfg(any(windows, test))]
+mod windows_executable;
 mod working_state;
 use crate::harness::{Harness, ResolvedHarness, ResourceId, TextId};
 use crate::{
