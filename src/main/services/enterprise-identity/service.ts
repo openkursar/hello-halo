@@ -1,5 +1,5 @@
 /**
- * Enterprise identity session: the QR sign-in flow, the session's lifetime and
+ * Enterprise identity session: the sign-in flow, the session's lifetime and
  * the short-lived tool credentials derived from it. See DESIGN.md.
  */
 
@@ -110,6 +110,26 @@ function isString(value: unknown): value is string {
   return typeof value === 'string' && value !== ''
 }
 
+function isMethodKind(value: unknown): value is EnterpriseIdentityMethod['kind'] {
+  return value === 'qr' || value === 'browser'
+}
+
+function isWebUrl(value: string): boolean {
+  try {
+    const { protocol } = new URL(value)
+    return protocol === 'http:' || protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/** What a started attempt shows the user, or null when the provider's answer is unusable for the method. */
+function loginPrompt(kind: EnterpriseIdentityMethod['kind'], start: EnterpriseLoginStart): { qrContent: string } | { url?: string } | null {
+  if (kind === 'qr') return isString(start.qrContent) ? { qrContent: start.qrContent } : null
+  if (start.url === undefined) return {}
+  return isString(start.url) && isWebUrl(start.url) ? { url: start.url } : null
+}
+
 export class EnterpriseIdentityService {
   private readonly bindings: EnterpriseToolBindingConfig[]
   private readonly credentialDir: string
@@ -168,8 +188,8 @@ export class EnterpriseIdentityService {
 
   private methods(): EnterpriseIdentityMethod[] {
     try {
-      return (this.provider?.methods() ?? []).filter(m => isString(m?.id) && isString(m?.label) && m.kind === 'qr')
-        .map(m => ({ id: m.id, label: m.label, kind: 'qr' as const, capabilities: (m.capabilities ?? []).filter(isString) }))
+      return (this.provider?.methods() ?? []).filter(m => isString(m?.id) && isString(m?.label) && isMethodKind(m.kind))
+        .map(m => ({ id: m.id, label: m.label, kind: m.kind, capabilities: (m.capabilities ?? []).filter(isString) }))
     } catch {
       return []
     }
@@ -185,7 +205,15 @@ export class EnterpriseIdentityService {
       active: this.session !== null && capabilities.includes(b.capability) && this.active.has(b.audience),
     }))
     const flow = this.flow
-      ? { flowId: this.flow.flowId, methodId: this.flow.methodId, qrContent: this.flow.qrContent, phase: this.flow.phase, expiresAt: this.flow.expiresAt, ...(this.flow.hint ? { hint: this.flow.hint } : {}) }
+      ? {
+          flowId: this.flow.flowId,
+          methodId: this.flow.methodId,
+          ...(this.flow.qrContent ? { qrContent: this.flow.qrContent } : {}),
+          ...(this.flow.url ? { url: this.flow.url } : {}),
+          phase: this.flow.phase,
+          expiresAt: this.flow.expiresAt,
+          ...(this.flow.hint ? { hint: this.flow.hint } : {}),
+        }
       : undefined
     if (!this.provider) return { status: 'unavailable', methods: [], capabilities: [], boundTools: [] }
     if (this.session) {
@@ -229,13 +257,17 @@ export class EnterpriseIdentityService {
     const provider = await this.getProvider()
     if (!provider) throw new Error('Enterprise identity is not available in this build')
     if (this.restoring) await this.restoring
-    if (!this.methods().some(m => m.id === methodId)) throw new Error('Unknown sign-in method')
+    const method = this.methods().find(m => m.id === methodId)
+    if (!method) throw new Error('Unknown sign-in method')
     if (this.flow) await this.cancelLogin(this.flow.flowId)
     const start = await provider.beginLogin(methodId)
-    if (!isString(start?.flowId) || !isString(start?.qrContent) || typeof start.expiresAt !== 'number' || start.expiresAt <= this.now()) {
-      throw new Error('The sign-in service returned an unusable QR code')
+    const prompt = start && isString(start.flowId) && typeof start.expiresAt === 'number' && start.expiresAt > this.now()
+      ? loginPrompt(method.kind, start)
+      : null
+    if (!prompt) {
+      throw new Error(method.kind === 'qr' ? 'The sign-in service returned an unusable QR code' : 'The sign-in service returned an unusable sign-in page')
     }
-    this.flow = { flowId: start.flowId, qrContent: start.qrContent, expiresAt: start.expiresAt, methodId, phase: 'waiting', ...(start.hint ? { hint: start.hint } : {}) }
+    this.flow = { flowId: start.flowId, ...prompt, expiresAt: start.expiresAt, methodId, phase: 'waiting', ...(start.hint ? { hint: start.hint } : {}) }
     this.lastError = undefined
     this.log.log('[EnterpriseIdentity] Sign-in started', { method: methodId })
     return this.snapshot()

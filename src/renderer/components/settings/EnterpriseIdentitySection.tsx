@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, CheckCircle2, LogOut, QrCode, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Globe, LogOut, QrCode, ShieldCheck } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
@@ -162,7 +162,7 @@ export function EnterpriseIdentitySection({ onAvailabilityChange }: EnterpriseId
                 ? 'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors'
                 : 'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-border hover:bg-muted transition-colors'}
             >
-              <QrCode className="w-3.5 h-3.5" />
+              {method.kind === 'browser' ? <Globe className="w-3.5 h-3.5" /> : <QrCode className="w-3.5 h-3.5" />}
               {t('Sign in with {{method}}', { method: method.label })}
             </button>
           ))
@@ -175,6 +175,7 @@ export function EnterpriseIdentitySection({ onAvailabilityChange }: EnterpriseId
           open
           methodId={scanMethod.id}
           methodLabel={scanMethod.label}
+          methodKind={scanMethod.kind}
           onClose={closeDialog}
           onStateChange={setState}
         />

@@ -3,7 +3,8 @@
  *
  * A build that signs users in with a company identity ships a module and names
  * it in product.json (`enterpriseIdentity.provider`). The module exports a
- * `get…Provider()` function returning this interface. Halo drives the QR flow
+ * `get…Provider()` function returning this interface. Halo drives the sign-in
+ * flow (a QR code to scan, or a web page to approve in the default browser)
  * and the session lifecycle; the provider alone talks to the company identity
  * service and keeps whatever proof or ticket it receives. Halo only ever asks
  * it for a short-lived credential for a named audience, which it hands to the
@@ -15,11 +16,17 @@ import type { EnterpriseIdentityMethod } from '../types/enterprise-identity'
 export interface EnterpriseLoginStart {
   /** Opaque id of this attempt. */
   flowId: string
-  /** Text to encode in the QR code. */
-  qrContent: string
-  /** Epoch ms when the code stops working. */
+  /** Text to encode in the QR code; required for QR methods. */
+  qrContent?: string
+  /**
+   * http(s) page the user approves the sign-in on; browser methods only. Halo
+   * opens it in the default browser. Omit it when the attempt needs nothing
+   * from the user (for example an approval this computer still holds).
+   */
+  url?: string
+  /** Epoch ms when the code or page stops working. */
   expiresAt: number
-  /** Short instruction shown under the code. */
+  /** Short instruction shown with the code or page. */
   hint?: string
 }
 

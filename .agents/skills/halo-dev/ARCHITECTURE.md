@@ -161,7 +161,7 @@ src/
 │       │                              #   bundled tools (resources/cli-preset) in an idle task and
 │       │                              #   appends launchers to user sessions (every engine) and
 │       │                              #   AI terminals. See cli-tools/DESIGN.md
-│       ├── enterprise-identity/       # Optional company sign-in (QR) from a build-supplied provider;
+│       ├── enterprise-identity/       # Optional company sign-in (QR or browser) from a build-supplied provider;
 │       │                              #   hands short-lived per-audience credentials to bound
 │       │                              #   CLI tools' processes only. See enterprise-identity/DESIGN.md
 │       ├── analytics/                 # Usage analytics

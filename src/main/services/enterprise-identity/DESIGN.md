@@ -6,7 +6,7 @@ A build may let the user sign in with a company identity so that command-line
 tools it ships, or installs from its enterprise catalog, can reach internal
 services. This module owns that sign-in on the client:
 
-- the QR flow (start, wait for scan and confirmation, cancel, code expiry);
+- the sign-in flow (start, wait for the user's approval, cancel, expiry);
 - the session's lifetime (sign-out, session expiry, resuming it after launch);
 - short-lived per-audience tool credentials derived from the session, and
   handing them to bound tools' processes only.
@@ -49,7 +49,11 @@ cannot ask for one.
 ## Flow
 
 1. Settings asks for the state (loads the provider) and lists its methods.
-2. `beginLogin(method)` → provider returns `flowId`, QR text and expiry. One
+2. `beginLogin(method)` → provider returns `flowId`, expiry and what the user
+   acts on, by the method's kind: `qr` → QR text (required), shown as a code;
+   `browser` → an http(s) approval page, which the dialog opens in the default
+   browser (with "open again" and "copy link"); a browser attempt may omit the
+   page when nothing is left to approve. Any other answer is refused. One
    attempt at a time; a new one cancels the old.
 3. The dialog calls `pollLogin(flowId)` in a loop. Each call waits at most
    `pollWaitMs` (25 s), asking the provider every `pollIntervalMs` (1.5 s), and
@@ -129,4 +133,5 @@ in (one for the session end, one per renewing credential) and are `unref`ed.
   authorization this computer holds, an app start needs a new scan.
 - Bindings are build configuration only; catalog-delivered bindings are not
   supported yet.
-- Only QR methods exist; the provider decides the actual protocol.
+- Two method kinds exist, `qr` and `browser`; the provider decides the actual
+  protocol behind either.

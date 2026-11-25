@@ -10,9 +10,11 @@ import {
 import type {
   EnterpriseIdentityProvider,
   EnterpriseLoginPoll,
+  EnterpriseLoginStart,
   EnterpriseSession,
   EnterpriseToolCredential,
 } from '../../../src/shared/interfaces/enterprise-identity-provider'
+import type { EnterpriseIdentityMethod } from '../../../src/shared/types/enterprise-identity'
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -26,15 +28,20 @@ class FakeProvider implements EnterpriseIdentityProvider {
   credentialLife = 60_000
   failAudience: string | null = null
   issueGate: Promise<void> | null = null
-  methods() {
+  extraMethods: EnterpriseIdentityMethod[] = []
+  /** Replaces the QR content of the next attempts' answers. */
+  startOverride: Partial<EnterpriseLoginStart> | null = null
+  methods(): EnterpriseIdentityMethod[] {
     return [
-      { id: 'cloud', label: 'Cloud', kind: 'qr' as const, capabilities: ['intranet', 'mail'] },
-      { id: 'esb', label: 'ESB', kind: 'qr' as const, capabilities: ['intranet'] },
+      { id: 'cloud', label: 'Cloud', kind: 'qr', capabilities: ['intranet', 'mail'] },
+      { id: 'esb', label: 'ESB', kind: 'qr', capabilities: ['intranet'] },
+      ...this.extraMethods,
     ]
   }
-  async beginLogin(methodId: string) {
+  async beginLogin(methodId: string): Promise<EnterpriseLoginStart> {
     this.flows++
-    return { flowId: `flow-${this.flows}-${methodId}`, qrContent: `mock://qr/${this.flows}`, expiresAt: Date.now() + 60_000 }
+    const base = { flowId: `flow-${this.flows}-${methodId}`, expiresAt: Date.now() + 60_000 }
+    return this.startOverride ? { ...base, ...this.startOverride } : { ...base, qrContent: `mock://qr/${this.flows}` }
   }
   async pollLogin(): Promise<EnterpriseLoginPoll> {
     return this.answers.length > 1 ? this.answers.shift()! : this.answers[0] ?? { status: 'pending' }
@@ -114,6 +121,48 @@ describe('enterprise identity: availability', () => {
 
   it('refuses an unknown method', async () => {
     await expect(newService().beginLogin('nope')).rejects.toThrow('Unknown sign-in method')
+  })
+})
+
+describe('enterprise identity: browser approval', () => {
+  beforeEach(() => {
+    provider.extraMethods = [{ id: 'web', label: 'Web', kind: 'browser', capabilities: ['intranet'] }]
+  })
+
+  it('lists a browser method with its kind', async () => {
+    const state = await newService().getState()
+    expect(state.methods.find(m => m.id === 'web')).toEqual({ id: 'web', label: 'Web', kind: 'browser', capabilities: ['intranet'] })
+  })
+
+  it('passes the approval page to the screen and signs in on confirmation', async () => {
+    provider.startOverride = { url: 'https://passport.example/page/consent?code=1', hint: 'check abc' }
+    const service = newService()
+    const started = await service.beginLogin('web')
+    expect(started.flow).toEqual({ flowId: started.flow!.flowId, methodId: 'web', url: 'https://passport.example/page/consent?code=1', phase: 'waiting', expiresAt: started.flow!.expiresAt, hint: 'check abc' })
+    provider.answers = [{ status: 'confirmed', session: session({ capabilities: ['intranet'] }) }]
+    const done = await service.pollLogin(started.flow!.flowId)
+    expect(done.state).toMatchObject({ status: 'ready', methodId: 'web' })
+    expect(existsSync(cred('code-host'))).toBe(true)
+  })
+
+  it('accepts an attempt without a page when nothing is left to approve', async () => {
+    provider.startOverride = { hint: 'resuming' }
+    const started = await newService().beginLogin('web')
+    expect(started.flow).toMatchObject({ methodId: 'web', phase: 'waiting', hint: 'resuming' })
+    expect(started.flow).not.toHaveProperty('url')
+    expect(started.flow).not.toHaveProperty('qrContent')
+  })
+
+  it.each(['javascript:alert(1)', 'file:///etc/passwd', 'not a url', ''])('refuses an approval page %j', async url => {
+    provider.startOverride = { url }
+    const service = newService()
+    await expect(service.beginLogin('web')).rejects.toThrow('unusable sign-in page')
+    expect((await service.getState()).flow).toBeUndefined()
+  })
+
+  it('still requires QR content from a QR method', async () => {
+    provider.startOverride = { url: 'https://passport.example/page/consent' }
+    await expect(newService().beginLogin('cloud')).rejects.toThrow('unusable QR code')
   })
 })
 

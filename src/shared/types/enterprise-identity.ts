@@ -18,7 +18,8 @@ export interface EnterpriseIdentityMethod {
   id: string
   /** Display name chosen by the build (already in the user's language). */
   label: string
-  kind: 'qr'
+  /** 'qr': the user scans a code with a phone app; 'browser': the user approves on a web page Halo opens. */
+  kind: 'qr' | 'browser'
   /** What a session from this method may use, e.g. "intranet". */
   capabilities: string[]
 }
@@ -38,8 +39,10 @@ export interface EnterpriseIdentityBoundTool {
 export interface EnterpriseIdentityFlowView {
   flowId: string
   methodId: string
-  /** Text encoded in the QR code. */
-  qrContent: string
+  /** Text encoded in the QR code (QR methods). */
+  qrContent?: string
+  /** Page the user approves the sign-in on (browser methods); absent when nothing is left to approve. */
+  url?: string
   /** 'scanned' once the phone has read the code and the user still has to confirm there. */
   phase: 'waiting' | 'scanned'
   /** Epoch ms when the code stops working. */
