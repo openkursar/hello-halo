@@ -318,6 +318,9 @@ impl Harness {
 }
 impl ResolvedHarness {
     pub fn scope(&self) -> &str { &self.scope }
+    pub(crate) fn has_override(&self, id: TextId) -> bool {
+        self.model.contains_key(&id) || self.common.contains_key(&id)
+    }
     fn template(&self, id: TextId) -> &Template {
         self.model
             .get(&id)

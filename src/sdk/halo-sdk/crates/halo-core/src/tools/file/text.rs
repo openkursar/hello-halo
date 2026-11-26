@@ -87,6 +87,23 @@ fn utf16(body: &[u8], unit: fn([u8; 2]) -> u16) -> Option<String> {
     String::from_utf16(&units).ok()
 }
 
+/// The complete text of UTF-8 bytes whose only defect is an incomplete
+/// character at the very end. `decode` still rejects such bytes, so they are
+/// shown but never rewritten.
+pub(crate) fn complete_prefix(bytes: &[u8]) -> Option<&str> {
+    let encoding = sniff(bytes);
+    if encoding.is_utf16() {
+        return None;
+    }
+    let body = &bytes[encoding.bom().len()..];
+    match std::str::from_utf8(body) {
+        Err(error) if error.error_len().is_none() => {
+            Some(std::str::from_utf8(&body[..error.valid_up_to()]).unwrap())
+        }
+        _ => None,
+    }
+}
+
 /// Display text for bytes `decode` rejects; undecodable bytes become U+FFFD.
 pub(crate) fn lossy(bytes: &[u8]) -> String {
     let encoding = sniff(bytes);
@@ -260,6 +277,19 @@ mod tests {
         assert_eq!(decode(b"").unwrap().encoding, Encoding::Utf8);
         assert_eq!(lossy(b"caf\xe9"), "caf\u{fffd}");
         assert_eq!(lossy(&[0xFF, 0xFE, b'h', 0, b'i']), "h\u{fffd}");
+    }
+
+    #[test]
+    fn only_an_incomplete_final_utf8_character_leaves_a_complete_prefix() {
+        let half: &[u8] = &"中".as_bytes()[..2];
+        assert_eq!(complete_prefix(&[b"end ", half].concat()), Some("end "));
+        assert_eq!(complete_prefix(&[b"\xEF\xBB\xBFend ", half].concat()), Some("end "));
+        assert_eq!(complete_prefix(half), Some(""));
+        assert_eq!(complete_prefix(&[b"a ", half, b"\n"].concat()), None);
+        assert_eq!(complete_prefix(&[b"caf\xe9 ", half].concat()), None);
+        assert_eq!(complete_prefix(b"end \x80"), None);
+        assert_eq!(complete_prefix(b"complete"), None);
+        assert_eq!(complete_prefix(&[0xFF, 0xFE, b'a']), None);
     }
 
     #[test]

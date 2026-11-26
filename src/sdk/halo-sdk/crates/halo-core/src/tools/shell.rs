@@ -1252,6 +1252,7 @@ mod encoding_tests {
     const INVALID: &[u8] = &[0xd6, 0xd0, 0xce, 0xc4];
     const PRINT_INVALID: &str = r"printf '\326\320\316\304'";
     const NOTICE: &str = "Some output was not valid UTF-8";
+    const SAVED_NOTICE: &str = "UTF-8 decoding was lossy; raw bytes (combined stdout and stderr):";
 
     struct TempDirectory(PathBuf);
 
@@ -1285,16 +1286,43 @@ mod encoding_tests {
         (directory, shell, ctx)
     }
 
+    #[test]
+    fn complete_encoding_notice_preserves_harness_overrides() {
+        let harness = crate::harness::Harness::from_config(&json!({
+            "templates": {"tools.shell.invalid_utf8_saved": "Lossy preview; original bytes: {path}."},
+            "models": {
+                "custom-issue": {"tools.shell.invalid_utf8": "Custom decoding warning."},
+                "custom-wrapper": {"tools.shell.encoding_saved": "{path}: {issue}"}
+            }
+        })).unwrap();
+        let path = Some(Path::new("capture.out"));
+        let notice = |model| encoding_notice(&harness.for_model(model), true, 0, path, true, None);
+        assert_eq!(notice("default").as_deref(), Some("Lossy preview; original bytes: capture.out."));
+        assert_eq!(notice("custom-issue").as_deref(), Some(
+            "Custom decoding warning. The exact captured bytes of stdout and stderr, combined, are in capture.out."
+        ));
+        assert_eq!(notice("custom-wrapper").as_deref(), Some(
+            "capture.out: Some output was not valid UTF-8; the text preview cannot preserve those bytes."
+        ));
+
+        let common = crate::harness::Harness::from_config(&json!({
+            "templates": {
+                "tools.shell.invalid_utf8": "Common warning.",
+                "tools.shell.encoding_saved": "{issue} Read {path}."
+            }
+        })).unwrap().for_model("default");
+        assert_eq!(encoding_notice(&common, true, 0, path, true, None).as_deref(),
+            Some("Common warning. Read capture.out."));
+    }
+
     #[tokio::test]
     async fn foreground_invalid_stdout_saves_exact_bytes_without_replay() {
         let (directory, shell, ctx) = fixture();
         let output = shell.execute(&json!({"command": format!("printf run >> effect; {PRINT_INVALID}")}), ctx).await;
         assert_eq!(output["isError"], false);
         let text = output["content"].as_str().unwrap();
-        assert!(text.starts_with("����\n"), "{text}");
-        assert_eq!(text.matches(NOTICE).count(), 1, "{text}");
         let path = output["__haloSdkNativeSavedOutput"].as_str().unwrap();
-        assert!(text.contains(path), "{text}");
+        assert_eq!(text, format!("����\n{SAVED_NOTICE} {path}."));
         assert_eq!(tokio::fs::read(path).await.unwrap(), INVALID);
         assert_eq!(tokio::fs::read(directory.path().join("effect")).await.unwrap(), b"run");
         shell.close().await;
@@ -1307,10 +1335,8 @@ mod encoding_tests {
         let output = shell.execute(&json!({"command":command}), ctx).await;
         assert_eq!(output["isError"], true);
         let text = output["content"].as_str().unwrap();
-        assert!(text.starts_with("Command exited with code 7\n©\n����\n"), "{text}");
-        assert_eq!(text.matches(NOTICE).count(), 1, "{text}");
         let path = output["__haloSdkNativeSavedOutput"].as_str().unwrap();
-        assert!(text.contains(path), "{text}");
+        assert_eq!(text, format!("Command exited with code 7\n©\n����\n{SAVED_NOTICE} {path}."));
         let bytes = tokio::fs::read(path).await.unwrap();
         // The shared raw sink can receive either pipe first.
         assert!(bytes == ["©".as_bytes(), INVALID].concat() || bytes == [INVALID, "©".as_bytes()].concat(), "{bytes:?}");
@@ -1341,10 +1367,8 @@ mod encoding_tests {
         assert_eq!(task["status"], "completed");
         assert_eq!(task["exit_code"], 0);
         let text = task["result"].as_str().unwrap();
-        assert!(text.starts_with("����\n"), "{text}");
-        assert_eq!(text.matches(NOTICE).count(), 1, "{text}");
         let path = task["output_file"].as_str().unwrap();
-        assert!(text.contains(path), "{text}");
+        assert_eq!(text, format!("����\n{SAVED_NOTICE} {path}."));
         assert_eq!(tokio::fs::read(path).await.unwrap(), INVALID);
         shell.close().await;
     }
@@ -1395,9 +1419,7 @@ mod encoding_tests {
         tokio::fs::write(directory.path().join("release"), "").await.unwrap();
         let output = task_output(&shell, &ctx, &launch["metadata"]["task_id"], true).await;
         let text = output["task"]["result"].as_str().unwrap();
-        assert!(text.starts_with("��\n"), "{text}");
-        assert_eq!(text.matches(NOTICE).count(), 1, "{text}");
-        assert!(text.contains(path), "{text}");
+        assert_eq!(text, format!("��\n{SAVED_NOTICE} {path}."));
         assert_eq!(tokio::fs::read(path).await.unwrap(), b"\xc2\xa9");
         shell.close().await;
     }
@@ -1466,10 +1488,9 @@ mod encoding_tests {
         let text = output["content"].as_str().unwrap();
         assert!(crate::js::utf16_len(text) <= 512, "{text}");
         assert!(text.ends_with('.'), "{text}");
-        assert!(text.contains(NOTICE), "{text}");
         assert!(text.contains("command output was omitted"), "{text}");
         let path = output["__haloSdkNativeSavedOutput"].as_str().unwrap();
-        assert!(text.contains(path), "{text}");
+        assert!(text.ends_with(&format!("\n{SAVED_NOTICE} {path}.")), "{text}");
         let mut expected = INVALID.to_vec();
         expected.extend([b'0'; 500]);
         assert_eq!(tokio::fs::read(path).await.unwrap(), expected);
@@ -1578,7 +1599,10 @@ mod encoding_tests {
             let output = preview.render("preview.output", false, &crate::harness::baseline());
             let text = output["output"].as_str().unwrap();
             assert!(text.starts_with("a\n"), "{text}");
-            assert!(!text.contains('�') && !text.contains(NOTICE), "{text}");
+            assert!(
+                !text.contains('�') && !text.contains(SAVED_NOTICE) && !text.contains(NOTICE),
+                "{text}"
+            );
             assert!(text.contains("1 of 6 captured bytes"), "{text}");
             assert_eq!(output["truncated"], true);
             assert_eq!(output["fileComplete"], true);
@@ -1943,6 +1967,7 @@ async fn drain<R: AsyncRead + Unpin>(
     }
 }
 /// How long a terminated command may take to exit and close its output before termination escalates.
+#[cfg(not(windows))]
 const TERMINATION_GRACE: Duration = if cfg!(test) {
     Duration::from_secs(1)
 } else {
@@ -2165,42 +2190,30 @@ async fn run(
     if !finished {
         stopping.cancel();
         #[cfg(windows)]
-        let terminate = |force| {
-            super::shell_platform::terminate_windows_shell(&owned_process, Path::new(&shell), force)
+        let settled = {
+            use super::shell_platform::{terminate_windows_shell, WINDOWS_STOP_BUDGET};
+            let deadline = tokio::time::Instant::now() + WINDOWS_STOP_BUDGET;
+            unconfirmed = !terminate_windows_shell(&owned_process, Path::new(&shell), deadline).await;
+            tokio::time::timeout_at(deadline, settle(&mut pipes, &mut exit, &mut output, &mut status))
+                .await.is_ok() && status.as_ref().is_some_and(std::result::Result::is_ok)
         };
         #[cfg(not(windows))]
-        let terminate = |force| {
-            let process = &owned_process;
-            async move {
-                process.terminate(force).await;
-                None::<bool>
+        let settled = {
+            owned_process.terminate(background).await;
+            if tokio::time::timeout(TERMINATION_GRACE, settle(&mut pipes, &mut exit, &mut output, &mut status)).await.is_ok() {
+                true
+            } else {
+                owned_process.terminate(true).await;
+                tokio::time::timeout(TERMINATION_GRACE, settle(&mut pipes, &mut exit, &mut output, &mut status)).await.is_ok()
             }
         };
-        unconfirmed = terminate(background).await == Some(false);
-        let settled = tokio::time::timeout(
-            TERMINATION_GRACE,
-            settle(&mut pipes, &mut exit, &mut output, &mut status),
-        )
-        .await
-        .is_ok();
-        if !settled || unconfirmed {
-            if let Some(confirmed) = terminate(true).await {
-                unconfirmed = !confirmed;
-            }
-            let settled = tokio::time::timeout(
-                TERMINATION_GRACE,
-                settle(&mut pipes, &mut exit, &mut output, &mut status),
-            )
-            .await
-            .is_ok();
-            if !settled {
-                unconfirmed = true;
-                tracing::warn!(session_id=%ctx.session_id,tool_use_id=%ctx.tool_use_id,pid,background,
-                    "command processes still running after forced termination");
-                detach.cancel();
-                if output.is_none() {
-                    output = Some(pipes.as_mut().await);
-                }
+        if !settled {
+            unconfirmed = true;
+            tracing::warn!(session_id=%ctx.session_id,tool_use_id=%ctx.tool_use_id,pid,background,
+                "command exit or output closure could not be confirmed after termination");
+            detach.cancel();
+            if output.is_none() {
+                output = Some(pipes.as_mut().await);
             }
         }
     }
@@ -2367,6 +2380,16 @@ fn encoding_notice(
     complete: bool,
     reason: Option<super::output::SaveReason>,
 ) -> Option<String> {
+    if let Some(path) = path.filter(|_| {
+        invalid_utf8 && withheld == 0 && complete
+            && !harness.has_override(TextId::ToolsShellInvalidUtf8)
+            && !harness.has_override(TextId::ToolsShellEncodingSaved)
+    }) {
+        return Some(harness.render(
+            TextId::ToolsShellInvalidUtf8Saved,
+            &[("path", &path.to_string_lossy())],
+        ));
+    }
     let issue = match (invalid_utf8, withheld) {
         (false, 0) => return None,
         (true, 0) => harness.text(TextId::ToolsShellInvalidUtf8).to_owned(),

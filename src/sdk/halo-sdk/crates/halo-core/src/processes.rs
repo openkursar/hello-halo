@@ -14,6 +14,8 @@ use tokio_util::sync::CancellationToken;
 struct ChildState {
     child: Child,
     waiters: Vec<Waker>,
+    #[cfg(windows)]
+    stopping_by_handle: bool,
 }
 #[derive(Clone)]
 struct Process {
@@ -158,7 +160,13 @@ fn signal(state: &mut ChildState, pid: u32, group: bool, force: bool) {
     }
     #[cfg(windows)]
     {
-        finish_tree_termination(pid, kill_windows_tree(pid, &[pid]), || state.child.start_kill());
+        if state.stopping_by_handle {
+            if let Err(error) = state.child.start_kill() {
+                tracing::warn!(pid, error=%error, "Owned shell root termination failed");
+            }
+        } else {
+            finish_tree_termination(pid, kill_windows_tree(pid, &[pid]), || state.child.start_kill());
+        }
         let _ = (group, force);
     }
 }
@@ -244,6 +252,8 @@ impl OwnedProcesses {
         let child = Arc::new(Mutex::new(ChildState {
             child,
             waiters: Vec::new(),
+            #[cfg(windows)]
+            stopping_by_handle: false,
         }));
         let generation = self.next.fetch_add(1, Ordering::Relaxed);
         let active = {
@@ -457,27 +467,25 @@ impl OwnedProcess {
         }
     }
     #[cfg(windows)]
-    pub(crate) async fn terminate_windows_tree(&self, pids: Vec<u32>) -> bool {
-        let pid = self.pid;
-        let child = self.child.clone();
-        match tokio::task::spawn_blocking(move || {
-            let mut state = child.lock().unwrap_or_else(|error| error.into_inner());
-            if state.child.id().is_some() {
-                let tree = kill_windows_tree(pid, &pids);
-                if tree.is_ok() {
-                    return true;
-                }
-                finish_tree_termination(pid, tree, || state.child.start_kill());
-            }
-            // Only the root's exit can be confirmed by the caller's child handle.
-            !pids.into_iter().any(|member| member != pid && windows_process_still_running(member))
-        }).await {
-            Ok(confirmed) => confirmed,
-            Err(error) => {
-                tracing::warn!(pid, error=%error, "Owned process tree termination task failed");
-                false
-            }
+    pub(crate) fn stop_windows_root(&self) {
+        let mut state = self.child.lock().unwrap_or_else(|error| error.into_inner());
+        state.stopping_by_handle = true;
+        signal(&mut state, self.pid, self.group, true);
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn windows_stop_handle(&self) -> std::io::Result<std::os::windows::io::OwnedHandle> {
+        use std::os::windows::io::BorrowedHandle;
+
+        let mut state = self.child.lock().unwrap_or_else(|error| error.into_inner());
+        state.stopping_by_handle = true;
+        let result = state.child.raw_handle().ok_or_else(|| std::io::Error::other("Owned shell handle is no longer available"))
+            .and_then(|raw| unsafe { BorrowedHandle::borrow_raw(raw) }.try_clone_to_owned());
+        if result.is_err() {
+            // Failure to duplicate must not route cleanup back through the numeric PID.
+            signal(&mut state, self.pid, self.group, true);
         }
+        result
     }
 
     pub(crate) fn abort_now(&self) {

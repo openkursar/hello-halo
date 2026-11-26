@@ -7,6 +7,9 @@ import { createServer } from 'node:http';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { on } from 'node:events';
+import { BroadcastChannel } from 'node:worker_threads';
 import { createWorkerRuntime, createSdkMcpServer, tool, RESUME_HISTORY_UNAVAILABLE, isResumeHistoryError } from '../../worker/index.js';
 import { buildWorker } from '../../../../scripts/build-worker.mjs';
 import type { WorkerRuntime, WorkerSession } from '../../worker/index.js';
@@ -45,6 +48,38 @@ async function turn(session: WorkerSession, text = 'hello') {
   return events;
 }
 function result(events: any[]) { return events.find(event => event.type === 'result'); }
+async function gateFirstClose(mode: 'request' | 'response') {
+  const name = randomUUID();
+  const channel = new BroadcastChannel(name);
+  channel.unref();
+  const held = new Promise<void>(resolve => channel.addEventListener('message', ({ data }) => {
+    if (data.type === 'held') resolve();
+  }));
+  const response = new Promise<{ error?: unknown }>(resolve => channel.addEventListener('message', ({ data }) => {
+    if (data.type === 'closed') resolve(data);
+  }));
+  const lockResponse = new Promise<{ error?: { name?: string; message?: string } }>(resolve => channel.addEventListener('message', ({ data }) => {
+    if (data.type === 'probe') resolve(data);
+  }));
+  const workerUrl = pathToFileURL(join(buildDirectory, `${name}.mjs`));
+  const adapter = new URL('../../worker/fixtures/close-gate.mjs', import.meta.url);
+  await writeFile(workerUrl, `import { startWithCloseGate } from ${JSON.stringify(adapter.href)};
+    await startWithCloseGate(${JSON.stringify(pathToFileURL(join(buildDirectory, 'entry.mjs')).href)}, ${JSON.stringify(name)}, ${JSON.stringify(mode)});`);
+  const waitForThread = async (threadId: number, type: 'held' | 'released') => {
+    const observer = new BroadcastChannel(name);
+    try {
+      const messages = on(observer, 'message', { signal: AbortSignal.timeout(5000) });
+      if (type === 'released') channel.postMessage({ type: 'release:thread', threadId });
+      for await (const [{ data }] of messages) if (data.type === type && data.threadId === threadId) return;
+    } finally { observer.close(); }
+  };
+  return {
+    workerUrl, held, response, waitForThread,
+    release: (error?: string) => channel.postMessage(error === undefined ? 'release' : { type: 'release:error', message: error }),
+    probeLock: (key: string) => { channel.postMessage({ type: 'probe:lock', key }); return lockResponse; },
+    dispose: () => channel.close(),
+  };
+}
 async function eventually(check: () => boolean | Promise<boolean>, timeout = 3000) {
   const end = Date.now() + timeout;
   while (!await check()) { if (Date.now() > end) throw new Error('Condition timed out'); await delay(10); }
@@ -628,15 +663,246 @@ describe('grouped worker runtime with real threads', () => {
 
   it('closes shells still starting POSIX children without retiring their shared worker', async () => {
     const pool = runtime({ maxWorkers: 1, closeTimeoutMs: 10_000 });
-    const neighbour = await session(pool);
-    const closing = await Promise.all(Array.from({ length: 2 }, () => session(pool, { tools: [{ name: 'Bash', input: { command: 'sleep 30', run_in_background: true } }] }, {
-      tools: ['Bash'], permissionMode: 'bypassPermissions',
-    })));
-    await Promise.all(closing.map(current => turn(current)));
-    await Promise.all(closing.map(current => current[Symbol.asyncDispose]()));
-    expect(pool.diagnostics()).toMatchObject({ recentFailures: 0, workers: [{ sessions: 1, children: 0 }] });
+    const files = ['before', 'during', 'after'].map(name => join(directory, `${name}.txt`));
+    const writes = files.map((file_path, index) => ({ name: 'Write', input: { file_path, content: String(index) } }));
+    const neighbour = await session(pool, { tools: [writes[0], null, writes[1], null, writes[2]] }, {
+      tools: ['Write'], permissionMode: 'bypassPermissions',
+    });
     expect(result(await turn(neighbour)).is_error).toBe(false);
+    expect(await readFile(files[0], 'utf8')).toBe('0');
+    let releaseClose!: () => void;
+    const closeGate = new Promise<void>(resolve => { releaseClose = resolve; });
+    let enteredClose!: () => void;
+    const closingStarted = new Promise<void>(resolve => { enteredClose = resolve; });
+    const closing = await Promise.all(Array.from({ length: 2 }, (_, index) => session(pool, { tools: [{ name: 'Bash', input: { command: 'sleep 30', run_in_background: true } }] }, {
+      tools: ['Bash'], permissionMode: 'bypassPermissions',
+      ...(index === 0 ? { hooks: { SessionEnd: [{ hooks: [async () => {
+        enteredClose();
+        await closeGate;
+        return {};
+      }] }] } } : {}),
+    })));
+    closing.forEach(current => expect(current.threadId).toBe(neighbour.threadId));
+    await Promise.all(closing.map(current => turn(current)));
+    let firstClosed = false;
+    const stopFirst = closing[0][Symbol.asyncDispose]().finally(() => { firstClosed = true; });
+    const stopped = Promise.all([stopFirst, closing[1][Symbol.asyncDispose]()]);
+    void stopped.catch(() => {});
+    try {
+      await Promise.race([closingStarted, stopFirst.then(() => { throw new Error('Close returned before its hook'); })]);
+      expect(result(await turn(neighbour)).is_error).toBe(false);
+      expect(await readFile(files[1], 'utf8')).toBe('1');
+      expect(firstClosed).toBe(false);
+    } finally {
+      releaseClose();
+      await stopped;
+    }
+    expect(pool.diagnostics()).toMatchObject({ recentFailures: 0, workers: [{ threadId: neighbour.threadId, sessions: 1, children: 0 }] });
+    expect(result(await turn(neighbour)).is_error).toBe(false);
+    expect(await readFile(files[2], 'utf8')).toBe('2');
   }, 15_000);
+
+  it('keeps a neighbouring session executing while a stalled close hook is cancelled', async () => {
+    const pool = runtime({ maxWorkers: 1, closeTimeoutMs: 1000 });
+    let entered!: (signal: AbortSignal) => void;
+    const hookEntered = new Promise<AbortSignal>(resolve => { entered = resolve; });
+    const closing = await session(pool, {}, { hooks: {
+      SessionEnd: [{ hooks: [async (_input, _id, { signal }) => {
+        entered(signal);
+        return new Promise(() => {});
+      }] }],
+    } });
+    const before = join(directory, 'before-close.txt');
+    const after = join(directory, 'after-close.txt');
+    const write = (file_path: string, content: string) => ({ name: 'Write', input: { file_path, content } });
+    const neighbour = await session(pool, { tools: [write(before, 'before'), null, write(after, 'after')] }, {
+      tools: ['Write'], permissionMode: 'bypassPermissions',
+    });
+    expect(neighbour.threadId).toBe(closing.threadId);
+    expect(result(await turn(neighbour)).is_error).toBe(false);
+    expect(await readFile(before, 'utf8')).toBe('before');
+
+    closing.close();
+    const receipt = closing.flush();
+    const signal = await hookEntered;
+    expect(signal.aborted).toBe(false);
+    await receipt;
+    expect(signal.aborted).toBe(true);
+    expect(result(await turn(neighbour)).is_error).toBe(false);
+    expect(await readFile(after, 'utf8')).toBe('after');
+    expect(pool.diagnostics()).toMatchObject({ recentFailures: 0, workers: [{ threadId: neighbour.threadId, sessions: 1 }] });
+  });
+
+  it.each(['request', 'response'] as const)('keeps a neighbour and retains the transcript while a close %s is withheld', async mode => {
+    const gate = await gateFirstClose(mode);
+    try {
+      const pool = runtime({ workerUrl: gate.workerUrl, maxWorkers: 1, closeTimeoutMs: 500 });
+      const file_path = join(directory, 'neighbour.txt');
+      const neighbour = await session(pool, { tools: [null, { name: 'Write', input: { file_path, content: 'still running' } }] }, {
+        tools: ['Write'], permissionMode: 'bypassPermissions',
+      });
+      expect(result(await turn(neighbour)).is_error).toBe(false);
+      const neighbourLocks = pool.diagnostics().transcriptLocks;
+      const closing = await session(pool, {}, { persistSession: true });
+      const marker = 'persisted before close';
+      expect(result(await turn(closing, marker)).is_error).toBe(false);
+      expect(neighbour.threadId).toBe(closing.threadId);
+      const bothLocks = pool.diagnostics().transcriptLocks;
+      expect(bothLocks).toBeGreaterThan(neighbourLocks);
+      const onExit = vi.fn();
+      closing.query.transport.onExit(onExit);
+
+      closing.close();
+      await Promise.all([gate.held, expect(closing.flush()).rejects.toThrow(/close.*timed out/i)]);
+      expect(result(await turn(neighbour)).is_error).toBe(false);
+      expect(await readFile(file_path, 'utf8')).toBe('still running');
+      expect(pool.diagnostics()).toMatchObject({ recentFailures: 0, transcriptLocks: bothLocks, workers: [{ threadId: neighbour.threadId, state: 'ready' }] });
+      await expect(closing.send('too late')).rejects.toThrow(/closed|close.*timed out/i);
+      if (mode === 'request') {
+        const heldLocks = pool.diagnostics().fileLocks;
+        expect(await gate.probeLock(join(directory, 'late-lock.txt'))).toMatchObject({ error: { name: 'AbortError' } });
+        expect(pool.diagnostics().fileLocks).toBe(heldLocks);
+      }
+      await expect(session(pool)).rejects.toThrow(/worker.*unavailable|no worker.*available/i);
+      expect(onExit).toHaveBeenCalledOnce();
+      expect(onExit).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/close.*timed out/i) }));
+
+      gate.release();
+      expect((await gate.response).error).toBeUndefined();
+      await eventually(() => {
+        const state = pool.diagnostics();
+        return state.workers.length === 1 && state.workers[0].sessions === 1 && state.transcriptLocks === neighbourLocks;
+      });
+      expect(pool.diagnostics()).toMatchObject({ transcriptLocks: neighbourLocks, workers: [{ threadId: neighbour.threadId, sessions: 1 }] });
+      const resumed = await session(pool, {}, { persistSession: true, resume: closing.sessionId });
+      expect(result(await turn(resumed, 'resume')).result).toContain(marker);
+      await resumed[Symbol.asyncDispose]();
+      await neighbour[Symbol.asyncDispose]();
+      expect(pool.diagnostics().transcriptLocks).toBe(0);
+      expect(onExit).toHaveBeenCalledOnce();
+    } finally {
+      gate.release();
+      gate.dispose();
+    }
+  });
+
+  it('retires the worker when its last healthy session closes and an older close never arrives', async () => {
+    const gate = await gateFirstClose('request');
+    try {
+      const pool = runtime({ workerUrl: gate.workerUrl, maxWorkers: 1, closeTimeoutMs: 500 });
+      const closing = await session(pool, {}, { persistSession: true });
+      expect(result(await turn(closing)).is_error).toBe(false);
+      const file_path = join(directory, 'last-neighbour.txt');
+      const neighbour = await session(pool, { tools: [{ name: 'Write', input: { file_path, content: 'last healthy session' } }] }, {
+        tools: ['Write'], permissionMode: 'bypassPermissions',
+      });
+      expect(neighbour.threadId).toBe(closing.threadId);
+
+      closing.close();
+      await Promise.all([gate.held, expect(closing.flush()).rejects.toThrow(/close.*timed out/i)]);
+      expect(result(await turn(neighbour)).is_error).toBe(false);
+      expect(await readFile(file_path, 'utf8')).toBe('last healthy session');
+      neighbour.close();
+      await neighbour.flush();
+      await eventually(() => pool.diagnostics().workers.length === 0);
+      expect(pool.diagnostics().transcriptLocks).toBe(0);
+      await pool.close();
+      expect(pool.diagnostics()).toMatchObject({ closed: true, workers: [] });
+    } finally {
+      gate.dispose();
+    }
+  });
+
+  it('can start new sessions after repeated single-session close timeouts', async () => {
+    const gate = await gateFirstClose('request');
+    try {
+      const pool = runtime({ workerUrl: gate.workerUrl, maxWorkers: 1, closeTimeoutMs: 100, shutdownTimeoutMs: 5000 });
+      for (let i = 0; i < 3; i++) {
+        const current = await session(pool);
+        expect(result(await turn(current)).is_error).toBe(false);
+        const held = gate.waitForThread(current.threadId, 'held');
+        current.close();
+        await Promise.all([held, expect(current.flush()).rejects.toThrow(/close.*timed out/i)]);
+        await eventually(() => pool.diagnostics().workers.length === 0);
+        expect(pool.diagnostics()).toMatchObject({ recentFailures: 0, fileLocks: 0, transcriptLocks: 0 });
+      }
+      const replacement = await session(pool);
+      expect(result(await turn(replacement)).is_error).toBe(false);
+      await gate.waitForThread(replacement.threadId, 'released');
+      expect(pool.diagnostics().recentFailures).toBe(0);
+      await pool.close();
+      expect(pool.diagnostics()).toMatchObject({ closed: true, workers: [], fileLocks: 0, transcriptLocks: 0 });
+    } finally { gate.dispose(); }
+  });
+
+  it('keeps a neighbour running after a late close error until the unconfirmed session can be retired', async () => {
+    const gate = await gateFirstClose('response');
+    try {
+      const pool = runtime({ workerUrl: gate.workerUrl, maxWorkers: 1, closeTimeoutMs: 500 });
+      const closing = await session(pool, {}, { persistSession: true });
+      expect(result(await turn(closing)).is_error).toBe(false);
+      const before = join(directory, 'before-close-error.txt');
+      const after = join(directory, 'after-close-error.txt');
+      const write = (file_path: string, content: string) => ({ name: 'Write', input: { file_path, content } });
+      const neighbour = await session(pool, { tools: [write(before, 'before'), null, write(after, 'after')] }, {
+        tools: ['Write'], permissionMode: 'bypassPermissions',
+      });
+      expect(neighbour.threadId).toBe(closing.threadId);
+      const bothLocks = pool.diagnostics().transcriptLocks;
+      expect(bothLocks).toBeGreaterThan(0);
+      const onExit = vi.fn();
+      closing.query.transport.onExit(onExit);
+
+      closing.close();
+      await Promise.all([gate.held, expect(closing.flush()).rejects.toThrow(/close.*timed out/i)]);
+      expect(result(await turn(neighbour)).is_error).toBe(false);
+      expect(await readFile(before, 'utf8')).toBe('before');
+      expect(pool.diagnostics()).toMatchObject({ transcriptLocks: bothLocks, workers: [{ threadId: neighbour.threadId, pendingRpc: 1 }] });
+
+      const error = 'Session resources could not be released';
+      gate.release(error);
+      expect(await gate.response).toMatchObject({ error: { message: error } });
+      await eventually(() => (pool.diagnostics().workers[0]?.pendingRpc ?? 0) === 0);
+      expect(result(await turn(neighbour)).is_error).toBe(false);
+      expect(await readFile(after, 'utf8')).toBe('after');
+      expect(pool.diagnostics()).toMatchObject({ recentFailures: 0, transcriptLocks: bothLocks, workers: [{ threadId: neighbour.threadId, state: 'ready' }] });
+      await expect(closing.flush()).rejects.toThrow(/close.*timed out/i);
+
+      await neighbour[Symbol.asyncDispose]();
+      await eventually(() => pool.diagnostics().workers.length === 0);
+      expect(pool.diagnostics().transcriptLocks).toBe(0);
+      expect(onExit).toHaveBeenCalledTimes(1);
+      expect(onExit).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/close.*timed out/i) }));
+    } finally {
+      gate.release();
+      gate.dispose();
+    }
+  });
+
+  it('closes the whole runtime without a receipt from an overdue session', async () => {
+    const gate = await gateFirstClose('request');
+    try {
+      const pool = runtime({ workerUrl: gate.workerUrl, maxWorkers: 1, closeTimeoutMs: 500, shutdownTimeoutMs: 1000 });
+      const closing = await session(pool, {}, { persistSession: true });
+      const neighbour = await session(pool);
+      expect(neighbour.threadId).toBe(closing.threadId);
+      expect(result(await turn(closing)).is_error).toBe(false);
+      const onExit = vi.fn();
+      closing.query.transport.onExit(onExit);
+
+      closing.close();
+      await Promise.all([gate.held, expect(closing.flush()).rejects.toThrow(/close.*timed out/i)]);
+      expect(result(await turn(neighbour)).is_error).toBe(false);
+      expect(pool.diagnostics().transcriptLocks).toBeGreaterThan(0);
+      await expect(pool.close()).resolves.toBeUndefined();
+      expect(pool.diagnostics()).toMatchObject({ closed: true, workers: [], transcriptLocks: 0, fileLocks: 0 });
+      await expect(closing.flush()).rejects.toThrow(/close.*timed out/i);
+      expect(onExit).toHaveBeenCalledTimes(1);
+      expect(onExit).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/close.*timed out/i) }));
+    } finally {
+      gate.dispose();
+    }
+  });
 
   it.each([false, true])('terminates MCP descendants after session close or worker failure (crash=%s)', async crash => {
     const pool = runtime();

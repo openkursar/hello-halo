@@ -32,6 +32,10 @@
     "text": "[This file is not valid UTF-8 or UTF-16 text. Bytes that cannot be decoded are shown as U+FFFD (�), and Edit and Write will not change the file. Use a program that handles its actual encoding to change it.]",
     "slots": []
   },
+  "tools.file.read_incomplete_end": {
+    "text": "[The final UTF-8 character is incomplete and is not shown.]",
+    "slots": []
+  },
   "tools.file.read_encoding": {
     "text": "[Decoded from {encoding}; Edit and Write keep this encoding. Shell text tools such as grep and sed see its encoded bytes, not this text.]",
     "slots": [

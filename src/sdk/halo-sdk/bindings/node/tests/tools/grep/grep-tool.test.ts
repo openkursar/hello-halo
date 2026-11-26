@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chmod, mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { access, chmod, mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getAllTools, releaseNativeToolOwner } from '../../../native/tools.js';
@@ -47,11 +47,10 @@ describe('Grep native facade', () => {
     expect(result.content).not.toContain('No matches');
   });
 
-  it('does not ignore filters when the search path is an explicit file', async () => {
+  it('searches an explicit file regardless of type and respects its glob', async () => {
     const input = { pattern: 'needle', path: 'src/a.ts' };
     const typed = await tool().execute({ ...input, type: 'ps' }, context());
-    expect(typed.isError).toBe(true);
-    expect(typed.content).toContain('directory');
+    expect(typed).toMatchObject({ isError: false, content: join(root, 'src', 'a.ts') });
     for (const glob of ['*.ps1', '!src']) {
       const excluded = await tool().execute({ ...input, glob }, context());
       expect(excluded.content).toContain('not searched');
@@ -153,11 +152,24 @@ describe('Grep native facade', () => {
     expect(invalid.content).toContain('unknownhalotype');
   });
 
-  it('refuses a type and glob together instead of widening the search', async () => {
-    const result = await tool().execute({ pattern: 'needle', type: 'ts', glob: '*.txt' }, context());
-    expect(result.isError).toBe(true);
-    expect(result.content).toMatch(/type.*glob/i);
-    expect(result.content).not.toContain('a.ts');
+  it('uses a positive glob in preference to type without changing the output format', async () => {
+    const file = join(root, 'selected.txt');
+    await writeFile(file, 'needle\n');
+    for (const output_mode of ['files_with_matches', 'content', 'count']) {
+      const input = { pattern: 'needle', glob: '*.txt', output_mode };
+      const byGlob = await tool().execute(input, context());
+      expect(byGlob.isError).toBe(false);
+      expect(byGlob.content).toContain('selected.txt');
+      expect(byGlob.content).not.toContain('a.ts');
+      const combined = await tool().execute({ ...input, type: 'ts' }, context());
+      expect(combined).toEqual(byGlob);
+    }
+    const absent = await tool().execute({ pattern: 'missing', glob: '*.txt', type: 'ts' }, context());
+    expect(absent.isError).toBe(false);
+    expect(absent.content).toContain('with glob "*.txt" and type "ts"');
+    const invalid = await tool().execute({ pattern: 'needle', glob: '*.txt', type: 'unknownhalotype' }, context());
+    expect(invalid.isError).toBe(true);
+    expect(invalid.content).toContain('unknownhalotype');
   });
 
   it.runIf(process.platform === 'win32')('accepts Windows path separators in a glob', async () => {
@@ -339,6 +351,30 @@ describe('Grep native facade', () => {
     const result = await tool().execute({ pattern: 'needle' }, ctx);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('aborted');
+  });
+
+  it.skipIf(process.platform === 'win32')('honors cancellation after stdout closes but before the search exits', async () => {
+    const ready = join(root, 'stdout-closed');
+    const ctx = await executable(`
+      const fs = require('node:fs');
+      fs.closeSync(1);
+      fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
+      setTimeout(() => process.exit(1), 1500);
+    `);
+    const controller = new AbortController();
+    ctx.abortSignal = controller.signal;
+    const pending = tool().execute({ pattern: 'needle' }, ctx);
+    try {
+      await vi.waitFor(() => access(ready), { timeout: 4000 });
+      controller.abort();
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('aborted');
+      expect(result.content).not.toContain('No matches');
+    } finally {
+      controller.abort();
+      await pending;
+    }
   });
 
   it('keeps process failures distinct from a missing executable', async () => {

@@ -338,6 +338,10 @@
     "text": "The preview omitted {bytes} bytes received at the end of output streams because capture ended inside a multibyte character.",
     "slots": ["bytes"]
   },
+  "tools.shell.invalid_utf8_saved": {
+    "text": "UTF-8 decoding was lossy; raw bytes (combined stdout and stderr): {path}.",
+    "slots": ["path"]
+  },
   "tools.shell.encoding_saved": {
     "text": "{issue} The exact captured bytes of stdout and stderr, combined, are in {path}.",
     "slots": ["issue", "path"]

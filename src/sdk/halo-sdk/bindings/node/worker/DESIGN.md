@@ -86,6 +86,8 @@ tools. Goal reads and writes are asynchronous on this surface. History stays in
 the worker. Stream batches have count/byte limits and acknowledgement-based flow
 control; a slow reader backpressures execution without losing final messages.
 
+## Session close and shared-worker isolation
+
 Closing a session first rejects new work, aborts pending callbacks and execution,
 then drains hooks, streams, MCP and persistence. A new session resuming the same
 transcript waits for retirement. Interrupt never terminates a shared worker.
@@ -94,9 +96,14 @@ the execution entry awaits their termination and reaping before acknowledging
 close. Native child counts are reported at creation, result and close boundaries
 and in the existing heartbeat, independently of JavaScript child-process records.
 Diagnostics add the two counts; the host never adds native PIDs to its kill list.
-An unresponsive worker has a bounded deadline and retires all its sessions;
-replacements are demand-driven with a crash circuit breaker. Workers cannot
-isolate native crashes or process-wide exhaustion.
+If a close times out, `flush()` rejects but the host still accepts the late reply.
+A close error does not release the transcript lease: release requires a successful
+acknowledgement or actual worker exit. Until then, the host refuses further work
+from that session and does not place new sessions on its thread. Existing neighbours
+continue normally. A worker left with only unconfirmed closes is retired without
+counting it as a crash. Worker failure, missing heartbeats and whole-runtime shutdown
+retain their bounded retirement paths. Workers cannot isolate native crashes or
+process-wide exhaustion.
 
 Read/Edit/Write use a host-coordinated lock keyed by the canonical path, shared
 by all runtimes in the host. A dead worker's locks are released only after Node
@@ -149,12 +156,31 @@ for persistence and resource release. Custom preparation can also be abandoned
 without creating a late SDK session. Extension modules still own resources they
 create outside SDK APIs and must respect their preparation signal.
 
-On Windows, Git Bash can replace a POSIX process without preserving its native
-Windows parent chain. Shell termination combines a bounded native process
-snapshot with the shell installation's POSIX process table before calling
-`taskkill`. Concurrent terminations share only in-flight snapshots; completed
-snapshots are not cached. This work runs only during termination and is asynchronous. The
-supervisor forwards the shell context to the host so abrupt worker exit uses the
-same cleanup path. If discovery is unavailable, native tree termination remains
-the fallback and emits a diagnostic warning. File snapshots compare opened
-handles on Windows because path-based `stat` can report a different device ID.
+## Native Bash command termination on Windows
+
+Git for Windows Bash is the supported configuration for observing both Windows
+and MSYS process ancestry. When a command is cancelled or times out, the SDK
+uses a bounded observation from that Git installation and fresh Windows snapshots.
+It requests termination and checks exit through the same retained process handles.
+This discovery does not run at startup or when a command finishes normally.
+
+A shell without an identifiable MSYS root, a failed `ps` query, or a possible
+descendant with no usable Windows PID leaves the overall result unconfirmed. The SDK still
+stops native descendants it can identify. A member already observed to have
+exited before its termination request also leaves the result unconfirmed: seeing
+it gone is not evidence that the request stopped it. Tests therefore check actual
+owned process exits and the independent session's work rather than requiring a
+positive receipt in every Windows environment.
+
+A positive receipt covers the command and the descendants attributable to it in
+these observations. A process that starts and loses its parent link entirely
+between snapshots may never be observed; snapshot-based termination is not
+lifetime containment.
+
+After abrupt Worker exit the host separately cleans up its tracked JavaScript
+child processes. With a Windows POSIX shell context, that path still starts a
+PowerShell CIM query (up to four seconds), then Git `ps`, before `taskkill`.
+Concurrent calls share only in-flight queries, not completed snapshots.
+
+File snapshots compare opened handles on Windows because path-based `stat` can
+report a different device ID.

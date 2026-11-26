@@ -18,7 +18,7 @@ use std::{
 };
 use tokio::{
     fs::{self, File, OpenOptions},
-    io::{AsyncSeekExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::{Mutex, OwnedMutexGuard},
 };
 
@@ -381,8 +381,7 @@ enum ReadDigest {
     None,
     /// SHA-256 of the file's raw bytes (`contentHash`).
     Raw(String),
-    /// SHA-256 of the `content` a host recorded without a `contentHash`. Hosts
-    /// keeping Claude Code's read-state shape store LF-normalized text there.
+    /// Without a raw hash, the host's recorded text may have LF-normalized line endings.
     Text(String),
 }
 impl ReadDigest {
@@ -713,6 +712,20 @@ async fn snapshot(path: &Path) -> Result<Snapshot> {
         metadata: after,
     })
 }
+async fn matches_bytes(file: &mut File, expected: &[u8]) -> std::io::Result<bool> {
+    let mut buffer = vec![0; (expected.len() + 1).min(64 * 1024)];
+    let mut remaining = expected;
+    while !remaining.is_empty() {
+        let limit = remaining.len().min(buffer.len());
+        let count = file.read(&mut buffer[..limit]).await?;
+        if count == 0 || buffer[..count] != remaining[..count] {
+            return Ok(false);
+        }
+        remaining = &remaining[count..];
+    }
+    Ok(file.read(&mut buffer[..1]).await? == 0)
+}
+
 async fn write_snapshot(
     path: &Path,
     bytes: &[u8],
@@ -746,31 +759,30 @@ async fn write_snapshot(
             .metadata()
             .await
             .map_err(Error::from)?;
-        if !same(&current, &at_path) {
+        if !current.is_file()
+            || !same(&current, &at_path)
+            || !same_content_version(&expected.metadata, &current)
+            || current.len() != expected.bytes.len() as u64
+        {
             return Err(Error::new("FILE_CHANGED", "").with_harness(TextId::ToolsFileChanged, &[]));
         }
-        if !same(&expected.metadata, &current) {
-            if !same_content_version(&expected.metadata, &current) {
-                return Err(
-                    Error::new("FILE_CHANGED", "").with_harness(TextId::ToolsFileChanged, &[])
-                );
-            }
-            let content = crate::filesystem::read_bounded(&mut file, MAX_BYTES).await?;
-            let after = file.metadata().await.map_err(Error::from)?;
-            let at_path = File::open(path)
-                .await
-                .map_err(Error::from)?
-                .metadata()
-                .await
-                .map_err(Error::from)?;
-            if content != expected.bytes || !same(&current, &after) || !same(&after, &at_path) {
-                return Err(
-                    Error::new("FILE_CHANGED", "").with_harness(TextId::ToolsFileChanged, &[])
-                );
-            }
-            file.seek(std::io::SeekFrom::Start(0))
-                .await
-                .map_err(Error::from)?;
+        if expected.bytes.len() > MAX_BYTES {
+            return Err(size_error());
+        }
+        // Filesystems can preserve the observed metadata across a same-size overwrite.
+        if !matches_bytes(&mut file, &expected.bytes).await? {
+            tracing::warn!("file overwrite refused: write handle bytes differ from its snapshot");
+            return Err(Error::new("FILE_CHANGED", "").with_harness(TextId::ToolsFileChanged, &[]));
+        }
+        let after = file.metadata().await.map_err(Error::from)?;
+        let at_path = File::open(path)
+            .await
+            .map_err(Error::from)?
+            .metadata()
+            .await
+            .map_err(Error::from)?;
+        if !same(&current, &after) || !same(&after, &at_path) {
+            return Err(Error::new("FILE_CHANGED", "").with_harness(TextId::ToolsFileChanged, &[]));
         }
     }
     guard.writing = true;
@@ -1132,10 +1144,17 @@ impl FileTools {
             }
         };
         let decoded = text::decode(&snap.bytes);
+        // Only the complete text is shown; this view never authorizes rewriting the file.
+        let complete_prefix = decoded
+            .is_none()
+            .then(|| text::complete_prefix(&snap.bytes))
+            .flatten()
+            .filter(|_| ext != "ipynb");
         let lossy;
-        let source: &str = match &decoded {
-            Some(decoded) => &decoded.text,
-            None => {
+        let source: &str = match (&decoded, complete_prefix) {
+            (Some(decoded), _) => &decoded.text,
+            (None, Some(prefix)) => prefix,
+            (None, None) => {
                 lossy = text::lossy(&snap.bytes);
                 &lossy
             }
@@ -1146,6 +1165,7 @@ impl FileTools {
                 &[("encoding", decoded.encoding.label())],
             )),
             Some(_) => None,
+            None if complete_prefix.is_some() => None,
             None => Some(harness.text(TextId::ToolsFileReadUndecodable).to_owned()),
         };
         let content = text::lf(source);
@@ -1169,7 +1189,7 @@ impl FileTools {
                 }
             }
         }
-        if content.is_empty() {
+        if content.is_empty() && complete_prefix.is_none() {
             self.record_public(target, json!({"content":"","contentHash":hash(&snap.bytes),"timestamp":modified(&snap.metadata),"offset":input.get("offset").cloned().unwrap_or_else(crate::js::undefined),"limit":input.get("limit").cloned().unwrap_or_else(crate::js::undefined)}));
             return success(harness.text(TextId::ToolsFileEmpty), None);
         }
@@ -1312,8 +1332,15 @@ impl FileTools {
             output.push_str(&notice);
             output.push('\n');
         }
-        let partial =
-            truncated_line.is_some() || budget.is_some() || more || start > 0 || clamped;
+        if complete_prefix.is_some() && truncated_line.is_none() && !clamped && fitted == total {
+            self.push_end_note(&mut output, harness);
+        }
+        let partial = truncated_line.is_some()
+            || budget.is_some()
+            || more
+            || start > 0
+            || clamped
+            || complete_prefix.is_some();
         let retained = if truncated_line.is_some() || budget.is_some() || clamped {
             crate::js::undefined()
         } else if partial {
@@ -1325,6 +1352,18 @@ impl FileTools {
         let mut result = success(output, None);
         result["__haloSdkNativeOutput"] = json!("read_text");
         result
+    }
+
+    /// Adds the note on an incomplete final character after a view that delivered
+    /// the file's final line, when the explicit budget still holds the whole note.
+    fn push_end_note(&self, output: &mut String, harness: &ResolvedHarness) {
+        let note = harness.text(TextId::ToolsFileReadIncompleteEnd);
+        if self.explicit_result_budget.is_none_or(|limit| {
+            crate::js::utf16_len(output) + crate::js::utf16_len(note) + 1 <= limit
+        }) {
+            output.push_str(note);
+            output.push('\n');
+        }
     }
 
     /// A notice that fits the explicit result budget, and the budget left for the lines.
@@ -1386,6 +1425,7 @@ impl FileTools {
                         .undecodable
                         .then(|| harness.text(TextId::ToolsFileReadUndecodable).to_owned()),
                 );
+                let mut clamped = false;
                 if let Some(limit) = body_limit {
                     if crate::js::utf16_len(&text) > limit {
                         let fitted = fit_explicit_read(
@@ -1399,11 +1439,15 @@ impl FileTools {
                         );
                         text = fitted.0;
                         delivered_end = fitted.1;
+                        clamped = fitted.2;
                     }
                 }
                 if let Some(notice) = notice {
                     text.push_str(&notice);
                     text.push('\n');
+                }
+                if outcome.incomplete_end && !clamped && delivered_end == outcome.end {
+                    self.push_end_note(&mut text, harness);
                 }
                 let delivered_start = if delivered_end == 0 { 0 } else { outcome.start };
                 let mut state = json!({"content":crate::js::undefined(),"timestamp":timestamp,"isPartialView":true,"offset":input.get("offset").cloned().unwrap_or_else(crate::js::undefined),"limit":input.get("limit").cloned().unwrap_or_else(crate::js::undefined),"deliveredStart":delivered_start,"deliveredEnd":delivered_end});

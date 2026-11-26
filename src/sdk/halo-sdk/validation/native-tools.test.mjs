@@ -74,6 +74,46 @@ test('direct native file tools use the caller read map and direct shell calls re
   } finally { await releaseNativeToolOwner(context.sessionId); await rm(root, { recursive: true, force: true }); }
 });
 
+test('search, edit and shell verification agree on the file, and a stale write preserves external changes', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'workspace-tools-')));
+  const tools = sdk.getAllTools();
+  const context = { sessionId: randomUUID(), cwd: root, env: { HOME: root }, abortSignal: new AbortController().signal,
+    costTracker: new sdk.CostTracker('fixture'), currentTurn: 1, readFileState: new Map() };
+  const execute = (name, input) => sdk.findToolByName(tools, name).execute(input, context);
+  const run = async (name, input) => {
+    const result = await execute(name, input);
+    assert.equal(result.isError, false, `${name}: ${result.content}`);
+    return result.content;
+  };
+  try {
+    const folder = join(root, 'config space');
+    await mkdir(folder);
+    const target = join(folder, 'app.ini');
+    const other = join(root, 'example.ini');
+    await writeFile(target, 'limit=12\r\nlabel=café\r\n');
+    await writeFile(other, 'limit=10\r\n');
+    const candidates = (await run('Glob', { pattern: '**/*.ini' })).trimEnd().split('\n');
+    const match = (await run('Grep', { pattern: '^limit=12\\r?$', glob: '*.ini' })).trimEnd();
+    const selected = await realpath(match);
+    assert.equal(selected, await realpath(target));
+    assert.deepEqual((await Promise.all(candidates.map(p => realpath(p)))).sort(), [selected, await realpath(other)].sort());
+    assert.match(await run('Read', { file_path: selected }), /limit=12/);
+    await run('Edit', { file_path: selected, old_string: 'limit=12', new_string: 'limit=24' });
+    await run('Bash', { command: `cat 'config space/app.ini' > observed.txt` });
+    const edited = 'limit=24\r\nlabel=café\r\n';
+    assert.equal(await readFile(join(root, 'observed.txt'), 'utf8'), edited);
+    assert.equal(await readFile(other, 'utf8'), 'limit=10\r\n');
+    const external = edited.replace('24', '36');
+    await writeFile(target, external);
+    const stale = await execute('Write', { file_path: selected, content: 'limit=48\n' });
+    assert.equal(stale.isError, true);
+    assert.equal(await readFile(target, 'utf8'), external);
+    assert.match(await run('Read', { file_path: selected }), /limit=36/);
+    await run('Write', { file_path: selected, content: 'limit=48\n' });
+    assert.equal(await readFile(target, 'utf8'), 'limit=48\n');
+  } finally { await releaseNativeToolOwner(context.sessionId); await rm(root, { recursive: true, force: true }); }
+});
+
 test('foreground and managed background shells keep restored environment values out of argv', { skip: process.platform === 'win32', timeout: 30_000 }, async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'halo-shell-argv-')));
   const nested = join(root, 'nested'); await mkdir(nested);

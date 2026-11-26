@@ -25,8 +25,8 @@ impl Fixture {
     fn path(&self, name: &str) -> PathBuf {
         self.root.join(name)
     }
-    async fn call(&self, name: &str, input: Value) -> Value {
-        let ctx = ToolContext {
+    fn context(&self) -> ToolContext {
+        ToolContext {
             session_id: "file-text".into(),
             cwd: self.root.to_string_lossy().into_owned(),
             env: json!({}),
@@ -34,8 +34,14 @@ impl Fixture {
             tool_use_id: "call".into(),
             cancellation: CancellationToken::new(),
             harness: crate::harness::baseline(),
-        };
-        self.tools.execute_admitted(name, &input, &ctx, None).await.unwrap()
+        }
+    }
+    async fn call(&self, name: &str, input: Value) -> Value {
+        self.tools.execute_admitted(name, &input, &self.context(), None).await.unwrap()
+    }
+    async fn read_within(&self, budget: usize, input: Value) -> Value {
+        let tools = FileTools::new(&json!({"cwd":self.root,"toolResultBudget":budget}), Arc::new(NoHost));
+        tools.execute_admitted("Read", &input, &self.context(), None).await.unwrap()
     }
     async fn read(&self, path: &Path) -> Value {
         let read = self.call("Read", json!({"file_path":path})).await;
@@ -64,6 +70,32 @@ fn touch(path: &Path, seconds: u64) {
         .unwrap()
         .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(seconds))
         .unwrap();
+}
+
+#[tokio::test]
+async fn write_handle_rejects_stale_bytes_even_when_metadata_matches() {
+    let f = Fixture::new();
+    let path = f.path("stale.txt");
+    let mut actual = vec![b'a'; 128 * 1024 + 1];
+    *actual.last_mut().unwrap() = b'b';
+    std::fs::write(&path, &actual).unwrap();
+    let mut expected = snapshot(&path).await.unwrap();
+    // Simulate the previous bytes with indistinguishable metadata on every filesystem.
+    *expected.bytes.last_mut().unwrap() = b'a';
+    let mut guard = lock(&path).await;
+    let error = write_snapshot(&path, b"updated", Some(&expected), &mut guard)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "FILE_CHANGED");
+    assert!(!guard.writing);
+    assert_eq!(std::fs::read(&path).unwrap(), actual);
+
+    expected.bytes = actual;
+    write_snapshot(&path, b"updated", Some(&expected), &mut guard)
+        .await
+        .unwrap();
+    assert!(guard.writing);
+    assert_eq!(std::fs::read(&path).unwrap(), b"updated");
 }
 
 #[tokio::test]
@@ -409,4 +441,139 @@ async fn a_write_whose_path_was_replaced_is_not_confirmed() {
 
     std::fs::remove_file(&path).unwrap();
     assert!(confirm_written(&path, &written).await.is_err());
+}
+
+#[tokio::test]
+async fn an_incomplete_final_character_is_shown_as_a_partial_view_that_cannot_be_rewritten() {
+    let f = Fixture::new();
+    let harness = crate::harness::baseline();
+    let notice = harness.text(TextId::ToolsFileReadIncompleteEnd);
+    let state = |path: &Path| f.tools.context_call("readFileState.get", &json!([path])).unwrap();
+    let half = &"中".as_bytes()[..2];
+
+    let path = f.path("tail.txt");
+    let bytes = [b"h\xc3\xa9llo\nend ", half].concat();
+    std::fs::write(&path, &bytes).unwrap();
+    let read = f.read(&path).await;
+    assert_eq!(content(&read), format!("1\théllo\n2\tend \n{notice}\n"));
+    assert_eq!(state(&path)["isPartialView"], true);
+    assert_eq!(state(&path)["contentHash"], hash(&bytes));
+    for refused in [f.edit(&path, "end", "END").await, f.write(&path, "replaced\n").await] {
+        assert_eq!(content(&refused), harness.text(TextId::ToolsFileUndecodable));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+    // Once the character is complete, the partial view is stale and a new Read is a full one.
+    let mut appended = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    std::io::Write::write_all(&mut appended, &"中".as_bytes()[2..]).unwrap();
+    drop(appended);
+    assert_eq!(content(&f.edit(&path, "end", "END").await), harness.text(TextId::ToolsFileChanged));
+    assert_eq!(content(&f.read(&path).await), "1\théllo\n2\tend 中\n");
+    assert_ne!(state(&path)["isPartialView"], true);
+    assert_eq!(f.edit(&path, "end", "END").await["isError"], false);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "héllo\nEND 中");
+
+    // A newer partial view replaces the full read state a Read, Write or Edit left.
+    let cut = [b"alpha\nbeta ", half].concat();
+    for complete in ["read", "write", "edit"] {
+        std::fs::write(&path, "alpha\nbeta 中").unwrap();
+        let recorded = match complete {
+            "read" => f.read(&path).await,
+            "write" => {
+                f.read(&path).await;
+                f.write(&path, "alpha\nbeta 中").await
+            }
+            _ => {
+                f.read(&path).await;
+                f.edit(&path, "beta 中", "beta 中!").await
+            }
+        };
+        assert_eq!(recorded["isError"], false, "{complete}: {recorded}");
+        assert_ne!(state(&path)["isPartialView"], true, "{complete}");
+        std::fs::write(&path, &cut).unwrap();
+        assert_eq!(content(&f.read(&path).await), format!("1\talpha\n2\tbeta \n{notice}\n"));
+        assert_eq!(state(&path)["isPartialView"], true, "{complete}");
+        assert_eq!(state(&path)["contentHash"], hash(&cut), "{complete}");
+        assert_eq!(content(&f.write(&path, "replaced\n").await), harness.text(TextId::ToolsFileUndecodable));
+        assert_eq!(std::fs::read(&path).unwrap(), cut, "{complete}");
+    }
+
+    std::fs::write(&path, half).unwrap();
+    assert_eq!(content(&f.read(&path).await), format!("1\t\n{notice}\n"));
+    assert_eq!(state(&path)["isPartialView"], true);
+    std::fs::write(&path, [b"\xEF\xBB\xBFbom ", half].concat()).unwrap();
+    assert_eq!(content(&f.read(&path).await), format!("1\tbom \n{notice}\n"));
+
+    // An incomplete character anywhere but the very end is an invalid byte sequence.
+    for middle in [[b"a ", half, b"\nb\n"].concat(), [b"a ", half, b"\r\nb\n"].concat()] {
+        std::fs::write(&path, &middle).unwrap();
+        let read = f.read(&path).await;
+        assert!(content(&read).contains(harness.text(TextId::ToolsFileReadUndecodable)), "{read}");
+        assert!(!content(&read).contains(notice), "{read}");
+    }
+
+    let large = f.path("large.txt");
+    let lines = 9 * 1024 * 1024 / 2;
+    std::fs::write(&large, [b"x\n".repeat(lines).as_slice(), b"end ", half].concat()).unwrap();
+    let read = f.call("Read", json!({"file_path":large,"offset":lines,"limit":5})).await;
+    assert!(content(&read).contains(&format!("{}\tend \n", lines + 1)), "{read}");
+    assert!(content(&read).contains(notice) && !content(&read).contains('\u{fffd}'), "{read}");
+    assert_eq!(state(&large)["isPartialView"], true);
+    assert!(state(&large).get("contentHash").is_none_or(Value::is_null));
+    let read = f.call("Read", json!({"file_path":large,"limit":2})).await;
+    assert!(!content(&read).contains(notice), "{read}");
+}
+
+const HALF: &[u8] = &[0xe4, 0xb8];
+
+/// The final line ends partway through `中`; the note follows only a view that delivered it.
+fn end_note() -> String {
+    format!("{}\n", crate::harness::baseline().text(TextId::ToolsFileReadIncompleteEnd))
+}
+
+#[tokio::test]
+async fn the_incomplete_end_note_follows_only_a_page_that_reaches_the_end() {
+    let f = Fixture::new();
+    let path = f.path("pages.txt");
+    std::fs::write(&path, [b"one\ntwo\nend ", HALF].concat()).unwrap();
+    let first = f.call("Read", json!({"file_path":path,"limit":1})).await;
+    assert!(!content(&first).contains(end_note().trim_end()), "{first}");
+    let last = f.call("Read", json!({"file_path":path,"offset":3})).await;
+    assert!(content(&last).contains("3\tend \n") && content(&last).ends_with(&end_note()), "{last}");
+}
+
+/// The note uses only room the delivered text leaves; it never displaces it.
+#[tokio::test]
+async fn the_incomplete_end_note_never_takes_room_from_the_text() {
+    let f = Fixture::new();
+    let length = crate::js::utf16_len;
+    let path = f.path("budget.txt");
+    std::fs::write(&path, [b"one\ntwo\nend ", "z".repeat(240).as_bytes(), HALF].concat()).unwrap();
+    let whole = content(&f.read(&path).await).to_owned();
+    let body = whole.strip_suffix(&end_note()).unwrap();
+    assert!(length(body) > length(&end_note()));
+    assert_eq!(content(&f.read_within(length(&whole), json!({"file_path":path})).await), whole);
+    assert_eq!(content(&f.read_within(length(body), json!({"file_path":path})).await), body);
+    for budget in [length(body) - 3, 20] {
+        let short = f.read_within(budget, json!({"file_path":path})).await;
+        assert!(!content(&short).contains(end_note().trim_end()) && length(content(&short)) <= budget, "{short}");
+    }
+}
+
+#[tokio::test]
+async fn a_large_page_shows_the_incomplete_end_note_only_with_its_final_line() {
+    let f = Fixture::new();
+    let length = crate::js::utf16_len;
+    let large = f.path("large.txt");
+    let lines = 9 * 1024 * 1024 / 2;
+    std::fs::write(&large, [b"x\n".repeat(lines).as_slice(), "a".repeat(190).as_bytes(), b"\nend ", HALF].concat()).unwrap();
+    let final_line = format!("{}\tend ", lines + 2);
+    let page = f.call("Read", json!({"file_path":large,"offset":lines + 1,"limit":5})).await;
+    assert!(content(&page).contains(&final_line) && content(&page).ends_with(&end_note()), "{page}");
+    let dropped = f.read_within(200, json!({"file_path":large,"offset":lines + 1,"limit":5})).await;
+    assert!(!content(&dropped).contains(&final_line) && !content(&dropped).contains(end_note().trim_end()), "{dropped}");
+    let whole = content(&f.call("Read", json!({"file_path":large,"offset":lines + 2})).await).to_owned();
+    let body = whole.strip_suffix(&end_note()).unwrap();
+    assert_eq!(content(&f.read_within(length(&whole), json!({"file_path":large,"offset":lines + 2})).await), whole);
+    assert_eq!(content(&f.read_within(length(body), json!({"file_path":large,"offset":lines + 2})).await), body);
 }

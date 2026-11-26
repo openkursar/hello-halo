@@ -49,6 +49,8 @@ pub struct RangeOutcome {
     pub beyond_end: bool,
     /// A delivered line had bytes that are not valid UTF-8.
     pub undecodable: bool,
+    /// The file's final line, delivered whole, ends partway through a UTF-8 character.
+    pub incomplete_end: bool,
 }
 
 pub fn read_token_limit(context_window: f64) -> usize {
@@ -98,6 +100,15 @@ struct Cursor {
     done: bool,
     abandoned: bool,
     undecodable: bool,
+    incomplete_end: bool,
+}
+
+/// Where a line's bytes stop.
+#[derive(Clone, Copy, PartialEq)]
+enum LineEnd {
+    Newline,
+    Bound,
+    File,
 }
 
 impl Cursor {
@@ -112,15 +123,26 @@ impl Cursor {
             done: false,
             abandoned: false,
             undecodable: false,
+            incomplete_end: false,
         }
     }
 
-    /// Lossy UTF-8 for display. A line cut at the buffer bound may end inside a
-    /// character; that partial character is dropped rather than reported as invalid.
-    fn decode(&mut self, mut bytes: Vec<u8>, bounded: bool) -> String {
+    /// Lossy UTF-8 for display. A character cut by the line bound is dropped:
+    /// its remaining bytes were not read, so it says nothing about the file. A
+    /// character left incomplete by the end of the file is dropped and reported,
+    /// unless invalid bytes were already reported for the delivered lines.
+    fn decode(&mut self, mut bytes: Vec<u8>, end: LineEnd) -> String {
         match std::str::from_utf8(&bytes) {
             Ok(_) => {}
-            Err(error) if bounded && error.error_len().is_none() => bytes.truncate(error.valid_up_to()),
+            Err(error) if error.error_len().is_none() && end == LineEnd::Bound => {
+                bytes.truncate(error.valid_up_to())
+            }
+            Err(error)
+                if error.error_len().is_none() && end == LineEnd::File && !self.undecodable =>
+            {
+                bytes.truncate(error.valid_up_to());
+                self.incomplete_end = true;
+            }
             Err(_) => self.undecodable = true,
         }
         String::from_utf8_lossy(&bytes).into_owned()
@@ -176,7 +198,7 @@ impl Cursor {
                     return Ok(None);
                 }
                 self.line += 1;
-                return Ok(Some((number, self.decode(bytes, bounded), bounded)));
+                return Ok(Some((number, self.decode(bytes, LineEnd::File), bounded)));
             }
             let byte = self.buffer[self.position];
             self.position += 1;
@@ -187,7 +209,7 @@ impl Cursor {
                 if bytes.last() == Some(&b'\r') {
                     bytes.pop();
                 }
-                return Ok(Some((number, self.decode(bytes, bounded), bounded)));
+                return Ok(Some((number, self.decode(bytes, LineEnd::Newline), bounded)));
             }
             self.last_terminated = false;
             if store {
@@ -198,7 +220,7 @@ impl Cursor {
                     self.done = true;
                     self.abandoned = true;
                     self.line += 1;
-                    return Ok(Some((number, self.decode(bytes, true), true)));
+                    return Ok(Some((number, self.decode(bytes, LineEnd::Bound), true)));
                 }
             }
         }
@@ -531,6 +553,7 @@ pub async fn read(request: &RangeRequest<'_>) -> Result<RangeOutcome> {
         cancelled,
         beyond_end: beyond_end && lines.is_empty(),
         undecodable: cursor.undecodable,
+        incomplete_end: cursor.incomplete_end && !more && truncated_line.is_none() && !cancelled,
     })
 }
 
@@ -722,6 +745,47 @@ mod tests {
         let rendered = error.render_for(&harness);
         assert!(rendered.contains("UTF-16LE"), "{rendered}");
         assert!(rendered.contains("Convert a copy to UTF-8"), "{rendered}");
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_the_end_of_the_file_can_end_with_an_incomplete_character() {
+        let harness = crate::harness::baseline();
+        let cancellation = CancellationToken::new();
+        let read_lines = |path: &'static Path, limit| {
+            let harness = &harness;
+            let cancellation = &cancellation;
+            async move {
+                read(&RangeRequest { path, start: 1, limit, token_limit: 30_000, character_limit: None, cancellation, harness })
+                    .await
+                    .unwrap()
+            }
+        };
+        let half = &"中".as_bytes()[..2];
+        let (root, path) = fixture("", "end.txt").await;
+        let path: &'static Path = Box::leak(path.into_boxed_path());
+        tokio::fs::write(path, [b"x\ny ", half].concat()).await.unwrap();
+        let outcome = read_lines(path, 10).await;
+        assert!(outcome.text.starts_with("1\tx\n2\ty \n"), "{}", outcome.text);
+        assert!(outcome.incomplete_end && !outcome.undecodable);
+        assert!(!outcome.text.contains('\u{fffd}'));
+        let outcome = read_lines(path, 1).await;
+        assert!(!outcome.incomplete_end && !outcome.undecodable);
+        tokio::fs::write(path, [&b"a".repeat(35), b"\ny ".as_slice(), half].concat()).await.unwrap();
+        let outcome = read(&RangeRequest { path, start: 1, limit: 10, token_limit: 30_000, character_limit: Some(40), cancellation: &cancellation, harness: &harness })
+            .await
+            .unwrap();
+        assert!(outcome.more && outcome.end == 1 && !outcome.incomplete_end, "{}", outcome.text);
+
+        for middle in [[b"a ", half, b"\nb"].concat(), [b"a ", half, b"\r\nb"].concat()] {
+            tokio::fs::write(path, middle).await.unwrap();
+            let outcome = read_lines(path, 10).await;
+            assert!(outcome.undecodable && !outcome.incomplete_end);
+        }
+        tokio::fs::write(path, [b"caf\xe9\ny ", half].concat()).await.unwrap();
+        let outcome = read_lines(path, 10).await;
+        assert!(outcome.undecodable && !outcome.incomplete_end);
+        assert!(outcome.text.contains("2\ty \u{fffd}"), "{}", outcome.text);
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
 
