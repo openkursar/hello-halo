@@ -4,8 +4,24 @@
     "slots": []
   },
   "tools.file.undecodable": {
-    "text": "This file is not valid UTF-8 or UTF-16 text, so saving it here would replace the bytes that cannot be decoded. Nothing was written. Change it with a program that reads and writes the file's actual encoding.",
+    "text": "This file starts with a UTF-16 byte order mark but is not valid UTF-16 text, so Edit cannot keep its other bytes. Nothing was written. Use Write to replace the whole file; its original bytes are saved first.",
     "slots": []
+  },
+  "tools.file.original_not_saved": {
+    "text": "This file is not valid UTF-8 or UTF-16 text, and a copy of its original bytes could not be saved first, so nothing was written. Write to a new file instead, or change this one with a program that handles its actual encoding.",
+    "slots": []
+  },
+  "tools.file.write_original_saved": {
+    "text": " The previous file was not valid UTF-8 or UTF-16 text; its exact bytes are saved at {path}.",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.file.edit_original_saved": {
+    "text": " Bytes outside the replaced text are unchanged; the file's exact previous bytes are saved at {path}.",
+    "slots": [
+      "path"
+    ]
   },
   "tools.file.partial_write": {
     "text": "{error}. Restoring the previous content also failed ({restore}), so the file may now be partially written. Inspect it before retrying.",
@@ -29,7 +45,7 @@
     "slots": []
   },
   "tools.file.read_undecodable": {
-    "text": "[This file is not valid UTF-8 or UTF-16 text. Bytes that cannot be decoded are shown as U+FFFD (�), and Edit and Write will not change the file. Use a program that handles its actual encoding to change it.]",
+    "text": "[This file is not valid UTF-8 or UTF-16 text; bytes that cannot be decoded are shown as U+FFFD (�). Edit replaces only the text it matches, and Edit and Write save a copy of the original bytes first.]",
     "slots": []
   },
   "tools.file.read_incomplete_end": {

@@ -144,6 +144,7 @@ impl DirectToolOwner {
         let result = match implementation.as_str() {
             "Read" | "Write" | "Edit" => {
                 file::FileTools::new(&context, bridge)
+                    .with_output_store(self.output(&context))
                     .execute_admitted(&implementation, &input, &ctx, admitted)
                     .await?
             }

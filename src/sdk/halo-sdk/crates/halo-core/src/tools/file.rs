@@ -618,6 +618,8 @@ pub struct FileTools {
     pub deny: Vec<PathBuf>,
     record_change: Option<(Arc<dyn crate::bridge::HostBridge>, String)>,
     external_reads: Option<Arc<dyn crate::bridge::HostBridge>>,
+    /// Receives the exact bytes of a file that is not lossless text before Edit or Write changes it.
+    originals: Option<Arc<super::output::OutputStore>>,
 }
 struct Snapshot {
     bytes: Vec<u8>,
@@ -862,6 +864,25 @@ impl FileTools {
                 .map(|callback| (bridge.clone(), callback.to_owned())),
             external_reads: (options["nativeOwner"]["externalReadFileState"] == true)
                 .then_some(bridge),
+            originals: None,
+        }
+    }
+    pub fn with_output_store(mut self, store: Arc<super::output::OutputStore>) -> Self {
+        self.originals = Some(store);
+        self
+    }
+    /// Saves the exact bytes of a file that is not lossless text; `None` when no complete copy exists.
+    async fn save_original(&self, path: &Path, bytes: &[u8]) -> Option<PathBuf> {
+        let saved = match &self.originals {
+            Some(store) => store.save_bytes("original", bytes).await,
+            None => return None,
+        };
+        match saved {
+            super::output::SaveState::Complete { path } => Some(path),
+            state => {
+                tracing::warn!(file_path = %path.display(), state = ?state, "original bytes could not be saved before rewriting");
+                None
+            }
         }
     }
     pub(super) fn prepare_admission(
@@ -1513,20 +1534,24 @@ impl FileTools {
                 return Ok(failure(harness.text(TextId::ToolsFileChanged)));
             }
         }
-        let encoding = match &old {
-            None => text::Encoding::Utf8,
+        let (encoding, lossless) = match &old {
+            None => (text::Encoding::Utf8, true),
             Some(old) => match text::decode(&old.bytes) {
-                Some(decoded) => decoded.encoding,
-                None => {
-                    tracing::warn!(file_path = %path.display(), "Write refused: the existing file is not lossless text");
-                    return Ok(failure(harness.text(TextId::ToolsFileUndecodable)));
-                }
+                Some(decoded) => (decoded.encoding, true),
+                None => (text::sniff(&old.bytes), false),
             },
         };
         let written = text::encode(content, encoding);
         if written.len() > MAX_BYTES {
             return Ok(failure(size_error().render_for(harness)));
         }
+        let original = match old.as_ref().filter(|_| !lossless) {
+            None => None,
+            Some(old) => match self.save_original(path, &old.bytes).await {
+                Some(saved) => Some(saved),
+                None => return Ok(failure(harness.text(TextId::ToolsFileOriginalNotSaved))),
+            },
+        };
         let stat = match write_snapshot(path, &written, old.as_ref(), guard).await {
             Ok(s) => s,
             Err(e) => {
@@ -1575,6 +1600,12 @@ impl FileTools {
                 &[("encoding", encoding.label())],
             ));
         }
+        if let Some(original) = original {
+            message.push_str(&harness.render(
+                TextId::ToolsFileWriteOriginalSaved,
+                &[("path", &original.to_string_lossy())],
+            ));
+        }
         Ok(success(
             message,
             Some(json!({"file_path":path,"is_new":old.is_none(),"lines":lines,"bytes":bytes})),
@@ -1621,11 +1652,23 @@ impl FileTools {
                 return Ok(failure(harness.text(TextId::ToolsFileChanged)));
             }
         }
-        let Some(decoded) = text::decode(&snap.bytes) else {
-            tracing::warn!(file_path = %path.display(), "Edit refused: the file is not lossless text");
-            return Ok(failure(harness.text(TextId::ToolsFileUndecodable)));
+        let decoded = text::decode(&snap.bytes);
+        let lossy = match &decoded {
+            Some(_) => None,
+            None => match text::LossyUtf8::new(&snap.bytes) {
+                Some(lossy) => Some(lossy),
+                None => {
+                    tracing::warn!(file_path = %path.display(), "Edit refused: malformed UTF-16 has no byte-exact text positions");
+                    return Ok(failure(harness.text(TextId::ToolsFileUndecodable)));
+                }
+            },
         };
-        let view = text::LfView::new(&decoded.text);
+        let (source, encoding) = match (&decoded, &lossy) {
+            (Some(decoded), _) => (decoded.text.as_ref(), decoded.encoding),
+            (None, Some(lossy)) => (lossy.text.as_str(), text::Encoding::Utf8),
+            (None, None) => unreachable!("an undecodable file without a lossy view returned above"),
+        };
+        let view = text::LfView::new(source);
         let wanted = text::lf(old);
         let count = view.text().matches(wanted.as_ref()).count();
         if count == 0 {
@@ -1641,25 +1684,39 @@ impl FileTools {
             )));
         }
         let replacements = if all { count } else { 1 };
-        let insertion = text::with_ending(new, text::dominant_ending(&decoded.text));
+        let insertion = text::with_ending(new, text::dominant_ending(source));
         // Size the result before building it: a replace_all multiplies the insertion.
         let mut removed = 0usize;
         let mut identical = true;
         for original in view.originals(&wanted, replacements) {
-            removed += text::encoded_len(original, decoded.encoding);
+            removed += text::encoded_len(original, encoding);
             identical &= original == insertion.as_ref();
         }
         if identical {
             return Ok(failure(harness.text(TextId::ToolsFileEditNoChange)));
         }
-        let size = text::encoded_len(&insertion, decoded.encoding)
+        // A lossy view is longer than the bytes it shows, so only the built result is sized.
+        let size = text::encoded_len(&insertion, encoding)
             .checked_mul(replacements)
             .and_then(|added| snap.bytes.len().checked_sub(removed)?.checked_add(added));
-        if size.is_none_or(|size| size > MAX_BYTES) {
+        if lossy.is_none() && size.is_none_or(|size| size > MAX_BYTES) {
             return Ok(failure(size_error().render_for(harness)));
         }
         let updated = view.replace(&wanted, replacements, &insertion);
-        let written = text::encode(&updated, decoded.encoding);
+        let written = match &lossy {
+            Some(lossy) => lossy.replace(&wanted, replacements, &insertion),
+            None => text::encode(&updated, encoding),
+        };
+        if written.len() > MAX_BYTES {
+            return Ok(failure(size_error().render_for(harness)));
+        }
+        let original = match &lossy {
+            None => None,
+            Some(_) => match self.save_original(path, &snap.bytes).await {
+                Some(saved) => Some(saved),
+                None => return Ok(failure(harness.text(TextId::ToolsFileOriginalNotSaved))),
+            },
+        };
         match write_snapshot(path, &written, Some(&snap), guard).await {
             Ok(_) => {}
             Err(e) => {
@@ -1683,6 +1740,12 @@ impl FileTools {
                 ("plural", if replacements == 1 { "" } else { "s" }),
             ],
         );
+        if let Some(original) = original {
+            message.push_str(&harness.render(
+                TextId::ToolsFileEditOriginalSaved,
+                &[("path", &original.to_string_lossy())],
+            ));
+        }
         if let Some(state) = state.filter(|_| self.track_reads) {
             match snapshot(path).await {
                 Ok(final_snapshot) if final_snapshot.bytes != written => {

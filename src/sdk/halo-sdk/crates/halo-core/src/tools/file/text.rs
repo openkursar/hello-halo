@@ -3,7 +3,7 @@
 //! Read, Edit and Write work on decoded text with LF line breaks, the form the
 //! model reads and writes. Saving converts back to the file's own encoding, byte
 //! order mark and line endings. A file that cannot be decoded losslessly is never
-//! re-encoded: callers report it instead of substituting its bytes.
+//! re-encoded: an edit replaces only the matched bytes and keeps the rest exactly.
 
 use std::borrow::Cow;
 
@@ -219,11 +219,17 @@ impl<'a> LfView<'a> {
         offset + self.joined.partition_point(|joined| *joined < offset)
     }
 
+    /// Original byte ranges of the first `limit` occurrences of `pattern` in the view.
+    fn ranges<'b>(&'b self, pattern: &'b str, limit: usize) -> impl Iterator<Item = (usize, usize)> + 'b {
+        self.text.match_indices(pattern).take(limit).map(move |(start, _)| {
+            (self.original_offset(start), self.original_offset(start + pattern.len()))
+        })
+    }
+
     /// The original text of the first `limit` occurrences of `pattern` in the view.
     pub(crate) fn originals<'b>(&'b self, pattern: &'b str, limit: usize) -> impl Iterator<Item = &'a str> + 'b {
-        self.text.match_indices(pattern).take(limit).map(move |(start, _)| {
-            &self.original[self.original_offset(start)..self.original_offset(start + pattern.len())]
-        })
+        let original = self.original;
+        self.ranges(pattern, limit).map(move |(start, end)| &original[start..end])
     }
 
     /// The original text with the first `limit` occurrences of `pattern` in the
@@ -231,12 +237,71 @@ impl<'a> LfView<'a> {
     pub(crate) fn replace(&self, pattern: &str, limit: usize, insertion: &str) -> String {
         let mut output = String::new();
         let mut copied = 0;
-        for (start, _) in self.text.match_indices(pattern).take(limit) {
-            output.push_str(&self.original[copied..self.original_offset(start)]);
+        for (start, end) in self.ranges(pattern, limit) {
+            output.push_str(&self.original[copied..start]);
             output.push_str(insertion);
-            copied = self.original_offset(start + pattern.len());
+            copied = end;
         }
         output.push_str(&self.original[copied..]);
+        output
+    }
+}
+
+/// The display text of UTF-8 bytes that are not valid UTF-8, with the offsets
+/// needed to write an edit back without re-encoding the bytes around it.
+pub(crate) struct LossyUtf8<'a> {
+    bytes: &'a [u8],
+    bom: usize,
+    /// The text `lossy` shows: each maximal invalid sequence is one U+FFFD.
+    pub text: String,
+    /// (text offset, byte offset) just after each U+FFFD, in ascending order.
+    after_invalid: Vec<(usize, usize)>,
+}
+
+impl<'a> LossyUtf8<'a> {
+    /// `None` for UTF-16, whose malformed units have no byte-exact text position.
+    pub(crate) fn new(bytes: &'a [u8]) -> Option<Self> {
+        let encoding = sniff(bytes);
+        if encoding.is_utf16() {
+            return None;
+        }
+        let bom = encoding.bom().len();
+        let mut text = String::with_capacity(bytes.len() - bom);
+        let mut after_invalid = Vec::new();
+        let mut consumed = 0;
+        for chunk in bytes[bom..].utf8_chunks() {
+            text.push_str(chunk.valid());
+            consumed += chunk.valid().len();
+            if !chunk.invalid().is_empty() {
+                text.push(char::REPLACEMENT_CHARACTER);
+                consumed += chunk.invalid().len();
+                after_invalid.push((text.len(), consumed));
+            }
+        }
+        Some(Self { bytes, bom, text, after_invalid })
+    }
+
+    /// Byte offset in the file of a character boundary in `text`.
+    fn byte_offset(&self, offset: usize) -> usize {
+        let (text, body) = match self.after_invalid.partition_point(|(text, _)| *text <= offset) {
+            0 => (0, 0),
+            index => self.after_invalid[index - 1],
+        };
+        self.bom + body + (offset - text)
+    }
+
+    /// The file bytes with the first `limit` occurrences of `pattern` in the LF
+    /// view replaced by UTF-8 `insertion`; every other byte is kept exactly.
+    pub(crate) fn replace(&self, pattern: &str, limit: usize, insertion: &str) -> Vec<u8> {
+        let view = LfView::new(&self.text);
+        let mut output = Vec::with_capacity(self.bytes.len());
+        let mut copied = 0;
+        for (start, end) in view.ranges(pattern, limit) {
+            output.extend_from_slice(&self.bytes[copied..self.byte_offset(start)]);
+            output.extend_from_slice(insertion.as_bytes());
+            copied = self.byte_offset(end);
+        }
+        output.extend_from_slice(&self.bytes[copied..]);
         output
     }
 }
@@ -303,6 +368,25 @@ mod tests {
         assert_eq!(view.replace("a", 1, "A"), "A\r\nb\nc\r\nd");
         assert_eq!(view.replace("\n", 2, "|"), "a|b|c\r\nd");
         assert_eq!(LfView::new("x\r\r\ny").text(), "x\r\ny");
+    }
+
+    #[test]
+    fn lossy_utf8_edits_keep_every_byte_outside_the_replaced_text() {
+        let bytes: &[u8] = b"\xEF\xBB\xBF// \xd6\xd0\xce\xc4\r\nport = 80\r\ncaf\xe9 \xe4\xb8";
+        let lossy = LossyUtf8::new(bytes).unwrap();
+        assert_eq!(lossy.text, self::lossy(bytes));
+        assert_eq!(
+            lossy.replace("port = 80", 1, "port = 8080"),
+            b"\xEF\xBB\xBF// \xd6\xd0\xce\xc4\r\nport = 8080\r\ncaf\xe9 \xe4\xb8"
+        );
+        // A replaced U+FFFD takes the bytes it stood for; LF matches CRLF.
+        let replaced = lossy.replace("// \u{fffd}\u{fffd}\u{fffd}\u{fffd}\nport", 1, "# port");
+        assert_eq!(replaced, b"\xEF\xBB\xBF# port = 80\r\ncaf\xe9 \xe4\xb8");
+        // The bytes written read back as the text the edit produced.
+        let pattern = "// \u{fffd}\u{fffd}\u{fffd}\u{fffd}\nport";
+        assert_eq!(self::lossy(&replaced), LfView::new(&lossy.text).replace(pattern, 1, "# port"));
+        assert_eq!(lossy.replace("caf\u{fffd} \u{fffd}", 1, "cafe"), b"\xEF\xBB\xBF// \xd6\xd0\xce\xc4\r\nport = 80\r\ncafe");
+        assert!(LossyUtf8::new(&[0xFF, 0xFE, b'a']).is_none());
     }
 
     #[test]

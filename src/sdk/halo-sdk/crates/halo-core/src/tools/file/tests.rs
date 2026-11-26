@@ -19,7 +19,10 @@ impl Fixture {
         let root = std::env::temp_dir().join(format!("halo-file-text-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let root = std::fs::canonicalize(root).unwrap();
-        let tools = FileTools::new(&json!({"cwd":root}), Arc::new(NoHost));
+        let store = super::super::output::OutputStore::new(
+            &json!({"persistSession":false,"nativeTempDirectory":root.join(".outputs")}),
+        );
+        let tools = FileTools::new(&json!({"cwd":root}), Arc::new(NoHost)).with_output_store(store);
         Self { root, tools }
     }
     fn path(&self, name: &str) -> PathBuf {
@@ -98,15 +101,22 @@ async fn write_handle_rejects_stale_bytes_even_when_metadata_matches() {
     assert_eq!(std::fs::read(&path).unwrap(), b"updated");
 }
 
+/// The path a result names after "saved at ".
+fn saved_original(result: &Value) -> PathBuf {
+    let text = content(result);
+    let (_, path) = text.split_once("saved at ").unwrap_or_else(|| panic!("no saved path: {text}"));
+    PathBuf::from(path.trim_end_matches('.'))
+}
+
 #[tokio::test]
-async fn undecodable_text_is_never_rewritten() {
+async fn undecodable_text_is_changed_after_its_exact_bytes_are_saved() {
     let f = Fixture::new();
     let harness = crate::harness::baseline();
     let gbk: &[u8] = b"// \xd6\xd0\xce\xc4\xd7\xa2\xca\xcd\nint main() { return 0; }\n";
     let latin1: &[u8] = b"caf\xe9 = 1\r\nx = 2\r\n";
-    for (name, bytes, old, new) in [
-        ("gbk.c", gbk, "return 0;", "return 1;"),
-        ("latin1.txt", latin1, "x = 2", "x = 3"),
+    for (name, bytes, old, new, edited) in [
+        ("gbk.c", gbk, "return 0;", "return 1;", &b"// \xd6\xd0\xce\xc4\xd7\xa2\xca\xcd\nint main() { return 1; }\n"[..]),
+        ("latin1.txt", latin1, "x = 2", "x = 3", &b"caf\xe9 = 1\r\nx = 3\r\n"[..]),
     ] {
         let path = f.path(name);
         std::fs::write(&path, bytes).unwrap();
@@ -115,13 +125,45 @@ async fn undecodable_text_is_never_rewritten() {
         assert!(content(&read).contains(harness.text(TextId::ToolsFileReadUndecodable)));
 
         let edit = f.edit(&path, old, new).await;
-        assert_eq!(edit["isError"], true);
-        assert_eq!(content(&edit), harness.text(TextId::ToolsFileUndecodable));
+        assert_eq!(edit["isError"], false, "{edit}");
+        assert!(content(&edit).contains("Bytes outside the replaced text are unchanged"), "{edit}");
+        assert_eq!(std::fs::read(&path).unwrap(), edited);
+        assert_eq!(std::fs::read(saved_original(&edit)).unwrap(), bytes);
+
         let write = f.write(&path, "replacement\n").await;
-        assert_eq!(write["isError"], true);
-        assert_eq!(content(&write), harness.text(TextId::ToolsFileUndecodable));
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(write["isError"], false, "{write}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement\n");
+        assert_eq!(std::fs::read(saved_original(&write)).unwrap(), edited);
     }
+
+    // Without a place to keep the original, nothing is written and the result names another way.
+    let path = f.path("unsaved.txt");
+    std::fs::write(&path, latin1).unwrap();
+    let tools = FileTools::new(&json!({"cwd":f.root}), Arc::new(NoHost));
+    let call = |name: &'static str, input: Value| {
+        let tools = &tools;
+        let context = f.context();
+        async move { tools.execute_admitted(name, &input, &context, None).await.unwrap() }
+    };
+    assert_eq!(call("Read", json!({"file_path":path})).await["isError"], false);
+    for refused in [
+        call("Edit", json!({"file_path":path,"old_string":"x = 2","new_string":"x = 3"})).await,
+        call("Write", json!({"file_path":path,"content":"replacement\n"})).await,
+    ] {
+        assert_eq!(content(&refused), harness.text(TextId::ToolsFileOriginalNotSaved));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), latin1);
+
+    // Malformed UTF-16 has no byte-exact text positions; Write still replaces it.
+    let path = f.path("broken16.txt");
+    let broken: &[u8] = &[0xFF, 0xFE, b'a', 0, b'b'];
+    std::fs::write(&path, broken).unwrap();
+    f.read(&path).await;
+    assert_eq!(content(&f.edit(&path, "a", "c").await), harness.text(TextId::ToolsFileUndecodable));
+    assert_eq!(std::fs::read(&path).unwrap(), broken);
+    let write = f.write(&path, "c").await;
+    assert_eq!(write["isError"], false, "{write}");
+    assert_eq!(std::fs::read(saved_original(&write)).unwrap(), broken);
 }
 
 #[tokio::test]
@@ -444,7 +486,7 @@ async fn a_write_whose_path_was_replaced_is_not_confirmed() {
 }
 
 #[tokio::test]
-async fn an_incomplete_final_character_is_shown_as_a_partial_view_that_cannot_be_rewritten() {
+async fn an_incomplete_final_character_is_shown_as_a_partial_view_and_kept_by_edits() {
     let f = Fixture::new();
     let harness = crate::harness::baseline();
     let notice = harness.text(TextId::ToolsFileReadIncompleteEnd);
@@ -458,10 +500,11 @@ async fn an_incomplete_final_character_is_shown_as_a_partial_view_that_cannot_be
     assert_eq!(content(&read), format!("1\théllo\n2\tend \n{notice}\n"));
     assert_eq!(state(&path)["isPartialView"], true);
     assert_eq!(state(&path)["contentHash"], hash(&bytes));
-    for refused in [f.edit(&path, "end", "END").await, f.write(&path, "replaced\n").await] {
-        assert_eq!(content(&refused), harness.text(TextId::ToolsFileUndecodable));
-    }
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let edit = f.edit(&path, "end", "END").await;
+    assert_eq!(edit["isError"], false, "{edit}");
+    assert_eq!(std::fs::read(&path).unwrap(), [b"h\xc3\xa9llo\nEND ", half].concat());
+    assert_eq!(std::fs::read(saved_original(&edit)).unwrap(), bytes);
+    std::fs::write(&path, &bytes).unwrap();
 
     // Once the character is complete, the partial view is stale and a new Read is a full one.
     let mut appended = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
@@ -494,8 +537,10 @@ async fn an_incomplete_final_character_is_shown_as_a_partial_view_that_cannot_be
         assert_eq!(content(&f.read(&path).await), format!("1\talpha\n2\tbeta \n{notice}\n"));
         assert_eq!(state(&path)["isPartialView"], true, "{complete}");
         assert_eq!(state(&path)["contentHash"], hash(&cut), "{complete}");
-        assert_eq!(content(&f.write(&path, "replaced\n").await), harness.text(TextId::ToolsFileUndecodable));
-        assert_eq!(std::fs::read(&path).unwrap(), cut, "{complete}");
+        let write = f.write(&path, "replaced\n").await;
+        assert_eq!(write["isError"], false, "{complete}: {write}");
+        assert_eq!(std::fs::read(saved_original(&write)).unwrap(), cut, "{complete}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"replaced\n", "{complete}");
     }
 
     std::fs::write(&path, half).unwrap();

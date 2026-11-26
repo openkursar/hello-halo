@@ -1524,20 +1524,25 @@ describe('File tools — encodings and line endings', () => {
     expect(await fs.readFile(filePath, 'utf-8')).toBe('class A {\r\n    int x = 1;\r\n    int z = 3;\r\n    int y = 2;\r\n}\r\n');
   });
 
-  it('refuses to edit or replace text it cannot decode losslessly', async () => {
+  it('changes text it cannot decode losslessly after saving the exact original bytes', async () => {
     const filePath = path.join(tmpDir, 'gbk.c');
-    const original = Buffer.concat([Buffer.from('// '), Buffer.from([0xd6, 0xd0, 0xce, 0xc4]), Buffer.from('\nint main() { return 0; }\n')]);
+    const comment = Buffer.concat([Buffer.from('// '), Buffer.from([0xd6, 0xd0, 0xce, 0xc4])]);
+    const original = Buffer.concat([comment, Buffer.from('\nint main() { return 0; }\n')]);
     await fs.writeFile(filePath, original);
     const ctx = makeStrictCtx(tmpDir);
     const shown = await read.execute({ file_path: filePath }, ctx);
     expect(shown.content).toContain('not valid UTF-8 or UTF-16 text');
+    const savedAt = (content: string) => content.match(/saved at (.+)\.$/s)![1];
 
     const edited = await edit.execute({ file_path: filePath, old_string: 'return 0;', new_string: 'return 1;' }, ctx);
-    expect(edited.isError).toBe(true);
-    expect(edited.content).toMatch(/not valid UTF-8 or UTF-16 text.*Nothing was written/s);
-    const written = await write.execute({ file_path: filePath, content: 'int main() { return 1; }\n' }, ctx);
-    expect(written.isError).toBe(true);
-    expect(await fs.readFile(filePath)).toEqual(original);
+    expect(edited.isError).toBe(false);
+    expect(await fs.readFile(filePath)).toEqual(Buffer.concat([comment, Buffer.from('\nint main() { return 1; }\n')]));
+    expect(await fs.readFile(savedAt(edited.content))).toEqual(original);
+
+    const written = await write.execute({ file_path: filePath, content: 'int main() { return 2; }\n' }, ctx);
+    expect(written.isError).toBe(false);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('int main() { return 2; }\n');
+    expect((await fs.readFile(savedAt(written.content))).subarray(0, comment.length)).toEqual(comment);
   });
 
   it('decodes UTF-16LE and keeps the encoding on Edit and Write', async () => {

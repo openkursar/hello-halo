@@ -209,7 +209,7 @@ impl ToolRuntime {
                 .as_array()
                 .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "CodeSearch"));
         Self {
-            files: file::FileTools::new(&options, bridge.clone()),
+            files: file::FileTools::new(&options, bridge.clone()).with_output_store(output.clone()),
             working: working.unwrap_or_else(|| Arc::new(WorkingState::new(&options))),
             mcp: mcp::McpTools::new(bridge.clone()),
             owns_mcp: true,
