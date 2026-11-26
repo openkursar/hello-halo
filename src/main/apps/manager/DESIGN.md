@@ -399,8 +399,13 @@ owner labels may remain as provenance. Owners are identified by `(kind, id)`;
 legacy owner metadata without a kind is read as `digital-human`.
 
 `reconcileManagedToolSkill`, `removeManagedToolSkill` and `listManagedToolSkillIds`
-are the host lifecycle for generated CLI skills. They never adopt a same-name
-personal skill. Update and withdrawal require a matching managed record, sole
+are the host lifecycle for generated CLI skills. A record belongs to one
+installation of one tool (`managedTool.installId`); reconciling a new
+installation, or a record from before installations had ids, first withdraws
+the earlier installation's skill, preserving it as the user's if it was
+changed. Reconciliation resolves to the file Halo then manages, or null when
+it manages none (a personal namesake, a customized copy, an unfinished
+operation). They never adopt a same-name personal skill. Update and withdrawal require a matching managed record, sole
 CLI ownership, the original directory identity and a digest matching Halo's
 last write. If verification fails, the manager keeps the skill and drops only
 the CLI owner. Install, update and withdrawal record intent in installation

@@ -214,7 +214,7 @@ test.describe('CLI tool lifecycle with Halo', () => {
       ok('install cowsay 1.5.0', await tools.install(COWSAY, '1.5.0'))
       const v1 = await probeAll('v1', ['cowsay'])
       expectEvery('v1', v1, 'cowsay', '1.5.0')
-      evidence.v1Bins = Object.fromEntries(Object.entries(v1).map(([entry, probe]) => [entry, probe.bin]))
+      evidence.v1Bins = Object.fromEntries(Object.entries(v1).map(([entry, probe]) => [entry, probe.bins]))
 
       // ---- F07: a newer approved version shows as an update and is not downloaded on its own.
       await admin.importNpm('cowsay', '1.6.0')
@@ -236,8 +236,7 @@ test.describe('CLI tool lifecycle with Halo', () => {
       const afterFailure = await probeAll('after-failure', ['cowsay'], ['chat'])
       expectEvery('after failed update', afterFailure, 'cowsay', '1.5.0')
 
-      // ---- New tasks use v2. Pinning a version for a task already running needs the services/agent change awaiting approval.
-      evidence.inflightNote = 'Not covered: per-execution version pinning for a running task needs the services/agent change awaiting separate approval.'
+      // ---- The next run of the tool uses v2; a command already running finishes on the version it started with.
       ok('install cowsay 1.6.0', await tools.install(COWSAY, '1.6.0'))
       const v2 = await probeAll('v2', ['cowsay'])
       expectEvery('v2', v2, 'cowsay', '1.6.0')

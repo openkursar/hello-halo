@@ -118,27 +118,16 @@ describe('buildDshLaunchSpec', () => {
     expect(env.PATH).toBe('/opt/homebrew/bin:/usr/bin')
   })
 
-  it('appends the CLI tool launchers after the shell directory and the inherited PATH', () => {
-    setPlatform('win32')
-    process.env.PATH = 'C:\\Windows\\System32'
-    const bash = 'C:\\Git\\bin\\bash.exe'
-    detectGitBash.mockReturnValue({ found: true, path: bash, source: 'system' })
-
-    const env = build({ cliToolsBinDir: 'C:\\cli\\views\\v\\bin' })
-
-    expect(env.PATH).toBe([path.dirname(bash), 'C:\\Windows\\System32', 'C:\\cli\\views\\v\\bin'].join(path.delimiter))
-    expect(env.HALO_CLI_TOOLS_BIN).toBe('C:\\cli\\views\\v\\bin')
-  })
-
-  it('adds no CLI tool variable without tools', () => {
+  it('gives the runtime the session variables it was handed, without touching PATH', () => {
     setPlatform('darwin')
     process.env.PATH = '/usr/bin'
     detectGitBash.mockReturnValue({ found: true, path: '/bin/bash', source: 'system' })
 
-    const env = build()
+    const env = build({ sessionEnv: { EC_BROKER_COMMAND: '["broker"]' } })
 
     expect(env.PATH).toBe('/usr/bin')
-    expect(env.HALO_CLI_TOOLS_BIN).toBeUndefined()
+    expect(env.EC_BROKER_COMMAND).toBe('["broker"]')
+    expect(build().EC_BROKER_COMMAND).toBeUndefined()
   })
 
   it('omits the shell variable when none was found, leaving the config to fall back', () => {
@@ -202,19 +191,6 @@ describe('buildDshLaunchSpec', () => {
     expect(roots.some((root: string) => root.endsWith(path.join('.agents', 'skills')) && !root.startsWith('/work'))).toBe(true)
     expect(roots.some((root: string) => root.endsWith(path.join('claude-config', 'skills')))).toBe(true)
     expect(roots.indexOf(path.join('/work', '.agents', 'skills'))).toBeGreaterThan(roots.findIndex((root: string) => root.endsWith(path.join('claude-config', 'skills'))))
-  })
-
-  it('adds the pinned launchers to the environment without changing the ordinary skill roots', () => {
-    setPlatform('darwin')
-    detectGitBash.mockReturnValue({ found: true, path: '/bin/bash', source: 'system' })
-    const binDir = path.join(dataDir, 'cli', 'views', 'v', 'bin')
-
-    const without = build()
-    const env = build({ cliToolsBinDir: binDir })
-
-    expect(env.DSH_SKILL_DIRS).toBe(without.DSH_SKILL_DIRS)
-    expect(env.PATH.split(path.delimiter).at(-1)).toBe(binDir)
-    expect(env.HALO_CLI_TOOLS_BIN).toBe(binDir)
   })
 
   it('carries MCP configuration in the environment, never on the command line', () => {

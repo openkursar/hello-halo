@@ -20,20 +20,28 @@ export interface ProbeResult { text: string; isError: boolean }
 
 const MARKER = /CLI_PROBE\[(chat|dh|auto|collab-lead|collab|team):([A-Za-z0-9_-]+)\]/
 
-/** A shell line that reports the launcher directory and each command's version or absence. Always exits 0. */
+/**
+ * A shell line that finds each command the way the agent does — the launcher
+ * path its installed skill names — and reports its version or absence.
+ * Always exits 0.
+ */
 export function probeCommand(commands: string[]): string {
   return [
-    `printf 'CLI_BIN=%s\\n' "$HALO_CLI_TOOLS_BIN"`,
-    ...commands.map(name => `if command -v ${name} >/dev/null 2>&1; then printf 'CMD ${name}='; ${name} --version 2>&1 | head -1; else printf 'CMD ${name}=MISSING\\n'; fi`),
+    ...commands.map(name => [
+      `p=$(sed -n 's/^- \`${name}\`: \`\\(.*\\)\`$/\\1/p' "$HOME"/.agents/skills/${name}-*/SKILL.md 2>/dev/null | head -1)`,
+      `if [ -n "$p" ] && [ -x "$p" ]; then printf 'CMD ${name}='; "$p" --version 2>&1 | head -1; printf 'BIN ${name}=%s\\n' "$p"; else printf 'CMD ${name}=MISSING\\n'; fi`,
+    ].join('; ')),
     `printf 'PROBE_%s\\n' END`,
   ].join('; ')
 }
 
-/** Parses `CMD name=value` lines into { name: value }. */
-export function parseProbe(text: string): { bin: string; commands: Record<string, string> } {
+/** Parses `CMD name=value` and `BIN name=path` lines. */
+export function parseProbe(text: string): { bins: Record<string, string>; commands: Record<string, string> } {
   const commands: Record<string, string> = {}
+  const bins: Record<string, string> = {}
   for (const match of text.matchAll(/^CMD ([a-z0-9._-]+)=(.*)$/gm)) commands[match[1]] = match[2].trim()
-  return { bin: /CLI_BIN=(.*)/.exec(text)?.[1]?.trim() ?? '', commands }
+  for (const match of text.matchAll(/^BIN ([a-z0-9._-]+)=(.*)$/gm)) bins[match[1]] = match[2].trim()
+  return { bins, commands }
 }
 
 type Api = HaloAPI

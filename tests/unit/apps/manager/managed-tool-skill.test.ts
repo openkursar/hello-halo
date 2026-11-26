@@ -10,7 +10,7 @@ vi.mock('node:os', async importOriginal => ({
   ...await importOriginal<typeof import('node:os')>(), homedir: () => globalThis.__HALO_TEST_DIR__,
 }))
 
-const input = { toolId: 'npm.example', name: 'cli-example', description: 'Example CLI', body: 'Original instructions' }
+const input = { toolId: 'npm.example', installId: 'a1b2c3', name: 'cli-example', description: 'Example CLI', body: 'Original instructions' }
 const toolOwner = { kind: 'cli-tool', id: input.toolId, name: input.toolId } as const
 const personOwner = { kind: 'digital-human', id: input.toolId, name: 'Person with the same ID' } as const
 const content = (body: string) => `---\nname: "cli-example"\ndescription: "Example CLI"\n---\n\n${body}`
@@ -81,6 +81,32 @@ describe('managed CLI skill lifecycle', () => {
     expect(trash).toHaveBeenCalledOnce()
     expect(existsSync(file)).toBe(false)
     expect(manager.listManagedToolSkillIds()).toEqual([])
+  })
+
+  it('replaces the skill of an earlier installation and reports the managed file', async () => {
+    expect(await manager.reconcileManagedToolSkill(input)).toBe(file)
+    const next = { ...input, installId: 'd4e5f6', name: 'cli-example-d4e5f6' }
+    const nextFile = join(root, '.agents', 'skills', next.name, 'SKILL.md')
+    expect(await manager.reconcileManagedToolSkill(next)).toBe(nextFile)
+    expect(existsSync(file)).toBe(false)
+    expect(trash).toHaveBeenCalledOnce()
+    expect(manager.listSkillRecords(null).map(record => record.spec.name)).toEqual([next.name])
+    expect(manager.listManagedToolSkillIds()).toEqual([input.toolId])
+  })
+
+  it('keeps an edited skill of an earlier installation as the user\'s and still installs the new one', async () => {
+    await manager.reconcileManagedToolSkill(input)
+    writeFileSync(file, content('Edited by the user'))
+    const next = { ...input, installId: 'd4e5f6', name: 'cli-example-d4e5f6' }
+    expect(await manager.reconcileManagedToolSkill(next)).toBe(join(root, '.agents', 'skills', next.name, 'SKILL.md'))
+    expect(readFileSync(file, 'utf8')).toBe(content('Edited by the user'))
+    expect(trash).not.toHaveBeenCalled()
+    expect(manager.listSkillRecords(null).map(record => record.spec.name).sort()).toEqual(['cli-example', next.name])
+  })
+
+  it('reports no managed file when it keeps a personal skill of the same name', async () => {
+    put(file, content(input.body))
+    expect(await manager.reconcileManagedToolSkill(input)).toBeNull()
   })
 
   it.each(['directory', 'flat'] as const)('does not adopt an identical, unrecorded personal %s skill', async format => {

@@ -37,11 +37,9 @@ vi.mock('../../../../src/main/services/ai-terminal/shell', () => ({
   resolveShell: () => ({ file: '/bin/zsh', args: [], env: { PATH: '/usr/bin' }, family: 'posix' })
 }))
 
-const cliTools = vi.hoisted(() => ({
-  apply: vi.fn(async (_env: Record<string, string | undefined>, _request: unknown): Promise<string | null> => null)
-}))
-vi.mock('../../../../src/main/services/cli-tools', () => ({
-  applyCliToolsEnv: cliTools.apply
+const org = vi.hoisted(() => ({ env: {} as Record<string, string> }))
+vi.mock('../../../../src/main/services/enterprise-identity', () => ({
+  applyOrgSessionEnv: (env: Record<string, string | undefined>) => { Object.assign(env, org.env); return '' }
 }))
 
 import { TerminalContext } from '../../../../src/main/services/ai-terminal/context'
@@ -298,20 +296,15 @@ describe('TerminalContext ending a removed space\'s sessions', () => {
   })
 })
 
-describe('TerminalContext CLI tools', () => {
-  it('opens a shell with the CLI tools current at that moment', async () => {
-    cliTools.apply.mockImplementationOnce(async env => {
-      env.PATH = `${env.PATH}:/cli/views/v/bin`
-      env.HALO_CLI_TOOLS_BIN = '/cli/views/v/bin'
-      return '/cli/views/v/bin'
-    })
+describe('TerminalContext organization access', () => {
+  it('opens a shell with organization access and nothing added to PATH', async () => {
+    org.env = { EC_BROKER_COMMAND: '["broker"]' }
     await createSession('t1')
-    expect(cliTools.apply).toHaveBeenCalledWith(expect.any(Object), { entry: 'terminal', engine: 'terminal' })
-    const spec = hostMock.ptyHostRequest.mock.calls[0][0].spec
-    expect(spec.shell.env).toMatchObject({ PATH: '/usr/bin:/cli/views/v/bin', HALO_CLI_TOOLS_BIN: '/cli/views/v/bin' })
+    expect(hostMock.ptyHostRequest.mock.calls[0][0].spec.shell.env).toEqual({ PATH: '/usr/bin', EC_BROKER_COMMAND: '["broker"]' })
   })
 
-  it('opens a plain shell when no tool is available', async () => {
+  it('opens a plain shell without organization access', async () => {
+    org.env = {}
     await createSession('t1')
     expect(hostMock.ptyHostRequest.mock.calls[0][0].spec.shell.env).toEqual({ PATH: '/usr/bin' })
   })

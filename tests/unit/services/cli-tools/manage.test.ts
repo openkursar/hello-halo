@@ -36,6 +36,15 @@ async function codeOf(promise: Promise<unknown>): Promise<string | undefined> {
   return undefined
 }
 
+/** Whether the tool has launchers, which is what makes it usable. */
+function launchable(id = ID): boolean {
+  return existsSync(join(root, 'tools', id, 'install.json'))
+}
+
+function launcher(command: string, id: string): string {
+  return join(root, 'tools', id, 'bin', command)
+}
+
 function storeEntries(): string[] {
   const toolDir = join(root, 'store', ID)
   return existsSync(toolDir) ? readdirSync(toolDir).sort() : []
@@ -123,17 +132,17 @@ describe('cli-tools manage: sources do not preempt a choice', () => {
 })
 
 describe('cli-tools manage: disable, preset protection, deferred removal', () => {
-  it('disables separately from revocation and excludes the tool from new pins', async () => {
+  it('disables separately from revocation and takes the launchers away', async () => {
     const store = newStore()
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
     await store.setDisabled(ID, true)
     const state = await store.readState()
     expect(state.tools[ID]).toMatchObject({ disabled: true, revoked: false })
-    expect(await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })).toBeNull()
+    expect(launchable()).toBe(false)
     await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.0.0'] }])
     expect((await store.readState()).tools[ID].disabled).toBe(true)
     await store.setDisabled(ID, false)
-    expect(await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })).not.toBeNull()
+    expect(launchable()).toBe(true)
   })
 
   it('never deletes a preset version or a tool holding one', async () => {
@@ -145,15 +154,14 @@ describe('cli-tools manage: disable, preset protection, deferred removal', () =>
     expect(storeEntries()).toHaveLength(2)
   })
 
-  it('removes a whole tool, deferring the files a running task pins', async () => {
+  it('removes a whole tool, deferring the files this process gave launchers to until the next start', async () => {
     const store = newStore()
     await store.importPackage(writePackage(pkgs), { source: 'user-import' })
-    await store.pinExecution({ executionId: 'run', entry: 'chat', engine: 'claude' })
     expect(await store.removeTool(ID)).toEqual({ deferred: 1 })
     expect((await store.readState()).tools[ID]).toBeUndefined()
+    expect(launchable()).toBe(false)
     expect(storeEntries()).toHaveLength(1)
-    await store.releaseExecution('run')
-    expect(await store.collectPendingCleanup()).toBe(1)
+    expect(await newStore().collectPendingCleanup()).toBe(1)
     expect(storeEntries()).toEqual([])
   })
 
@@ -161,11 +169,9 @@ describe('cli-tools manage: disable, preset protection, deferred removal', () =>
     const store = newStore()
     const file = writePackage(pkgs)
     await store.importPackage(file, { source: 'user-import' })
-    await store.pinExecution({ executionId: 'run', entry: 'chat', engine: 'claude' })
     await store.removeTool(ID)
     await store.importPackage(file, { source: 'user-import' })
-    await store.releaseExecution('run')
-    expect(await store.collectPendingCleanup()).toBe(0)
+    expect(await newStore().collectPendingCleanup()).toBe(0)
     expect(storeEntries()).toHaveLength(1)
     expect((await store.readState()).pendingCleanup).toBeUndefined()
   })
@@ -191,23 +197,19 @@ describe.skipIf(process.platform === 'win32')('cli-tools manage: registered exis
     expect(record.external!.sha256).toMatch(/^[0-9a-f]{64}$/)
     expect(existsSync(join(root, 'store', id))).toBe(false)
 
-    const pin = await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })
-    const run = spawnSync(join(pin!.binDir!, 'mytool'), ['hello'], {
+    const run = spawnSync(launcher('mytool', id), ['hello'], {
       encoding: 'utf-8', env: { ...process.env, NODE_PATH: 'inherited-modules' },
     })
     expect(run.stdout.trim()).toBe('external:hello:inherited-modules')
     expect(run.status).toBe(7)
-    expect(readFileSync(join(pin!.binDir!, '..', 'TOOLS.md'), 'utf-8'))
-      .toContain('| `mytool` | external.mytool | - | unknown | unknown | - |')
   })
 
   it('runs a .mjs script on the bundled Node without the inherited NODE_PATH', async () => {
     const file = join(dir, 'script.mjs')
     writeFileSync(file, 'console.log("node:" + process.argv.slice(2).join(",") + ":" + (process.env.NODE_PATH ?? ""))\n')
     const store = newStore()
-    await store.registerExternal({ path: file, interpreter: 'halo-node', command: 'myscript', name: 'Script' })
-    const pin = await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })
-    const run = spawnSync(join(pin!.binDir!, 'myscript'), ['a', 'b'], {
+    const { id } = await store.registerExternal({ path: file, interpreter: 'halo-node', command: 'myscript', name: 'Script' })
+    const run = spawnSync(launcher('myscript', id), ['a', 'b'], {
       encoding: 'utf-8', env: { ...process.env, NODE_PATH: 'inherited-modules' },
     })
     expect(run.stdout.trim()).toBe('node:a,b:')
@@ -226,37 +228,39 @@ describe.skipIf(process.platform === 'win32')('cli-tools manage: registered exis
     expect(await codeOf(store.registerExternal({ path: plain, interpreter: null, command: 'ok', name: 'x' }))).toBe('EXTERNAL_INVALID')
   })
 
-  it('blocks a changed or missing program from new pins until re-confirmed', async () => {
+  it('takes the launcher of a changed or missing program away until it is re-confirmed', async () => {
     const file = program()
     const store = newStore()
     const { id } = await store.registerExternal({ path: file, interpreter: null, command: 'mytool', name: 'My tool' })
-    const first = await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })
-    expect(first).not.toBeNull()
+    const first = (await store.readInstallRecord(id))!.launchKey
+    expect(launchable(id)).toBe(true)
 
     writeFileSync(file, '#!/bin/sh\necho changed\n')
     utimesSync(file, new Date(), new Date(Date.now() + 5000))
-    expect(await store.pinCurrent({ holder: 'p2', entry: 'other', engine: 'claude' })).toBeNull()
+    await store.syncLaunchers()
+    expect(launchable(id)).toBe(false)
     const state = await store.readState()
     expect(state.tools[id].versions.external.external!.changed).toBe('modified')
-    expect(buildToolViews(state, [])[0].status).toBe('external-changed')
+    expect(buildToolViews(state)[0].status).toBe('external-changed')
 
     await store.reconfirmExternal(id)
-    const again = await store.pinCurrent({ holder: 'p3', entry: 'other', engine: 'claude' })
-    expect(again).not.toBeNull()
-    // The new fingerprint gives a new view, so sessions rebuild with the confirmed file.
-    expect(again!.binDir).not.toBe(first!.binDir)
+    expect(launchable(id)).toBe(true)
+    // The confirmed fingerprint is part of what the launcher is written from.
+    expect((await store.readInstallRecord(id))!.launchKey).not.toBe(first)
 
     removeTree(file)
-    expect(await store.pinCurrent({ holder: 'p4', entry: 'other', engine: 'claude' })).toBeNull()
+    await store.syncLaunchers()
+    expect(launchable(id)).toBe(false)
     expect((await store.readState()).tools[id].versions.external.external!.changed).toBe('missing')
   })
 
   it('treats a touched but identical file as unchanged', async () => {
     const file = program()
     const store = newStore()
-    await store.registerExternal({ path: file, interpreter: null, command: 'mytool', name: 'My tool' })
+    const { id } = await store.registerExternal({ path: file, interpreter: null, command: 'mytool', name: 'My tool' })
     utimesSync(file, new Date(), new Date(Date.now() + 5000))
-    expect(await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })).not.toBeNull()
+    await store.syncLaunchers()
+    expect(launchable(id)).toBe(true)
   })
 
   it('removing the registration leaves the program file untouched', async () => {
@@ -285,14 +289,14 @@ describe('cli-tools manage: catalog status', () => {
     await catalogTool(store)
     expect(await store.applyCatalogStatus([])).toEqual([ID])
     expect((await store.readState()).tools[ID].delisted).toBe(true)
-    expect(await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })).toBeNull()
+    expect(launchable()).toBe(false)
 
     await store.applyCatalogStatus([{ id: ID, revoked: false, versions: [] }])
     expect((await store.readState()).tools[ID].delisted).toBe(true)
 
     await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.0.0'] }])
     expect((await store.readState()).tools[ID].delisted).toBeUndefined()
-    expect(await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })).not.toBeNull()
+    expect(launchable()).toBe(true)
   })
 
   it('treats a revocation-only entry as revoked, not delisted', async () => {
@@ -318,7 +322,7 @@ describe('cli-tools manage: catalog status', () => {
     const tool = (await store.readState()).tools[ID]
     expect(tool.versions['1.0.0'].withdrawn).toBe(true)
     expect(tool.catalogUpdate).toBe('2.0.0')
-    expect(await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })).not.toBeNull()
+    expect(launchable()).toBe(true)
     // Nothing was downloaded.
     expect(storeEntries()).toHaveLength(1)
   })
@@ -350,13 +354,13 @@ describe('cli-tools manage: catalog status', () => {
     await store.importPackage(writePackage(pkgs, { version: '1.0.0' }), { source: 'preset' })
     await store.importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'catalog' })
     await store.importPackage(writePackage(pkgs, { version: '3.0.0' }), { source: 'user-import', activate: false })
-    await store.pinExecution({ executionId: 'run', entry: 'chat', engine: 'claude' })
-    const [view] = buildToolViews(await store.readState(), await store.listExecutionLocks())
+    const [view] = buildToolViews(await store.readState(), store.launchedDirs())
     expect(view).toMatchObject({ id: ID, current: '2.0.0', status: 'available', hasPreset: true, commands: ['tool'] })
+    // 1.0.0 was current earlier in this process, so a command may still run from it.
     expect(view.versions.map(v => [v.version, v.source, v.current, v.removable, v.inUse])).toEqual([
       ['3.0.0', 'user-import', false, true, false],
-      ['2.0.0', 'catalog', true, false, true],
-      ['1.0.0', 'preset', false, false, false],
+      ['2.0.0', 'catalog', true, false, false],
+      ['1.0.0', 'preset', false, false, true],
     ])
   })
 })

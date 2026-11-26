@@ -225,209 +225,113 @@ describe('cli-tools store: pure-JS rule', () => {
   })
 })
 
-describe('cli-tools store: execution pins', () => {
-  it('keeps a running execution on v1 after upgrade while the next one gets v2', async () => {
+function launcher(command = 'tool', id = ID): string {
+  return join(root, 'tools', id, 'bin', command)
+}
+
+describe('cli-tools store: launchers per tool', () => {
+  it('writes launchers for the current version and swaps them in on an upgrade, keeping the installation', async () => {
     const store = newStore()
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    const first = await store.pinExecution({ executionId: 'run-1', entry: 'chat', engine: 'claude' })
-    expect(first.reused).toBe(false)
-    expect(first.lock.tools).toEqual([expect.objectContaining({ id: ID, version: '1.0.0' })])
+    const first = await store.readInstallRecord(ID)
+    expect(first).toMatchObject({
+      schema: 1, toolId: ID, version: '1.0.0', installId: expect.stringMatching(/^[0-9a-f]{6}$/),
+      commands: [{ name: 'tool', launcher: launcher() }],
+    })
+    expect((await store.readState()).tools[ID].installId).toBe(first!.installId)
+    expect(readFileSync(launcher(), 'utf-8')).toContain('1.0.0-')
 
     await store.importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'catalog' })
-    const again = await store.pinExecution({ executionId: 'run-1', entry: 'chat', engine: 'claude' })
-    expect(again.reused).toBe(true)
-    expect(again.binDir).toBe(first.binDir)
-    expect(again.lock.tools[0].version).toBe('1.0.0')
-
-    const next = await store.pinExecution({ executionId: 'run-2', entry: 'automation', engine: 'dsh' })
-    expect(next.lock.tools[0].version).toBe('2.0.0')
-    expect(next.binDir).not.toBe(first.binDir)
-    expect(readFileSync(join(next.binDir!, 'tool'), 'utf-8')).toContain('2.0.0-')
+    expect(await store.readInstallRecord(ID)).toMatchObject({ version: '2.0.0', installId: first!.installId })
+    expect(readFileSync(launcher(), 'utf-8')).toContain('2.0.0-')
+    expect(readdirSync(join(root, 'tools'))).toEqual([ID])
   })
 
-  it('keeps a legacy view pinned while new pins of the same tool set get the new format', async () => {
-    const platform = 'linux'
-    const store = newStore({ platform })
-    const { version, integrity } = await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    const record = (await store.readState()).tools[ID].versions[version]
-    const entry = join(root, record.dir, 'payload', 'bin', 'tool.js')
-    const legacyKey = createHash('sha256').update(JSON.stringify({
-      v: 3, platform, runtime: process.execPath, targets: [{ exposedAs: 'tool', entry }],
-    })).digest('hex').slice(0, 20)
-    const holder = 'process'
-    const executionId = `${holder}-chat-${legacyKey}`
-    const options = { entry: 'chat', engine: 'claude' } as const
-    const commands = [{ toolId: ID, version, command: 'tool', exposedAs: 'tool', conflict: false }]
-    const lock = {
-      schema: 1, executionId, holder, viewKey: legacyKey, runtimeNodeVersion: process.versions.node,
-      ...options, tools: [{ id: ID, version, integrity }], commands, createdAt: new Date().toISOString(),
-    }
-    const legacyView = join(root, 'views', legacyKey)
-    const legacyBin = join(legacyView, 'bin')
-    const legacyLauncher = '#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\n'
-    const legacyGuide = '| Command | Tool | Version | Side effects | Sign-in | Guide |\n'
-    mkdirSync(legacyBin, { recursive: true })
-    mkdirSync(join(root, 'locks'))
-    writeFileSync(join(root, 'locks', `${executionId}.json`), JSON.stringify(lock))
-    writeFileSync(join(legacyView, 'view.json'), JSON.stringify({ viewKey: legacyKey, commands }))
-    writeFileSync(join(legacyBin, 'tool'), legacyLauncher)
-    writeFileSync(join(legacyView, 'TOOLS.md'), legacyGuide)
-
-    const next = await store.pinCurrent({ holder, ...options })
-    expect(next?.reused).toBe(false)
-    expect(next?.lock.tools).toEqual(lock.tools)
-    expect(next?.lock.commands).toEqual(commands)
-    expect(next?.lock.viewKey).not.toBe(legacyKey)
-    expect(readFileSync(join(next!.binDir!, 'tool'), 'utf-8')).toContain('unset NODE_PATH\n')
-    expect(readFileSync(join(next!.binDir!, '..', 'TOOLS.md'), 'utf-8')).not.toContain('| Origin |')
-
-    const existing = await store.pinExecution({ executionId, ...options })
-    expect(existing).toEqual({ binDir: legacyBin, lock, reused: true })
-    expect(await store.pruneViews()).toBe(0)
-    expect(readFileSync(join(legacyBin, 'tool'), 'utf-8')).toBe(legacyLauncher)
-    expect(readFileSync(join(legacyView, 'TOOLS.md'), 'utf-8')).toBe(legacyGuide)
-  })
-
-  it('shares one view between executions with the same tool set', async () => {
+  it('leaves launchers alone when nothing they are written from changed', async () => {
     const store = newStore()
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    const a = await store.pinExecution({ executionId: 'a', entry: 'chat', engine: 'claude' })
-    const b = await store.pinExecution({ executionId: 'b', entry: 'team', engine: 'claude' })
-    expect(a.binDir).toBe(b.binDir)
+    const written = statSync(join(root, 'tools', ID, 'install.json')).mtimeMs
+    await store.syncLaunchers()
+    await store.importPackage(writePackage(pkgs, { id: 'com.example.other', commands: [{ name: 'other', entry: 'bin/tool.js' }] }), { source: 'catalog' })
+    expect(statSync(join(root, 'tools', ID, 'install.json')).mtimeMs).toBe(written)
+    expect(readdirSync(join(root, 'tools')).sort()).toEqual(['com.example.other', ID])
   })
 
-  it('exposes a conflicting command as halo-<name>', async () => {
-    const userBin = join(dir, 'user-bin')
-    mkdirSync(userBin)
-    writeFileSync(join(userBin, 'tool'), '#!/bin/sh\n', { mode: 0o755 })
-    const store = newStore({ platform: 'linux' })
-    await store.importPackage(writePackage(pkgs), { source: 'user-import' })
-    const pinned = await store.pinExecution({ executionId: 'x', entry: 'chat', engine: 'claude', basePath: userBin })
-    expect(pinned.lock.commands).toEqual([expect.objectContaining({ command: 'tool', exposedAs: 'halo-tool', conflict: true })])
-    expect(existsSync(join(pinned.binDir!, 'halo-tool'))).toBe(true)
-    expect(existsSync(join(pinned.binDir!, 'tool'))).toBe(false)
-  })
-
-  it('excludes revoked tools from new executions only', async () => {
+  it('takes the launchers of a revoked or disabled tool away and brings them back for the same installation', async () => {
     const store = newStore()
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    const before = await store.pinExecution({ executionId: 'before', entry: 'chat', engine: 'claude' })
+    const { installId } = (await store.readInstallRecord(ID))!
     await store.setRevoked(ID, true)
-    const after = await store.pinExecution({ executionId: 'after', entry: 'chat', engine: 'claude' })
-    expect(after.lock.tools).toEqual([])
-    expect(after.binDir).toBeNull()
-    expect((await store.pinExecution({ executionId: 'before', entry: 'chat', engine: 'claude' })).binDir).toBe(before.binDir)
+    expect(existsSync(join(root, 'tools', ID))).toBe(false)
+    await store.setRevoked(ID, false)
+    await store.setDisabled(ID, true)
+    expect(existsSync(join(root, 'tools', ID))).toBe(false)
+    await store.setDisabled(ID, false)
+    expect((await store.readInstallRecord(ID))?.installId).toBe(installId)
   })
 
-  it('reports a missing runtime', async () => {
+  it('gives a tool installed again after removal a new installation id', async () => {
+    const store = newStore()
+    await store.importPackage(writePackage(pkgs), { source: 'user-import' })
+    const { installId } = (await store.readInstallRecord(ID))!
+    await store.removeTool(ID)
+    expect(existsSync(join(root, 'tools', ID))).toBe(false)
+    await store.importPackage(writePackage(pkgs, { version: '1.1.0' }), { source: 'user-import' })
+    expect((await store.readInstallRecord(ID))?.installId).not.toBe(installId)
+  })
+
+  it('writes no launchers while the runtime is missing, without failing the import', async () => {
     const store = newStore({ runtimePath: join(dir, 'no-such-runtime') })
-    await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    expect(await codeOf(store.pinExecution({ executionId: 'x', entry: 'chat', engine: 'claude' }))).toBe('RUNTIME_MISSING')
+    expect((await store.importPackage(writePackage(pkgs), { source: 'catalog' })).installed).toBe(true)
+    expect(existsSync(join(root, 'tools'))).toBe(false)
   })
 
-  it('stores locks for unsafe execution ids under a hash', async () => {
+  it('removes the per-session views and pins of earlier builds', async () => {
+    mkdirSync(join(root, 'views', 'abc', 'bin'), { recursive: true })
+    mkdirSync(join(root, 'locks'), { recursive: true })
+    writeFileSync(join(root, 'locks', 'p1.json'), '{}')
     const store = newStore()
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    await store.pinExecution({ executionId: '../../escape', entry: 'chat', engine: 'claude' })
-    expect(readdirSync(join(root, 'locks'))[0]).toMatch(/^x-[0-9a-f]{32}\.json$/)
-    expect((await store.readExecutionLock('../../escape'))?.executionId).toBe('../../escape')
-  })
-})
-
-describe('cli-tools store: pins held by a process', () => {
-  it('pins nothing when no tool is usable', async () => {
-    const store = newStore()
-    expect(await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'claude' })).toBeNull()
+    await store.syncLaunchers()
+    expect(existsSync(join(root, 'views'))).toBe(false)
     expect(existsSync(join(root, 'locks'))).toBe(false)
+    expect(existsSync(launcher())).toBe(true)
   })
 
-  it('reuses one lock per tool set and keeps the earlier set pinned after an update', async () => {
+  it('records where the skill of an installation went, and carries it across version changes', async () => {
     const store = newStore()
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    const first = await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'claude' })
-    const again = await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'codex' })
-    expect(first?.reused).toBe(false)
-    expect(again?.reused).toBe(true)
-    expect(again?.binDir).toBe(first?.binDir)
-    expect(first?.lock).toMatchObject({ holder: 'p1', entry: 'other', executionId: `p1-other-${first?.lock.viewKey}` })
-
+    const { installId } = (await store.readInstallRecord(ID))!
+    const skill = { name: `tool-com-example-tool-${installId}`, path: join(dir, 'skills', 'SKILL.md') }
+    expect(await store.recordSkillLocation(ID, 'ffffff', skill)).toBe(false)
+    expect(await store.recordSkillLocation(ID, installId, skill)).toBe(true)
     await store.importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'catalog' })
-    const next = await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'claude' })
-    expect(next?.lock.tools[0].version).toBe('2.0.0')
-    expect(next?.binDir).not.toBe(first?.binDir)
-    expect(readdirSync(join(root, 'locks'))).toHaveLength(2)
-    // The earlier set is still pinned: its record goes, its files wait for cleanup.
-    expect(await store.removeVersion(ID, '1.0.0')).toEqual({ deferred: true })
-    expect(storeEntries()).toHaveLength(2)
-  })
-
-  it('releases the locks of other holders only', async () => {
-    const store = newStore()
-    await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    await store.pinCurrent({ holder: 'old', entry: 'other', engine: 'claude' })
-    await store.pinExecution({ executionId: 'legacy', entry: 'chat', engine: 'claude' })
-    await store.pinCurrent({ holder: 'now', entry: 'terminal', engine: 'terminal' })
-    expect(await store.releaseOtherHolders('now')).toBe(2)
-    const left = readdirSync(join(root, 'locks')).map(name => JSON.parse(readFileSync(join(root, 'locks', name), 'utf-8')).holder)
-    expect(left).toEqual(['now'])
-    expect(await store.releaseOtherHolders('now')).toBe(0)
-  })
-
-  it('lists aliases, versions and guides without installation channels in TOOLS.md', async () => {
-    const store = newStore()
-    await store.importPackage(writePackage(pkgs, { id: 'com.example.local' }), { source: 'user-import' })
-    await store.importPackage(writePackage(pkgs, {
-      extra: { 'guide/README.md': '# guide\n' },
-      manifest: { guide: 'guide/README.md', sideEffects: 'read-only', auth: { method: 'none' } },
-    }), { source: 'catalog' })
-    await store.importPackage(writePackage(pkgs, {
-      id: 'com.example.preset', commands: [{ name: 'built-in', entry: 'bin/tool.js' }],
-    }), { source: 'preset' })
-    const pin = await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'claude' })
-    const guide = readFileSync(join(pin!.binDir!, '..', 'TOOLS.md'), 'utf-8')
-    expect(guide).toContain('| `tool` | com.example.local | 1.0.0 | unknown |')
-    expect(guide).toContain('| `halo-tool` | com.example.tool | 1.0.0 | read-only | none |')
-    expect(guide).toContain('| `built-in` | com.example.preset | 1.0.0 | unknown |')
-    expect(guide).not.toMatch(/origin|organization|prefer them/i)
-    const guidePath = /\| `([^`]+README\.md)` \|/.exec(guide)?.[1]
-    expect(guidePath && readFileSync(guidePath, 'utf-8')).toBe('# guide\n')
-    expect(guide).toContain('halo-<name>')
+    expect((await store.readInstallRecord(ID))?.skill).toEqual(skill)
+    expect(await store.recordSkillLocation(ID, installId, null)).toBe(true)
+    expect((await store.readInstallRecord(ID))?.skill).toBeUndefined()
   })
 })
 
 describe('cli-tools store: removal, rollback and verification', () => {
-  it('refuses the current version, defers pinned files, and cleans them once released', async () => {
+  it('refuses the current version, deletes one never launched at once and defers one this process launched', async () => {
     const store = newStore()
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    await store.pinExecution({ executionId: 'run-1', entry: 'chat', engine: 'claude' })
     await store.importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'catalog' })
+    await store.importPackage(writePackage(pkgs, { version: '3.0.0' }), { source: 'catalog', activate: false })
 
     expect(await codeOf(store.removeVersion(ID, '2.0.0'))).toBe('IN_USE')
+    expect(await store.removeVersion(ID, '3.0.0')).toEqual({ deferred: false })
     expect(await store.removeVersion(ID, '1.0.0')).toEqual({ deferred: true })
     expect(Object.keys((await store.readState()).tools[ID].versions)).toEqual(['2.0.0'])
-    // Still pinned by run-1: the files stay and the pin still resolves.
+    // A command started from 1.0.0 in this process may still run.
     expect(storeEntries()).toHaveLength(2)
     expect((await store.readState()).pendingCleanup).toHaveLength(1)
-    expect((await store.pinExecution({ executionId: 'run-1', entry: 'chat', engine: 'claude' })).reused).toBe(true)
-    expect(await store.collectPendingCleanup()).toBe(0)
-    expect(storeEntries()).toHaveLength(2)
 
-    expect(await store.releaseExecution('run-1')).toBe(true)
-    expect(await store.collectPendingCleanup()).toBe(1)
+    const next = newStore()
+    expect(await next.collectPendingCleanup()).toBe(1)
     expect(storeEntries()).toHaveLength(1)
-    expect((await store.readState()).pendingCleanup).toBeUndefined()
-    expect(await codeOf(store.removeVersion(ID, '1.0.0'))).toBe('NOT_FOUND')
-  })
-
-  it('prunes views no lock refers to', async () => {
-    const store = newStore()
-    await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    await store.pinExecution({ executionId: 'a', entry: 'chat', engine: 'claude' })
-    await store.importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'catalog' })
-    await store.pinExecution({ executionId: 'b', entry: 'chat', engine: 'claude' })
-    await store.releaseExecution('a')
-    expect(await store.pruneViews()).toBe(1)
-    expect(readdirSync(join(root, 'views'))).toHaveLength(1)
+    expect((await next.readState()).pendingCleanup).toBeUndefined()
+    expect(await codeOf(next.removeVersion(ID, '1.0.0'))).toBe('NOT_FOUND')
   })
 
   it('rolls back to an installed version', async () => {
@@ -435,8 +339,7 @@ describe('cli-tools store: removal, rollback and verification', () => {
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
     await store.importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'catalog' })
     expect(await store.activateVersion(ID, '1.0.0')).toEqual({ current: '1.0.0', previous: '2.0.0' })
-    const pinned = await store.pinExecution({ executionId: 'r', entry: 'chat', engine: 'claude' })
-    expect(pinned.lock.tools[0].version).toBe('1.0.0')
+    expect(readFileSync(launcher(), 'utf-8')).toContain('1.0.0-')
     expect(await codeOf(store.activateVersion(ID, '9.9.9'))).toBe('NOT_FOUND')
   })
 
@@ -455,15 +358,15 @@ describe('cli-tools store: launchers', () => {
   it('writes .cmd plus an sh twin on Windows', async () => {
     const store = newStore({ platform: 'win32', arch: 'x64', runtimePath: process.execPath })
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    const pinned = await store.pinExecution({ executionId: 'w', entry: 'chat', engine: 'claude' })
-    const files = readdirSync(pinned.binDir!).sort()
-    expect(files).toEqual(['tool', 'tool.cmd'])
-    const cmd = readFileSync(join(pinned.binDir!, 'tool.cmd'), 'utf-8')
+    const binDir = join(root, 'tools', ID, 'bin')
+    expect(readdirSync(binDir).sort()).toEqual(['tool', 'tool.cmd'])
+    expect((await store.readInstallRecord(ID))?.commands).toEqual([{ name: 'tool', launcher: launcher(), cmdLauncher: `${launcher()}.cmd` }])
+    const cmd = readFileSync(join(binDir, 'tool.cmd'), 'utf-8')
     expect(cmd).toContain('set ELECTRON_RUN_AS_NODE=1')
     expect(cmd).toContain('set "NODE_PATH="\r\n')
-    expect(readFileSync(join(pinned.binDir!, 'tool'), 'utf-8')).toContain('unset NODE_PATH\n')
-    expect(cmd).toContain(`--require "${join(pinned.binDir!, '..', 'argv-preload.cjs')}"`)
-    expect(readFileSync(join(pinned.binDir!, '..', 'argv-preload.cjs'), 'utf-8')).toContain('process.defaultApp = true')
+    expect(readFileSync(join(binDir, 'tool'), 'utf-8')).toContain('unset NODE_PATH\n')
+    expect(cmd).toContain(`--require "${join(root, 'tools', ID, 'argv-preload.cjs')}"`)
+    expect(readFileSync(join(root, 'tools', ID, 'argv-preload.cjs'), 'utf-8')).toContain('process.defaultApp = true')
     expect(cmd).toContain('%*')
     expect(cmd).toContain('exit /b %ERRORLEVEL%')
     expect(cmd.includes('\r\n')).toBe(true)
@@ -476,8 +379,7 @@ describe('cli-tools store: launchers', () => {
     const nonAsciiRoot = join(dir, '张三', 'cli')
     const store = newStore({ root: nonAsciiRoot, platform: 'win32', arch: 'x64', runtimePath: join(runtimeDir, 'Halo.exe') })
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
-    const pinned = await store.pinExecution({ executionId: 'w', entry: 'chat', engine: 'claude' })
-    const cmd = readFileSync(join(pinned.binDir!, 'tool.cmd'), 'utf-8')
+    const cmd = readFileSync(join(nonAsciiRoot, 'tools', ID, 'bin', 'tool.cmd'), 'utf-8')
     expect(/^[\x00-\x7f]*$/.test(cmd)).toBe(true)
     const runtimeRef = /"%~dp0([^"]*Halo\.exe)"/.exec(cmd)?.[1]
     expect(runtimeRef).toMatch(/^\.\.\\\.\.\\\.\.\\runtime\\[0-9a-f]{16}\\Halo\.exe$/)
@@ -485,11 +387,10 @@ describe('cli-tools store: launchers', () => {
     expect(realpathSync(link)).toBe(realpathSync(runtimeDir))
     expect(cmd).toContain('--require "%~dp0..\\argv-preload.cjs"')
 
-    // A second view reuses the link; a wrong one is replaced, never followed.
+    // New launchers reuse the link; a wrong one is replaced, never followed.
     rmSync(link)
     symlinkSync(dir, link)
     await store.importPackage(writePackage(pkgs, { version: '1.1.0' }), { source: 'catalog' })
-    await store.pinExecution({ executionId: 'w2', entry: 'chat', engine: 'claude' })
     expect(realpathSync(link)).toBe(realpathSync(runtimeDir))
     expect(existsSync(join(dir, '张三'))).toBe(true)
   })
@@ -508,10 +409,9 @@ describe('cli-tools store: launchers', () => {
     }
     const store = newStore()
     await store.importPackage(writePackage(pkgs, { payload }), { source: 'user-import' })
-    const pinned = await store.pinExecution({ executionId: 'run', entry: 'chat', engine: 'claude' })
     const work = join(dir, "work dir 'quoted'")
     mkdirSync(work)
-    const result = spawnSync(join(pinned.binDir!, 'tool'), ['a b', '--flag=$HOME', "it's"], {
+    const result = spawnSync(launcher(), ['a b', '--flag=$HOME', "it's"], {
       cwd: work,
       input: 'from-stdin',
       encoding: 'utf-8',
@@ -543,7 +443,7 @@ describe('cli-tools store: tool skills', () => {
     })
   }
 
-  async function staticSkill(store: CliToolStore, toolId = ID) {
+  async function skillOf(store: CliToolStore, toolId = ID) {
     return (await store.readCurrentToolSkills()).skills.find(skill => skill.toolId === toolId)?.describe()
   }
 
@@ -551,51 +451,56 @@ describe('cli-tools store: tool skills', () => {
     return { revision, sha256: createHash('sha256').update(content).digest('hex'), content, signature: null }
   }
 
-  it('describes one static skill per tool and keeps the guide in the view', async () => {
+  it('names the installation and carries the launcher path and the guide itself', async () => {
     const store = newStore()
     const file = guidedPackage()
-    expect((await store.previewPackage(file)).skill).toEqual({ name: cliSkillName(ID), description: 'Query example tickets.', source: 'package' })
+    expect((await store.previewPackage(file)).skill).toEqual({ name: cliSkillName('tool', ID, ''), description: 'Query example tickets.', source: 'package' })
     await store.importPackage(file, { source: 'user-import' })
-    const { binDir } = await store.pinExecution({ executionId: 'e1', entry: 'chat', engine: 'claude' })
-    const viewDir = dirname(binDir!)
-    expect(JSON.parse(readFileSync(join(viewDir, 'view.json'), 'utf-8'))).not.toHaveProperty('skills')
-    expect(existsSync(join(viewDir, 'skills'))).toBe(false)
-    const skill = await staticSkill(store)
-    expect(skill).toMatchObject({ toolId: ID, name: cliSkillName(ID), description: 'Query example tickets.' })
-    expect(Object.keys(skill!)).toEqual(['toolId', 'name', 'description', 'body'])
-    expect(skill!.body).toContain('$HALO_CLI_TOOLS_BIN/../TOOLS.md')
-    expect(skill!.body).not.toMatch(/tool list|allowed-tools|1\.0\.0|SKILL\.md/)
-    expect(readFileSync(join(viewDir, 'TOOLS.md'), 'utf-8')).toMatch(/guide\/SKILL\.md/)
+    const { installId } = (await store.readInstallRecord(ID))!
+    const skill = await skillOf(store)
+    expect(Object.keys(skill!)).toEqual(['toolId', 'installId', 'name', 'description', 'body'])
+    expect(skill).toMatchObject({
+      toolId: ID, installId, name: cliSkillName('tool', ID, installId),
+      description: 'Companion skill for the tool command-line tool. Query example tickets.',
+    })
+    expect(skill!.name).toBe(`tool-com-example-tool-${installId}`)
+    expect(skill!.body).toContain(`\`${launcher()}\``)
+    expect(skill!.body).toContain('Run `tool list`.')
+    expect(skill!.body).not.toMatch(/allowed-tools|HALO_CLI_TOOLS_BIN|TOOLS\.md/)
   })
 
   it('falls back to the package description, then to a generated line', async () => {
     const store = newStore()
     await store.importPackage(writePackage(pkgs, { manifest: { description: 'From the manifest.' } }), { source: 'user-import' })
     await store.importPackage(writePackage(pkgs, { id: 'com.example.other', commands: [{ name: 'other', entry: 'bin/tool.js' }] }), { source: 'user-import' })
-    const skills = await store.describeToolSkills(await store.readState())
+    const state = await store.readState()
+    const skills = await store.describeToolSkills(state)
     expect(skills).toEqual({
-      [ID]: { name: cliSkillName(ID), description: 'From the manifest.', source: 'manifest' },
-      'com.example.other': { name: cliSkillName('com.example.other'), description: 'Use the com.example.other command-line tool.', source: 'default' },
+      [ID]: { name: cliSkillName('tool', ID, state.tools[ID].installId!), description: 'From the manifest.', source: 'manifest' },
+      'com.example.other': {
+        name: cliSkillName('other', 'com.example.other', state.tools['com.example.other'].installId!),
+        description: 'Use the com.example.other command-line tool.', source: 'default',
+      },
     })
     expect((await store.readCurrentToolSkills()).skills.map(skill => skill.toolId)).toEqual(['com.example.other', ID])
+    expect((await skillOf(store, 'com.example.other'))!.body).toContain('Run the tool with `--help`')
   })
 
-  it('updates the static description but leaves earlier pinned guides intact', async () => {
+  it('takes an administrator guide into the skill and keeps the name', async () => {
     const store = newStore()
     await store.importPackage(guidedPackage(), { source: 'catalog' })
     const integrity = (await store.readState()).tools[ID].versions['1.0.0'].integrity
-    const first = await store.pinExecution({ executionId: 'e1', entry: 'chat', engine: 'claude' })
-    const before = await staticSkill(store)
-    const originalIndex = readFileSync(join(dirname(first.binDir!), 'TOOLS.md'), 'utf8')
+    const before = await skillOf(store)
+    const { skills: [{ fingerprint }] } = await store.readCurrentToolSkills()
 
     const full = '---\ndescription: Use for example tickets.\n---\n# Usage notes\nRun `tool --check` first.\n'
     await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.0.0'], guides: { '1.0.0': { integrity, override: overrideOf(full, 1) } } }])
-    const second = await store.pinExecution({ executionId: 'e2', entry: 'chat', engine: 'claude' })
-    expect(second.binDir).not.toBe(first.binDir)
-    expect(await staticSkill(store)).toEqual({ ...before, description: 'Use for example tickets.' })
-    expect(readFileSync(join(dirname(second.binDir!), 'guides', `${ID}.md`), 'utf8')).toBe(full)
-    expect(readFileSync(join(dirname(first.binDir!), 'TOOLS.md'), 'utf8')).toBe(originalIndex)
-    expect((await store.describeToolSkills(await store.readState()))[ID]).toEqual({ name: cliSkillName(ID), description: 'Use for example tickets.', source: 'admin' })
+    const after = await skillOf(store)
+    expect(after).toMatchObject({ name: before!.name, description: 'Companion skill for the tool command-line tool. Use for example tickets.' })
+    expect(after!.body).toContain('Run `tool --check` first.')
+    expect(after!.body).not.toContain('Run `tool list`.')
+    expect((await store.readCurrentToolSkills()).skills[0].fingerprint).not.toBe(fingerprint)
+    expect((await store.describeToolSkills(await store.readState()))[ID]).toMatchObject({ description: 'Use for example tickets.', source: 'admin' })
   })
 
   it.skipIf(process.platform === 'win32')('writes a skill for a registered program', async () => {
@@ -604,17 +509,18 @@ describe('cli-tools store: tool skills', () => {
     chmodSync(file, 0o755)
     const store = newStore()
     await store.registerExternal({ path: file, interpreter: null, command: 'mytool', name: 'My tool' })
-    const skill = await staticSkill(store, 'external.mytool')
-    expect(skill).toMatchObject({ name: cliSkillName('external.mytool'), description: 'Use the My tool command-line tool.' })
-    expect(skill!.body).not.toContain(file)
+    const skill = await skillOf(store, 'external.mytool')
+    expect(skill).toMatchObject({ description: 'Companion skill for the mytool command-line tool. Use the My tool command-line tool.' })
+    expect(skill!.body).toContain(launcher('mytool', 'external.mytool'))
+    expect(spawnSync(launcher('mytool', 'external.mytool'), [], { encoding: 'utf-8' }).stdout).toBe('hi\n')
   })
 
   it('shows the current skill in the management view', async () => {
     const store = newStore()
     await store.importPackage(guidedPackage(), { source: 'user-import' })
     const state = await store.readState()
-    const [view] = buildToolViews(state, [], await store.describeToolSkills(state))
-    expect(view.skill).toEqual({ name: cliSkillName(ID), description: 'Query example tickets.', source: 'package' })
-    expect(buildToolViews(state, [])[0].skill).toBeUndefined()
+    const [view] = buildToolViews(state, new Set(), await store.describeToolSkills(state))
+    expect(view.skill).toEqual({ name: cliSkillName('tool', ID, state.tools[ID].installId!), description: 'Query example tickets.', source: 'package' })
+    expect(buildToolViews(state)[0].skill).toBeUndefined()
   })
 })

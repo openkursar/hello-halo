@@ -58,7 +58,8 @@ import {
   buildUserSessionSdkOptions,
   toEngineSystemPrompt,
   waitForSessionCleanup,
-  orgTurnContext,
+  orgConversationKey,
+  prepareOrgReminder,
   type AgentExecution,
   type V2SessionLease,
 } from '../../services/agent'
@@ -586,7 +587,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     const sdkOptions = await buildUserSessionSdkOptions({
       engineId,
-      cliToolsEntry: 'automation',
       selfApiAccess: usesHaloApi,
       credentials: resolvedCreds,
       workDir,
@@ -763,6 +763,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         store.updateRunSessionId(runId, sessionId)
       }
     }
+    const orgReminder = prepareOrgReminder(orgConversationKey(app.spaceId, sessionKey), initialMessage)
     const turnContext = {
       execution: agentExecution,
       abortController,
@@ -774,12 +775,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       engineId,
       onSessionId: persistEngineSession,
       reportSaved: () => reportedAt === agentExecution.inputRevision,
-      onSent: () => { if (!opensWithSlashCommand(initialMessage)) workspaceNotice.delivered() },
+      onSent: () => {
+        orgReminder.delivered()
+        if (!opensWithSlashCommand(initialMessage)) workspaceNotice.delivered()
+      },
       spaceId: app.spaceId ?? undefined,
     }
     let streamResult = await processStream(
       formatReferencesBlock(followupReferences, workDir)
-        + orgTurnContext(initialMessage)
+        + orgReminder.context
         + (workspaceNotice.context && !opensWithSlashCommand(initialMessage) ? `${workspaceNotice.context}\n\n` : '') + initialMessage,
       turnContext
     )

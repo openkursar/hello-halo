@@ -6,8 +6,8 @@
  * It works without the enterprise store: everything here reads the local
  * tool store. Store calls are "Update", which the user confirms, and the
  * catalog sync, which installs only what the administrator delivers.
- * Every change affects tasks started afterwards; running tasks keep the
- * command view they were started with (see services/cli-tools/DESIGN.md).
+ * A change takes effect at the tool's next run; a command already running
+ * finishes on the version it started with (see services/cli-tools/DESIGN.md).
  */
 
 import { useCallback, useEffect, useState } from 'react'

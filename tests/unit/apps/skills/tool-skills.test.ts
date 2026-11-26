@@ -8,6 +8,7 @@ import { CliToolStore, type CliToolSkill } from '../../../../src/main/services/c
 import { removeTree, writePackage } from '../../services/cli-tools/helpers'
 
 const firstTool = 'com.example.tool'
+const described = (text: string) => `Companion skill for the tool command-line tool. ${text}`
 const secondTool = 'com.example.other'
 let dir: string
 
@@ -43,10 +44,10 @@ describe('static CLI skill sync', () => {
       const original = managed.get(firstTool)!
       await add('Updated first tool', '2.0.0')
       await store.setDisabled(secondTool, true)
-      await vi.waitFor(() => expect(managed.get(firstTool)?.description).toBe('Updated first tool'))
+      await vi.waitFor(() => expect(managed.get(firstTool)?.description).toBe(described('Updated first tool')))
       expect(readSnapshot).toHaveBeenCalledTimes(2)
       expect(upsert).toHaveBeenCalledTimes(3)
-      expect(managed.get(firstTool)).toEqual({ ...original, description: 'Updated first tool' })
+      expect(managed.get(firstTool)).toEqual({ ...original, description: described('Updated first tool') })
       expect(remove.mock.calls).toEqual([[secondTool]])
       await store.removeTool(firstTool)
       await vi.waitFor(() => expect(managed.has(firstTool)).toBe(false))
@@ -94,7 +95,7 @@ describe('static CLI skill sync', () => {
     try {
       await interrupted.afterPrepare(store.preparedCurrentToolsRevision)
       expect(await readFile(stampPath, 'utf8')).toBe('pending\n')
-      expect(managed.get(firstTool)?.description).toBe('Second tool')
+      expect(managed.get(firstTool)?.description).toBe(described('Second tool'))
       expect(warning).toHaveBeenCalledWith(expect.stringContaining('Reconciliation failed'), expect.anything())
     } finally {
       warning.mockRestore()
@@ -106,7 +107,7 @@ describe('static CLI skill sync', () => {
     const restarted = start()
     try {
       await restarted.afterPrepare(store.preparedCurrentToolsRevision)
-      expect(managed.get(firstTool)?.description).toBe('First tool')
+      expect(managed.get(firstTool)?.description).toBe(described('First tool'))
       expect(await readFile(stampPath, 'utf8')).not.toBe('pending\n')
     } finally {
       await restarted.dispose()
@@ -124,7 +125,7 @@ describe('static CLI skill sync', () => {
       onDidChange: changed.event,
       readSnapshot: async () => ({ revision, skills: [{
         toolId: firstTool, fingerprint: revision,
-        describe: async () => ({ toolId: firstTool, name: 'cli-example', description: revision, body: '' }),
+        describe: async () => ({ toolId: firstTool, installId: 'a1b2c3', name: 'cli-example', description: revision, body: '' }),
       }] }),
       upsert, remove: async () => {}, listManagedIds: () => [firstTool],
     })

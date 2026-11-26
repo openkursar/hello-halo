@@ -1531,7 +1531,7 @@ export function initializeExtendedServices(): void {
       broadcastToAll(ENTERPRISE_IDENTITY_CHANGED_EVENT, { ...state })
     },
   })
-  // Paths only; the store is read when a session or terminal first asks for tools.
+  // Paths only; the idle task prepares the store and writes launchers and skills.
   const supportFiles = loadProductConfig().cliTools?.supportFiles
   const cliRoot = join(app.getPath('userData'), 'cli')
   cliSkillStartup = createCliToolSkillStartup(join(cliRoot, 'skill-sync-stamp'))
@@ -1547,7 +1547,6 @@ export function initializeExtendedServices(): void {
       productDir: app.isPackaged ? join(process.resourcesPath, 'app.asar.unpacked') : dirname(getProductConfigPath()),
       files: supportFiles,
     },
-    prepareSessionSkills: cliSkillStartup.afterPrepare,
   })
   const start = performance.now()
   console.log('[Bootstrap] Extended services starting...')

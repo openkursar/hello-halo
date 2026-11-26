@@ -138,6 +138,8 @@ export interface SkillInstallationState {
   requestId?: string
   managedTool?: {
     toolId: string
+    /** The tool installation this skill belongs to; absent in records written before installations had ids. */
+    installId?: string
     directoryId: string
     writtenDigest: string
     stagingId?: string

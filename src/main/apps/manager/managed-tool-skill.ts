@@ -14,8 +14,10 @@ type ManagedState = SkillInstallationState & { managedTool: NonNullable<SkillIns
 
 const STAGING_FOLDER = '.halo-managed-tool-skills'
 
-function recordId(toolId: string): string {
-  return `managed-tool-skill:${createHash('sha256').update(toolId).digest('hex')}`
+/** One record per tool installation; records from before installation ids are keyed by the tool alone. */
+function recordId(toolId: string, installId?: string): string {
+  const key = installId ? `${toolId}\u0000${installId}` : toolId
+  return `managed-tool-skill:${createHash('sha256').update(key).digest('hex')}`
 }
 
 function entryOf(path: string) {
@@ -66,15 +68,53 @@ function owns(state: SkillInstallationState, toolId: string): boolean {
 }
 
 export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], trash: (path: string) => Promise<void>) {
-  const pending = new Map<string, Promise<void>>()
+  const pending = new Map<string, Promise<unknown>>()
 
-  function enqueue(toolId: string, work: () => Promise<void>): Promise<void> {
+  function enqueue<T>(toolId: string, work: () => Promise<T>): Promise<T> {
     const previous = pending.get(toolId)
     const task = (previous ? previous.then(work, work) : work()).finally(() => {
       if (pending.get(toolId) === task) pending.delete(toolId)
     })
     pending.set(toolId, task)
     return task
+  }
+
+  /** Records whose skill Halo still manages for the tool, of any installation. */
+  function ownedRecords(toolId: string): InstalledApp[] {
+    return store.listSkillRecords(null).filter(app => {
+      const state = stateOf(app, toolId)
+      return !!state && owns(state, toolId)
+    })
+  }
+
+  /** Withdraw one managed skill: the files go to the trash unless the user changed them. */
+  async function removeRecord(app: InstalledApp, toolId: string): Promise<void> {
+    let state = stateOf(app, toolId)
+    if (!state || !owns(state, toolId)) return
+    const expected = skillFilePath(null, app.spec.name)
+    const reason = protectedReason(app, state, expected)
+    if (reason) return relinquish(app, state, reason)
+    if (state.managedTool.removalId) return finishRemoval(app, state)
+    const { filePath, managedTool } = state
+    const target = managedTool.stagingId && !directoryEntry(filePath) ? stagingPath(filePath, managedTool.stagingId) : filePath
+    const current = currentPackage(target, managedTool.directoryId)
+    if (!current || (current.digest !== managedTool.writtenDigest && current.digest !== managedTool.pendingDigest)) {
+      return relinquish(app, state, 'files no longer match the package Halo wrote')
+    }
+    state = { ...state, managedTool: { ...managedTool, writtenDigest: current.digest,
+      stagingId: undefined, pendingDigest: undefined, removalId: managedTool.stagingId && target !== filePath ? managedTool.stagingId : randomUUID(),
+    } }
+    commit(app, state)
+    await finishRemoval(app, state)
+  }
+
+  /** The file Halo manages under `id` once nothing is in flight, or null. */
+  function managedPath(id: string, toolId: string): string | null {
+    const app = store.getById(id)
+    const state = app && stateOf(app, toolId)
+    if (!app || !state || !owns(state, toolId) || state.deleted || app.status !== 'active') return null
+    const { stagingId, removalId } = state.managedTool
+    return stagingId || removalId ? null : state.filePath
   }
 
   function commit(app: InstalledApp, state: ManagedState, change?: Partial<Pick<InstalledApp, 'status' | 'uninstalledAt' | 'spec'>>): void {
@@ -184,7 +224,7 @@ export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], 
     }
   }
 
-  function create(id: string, spec: SkillSpec, toolId: string, filePath: string, content: string, digest: string): void {
+  function create(id: string, spec: SkillSpec, toolId: string, installId: string, filePath: string, content: string, digest: string): void {
     const occupied = skillSearchRoots(null).some(({ path }) =>
       !!entryOf(join(path, spec.name)) || !!entryOf(join(path, `${spec.name}.md`)))
     if (occupied || store.getBySpecAndSpace(spec.name, null)) {
@@ -199,7 +239,7 @@ export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], 
     const state: ManagedState = {
       version: 1, filePath, deleted: true, digest,
       owners: [{ kind: 'cli-tool', id: toolId, name: toolId }],
-      managedTool: { toolId, directoryId: directoryId(entry), writtenDigest: digest, stagingId },
+      managedTool: { toolId, installId, directoryId: directoryId(entry), writtenDigest: digest, stagingId },
     }
     const app: InstalledApp = {
       id, specId: id, spec, spaceId: null, status: 'uninstalled', installedAt: Date.now(),
@@ -216,80 +256,73 @@ export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], 
     finishInstall(app, state)
   }
 
+  async function reconcile(input: ManagedToolSkillInput): Promise<void> {
+    const { toolId, installId, description, body } = input
+    const name = validateSkillName(input.name)
+    const id = recordId(toolId, installId)
+    const filePath = skillFilePath(null, name)
+    const content = `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}`
+    if (!toolId.trim() || !installId.trim() || !description.trim() || parseSkillMetadata(content, name).error) {
+      throw new Error('Invalid managed CLI skill input')
+    }
+    // A skill of an earlier installation, or one from before installations had ids, makes way first.
+    for (const earlier of ownedRecords(toolId)) {
+      if (earlier.id !== id) await removeRecord(earlier, toolId)
+    }
+    const spec: SkillSpec = {
+      type: 'skill', name, description, version: '1', spec_version: '1',
+      store: { install_source: 'store', registry_id: id, tags: [] }, skill_files: { 'SKILL.md': content },
+    }
+    const digest = skillPackageDigest({ files: { 'SKILL.md': content }, assets: {} })
+    let app = store.getById(id)
+    if (!app) {
+      create(id, spec, toolId, installId, filePath, content, digest)
+      return
+    }
+    let state = stateOf(app, toolId)
+    if (!state || !owns(state, toolId)) return
+    const reason = protectedReason(app, state, filePath)
+    if (reason) return relinquish(app, state, reason)
+    if (state.managedTool.removalId) {
+      await finishRemoval(app, state)
+      if (!store.getById(id)) create(id, spec, toolId, installId, filePath, content, digest)
+      return
+    }
+    if (state.managedTool.stagingId) {
+      if (!finishInstall(app, state)) return
+      app = store.getById(id)!
+      state = stateOf(app, toolId)!
+    }
+    const { managedTool } = state
+    const current = currentPackage(filePath, managedTool.directoryId)
+    if (!current || (current.digest !== managedTool.writtenDigest && current.digest !== managedTool.pendingDigest)) {
+      return relinquish(app, state, 'files no longer match the package Halo wrote')
+    }
+    if (current.digest !== digest) {
+      if (current.digest === managedTool.pendingDigest) {
+        state = { ...state, digest: current.digest, managedTool: { ...managedTool, writtenDigest: current.digest, pendingDigest: undefined } }
+      }
+      const writing = { ...state, managedTool: { ...state.managedTool, pendingDigest: digest } }
+      commit(app, writing)
+      writeSkillContent(filePath, content, current.revision)
+      state = writing
+    }
+    if (state.managedTool.pendingDigest !== undefined || state.managedTool.writtenDigest !== digest) {
+      commit(app, { ...state, digest, managedTool: { ...state.managedTool, writtenDigest: digest, pendingDigest: undefined } }, { spec })
+    }
+  }
+
   return {
-    reconcileManagedToolSkill(input: ManagedToolSkillInput): Promise<void> {
+    reconcileManagedToolSkill(input: ManagedToolSkillInput): Promise<string | null> {
       return enqueue(input.toolId, async () => {
-        const { toolId, description, body } = input
-        const name = validateSkillName(input.name)
-        const id = recordId(toolId)
-        const filePath = skillFilePath(null, name)
-        const content = `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}`
-        if (!toolId.trim() || !description.trim() || parseSkillMetadata(content, name).error) throw new Error('Invalid managed CLI skill input')
-        const spec: SkillSpec = {
-          type: 'skill', name, description, version: '1', spec_version: '1',
-          store: { install_source: 'store', registry_id: id, tags: [] }, skill_files: { 'SKILL.md': content },
-        }
-        const digest = skillPackageDigest({ files: { 'SKILL.md': content }, assets: {} })
-        let app = store.getById(id)
-        if (!app) {
-          create(id, spec, toolId, filePath, content, digest)
-          return
-        }
-        let state = stateOf(app, toolId)
-        if (!state || !owns(state, toolId)) return
-        const reason = protectedReason(app, state, filePath)
-        if (reason) return relinquish(app, state, reason)
-        if (state.managedTool.removalId) {
-          await finishRemoval(app, state)
-          if (!store.getById(id)) create(id, spec, toolId, filePath, content, digest)
-          return
-        }
-        if (state.managedTool.stagingId) {
-          if (!finishInstall(app, state)) return
-          app = store.getById(id)!
-          state = stateOf(app, toolId)!
-        }
-        const { managedTool } = state
-        const current = currentPackage(filePath, managedTool.directoryId)
-        if (!current || (current.digest !== managedTool.writtenDigest && current.digest !== managedTool.pendingDigest)) {
-          return relinquish(app, state, 'files no longer match the package Halo wrote')
-        }
-        if (current.digest !== digest) {
-          if (current.digest === managedTool.pendingDigest) {
-            state = { ...state, digest: current.digest, managedTool: { ...managedTool, writtenDigest: current.digest, pendingDigest: undefined } }
-          }
-          const writing = { ...state, managedTool: { ...state.managedTool, pendingDigest: digest } }
-          commit(app, writing)
-          writeSkillContent(filePath, content, current.revision)
-          state = writing
-        }
-        if (state.managedTool.pendingDigest !== undefined || state.managedTool.writtenDigest !== digest) {
-          commit(app, { ...state, digest, managedTool: { ...state.managedTool, writtenDigest: digest, pendingDigest: undefined } }, { spec })
-        }
+        await reconcile(input)
+        return managedPath(recordId(input.toolId, input.installId), input.toolId)
       })
     },
 
     removeManagedToolSkill(toolId: string): Promise<void> {
       return enqueue(toolId, async () => {
-        const app = store.getById(recordId(toolId))
-        if (!app) return
-        let state = stateOf(app, toolId)
-        if (!state || !owns(state, toolId)) return
-        const expected = skillFilePath(null, app.spec.name)
-        const reason = protectedReason(app, state, expected)
-        if (reason) return relinquish(app, state, reason)
-        if (state.managedTool.removalId) return finishRemoval(app, state)
-        const { filePath, managedTool } = state
-        const target = managedTool.stagingId && !directoryEntry(filePath) ? stagingPath(filePath, managedTool.stagingId) : filePath
-        const current = currentPackage(target, managedTool.directoryId)
-        if (!current || (current.digest !== managedTool.writtenDigest && current.digest !== managedTool.pendingDigest)) {
-          return relinquish(app, state, 'files no longer match the package Halo wrote')
-        }
-        state = { ...state, managedTool: { ...managedTool, writtenDigest: current.digest,
-          stagingId: undefined, pendingDigest: undefined, removalId: managedTool.stagingId && target !== filePath ? managedTool.stagingId : randomUUID(),
-        } }
-        commit(app, state)
-        await finishRemoval(app, state)
+        for (const app of ownedRecords(toolId)) await removeRecord(app, toolId)
       })
     },
   }

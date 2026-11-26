@@ -1,0 +1,145 @@
+version: 1
+id: capabilities.command-line-tools
+module: capabilities
+title:
+  en: Use installed command-line tools through their skills
+  zh: 通过技能使用已安装的命令行工具
+story:
+  en: A command-line tool Halo installs, bundled or delivered or imported, is ready the way an editor extension is; the AI reads its skill and runs it, and my own programs and shell setup are left alone.
+  zh: Halo 安装的命令行工具（随包、下发或导入）像编辑器插件一样即装即用；AI 读取其技能后直接运行，我自己的程序和终端配置不受影响。
+basis: documented
+references:
+  - src/main/services/cli-tools/DESIGN.md
+  - src/main/services/agent/DESIGN.md
+  - tests/e2e/specs/cli-tools-skill-packaged.spec.ts
+  - tests/e2e/specs/cli-tools-preset-packaged.spec.ts
+  - tests/e2e/specs/cli-tools-lifecycle-packaged.spec.ts
+promises:
+  together:
+    en: A tool and its skill are installed, updated and removed together; the skill names the tool's launcher by absolute path and carries the tool's guide.
+    zh: 工具与其技能一起安装、更新和移除；技能用绝对路径写明工具的启动器，并附带工具指南。
+  direct:
+    en: The AI runs a tool by loading its skill and running the command, without reading a separate index or changing my environment.
+    zh: AI 加载技能后直接运行命令，无需读取额外索引，也不改动我的环境。
+  untouched:
+    en: Sessions and terminals get nothing added to PATH, and a program of mine with the same name is neither shadowed nor renamed.
+    zh: 会话和终端的 PATH 不被追加任何内容，我同名的程序既不被遮挡也不被改名。
+  organization:
+    en: When organization sign-in is configured, the AI is told which organization tools are ready, and how I sign in, only when that changes.
+    zh: 配置了组织登录时，只在状态变化时告诉 AI 哪些组织工具可用以及我如何登录。
+scenarios:
+  - id: capabilities.command-line-tools.skill-runs-tool
+    title:
+      en: Load a bundled tool's skill and run the command it names
+      zh: 加载随包工具的技能并运行其写明的命令
+    verifies:
+      - together
+      - direct
+    platforms:
+      - darwin
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    variants:
+      engine:
+        - halo
+        - anthropic
+        - dsh
+    preconditions:
+      - en: A packaged application ships one tool in its bundled tools and starts in an isolated profile with the requested engine and a scripted model.
+        zh: 打包应用随包附带一个工具，在隔离资料中以指定引擎和脚本化模型启动。
+    steps:
+      - en: Wait for the tool's skill, then ask in chat and in a digital-human chat to use the tool.
+        zh: 等待工具技能出现后，分别在普通对话和数字人对话中请求使用该工具。
+    expected:
+      - en: The skill is offered, loads, names the tool's fixed launcher, and the command it names runs successfully in two tool calls.
+        zh: 技能被提供并成功加载，写明工具的固定启动器，按其写明的命令两次工具调用内运行成功。
+    requirements:
+      - packaged-app
+  - id: capabilities.command-line-tools.entries
+    title:
+      en: Reach the same tools from every entry without changing PATH
+      zh: 各入口都能使用同一工具，且不改动 PATH
+    verifies:
+      - direct
+      - untouched
+    platforms:
+      - darwin
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A packaged application ships several bundled tools.
+        zh: 打包应用随包附带多个工具。
+    steps:
+      - en: From chat, a digital-human chat, an automation and the AI terminal, run each tool by the path its skill names and inspect PATH.
+        zh: 在普通对话、数字人对话、自动任务和 AI 终端中，按技能写明的路径运行每个工具并检查 PATH。
+    expected:
+      - en: Every entry runs the same launcher; no tool directory appears on PATH and shell startup files are unchanged.
+        zh: 各入口运行同一个启动器；PATH 中没有工具目录，终端启动文件未改动。
+    requirements:
+      - packaged-app
+    notes:
+      en: tests/e2e/specs/cli-tools-preset-packaged.spec.ts asserts this but needs a package built with specific tools, so it is not bound to a regression profile yet.
+      zh: tests/e2e/specs/cli-tools-preset-packaged.spec.ts 已断言此行为，但需要带特定工具构建的包，暂未绑定回归。
+  - id: capabilities.command-line-tools.lifecycle
+    title:
+      en: Update, disable, revoke and remove a tool together with its skill
+      zh: 工具与其技能一起更新、停用、撤权和移除
+    verifies:
+      - together
+    platforms:
+      - darwin
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A packaged application connected to a local administrator catalog with an approved tool.
+        zh: 打包应用连接本地管理目录，其中有一个已批准的工具。
+    steps:
+      - en: Install the tool, update it, roll it back, disable and enable it, then revoke it.
+        zh: 安装工具，更新、回滚、停用再启用，最后撤权。
+    expected:
+      - en: The next run uses the current version; a disabled or revoked tool has neither launcher nor skill; a skill I edited is kept as mine.
+        zh: 下一次运行使用当前版本；停用或撤权的工具既无启动器也无技能；我修改过的技能保留为我的技能。
+    requirements:
+      - packaged-app
+    notes:
+      en: tests/e2e/specs/cli-tools-lifecycle-packaged.spec.ts asserts this against a local registry and is not bound to a regression profile yet. Unit tests cover the store and skill lifecycle.
+      zh: tests/e2e/specs/cli-tools-lifecycle-packaged.spec.ts 针对本地商店后台断言此行为，暂未绑定回归。存储与技能生命周期有单元测试覆盖。
+  - id: capabilities.command-line-tools.organization-reminder
+    title:
+      en: Tell the AI about organization tools only when their status changes
+      zh: 仅在组织工具状态变化时告诉 AI
+    verifies:
+      - organization
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Organization sign-in is configured with a mock provider and one bundled organization tool.
+        zh: 使用模拟提供方配置组织登录，并随包附带一个组织工具。
+    steps:
+      - en: Send several turns in one conversation, sign out between two of them, then compact the conversation.
+        zh: 在同一对话中发送多轮消息，在其中两轮之间退出登录，然后压缩对话。
+    expected:
+      - en: The model request carries the status reminder on the first turn, after sign-out and after compaction, and on no other turn.
+        zh: 模型请求仅在首轮、退出登录后和压缩后带有状态提醒，其余轮次不带。
+    notes:
+      en: Unit tests cover the reminder text, its change detection and its hooks; no application-level binding exists yet.
+      zh: 提醒文本、变化判断和钩子有单元测试覆盖；尚无应用级绑定。

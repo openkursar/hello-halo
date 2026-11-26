@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash, generateKeyPairSync, sign } from 'crypto'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { STORE_NOT_SIGNED_IN } from '../../../src/shared/store/store-types'
@@ -253,8 +253,7 @@ describe('cli catalog: install and revocation', () => {
     revoked = true
     await sync.requestCliCatalogSync('startup')
     expect((await host.readCliToolState())!.tools[ID].revoked).toBe(true)
-    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    expect(await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })).toBeNull()
+    expect(existsSync(join(dir, 'cli', 'tools', ID))).toBe(false)
 
     revoked = false
     const { tools } = await catalog.fetchCliCatalog()
@@ -301,8 +300,7 @@ describe('cli catalog: status and signatures', () => {
     expect(tools).toEqual([])
     record = (await host.readCliToolState())!.tools[ID]
     expect(record.delisted).toBe(true)
-    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    expect(await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })).toBeNull()
+    expect(existsSync(join(dir, 'cli', 'tools', ID))).toBe(false)
   })
 
   it('does not delist anything when the catalog cannot be read', async () => {
@@ -353,15 +351,10 @@ describe('cli catalog: administrator guide overrides', () => {
     return { revision, sha256: createHash('sha256').update(content).digest('hex'), content, signature: null, ...extra }
   }
 
-  /** The guide path TOOLS.md of a new session names for the tool. */
-  async function sessionGuide(host: Awaited<ReturnType<typeof load>>['host']): Promise<{ path: string; text: string }> {
-    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    const binDir = await host.applyCliToolsEnv(env, { entry: 'chat', engine: 'claude' })
-    expect(binDir).not.toBeNull()
-    const index = readFileSync(join(binDir!, '..', 'TOOLS.md'), 'utf-8')
-    const row = index.split('\n').find(line => line.includes(`| ${ID} |`))
-    const path = row?.match(/`([^`]+)` \|$/)?.[1] ?? ''
-    return { path, text: path ? readFileSync(path, 'utf-8') : '' }
+  /** The guide the tool's skill carries now. */
+  async function skillBody(host: Awaited<ReturnType<typeof load>>['host']): Promise<string> {
+    const snapshot = await host.readCurrentToolSkills()
+    return (await snapshot!.skills.find(skill => skill.toolId === ID)!.describe()).body
   }
 
   it('parses a valid override and drops a malformed one without touching the version', async () => {
@@ -387,7 +380,7 @@ describe('cli catalog: administrator guide overrides', () => {
     expect(JSON.stringify(view)).not.toContain('Bank notes')
   })
 
-  it('applies an override on install, pins it per session, and reverts when the administrator resets it', async () => {
+  it('applies an override on install, takes a new revision into the skill, and reverts when the administrator resets it', async () => {
     const bytes = packageBytes('1.0.0')
     let guide: unknown = guideOf(TEXT)
     const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes, { guide })])]))
@@ -397,26 +390,19 @@ describe('cli catalog: administrator guide overrides', () => {
     const record = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
     expect(record.guideOverride).toEqual({ revision: 1, sha256: guideOf(TEXT).sha256 })
     expect(JSON.stringify(record)).not.toContain('Bank notes')
-    const first = await sessionGuide(host)
-    expect(first.text).toBe(TEXT)
-    expect(first.path).toContain(join('guides', `${ID}.md`))
+    expect(await skillBody(host)).toContain(TEXT.trim())
 
-    // A new revision reaches new sessions; the earlier session's copy is unchanged.
     const edited = `${TEXT}Second revision.\n`
     guide = guideOf(edited, 2)
     await catalog.fetchCliCatalog()
-    const second = await sessionGuide(host)
-    expect(second.text).toBe(edited)
-    expect(second.path).not.toBe(first.path)
-    expect(readFileSync(first.path, 'utf-8')).toBe(TEXT)
+    expect(await skillBody(host)).toContain(edited.trim())
 
     // Reset: the package guide applies again and unreferenced texts are pruned.
     guide = undefined
     await catalog.fetchCliCatalog()
     expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
-    const third = await sessionGuide(host)
-    expect(third.path).not.toContain(join('guides', `${ID}.md`))
-    expect(third.path.endsWith('README.md') || third.path === '').toBe(true)
+    expect(await skillBody(host)).not.toContain('Bank notes')
+    expect(existsSync(join(dir, 'cli', 'guides', `${guideOf(edited, 2).sha256}.md`))).toBe(false)
   })
 
   it('leaves the guide as it is when the override is malformed or for another payload', async () => {
@@ -433,7 +419,7 @@ describe('cli catalog: administrator guide overrides', () => {
     entry = { guide: guideOf('for a different build', 5), integrity: `sha256-${'B'.repeat(43)}=` }
     await catalog.fetchCliCatalog()
     expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(1)
-    expect((await sessionGuide(host)).text).toBe(TEXT)
+    expect(await skillBody(host)).toContain(TEXT.trim())
   })
 
   it('requires a guide signature when the build ships keys', async () => {
@@ -469,7 +455,7 @@ describe('cli catalog: administrator guide overrides', () => {
     guide = { ...plain, revision: 2, signature: guideSig(2) }
     await catalog.fetchCliCatalog()
     expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(2)
-    expect((await sessionGuide(host)).text).toBe(TEXT)
+    expect(await skillBody(host)).toContain(TEXT.trim())
   })
 })
 
@@ -529,10 +515,8 @@ describe('cli catalog: tool skill for preset copies', () => {
     expect(record.source).toBe('preset')
     expect(record.guideOverride).toEqual({ revision: 1, sha256: textOf(SKILL).sha256, tool: true })
     const first = await staticSkill(host)
-    expect(first.description).toBe('Open and track service tickets with the tool command')
-    expect(first.body).not.toContain('Ticket notes')
-    const binDir = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'chat', engine: 'claude' })
-    expect(readFileSync(join(binDir!, '..', 'guides', `${ID}.md`), 'utf-8')).toContain('Ticket notes')
+    expect(first.description).toBe('Companion skill for the tool command-line tool. Open and track service tickets with the tool command')
+    expect(first.body).toContain('Ticket notes')
     const overview = await host.getCliToolsOverview()
     expect(overview.tools.find(t => t.id === ID)?.skill?.description).toBe('Open and track service tickets with the tool command')
 

@@ -20,6 +20,7 @@ import { hostSystemPromptText } from '../system-prompt'
 import { partitionMcpServers } from '../mcp/partition'
 import { SdkMcpBridge } from '../mcp/sdk-bridge'
 import { buildDshLaunchSpec } from './runtime'
+import { applyOrgSessionEnv } from '../../enterprise-identity'
 import { resolveDshModel } from './routing'
 import { clampModelRuntimeLimits } from '../../../../shared/constants/model-runtime-limits'
 import { isReasoningEffortLevel } from '../../../../shared/constants/reasoning-effort'
@@ -129,6 +130,10 @@ export async function resolveDshOptions(
   }
 
   const { mcpServers, bridge } = await resolveMcpServers(sdkOptions.mcpServers)
+  // The runtime builds its children's environment itself, so organization
+  // access reaches its commands only through the launch spec.
+  const orgEnv: Record<string, string> = {}
+  applyOrgSessionEnv(orgEnv)
 
   try {
     const launch = buildDshLaunchSpec({
@@ -141,9 +146,7 @@ export async function resolveDshOptions(
       disallowedTools,
       mcpServers,
       ...(limits.contextWindow ? { contextWindow: limits.contextWindow } : {}),
-      ...(typeof sdkOptions.env?.HALO_CLI_TOOLS_BIN === 'string'
-        ? { cliToolsBinDir: sdkOptions.env.HALO_CLI_TOOLS_BIN }
-        : {}),
+      ...(Object.keys(orgEnv).length > 0 ? { sessionEnv: orgEnv } : {}),
     })
 
     return {

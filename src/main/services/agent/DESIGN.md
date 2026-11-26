@@ -986,25 +986,30 @@ uses which:
 | `apps/team/service.ts` `proposeMembersViaSdk` | internal task | One-shot, tool-less helper. |
 | `services/memory-consolidation/runner.ts` | internal task | Housekeeping; confined to its workspace, replaces the prompt. |
 
-**Installed CLI tools follow the same split.** `buildUserSessionSdkOptions`
-calls `cli-tools` `applyCliToolsEnv` after assembly, for every engine: the
-current tool set's launcher directory goes to the end of the session's PATH and
-into `HALO_CLI_TOOLS_BIN`. Every row marked "user session" above therefore gets
-the tools; internal tasks never do. dsh builds its child env itself, so
-`dsh/options.ts` passes the directory to `buildDshLaunchSpec`, which appends it
-after the shell directory and inherited PATH (dsh is experimental). Because the
-directory is part of `computeCredentialsFingerprint`, an updated tool set
-rebuilds the session at the next safe point, and a running turn finishes on
-the set it started with. A tool failure leaves the session without tools; it
-never fails the session. Callers name their entry (`cliToolsEntry`: `chat` for
-send-message and warm-up, `app-chat`/`im`/`team` for digital-human chat,
-`automation` for runs), which is recorded on the pin. `resolved-sdk`
-`createSession` and `query` hold the session's `HALO_CLI_TOOLS_BIN`
-(`holdCliTools`) until the session's close has settled, or until starting it
-fails, so resident, transient (automation) and DSH sessions alike keep their
-tool set while they run, and cli-tools releases a set no session holds after
-its grace period instead of at the next app start. See
-`services/cli-tools/DESIGN.md`.
+**Organization access follows the same split.** Installed CLI tools add
+nothing to a session: each tool's skill names its launcher by absolute path
+(see `services/cli-tools/DESIGN.md`). `buildUserSessionSdkOptions` adds the
+organization session variables (`applyOrgSessionEnv`, for example a sign-in
+broker command) to every user session's env; their digest is part of
+`computeCredentialsFingerprint`, so signing in or out rebuilds an idle session.
+dsh builds its child env itself, so `dsh/options.ts` hands the same variables
+to `buildDshLaunchSpec` as `sessionEnv`. Internal tasks get neither.
+
+**Organization status reaches the model as a change-only system reminder**
+(`org-context.ts`). The text names the sign-in state, the organization tools
+ready to use (skill name and display name from `cli-tools`
+`peekOrganizationTools`, at most ten) with a rule to prefer them unless the
+user names another tool, missing or expired capabilities, and how the user
+signs in. It is wrapped in `<system-reminder>` and put ahead of an owner's turn
+(space chat, digital-human chat, automation) only when it differs from what
+that conversation (`spaceId` + `conversationId`) was last told; the record is
+kept in memory once the engine accepted the turn, so after a restart a
+conversation is told once more. On engines that run hooks,
+`buildUserSessionSdkOptions` adds a `PostToolUse` hook on the shell tool that
+appends the reminder to the tool result when the status changed during a run,
+and a `PreCompact` hook: the Halo engine carries the current status forward in
+compacted context, other engines are told again at the next turn. Nothing is
+sent without organization sign-in or while its state is still loading.
 
 **A policy narrows, never re-opens.** `applyCapabilityPolicy`
 (`apps/runtime/capability-policy.ts`) adds its withheld tools to the session's

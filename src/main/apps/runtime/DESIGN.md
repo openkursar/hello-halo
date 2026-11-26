@@ -2477,8 +2477,8 @@ itself has no switch: it exists for a caller exactly when some skill does.
   one.
 - **Command-line tool skills follow the same allowlist.** Granting Bash does
   not grant a skill, and granting a skill does not grant Bash. A tool skill
-  points to the pinned `TOOLS.md`; the policy still judges every command and
-  file access as usual.
+  names its launcher by absolute path; the policy still judges every command
+  and file access as usual.
 - **A skill grants nothing beyond itself.** Each tool call it makes is judged by
   the policy like any other. What the engine lets a loaded skill do without
   asking — run the tools its `allowed-tools` pre-approve for the rest of the

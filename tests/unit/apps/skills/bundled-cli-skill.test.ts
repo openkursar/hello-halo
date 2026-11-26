@@ -8,7 +8,6 @@ import { createAppManagerService } from '../../../../src/main/apps/manager/servi
 import { AppManagerStore } from '../../../../src/main/apps/manager/store'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../src/main/apps/manager/migrations'
 import { createSkillLibrary, subscribeToolSkillSync } from '../../../../src/main/apps/skills'
-import { cliSkillName } from '../../../../src/main/services/cli-tools/skills'
 import { signedBytes, signedGuideBytes, signedSkillBytes } from '../../../../src/main/services/cli-tools/signature'
 import { buildManifest, removeTree, writePackage, type PackageSpec } from '../../services/cli-tools/helpers'
 
@@ -24,7 +23,7 @@ const packageSpec: PackageSpec = {
   manifest: { guide: 'guide/usage.md' },
   extra: { 'guide/usage.md': '---\ndescription: Archive description\n---\nArchive usage\n' },
 }
-const skillName = cliSkillName(id)
+const described = (text: string) => `Companion skill for the ${launchName} command-line tool. ${text}`
 const hash = (content: string | Buffer) => createHash('sha256').update(content).digest('hex')
 function guide(description: string, marker: string, revision = 1) {
   const content = `---\ndescription: ${description}\n---\n${marker}\n`
@@ -74,25 +73,35 @@ async function boot() {
 
 type Host = Awaited<ReturnType<typeof boot>>
 
-async function checkPin(host: Host, marker: string) {
-  const env: Record<string, string> = {}
-  const bin = await host.applyCliToolsEnv(env, { entry: 'terminal', engine: 'test' })
-  checkLauncher(bin, marker)
+function launcherIn(cliRoot: string): string {
+  return join(cliRoot, 'tools', id, 'bin', process.platform === 'win32' ? `${launchName}.cmd` : launchName)
 }
 
-function checkLauncher(bin: string | null | undefined, marker: string) {
-  expect(bin).toBeTruthy()
-  const index = readFileSync(join(bin!, '..', 'TOOLS.md'), 'utf8')
-  const row = index.split('\n').find(line => line.startsWith(`| \`${launchName}\` | ${id} |`))
-  expect(row).toBeTruthy()
-  const linked = row?.match(/\| `([^`]+)` \|$/)?.[1]
-  expect(linked).toBeTruthy()
-  expect(readFileSync(linked!, 'utf8')).toContain(marker)
-  const cmd = join(bin!, process.platform === 'win32' ? `${launchName}.cmd` : launchName)
+function runLauncher(cliRoot = toolRoot): void {
+  const cmd = launcherIn(cliRoot)
   const stdout = process.platform === 'win32'
     ? execFileSync('cmd.exe', ['/c', cmd], { encoding: 'utf8' })
     : execFileSync(cmd, { encoding: 'utf8' })
   expect(stdout.trim()).toBe('hello 1.0.0')
+}
+
+async function skillOf(host: Host) {
+  const snapshot = await host.readCurrentToolSkills()
+  return snapshot!.skills.find(skill => skill.toolId === id)!.describe()
+}
+
+/** The tool runs from its launcher and its skill carries the expected guide. */
+async function checkTool(host: Host, marker: string, cliRoot = toolRoot): Promise<void> {
+  await host.prepareCliTools()
+  const skill = await skillOf(host)
+  expect(skill.body).toContain(marker)
+  expect(skill.body).toContain(launcherIn(cliRoot).replace(/\.cmd$/, ''))
+  runLauncher(cliRoot)
+}
+
+async function checkNoTool(host: Host, cliRoot = toolRoot): Promise<void> {
+  await host.prepareCliTools()
+  expect(existsSync(join(cliRoot, 'tools', id))).toBe(false)
 }
 
 function setupSkillLibrary() {
@@ -109,7 +118,7 @@ function setupSkillLibrary() {
   return { db, manager, library }
 }
 
-async function coldSession(config: 'preset' | 'empty' | 'unconfigured' = 'preset') {
+async function coldStart(config: 'preset' | 'empty' | 'unconfigured' = 'preset') {
   vi.resetModules()
   const host = await import('../../../../src/main/services/cli-tools')
   const { createCliToolSkillStartup } = await import('../../../../src/main/bootstrap/cli-tool-skills')
@@ -117,105 +126,93 @@ async function coldSession(config: 'preset' | 'empty' | 'unconfigured' = 'preset
   const { buildUserSessionSdkOptions } = await import('../../../../src/main/services/agent/sdk-config')
   const { prepareSessionSkills } = await import('../../../../src/main/services/agent/skill-availability')
   const startup = createCliToolSkillStartup(join(toolRoot, 'skill-sync-stamp'))
-  const synchronize = vi.fn(startup.afterPrepare)
-  if (config !== 'unconfigured') host.initCliTools({
-    root: toolRoot, presetDir: config === 'empty' ? null : presetDir, runtimePath: process.execPath, prepareSessionSkills: synchronize,
-  })
+  if (config !== 'unconfigured') host.initCliTools({ root: toolRoot, presetDir: config === 'empty' ? null : presetDir, runtimePath: process.execPath })
   const start = async () => {
     const options = await buildUserSessionSdkOptions({
-      engineId: 'halo', cliToolsEntry: 'chat', spaceId: 'test-space', conversationId: 'test-conversation',
+      engineId: 'halo', spaceId: 'test-space', conversationId: 'test-conversation',
       workDir: root, electronPath: process.execPath, credentials: {
         anthropicBaseUrl: 'http://127.0.0.1:1', anthropicApiKey: '', sdkModel: 'synthetic-model', displayModel: 'synthetic-model',
       },
     })
-    return { ...await prepareSessionSkills(options), bin: options.env[host.CLI_TOOLS_BIN_ENV] as string | undefined }
+    return { ...await prepareSessionSkills(options), env: options.env as Record<string, string | undefined> }
   }
-  return { host, startup, synchronize, start, registerAppBridge }
+  return { host, startup, start, registerAppBridge }
 }
 
-it('materializes the offline CLI skill before the immediate first session discovers it, without executing idle preparation', async () => {
+it('installs the offline CLI skill with its launcher when the store is prepared, and sessions add nothing to their environment', async () => {
   const { db, manager, library } = setupSkillLibrary()
-  const { host, startup, synchronize, start, registerAppBridge } = await coldSession()
-  const file = join(root, '.agents', 'skills', skillName, 'SKILL.md')
-  const offline = guide('Cold-start guide description', 'Cold-start usage')
-  writeCatalog(catalogEntry({ versions: [exactEntry({ guide: offline })] }))
-  try {
-    const pending = start()
-    await vi.waitFor(() => expect(synchronize).toHaveBeenCalledOnce())
-    expect(existsSync(file)).toBe(false)
-    const terminal = await host.applyCliToolsEnv({}, { entry: 'terminal', engine: 'test' })
-    expect(terminal).toBeTruthy()
-    expect(synchronize).toHaveBeenCalledOnce()
-    startup.attachManager(manager)
-    registerAppBridge({ getAppManager: () => manager, onMcpAppsChange: () => () => {}, createHaloAppsMcpServer: () => null,
-      getEffectiveSkillCatalog: library.effectiveCatalog })
-    const first = await pending
-    expect(first.catalog).toEqual([{ name: skillName, description: 'Cold-start guide description', source: { kind: 'file', path: file } }])
-    expect(readFileSync(file, 'utf8')).toContain('HALO_CLI_TOOLS_BIN/../TOOLS.md')
-    checkLauncher(first.bin, 'Cold-start usage')
-    expect(startup.afterPrepare()).toBeUndefined()
-  } finally {
-    await startup.dispose()
-    db.closeAll()
-  }
-})
-
-it.each(['empty', 'unconfigured'] as const)('does not wait for CLI skill synchronization on a %s installation', async config => {
-  const { startup, synchronize, start, registerAppBridge } = await coldSession(config)
-  registerAppBridge({ getAppManager: () => null, onMcpAppsChange: () => () => {}, createHaloAppsMcpServer: () => null,
-    getEffectiveSkillCatalog: () => [] })
-  try {
-    expect(await start()).toEqual({ catalog: [], bin: undefined })
-    expect(synchronize).not.toHaveBeenCalled()
-  } finally { await startup.dispose() }
-})
-
-it('keeps the session runnable after a static skill write failure and retries it on the next session', async () => {
-  const { db, manager, library } = setupSkillLibrary()
-  const { startup, start, registerAppBridge } = await coldSession()
-  const upsert = vi.spyOn(manager, 'reconcileManagedToolSkill').mockRejectedValueOnce(new Error('Controlled skill write failure'))
+  const { host, startup, start, registerAppBridge } = await coldStart()
+  writeCatalog(catalogEntry({ versions: [exactEntry({ guide: guide('Cold-start guide description', 'Cold-start usage') })] }))
   registerAppBridge({ getAppManager: () => manager, onMcpAppsChange: () => () => {}, createHaloAppsMcpServer: () => null,
     getEffectiveSkillCatalog: library.effectiveCatalog })
   startup.attachManager(manager)
   try {
-    const first = await start()
-    expect(first.catalog).toEqual([])
-    checkLauncher(first.bin, 'Archive usage')
-    const second = await start()
-    expect(second.catalog).toEqual([expect.objectContaining({ name: skillName, description: 'Archive description' })])
-    expect(upsert).toHaveBeenCalledTimes(2)
+    await startup.prepareInBackground()
+    const { installId } = (await host.readCliToolState())!.tools[id]
+    const name = `${launchName}-example-offline-${installId}`
+    const file = join(root, '.agents', 'skills', name, 'SKILL.md')
+    await vi.waitFor(() => expect(existsSync(file)).toBe(true))
+    await vi.waitFor(async () => expect((await new (await import('../../../../src/main/services/cli-tools')).CliToolStore({
+      root: toolRoot, runtimePath: process.execPath, runtimeNodeVersion: process.versions.node,
+    }).readInstallRecord(id))?.skill).toEqual({ name, path: file }))
+    const session = await start()
+    expect(session.catalog).toEqual([{ name, description: described('Cold-start guide description'), source: { kind: 'file', path: file } }])
+    const text = readFileSync(file, 'utf8')
+    expect(text).toContain(launcherIn(toolRoot).replace(/\.cmd$/, ''))
+    expect(text).toContain('Cold-start usage')
+    expect(text).not.toMatch(/HALO_CLI_TOOLS_BIN|TOOLS\.md/)
+    expect(Object.keys(session.env).filter(key => /HALO_CLI|CLI_TOOLS/.test(key))).toEqual([])
+    expect(String(session.env.PATH ?? '')).not.toContain(join(toolRoot, 'tools'))
+    runLauncher()
   } finally {
     await startup.dispose()
     db.closeAll()
   }
 })
 
-it('releases a session waiting for App Manager if startup is abandoned', async () => {
-  const { startup, synchronize, start, registerAppBridge } = await coldSession()
+it.each(['empty', 'unconfigured'] as const)('adds no tool and no skill on a %s installation', async config => {
+  const { startup, start, registerAppBridge } = await coldStart(config)
   registerAppBridge({ getAppManager: () => null, onMcpAppsChange: () => () => {}, createHaloAppsMcpServer: () => null,
     getEffectiveSkillCatalog: () => [] })
-  const pending = start()
-  await vi.waitFor(() => expect(synchronize).toHaveBeenCalledOnce())
-  await startup.dispose()
-  expect((await pending).bin).toBeTruthy()
+  try {
+    await startup.prepareInBackground()
+    expect((await start()).catalog).toEqual([])
+    expect(existsSync(join(toolRoot, 'tools'))).toBe(false)
+  } finally { await startup.dispose() }
 })
 
-it('bounds the wait when App Manager never becomes ready', async () => {
-  const { startup, synchronize, start, registerAppBridge } = await coldSession()
-  registerAppBridge({ getAppManager: () => null, onMcpAppsChange: () => () => {}, createHaloAppsMcpServer: () => null,
-    getEffectiveSkillCatalog: () => [] })
-  const realSetTimeout = globalThis.setTimeout
-  const timeout = vi.spyOn(globalThis, 'setTimeout').mockImplementation((handler, delay, ...args) =>
-    realSetTimeout(handler, delay === 10_000 ? 10 : delay, ...args))
+it('retries a failed skill write at the next start while the launcher already works', async () => {
+  const { db, manager, library } = setupSkillLibrary()
+  const first = await coldStart()
+  first.registerAppBridge({ getAppManager: () => manager, onMcpAppsChange: () => () => {}, createHaloAppsMcpServer: () => null,
+    getEffectiveSkillCatalog: library.effectiveCatalog })
+  const upsert = vi.spyOn(manager, 'reconcileManagedToolSkill').mockRejectedValueOnce(new Error('Controlled skill write failure'))
+  first.startup.attachManager(manager)
   try {
-    const session = await start()
-    expect(synchronize).toHaveBeenCalledOnce()
-    expect(session.catalog).toEqual([])
-    expect(session.bin).toBeTruthy()
+    await first.startup.prepareInBackground()
+    await vi.waitFor(() => expect(upsert).toHaveBeenCalledOnce())
+    runLauncher()
+    expect((await first.start()).catalog).toEqual([])
+    await first.startup.dispose()
+
+    const second = await coldStart()
+    second.registerAppBridge({ getAppManager: () => manager, onMcpAppsChange: () => () => {}, createHaloAppsMcpServer: () => null,
+      getEffectiveSkillCatalog: library.effectiveCatalog })
+    second.startup.attachManager(manager)
+    await second.startup.prepareInBackground()
+    await vi.waitFor(() => expect(upsert).toHaveBeenCalledTimes(2))
+    await vi.waitFor(async () => expect((await second.start()).catalog).toEqual([expect.objectContaining({ description: described('Archive description') })]))
+    await second.startup.dispose()
   } finally {
-    timeout.mockRestore()
-    await startup.dispose()
+    db.closeAll()
   }
+})
+
+it('does not hold the idle queue when App Manager never arrives', async () => {
+  const { startup } = await coldStart()
+  await startup.prepareInBackground()
+  runLauncher()
+  await startup.dispose()
 })
 
 it('lists the real static skill on fresh offline install, follows its pinned guide and command, and preserves customization on a sidecar-only change', async () => {
@@ -223,7 +220,7 @@ it('lists the real static skill on fresh offline install, follows its pinned gui
   const pushSkills = async (host: Host) => {
     const sync = subscribeToolSkillSync({
       stampPath: join(root, 'skill-sync'), onDidChange: host.onDidChangeCurrentTools, readSnapshot: host.readCurrentToolSkills,
-      upsert: skill => manager.reconcileManagedToolSkill(skill), remove: toolId => manager.removeManagedToolSkill(toolId),
+      upsert: async skill => { await manager.reconcileManagedToolSkill(skill) }, remove: toolId => manager.removeManagedToolSkill(toolId),
       listManagedIds: () => manager.listManagedToolSkillIds(),
     })
     try {
@@ -239,12 +236,13 @@ it('lists the real static skill on fresh offline install, follows its pinned gui
   try {
     const first = await boot()
     await pushSkills(first)
+    const skillName = (await skillOf(first)).name
     const file = join(root, '.agents', 'skills', skillName, 'SKILL.md')
     expect(library.effectiveCatalog('test-space')).toEqual([
-      { name: skillName, description: 'Version guide description', source: { kind: 'file', path: file } },
+      { name: skillName, description: described('Version guide description'), source: { kind: 'file', path: file } },
     ])
-    expect(readFileSync(file, 'utf8')).toContain('HALO_CLI_TOOLS_BIN/../TOOLS.md')
-    await checkPin(first, 'Version guide usage')
+    expect(readFileSync(file, 'utf8')).toContain('Version guide usage')
+    await checkTool(first, 'Version guide usage')
     expect(Object.keys((await first.readCliToolState())!.tools)).toEqual([id])
     expect(readFileSync(archive)).toEqual(archiveBytes)
 
@@ -256,7 +254,7 @@ it('lists the real static skill on fresh offline install, follows its pinned gui
     expect(statSync(archive).mtimeMs).toBe(before)
     expect(readFileSync(file, 'utf8')).toBe(custom)
     expect(library.effectiveCatalog('test-space')[0]?.description).toBe('My own description')
-    await checkPin(second, 'New usage')
+    await checkTool(second, 'New usage')
 
     const live = guide('Live description', 'Live usage', 3)
     await second.applyCatalogStatus([{ id, revoked: false, versions: [version], guides: {
@@ -265,14 +263,14 @@ it('lists the real static skill on fresh offline install, follows its pinned gui
     writeCatalog(catalogEntry({ skill: guide('Stale description', 'Stale usage', 4) }))
     const third = await boot()
     await pushSkills(third)
-    await checkPin(third, 'Live usage')
+    await checkTool(third, 'Live usage')
     expect(readFileSync(file, 'utf8')).toBe(custom)
     await third.applyCatalogStatus([{ id, revoked: false, versions: [version], guides: {
       [version]: { integrity: exactEntry().integrity, override: null },
     } }])
     writeCatalog(catalogEntry({ skill: guide('Stale again', 'Still stale', 5) }))
     const fourth = await boot()
-    await checkPin(fourth, 'Archive usage')
+    await checkTool(fourth, 'Archive usage')
   } finally { db.closeAll() }
 })
 
@@ -286,7 +284,7 @@ it('attaches signed zero-version tool text only to a valid local archive', async
   const skill = { ...plain, signature: signature(signedSkillBytes({ id, ...plain })) }
   writeCatalog(catalogEntry({ skill }), catalogEntry({ id: 'example.missing', skill }))
   const host = await boot()
-  await checkPin(host, 'Signed tool usage')
+  await checkTool(host, 'Signed tool usage')
   expect(Object.keys((await host.readCliToolState())!.tools)).toEqual([id])
 
   const otherGuide = guide('Wrong domain', 'Should never load', 2)
@@ -297,13 +295,13 @@ it('attaches signed zero-version tool text only to a valid local archive', async
   })], skill: { ...plain, revision: 2 } }))
   const app = await boot()
   app.initCliTools({ root: join(root, 'fresh-cli'), presetDir, runtimePath: process.execPath })
-  await checkPin(app, 'Archive usage')
+  await checkTool(app, 'Archive usage', join(root, 'fresh-cli'))
 
   const valid = guide('Signed version description', 'Signed version usage', 3)
   writeCatalog(catalogEntry({ versions: [exactEntry({ signature: signature(signedBytes(fields)),
     guide: { ...valid, signature: signature(signedGuideBytes({ id, version, ...valid })) },
   })] }))
-  await checkPin(await boot(), 'Signed version usage')
+  await checkTool(await boot(), 'Signed version usage')
 
   writeCatalog(catalogEntry({ versions: [exactEntry()] }))
   const unsigned = await boot()
@@ -321,22 +319,22 @@ it.each(['archive hash', 'payload integrity', 'tool id', 'version', 'renamed rev
     writeCatalog(catalogEntry({ revoked: error === 'renamed revoked', versions: [entry] }))
     const host = await boot()
     expect((await host.readCliToolState())?.tools).toEqual({})
-    expect(await host.applyCliToolsEnv({}, { entry: 'terminal', engine: 'test' })).toBeNull()
+    await checkNoTool(host)
   },
 )
 
 it('does not let a bundled revocation replace a live decision, or clear live revocation with an allowed preset', async () => {
   const noSidecar = await boot()
-  await checkPin(noSidecar, 'Archive usage')
+  await checkTool(noSidecar, 'Archive usage')
   await noSidecar.applyCatalogStatus([{ id, revoked: false, versions: [] }])
   writeCatalog(catalogEntry({ revoked: true, versions: [exactEntry()] }))
   const staleRevoke = await boot()
-  await checkPin(staleRevoke, 'Archive usage')
+  await checkTool(staleRevoke, 'Archive usage')
   expect((await staleRevoke.readCliToolState())?.tools[id]?.revoked).toBe(false)
 
   await staleRevoke.applyCatalogStatus([{ id, revoked: true, versions: [] }])
   writeCatalog(catalogEntry({ versions: [exactEntry()], skill: guide('Should not revive', 'Revive') }))
   const stalePermit = await boot()
   expect((await stalePermit.readCliToolState())?.tools[id]).toMatchObject({ revoked: true, current: version })
-  expect(await stalePermit.applyCliToolsEnv({}, { entry: 'terminal', engine: 'test' })).toBeNull()
+  await checkNoTool(stalePermit)
 })

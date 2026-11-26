@@ -53,19 +53,18 @@ describe.skipIf(!enabled)('Codex native tool routing', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'halo-codex-native-'))
     const home = path.join(directory, 'home')
     const workDir = path.join(directory, 'work')
-    const name = 'cli-com-example-marker-0123456789ab'
+    const name = 'marker-com-example-marker-7f3a9c'
     const skillDir = path.join(home, '.agents', 'skills', name)
-    const view = path.join(directory, 'cli', 'views', 'fixture')
-    const binDir = path.join(view, 'bin')
+    const binDir = path.join(directory, 'cli', 'tools', 'com.example.marker', 'bin')
+    const launcher = path.join(binDir, process.platform === 'win32' ? 'cli-e2e-marker.cmd' : 'cli-e2e-marker')
     mkdirSync(workDir)
     mkdirSync(skillDir, { recursive: true })
     mkdirSync(binDir, { recursive: true })
-    writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: ${name}\ndescription: Use the marker command.\n---\n\nRead $HALO_CLI_TOOLS_BIN/../TOOLS.md to find the command.\n`)
-    writeFileSync(path.join(view, 'TOOLS.md'), 'Use `halo-cli-e2e-marker`.\n')
+    writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: ${name}\ndescription: Companion skill for the cli-e2e-marker command-line tool. Use the marker command.\n---\n\n- \`cli-e2e-marker\`: \`${launcher}\`\n`)
     if (process.platform === 'win32') {
-      writeFileSync(path.join(binDir, 'halo-cli-e2e-marker.cmd'), '@echo native-shell-42\r\n')
+      writeFileSync(launcher, '@echo native-shell-42\r\n')
     } else {
-      writeFileSync(path.join(binDir, 'halo-cli-e2e-marker'), '#!/bin/sh\nprintf "native-shell-42\\n"\n', { mode: 0o755 })
+      writeFileSync(launcher, '#!/bin/sh\nprintf "native-shell-42\\n"\n', { mode: 0o755 })
     }
     const nativeRequests: any[] = []
     const modelRequests: any[] = []
@@ -88,17 +87,14 @@ describe.skipIf(!enabled)('Codex native tool routing', () => {
     upstreamApp.post(endpoint, (req, res) => {
       modelRequests.push(req.body)
       const step = modelRequests.length
-      const toolStep = step <= 4
+      const toolStep = step <= 3
       const toolName = step === 1 ? 'spawn_agent' : 'exec_command'
       const offered = req.body.tools.find((tool: any) => (tool.name ?? tool.function?.name)?.endsWith(toolName))
       const callName = offered?.name ?? offered?.function.name
       const readSkill = process.platform === 'win32'
         ? `Get-Content "$env:USERPROFILE/.agents/skills/${name}/SKILL.md"`
         : `cat "$HOME/.agents/skills/${name}/SKILL.md"`
-      const readGuide = process.platform === 'win32'
-        ? 'Get-Content "$env:HALO_CLI_TOOLS_BIN/../TOOLS.md"'
-        : 'cat "$HALO_CLI_TOOLS_BIN/../TOOLS.md"'
-      const command = step === 2 ? readSkill : step === 3 ? readGuide : 'halo-cli-e2e-marker'
+      const command = step === 2 ? readSkill : `"${launcher}"`
       const args = step === 1 ? { value: 'marker' } : { cmd: command, login: false, max_output_tokens: 200 }
       const callId = `call_native_${modelRequests.length}`
       res.setHeader('Content-Type', 'text/event-stream')
@@ -137,7 +133,7 @@ describe.skipIf(!enabled)('Codex native tool routing', () => {
     runtimeState.routerUrl = baseUrl(router)
     const resolved = await resolveCodexOptions({
       cwd: workDir,
-      env: { ...process.env, HOME: home, USERPROFILE: home, PATH: `${process.env.PATH ?? ''}${path.delimiter}${binDir}`, HALO_CLI_TOOLS_BIN: binDir },
+      env: { ...process.env, HOME: home, USERPROFILE: home },
       apiCredentials: { provider: 'openai', baseUrl: `${baseUrl(upstream)}${endpoint}`, apiKey: 'local-test', model: 'gpt-5.1-codex-max', apiType },
       systemPrompt: { type: 'preset', preset: 'default', append: 'Halo host-context-marker-42' },
       permissionMode: 'bypassPermissions',
@@ -167,10 +163,9 @@ describe.skipIf(!enabled)('Codex native tool routing', () => {
       expect(JSON.stringify(modelRequests[1])).toContain('native-tool-receipt-42')
       expect(JSON.stringify(modelRequests[1])).not.toContain('unsupported call')
       expect(JSON.stringify(modelRequests[0])).toContain(name)
-      expect(JSON.stringify(modelRequests[2])).toContain('HALO_CLI_TOOLS_BIN/../TOOLS.md')
-      expect(JSON.stringify(modelRequests[3])).toContain('Use `halo-cli-e2e-marker`.')
-      expect(JSON.stringify(modelRequests[4])).toContain('native-shell-42')
-      expect(JSON.stringify(modelRequests[4])).not.toContain('unsupported call')
+      expect(JSON.stringify(modelRequests[2])).toContain(JSON.stringify(launcher).slice(1, -1))
+      expect(JSON.stringify(modelRequests[3])).toContain('native-shell-42')
+      expect(JSON.stringify(modelRequests[3])).not.toContain('unsupported call')
     } finally {
       await session.close()
       await closeServer(router)

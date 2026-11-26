@@ -51,7 +51,7 @@ import {
   buildMessageContent,
 } from './message-utils'
 import { formatTurnAttachments } from './references'
-import { orgTurnContext } from './org-context'
+import { orgConversationKey, prepareOrgReminder } from './org-context'
 import { opensWithSlashCommand } from './opening-context'
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { captureToolsetExecutionOptions, resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
@@ -349,7 +349,6 @@ async function sendMessageInner(request: AgentRequest, maintenanceSignal: AbortS
     // Build base SDK options
     const sdkOptions = await buildUserSessionSdkOptions({
       engineId,
-      cliToolsEntry: 'chat',
       // Same switch that loads the halo_api_ref tool: a session without the
       // manual has no way to discover the API, so the credentials would only
       // widen what an injected instruction can reach.
@@ -443,7 +442,8 @@ async function sendMessageInner(request: AgentRequest, maintenanceSignal: AbortS
     // The space's memory opens a new conversation only: a resumed one carries
     // it forward in its own transcript.
     const attachments = formatTurnAttachments({ references, task, taskInstructions: request.taskInstructions, workDir })
-    const turnMessage = canvasPrefix + orgTurnContext(message) + attachments + (imageFallback?.contextBlock ?? '') + message
+    const orgReminder = prepareOrgReminder(orgConversationKey(spaceId, conversationId), message)
+    const turnMessage = canvasPrefix + orgReminder.context + attachments + (imageFallback?.contextBlock ?? '') + message
     const memoryPreamble = spaceMemory && !sessionId && !opensWithSlashCommand(turnMessage)
       ? await buildSpaceMemoryPreamble(spaceMemory.layout, conversationId)
       : ''
@@ -462,6 +462,7 @@ async function sendMessageInner(request: AgentRequest, maintenanceSignal: AbortS
       }
       await sessionLease.send(userMessage as any, reportFailure)
     }
+    orgReminder.delivered()
 
     console.log(`[Agent][${conversationId}] Message sent to REPL (${typeof messageContent === 'string' ? messageContent.length : 'multi-modal'} chars). Consumer handles response.`)
 

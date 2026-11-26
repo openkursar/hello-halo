@@ -108,11 +108,11 @@ into a plain Node process — `npm run dev` in this repo then fails with a missi
 repair. Same rule for any future spawn of a user-visible process: the
 environment is policy, and policy lives in main.
 
-`TerminalContext.create` then passes that env to `cli-tools`
-`applyCliToolsEnv`, which appends the launcher directory of the CLI tools
-current at that moment to the end of PATH and sets `HALO_CLI_TOOLS_BIN`. A
-terminal keeps that set for its life; the user's own commands stay first on
-PATH. A failure only leaves the terminal without tools.
+`TerminalContext.create` then adds the organization session variables
+(`enterprise-identity` `applyOrgSessionEnv`), so an organization tool run from
+the terminal reaches the signed-in user's access. Installed CLI tools need
+nothing here: their skills name each launcher by absolute path, and PATH stays
+the user's own.
 
 ## 5) MCP tools (AI-facing)
 

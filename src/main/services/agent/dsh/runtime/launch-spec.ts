@@ -63,10 +63,10 @@ export interface DshLaunchOptions {
    */
   mcpServers?: Record<string, ExternalMcpServer>
   /**
-   * Launcher directory of the session's CLI tools (`HALO_CLI_TOOLS_BIN` of the
-   * assembled options). Appended to PATH like every other engine gets it.
+   * Variables the session's commands need from the host, such as organization
+   * sign-in access; every other engine finds them in its options' env.
    */
-  cliToolsBinDir?: string
+  sessionEnv?: Record<string, string>
 }
 
 /**
@@ -141,10 +141,7 @@ export function buildDshLaunchSpec(options: DshLaunchOptions): DshRuntimeLaunchS
     )
   }
 
-  if (options.cliToolsBinDir) {
-    env.PATH = env.PATH ? `${env.PATH}${path.delimiter}${options.cliToolsBinDir}` : options.cliToolsBinDir
-    env.HALO_CLI_TOOLS_BIN = options.cliToolsBinDir
-  }
+  if (options.sessionEnv) Object.assign(env, options.sessionEnv)
 
   console.log(
     `[Dsh][runtime] launch spec entry=${runtime.entryPath} config=${config.path} ` +

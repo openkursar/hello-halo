@@ -85,8 +85,8 @@ function requireManager(): AppManagerService {
   return managerInstance
 }
 
-export async function reconcileManagedToolSkill(input: ManagedToolSkillInput): Promise<void> {
-  await requireManager().reconcileManagedToolSkill(input)
+export async function reconcileManagedToolSkill(input: ManagedToolSkillInput): Promise<string | null> {
+  return requireManager().reconcileManagedToolSkill(input)
 }
 
 export async function removeManagedToolSkill(toolId: string): Promise<void> {

@@ -46,7 +46,7 @@ import {
 import { emitAgentEvent } from '../../services/agent/events'
 import { addSdkHooks } from '../../services/agent/sdk-config'
 import { applyReasoningEffort, applyEffectiveReasoning, pickReasoningEffort } from '../../services/agent/reasoning-effort'
-import { captureDelegatedModelContext, orgTurnContext } from '../../services/agent'
+import { captureDelegatedModelContext, orgConversationKey, prepareOrgReminder } from '../../services/agent'
 import { validateModelSelectionRestore } from '@hello-halo/agent-sdk/collaboration'
 import { prepareSubagentModelMetadata } from '../../services/agent'
 import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
@@ -1155,9 +1155,6 @@ async function runAppChatTurn(
   // ── 5. Build SDK options ─────────────────────────────
   const sdkOptions = await buildUserSessionSdkOptions({
     engineId,
-    cliToolsEntry: teamContext && !teamContext.personalChat ? 'team'
-      : classifySessionSource(parseAppChatKey(conversationId)?.channel ?? NATIVE_SESSION_CHANNEL) === 'im' ? 'im'
-      : 'app-chat',
     selfApiAccess: usesHaloApi,
     credentials: resolvedCreds,
     workDir,
@@ -1658,8 +1655,11 @@ async function runAppChatTurn(
     // goes without it: the engine routes a command only while it opens the text.
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
+    const orgReminder = permCtx?.isOwner !== false && !origin
+      ? prepareOrgReminder(orgConversationKey(spaceId, conversationId), message)
+      : { context: '', delivered() {} }
     const turnText = formatCanvasContext(request.canvasContext)
-      + (permCtx?.isOwner !== false && !origin ? orgTurnContext(message) : '')
+      + orgReminder.context
       + formatTurnAttachments({ references: request.references, workDir })
       + (imageFallback?.contextBlock ?? '') + (restrictionNotice ? `${restrictionNotice}\n\n` : '')
       + (workspaceNotice.context && !opensWithSlashCommand(message) ? `${workspaceNotice.context}\n\n` : '') + message
@@ -1724,6 +1724,7 @@ async function runAppChatTurn(
         await sessionLease.send({ type: 'user', message: { role: 'user', content: messageContent } } as any, error => reportPreInitFailure(error as Error))
       }
       dispatchAccepted = true
+      orgReminder.delivered()
       if (!opensWithSlashCommand(message)) workspaceNotice.delivered()
     } catch (sendErr) {
       // Nothing reached CC, so no turn will arrive to settle this round.

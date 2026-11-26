@@ -13,6 +13,10 @@ vi.mock('../../../../../src/main/openai-compat-router', async importOriginal => 
   const actual = await importOriginal<typeof import('../../../../../src/main/openai-compat-router')>()
   return { ...actual, ensureOpenAICompatRouter: (options: unknown) => ensureOpenAICompatRouter(options) }
 })
+const org = vi.hoisted(() => ({ env: {} as Record<string, string> }))
+vi.mock('../../../../../src/main/services/enterprise-identity', () => ({
+  applyOrgSessionEnv: (env: Record<string, string>) => { Object.assign(env, org.env); return '' },
+}))
 vi.mock('../../../../../src/main/services/agent/dsh/runtime', () => ({
   buildDshLaunchSpec: (options: Record<string, any>) => buildDshLaunchSpec(options),
 }))
@@ -239,14 +243,17 @@ describe('resolveDshOptions selected model limits', () => {
   })
 })
 
-describe('resolveDshOptions CLI tools', () => {
-  it('hands the session\'s CLI tool directory to the launch spec', async () => {
-    await resolveDshOptions({ cwd: '/work', apiCredentials: credentials(), env: { HALO_CLI_TOOLS_BIN: '/cli/views/v/bin' } })
-    expect(buildDshLaunchSpec.mock.calls[0][0].cliToolsBinDir).toBe('/cli/views/v/bin')
+describe('resolveDshOptions organization access', () => {
+  it('hands organization session variables to the launch spec, whatever the options env says', async () => {
+    org.env = { EC_BROKER_COMMAND: '["broker"]' }
+    await resolveDshOptions({ cwd: '/work', apiCredentials: credentials(), env: { HALO_CLI_TOOLS_BIN: '/stale' } })
+    expect(buildDshLaunchSpec.mock.calls[0][0].sessionEnv).toEqual({ EC_BROKER_COMMAND: '["broker"]' })
+    expect(buildDshLaunchSpec.mock.calls[0][0]).not.toHaveProperty('cliToolsBinDir')
   })
 
-  it('passes none without tools', async () => {
+  it('passes none without organization access', async () => {
+    org.env = {}
     await resolveDshOptions({ cwd: '/work', apiCredentials: credentials(), env: {} })
-    expect(buildDshLaunchSpec.mock.calls[0][0]).not.toHaveProperty('cliToolsBinDir')
+    expect(buildDshLaunchSpec.mock.calls[0][0]).not.toHaveProperty('sessionEnv')
   })
 })

@@ -1,14 +1,16 @@
 /**
- * The app's one CLI tool store, and how sessions and terminals get its tools.
+ * The app's one CLI tool store. Each usable tool has launchers at a fixed
+ * path and a skill that names it; sessions and terminals get nothing added to
+ * their environment.
  *
  * Bootstrap calls `initCliTools` with paths only; nothing touches the disk
- * until a session asks for its environment or the idle task prepares the
- * store. Every failure logs and degrades to "no tools": a broken tool store
- * must never stop a conversation or a terminal from starting.
+ * until the idle task prepares the store or a management call needs it. Every
+ * failure logs and leaves the tools as they were: a broken tool store never
+ * stops a conversation or a terminal from starting.
  */
 
 import { existsSync, promises as fsp } from 'fs'
-import { delimiter, join } from 'path'
+import { join } from 'path'
 import { Emitter } from '../../platform/event'
 import {
   CliToolStore,
@@ -17,7 +19,6 @@ import {
   compareVersions,
   toolBlock,
   type CatalogToolStatus,
-  type CliExecutionEntry,
   type CliToolSkillSummary,
   type CliToolState,
   type ImportResult,
@@ -45,9 +46,6 @@ import type {
   CliToolVersionView,
 } from '../../../shared/types/cli-tools'
 
-/** Launcher directory of the tool set an environment was given; also tells the agent where TOOLS.md is. */
-export const CLI_TOOLS_BIN_ENV = 'HALO_CLI_TOOLS_BIN'
-
 export interface CliToolsHostOptions {
   /** Store root, e.g. `<userData>/cli`. */
   root: string
@@ -58,11 +56,14 @@ export interface CliToolsHostOptions {
   /** Tools whose process receives a host-held credential; supplied by the caller, never read here. */
   credentialBindings?: CliCredentialBinding[]
   supportFiles?: CliSupportFilesConfig
-  /** Reconcile static skills before a session with a CLI pin discovers them; must not acquire a pin. */
-  prepareSessionSkills?(): Promise<void> | undefined
 }
 
-type Env = Record<string, string | number | undefined>
+/** A usable tool an organization supplied (bundled or delivered) whose skill is installed. */
+export interface OrganizationTool {
+  toolId: string
+  name: string
+  skillName: string
+}
 
 let options: CliToolsHostOptions | null = null
 let store: CliToolStore | null = null
@@ -70,6 +71,7 @@ let prepared: Promise<void> | null = null
 const currentToolsChanged = new Emitter<string>()
 let currentToolBatchDepth = 0
 let batchedRevision: string | undefined
+let organizationTools: readonly OrganizationTool[] = []
 
 /** Fires after a committed change to the current usable tool set. */
 export const onDidChangeCurrentTools = currentToolsChanged.event
@@ -95,41 +97,45 @@ export function getPreparedCurrentToolsRevision(): string | undefined {
 export function readCurrentToolSkills() {
   return getStore()?.readCurrentToolSkills()
 }
-/** Owner of this process's pins; a later process releases them. */
-const holder = `p${process.pid}-${Date.now().toString(36)}`
-const SKILL_READY_TIMEOUT_MS = 10_000
-
-async function waitForSessionSkills(ready: Promise<void>): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    await Promise.race([ready, new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('Static skill preparation timed out')), SKILL_READY_TIMEOUT_MS)
-      timer.unref()
-    })])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
 
 /**
- * How long a session pin must stay unheld before it is released. It covers an
- * environment assembled for a session that has not started (and so taken its
- * hold) yet; a running session is covered by its hold (`holdCliTools`).
+ * Record in a tool's installation where its skill went, or that it has none
+ * (the skill could not be installed or was given up to the user). Also
+ * refreshes the organization tools the agent is told about.
  */
-export const CLI_TOOLS_IDLE_GRACE_MS = 10 * 60_000
+export async function recordCliToolSkill(toolId: string, installId: string, skill: { name: string; path: string } | null): Promise<void> {
+  const cliStore = getStore()
+  if (!cliStore) return
+  try {
+    await cliStore.recordSkillLocation(toolId, installId, skill)
+  } catch (err) {
+    console.error('[CliTools] Skill location not recorded', { tool: toolId, message: err instanceof Error ? err.message : String(err) })
+  }
+  await refreshOrganizationTools()
+}
 
-/** Pins this process took for sessions, by execution id; `idleSince` is when a sweep first saw it unused. */
-const sessionPins = new Map<string, { binDir: string; idleSince: number | null }>()
-/** Launcher directories of running sessions, with how many hold each (see `holdCliTools`). */
-const heldDirs = new Map<string, number>()
-let sweepTimer: ReturnType<typeof setTimeout> | null = null
-/** Pinning and releasing run one at a time, so a release never drops a lock a concurrent pin just reused. */
-let pinOrder: Promise<unknown> = Promise.resolve()
+/** Organization tools with an installed skill, from memory; empty until the store is prepared. */
+export function peekOrganizationTools(): readonly OrganizationTool[] {
+  return organizationTools
+}
 
-function withPinOrder<T>(task: () => Promise<T>): Promise<T> {
-  const run = pinOrder.then(task, task)
-  pinOrder = run.catch(() => undefined)
-  return run
+async function refreshOrganizationTools(): Promise<void> {
+  const cliStore = getStore()
+  if (!cliStore) return
+  try {
+    const state = await cliStore.readState()
+    const next: OrganizationTool[] = []
+    for (const [toolId, tool] of Object.entries(state.tools).sort(([a], [b]) => a.localeCompare(b))) {
+      const record = tool.current ? tool.versions[tool.current] : undefined
+      if (toolBlock(tool) !== null || !record || (record.source !== 'preset' && record.source !== 'catalog')) continue
+      const install = await cliStore.readInstallRecord(toolId)
+      if (!install?.skill || install.installId !== tool.installId) continue
+      next.push({ toolId, name: record.name ?? toolId, skillName: install.skill.name })
+    }
+    organizationTools = next
+  } catch (err) {
+    console.error('[CliTools] Organization tools could not be read', { message: err instanceof Error ? err.message : String(err) })
+  }
 }
 
 export function initCliTools(hostOptions: CliToolsHostOptions): void {
@@ -147,6 +153,7 @@ function getStore(): CliToolStore | null {
       supportFiles: options.supportFiles,
     })
     store.onDidChangeCurrentTools(revision => {
+      void refreshOrganizationTools()
       if (currentToolBatchDepth > 0) batchedRevision = revision
       else currentToolsChanged.fire(revision)
     })
@@ -155,9 +162,9 @@ function getStore(): CliToolStore | null {
 }
 
 /**
- * Clear locks left by an earlier app process, drop views nothing uses, and
- * import the packages shipped with this build. Runs once; the idle task
- * starts it and the first session waits for it.
+ * Delete versions removed while an earlier process could still run them,
+ * import the packages shipped with this build, and bring every launcher up to
+ * date. Runs once, from the idle task or the first management call.
  */
 export function prepareCliTools(): Promise<void> {
   if (!prepared) prepared = runPrepare()
@@ -168,12 +175,10 @@ async function runPrepare(): Promise<void> {
   const cliStore = getStore()
   if (!cliStore || !options) return
   try {
-    // A previous process's sessions are gone, so its pins protect nothing now.
-    await cliStore.releaseOtherHolders(holder)
-    await cliStore.pruneViews()
-    // Versions removed while an earlier process still ran them.
     await cliStore.collectPendingCleanup()
     if (options.presetDir) await importPresets(cliStore, options.presetDir, options.root)
+    await cliStore.syncLaunchers()
+    await refreshOrganizationTools()
   } catch (err) {
     console.error('[CliTools] Preparing the tool store failed; sessions continue without changes', {
       code: isCliToolError(err) ? err.code : 'UNEXPECTED',
@@ -287,7 +292,7 @@ export async function readCliToolState(): Promise<CliToolState | null> {
  * Import a package fetched from an administrator catalog and make it current.
  * The archive digest, payload integrity, id and version must all match what
  * the catalog promised; any difference leaves the installed versions as they
- * were. Executions already running keep their pinned versions.
+ * were. A command already running finishes on the version it started with.
  */
 export async function installCatalogPackage(
   archivePath: string,
@@ -309,8 +314,8 @@ export async function installCatalogPackage(
 /**
  * Apply an administrator catalog's revocation flags to the installed tools it
  * lists, whatever their source; tools the catalog does not list are left
- * alone. Revocation keeps a tool out of new executions only; running ones
- * keep their launchers. Returns the ids whose flag changed.
+ * alone. A revoked tool loses its launchers and skill; a command already
+ * running finishes. Returns the ids whose flag changed.
  */
 export async function applyCatalogRevocations(flags: Record<string, boolean>): Promise<string[]> {
   const cliStore = getStore()
@@ -397,11 +402,10 @@ export async function getCliToolsOverview(): Promise<CliToolsOverview> {
   if (!cliStore) return { available: false, tools: [], signature, pendingCleanup: 0, deliveryFailures: [] }
   await prepareCliTools()
   const state = await cliStore.readState()
-  const locks = await cliStore.listExecutionLocks()
   const skills = await cliStore.describeToolSkills(state)
   return {
     available: true,
-    tools: buildToolViews(state, locks, skills),
+    tools: buildToolViews(state, cliStore.launchedDirs(), skills),
     signature,
     pendingCleanup: state.pendingCleanup?.length ?? 0,
     deliveryFailures: deliveryFailureViews(state),
@@ -415,13 +419,16 @@ function deliveryFailureViews(state: CliToolState): CliDeliveryFailureView[] {
   })
 }
 
-/** Pure projection of state + locks; exported for tests. */
+/**
+ * Pure projection of state; exported for tests. `launched` holds the store
+ * directories this process gave launchers to: a version among them that is no
+ * longer current may still run a command, so its removal waits.
+ */
 export function buildToolViews(
   state: CliToolState,
-  locks: Array<{ tools: Array<{ id: string; version: string }> }>,
+  launched: ReadonlySet<string> = new Set(),
   skills: Record<string, CliToolSkillSummary> = {},
 ): CliToolView[] {
-  const pinned = new Set(locks.flatMap(lock => lock.tools.map(t => `${t.id}@${t.version}`)))
   return Object.entries(state.tools).map(([id, tool]): CliToolView => {
     const block = toolBlock(tool)
     const current = tool.current ? tool.versions[tool.current] : undefined
@@ -437,7 +444,7 @@ export function buildToolViews(
         ...(record.sideEffects ? { sideEffects: record.sideEffects } : {}),
         ...(record.auth ? { auth: record.auth } : {}),
         ...(record.withdrawn ? { withdrawn: true } : {}),
-        inUse: pinned.has(`${id}@${version}`),
+        inUse: tool.current !== version && !!record.dir && launched.has(record.dir),
         removable: tool.current !== version && record.source !== 'preset' && !(record.source === 'catalog' && tool.autoInstall),
         ...(record.external
           ? {
@@ -579,155 +586,4 @@ export function shouldActivatePreset(stateBefore: CliToolState, toolId: string, 
   const source = tool.versions[tool.current]?.source
   if (source === 'preset') return true
   return source === 'catalog' && tool.autoInstall === true && compareVersions(version, tool.current) > 0
-}
-
-/** PATH as a child would get it; Windows names are case-insensitive (see child-env). */
-function readEnvPath(env: Env): string | undefined {
-  const key = process.platform === 'win32'
-    ? Object.keys(env).filter(name => name.toUpperCase() === 'PATH').sort()[0]
-    : 'PATH'
-  const value = key ? env[key] : undefined
-  return typeof value === 'string' ? value : undefined
-}
-
-function writeEnvPath(env: Env, value: string): void {
-  if (process.platform === 'win32') {
-    for (const name of Object.keys(env)) if (name.toUpperCase() === 'PATH') delete env[name]
-    env.Path = value
-  } else {
-    env.PATH = value
-  }
-}
-
-/**
- * Give an environment the tool set current right now: append its launcher
- * directory to PATH and name it in `HALO_CLI_TOOLS_BIN`. Appending means a
- * launcher never shadows a command the user already has, and a name that is
- * taken is exposed as `halo-<name>`. Returns the directory, or null when no
- * tool is usable (the environment is then left without either change).
- *
- * The directory is content-addressed: a session built with it keeps those
- * exact versions, and an environment assembled after an update gets a new
- * directory.
- */
-export async function applyCliToolsEnv(
-  env: Env,
-  request: { entry: CliExecutionEntry; engine: string }
-): Promise<string | null> {
-  delete env[CLI_TOOLS_BIN_ENV]
-  const cliStore = getStore()
-  if (!cliStore) return null
-  try {
-    await prepareCliTools()
-    const basePath = readEnvPath(env)
-    const pin = await withPinOrder(async () => {
-      const taken = await cliStore.pinCurrent({ holder, entry: request.entry, engine: request.engine, basePath })
-      // Terminals keep their tools until the app exits; every other pin is released by `releaseIdleCliTools`.
-      if (taken?.binDir && request.entry !== 'terminal') {
-        sessionPins.set(taken.lock.executionId, { binDir: taken.binDir, idleSince: null })
-      }
-      return taken
-    })
-    if (!pin?.binDir) return null
-    if (request.entry !== 'terminal' && options?.prepareSessionSkills) {
-      try {
-        const ready = options.prepareSessionSkills()
-        if (ready) await waitForSessionSkills(ready)
-      } catch (error) {
-        console.warn('[CliTools] Static skills could not be prepared for this environment; keeping CLI launchers', {
-          entry: request.entry, engine: request.engine, error,
-        })
-      }
-    }
-    writeEnvPath(env, basePath ? `${basePath}${delimiter}${pin.binDir}` : pin.binDir)
-    env[CLI_TOOLS_BIN_ENV] = pin.binDir
-    return pin.binDir
-  } catch (err) {
-    console.error('[CliTools] Tools not added to this environment', {
-      entry: request.entry,
-      engine: request.engine,
-      code: isCliToolError(err) ? err.code : 'UNEXPECTED',
-      message: err instanceof Error ? err.message : String(err),
-    })
-    return null
-  }
-}
-
-/**
- * Mark a session's launcher directory (its `HALO_CLI_TOOLS_BIN`) as in use
- * until the returned function is called, which the caller does once the
- * session's processes have exited. Calling it again is harmless. When the
- * last hold on a directory ends, a sweep (`releaseIdleCliTools`) is
- * scheduled. A missing directory is a no-op.
- */
-export function holdCliTools(binDir: string | undefined): () => void {
-  if (!binDir) return () => undefined
-  heldDirs.set(binDir, (heldDirs.get(binDir) ?? 0) + 1)
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    const left = (heldDirs.get(binDir) ?? 1) - 1
-    if (left > 0) {
-      heldDirs.set(binDir, left)
-      return
-    }
-    heldDirs.delete(binDir)
-    scheduleSweep(1000)
-  }
-}
-
-function scheduleSweep(delayMs: number): void {
-  if (sweepTimer || sessionPins.size === 0) return
-  sweepTimer = setTimeout(() => {
-    sweepTimer = null
-    void releaseIdleCliTools().then(({ waiting }) => {
-      if (waiting > 0) scheduleSweep(CLI_TOOLS_IDLE_GRACE_MS)
-    })
-  }, delayMs)
-  sweepTimer.unref?.()
-}
-
-/**
- * Release the session pins no running session holds, then delete the removed
- * versions and views nothing pins any more. A pin is released only when it
- * was already unheld at an earlier sweep at least `CLI_TOOLS_IDLE_GRACE_MS`
- * ago, so an environment assembled for a session that has not started yet
- * keeps its files. Returns how many unheld pins are still waiting for their
- * grace period. Never throws.
- */
-export async function releaseIdleCliTools(
-  now: number = Date.now()
-): Promise<{ released: number; waiting: number }> {
-  const cliStore = getStore()
-  if (!cliStore || sessionPins.size === 0) return { released: 0, waiting: 0 }
-  try {
-    return await withPinOrder(async () => {
-      let released = 0
-      let waiting = 0
-      for (const [executionId, pin] of [...sessionPins]) {
-        if (heldDirs.has(pin.binDir)) {
-          pin.idleSince = null
-        } else if (pin.idleSince === null || now - pin.idleSince < CLI_TOOLS_IDLE_GRACE_MS) {
-          pin.idleSince ??= now
-          waiting += 1
-        } else {
-          await cliStore.releaseExecution(executionId)
-          sessionPins.delete(executionId)
-          released += 1
-        }
-      }
-      if (released > 0) {
-        await cliStore.collectPendingCleanup()
-        await cliStore.pruneViews()
-      }
-      return { released, waiting }
-    })
-  } catch (err) {
-    console.error('[CliTools] Releasing unused tool pins failed; they stay until the app restarts', {
-      code: isCliToolError(err) ? err.code : 'UNEXPECTED',
-      message: err instanceof Error ? err.message : String(err),
-    })
-    return { released: 0, waiting: 0 }
-  }
 }

@@ -2,11 +2,17 @@
 
 ## Purpose and boundary
 
-This service keeps command-line tools that agent executions can call, and gives
-each execution a fixed set of them. A tool is a pure-JavaScript Node program
-delivered as a `.hcli` package. It runs on the runtime that ships with the app
-(Electron as Node), so users install no Node.js and tools never use the user's
-global Node, npm or PATH.
+This service keeps command-line tools that agents can call. A tool is a
+pure-JavaScript Node program delivered as a `.hcli` package. It runs on the
+runtime that ships with the app (Electron as Node), so users install no Node.js
+and tools never use the user's global Node, npm or PATH.
+
+An installed tool is one unit, like an editor extension: its package, its
+launchers and its skill are installed, updated and removed together. The skill
+names each launcher by absolute path and carries the tool's guide, so an agent
+reads the skill and runs the command; nothing is added to a session's PATH or
+environment for it, and a user's own program of the same name is never
+shadowed or renamed.
 
 There is one store for every source. A tool may be bundled with the build
 (`preset`), delivered by an administrator catalog (`catalog`) or imported by
@@ -15,8 +21,9 @@ never trusts a source declared inside a package.
 
 The module is pure Node. `store.ts` takes the store root, runtime executable,
 runtime Node version and platform from its caller. `host.ts` is the one place
-the app wires it: bootstrap passes the paths in, and session and terminal code
-call `applyCliToolsEnv`. The module imports no Electron, agent or app code.
+the app wires it: bootstrap passes the paths in and the idle task prepares the
+store. The module imports no Electron, agent or app code; Apps installs the
+skills (`apps/skills/tool-skills.ts`, `apps/manager/managed-tool-skill.ts`).
 
 Catalog fetch, download and the catalog UI belong to the store module
 (`src/main/store/backend/cli-catalog.ts`), which calls this module's public
@@ -200,56 +207,72 @@ checks are unchanged.
 
 The first install uses the staged package as its runtime root, so it copies no
 payload. If a later product deployment changes or removes the support files,
-identical re-import or first use publishes a runtime root at
+identical re-import or the next launcher write publishes a runtime root at
 `support/<id>/<version>-<digest12>/<supportDigest>/`. It copies only the original
 package entries, using filesystem copy-on-write when available, and places the
-new files beside the real `payload/` directory. The lock captures the chosen
-root and support digest; the digest enters the view key. Neither the base nor
-any earlier root is rewritten. Removing a version reclaims its entire variant
-family under the same pending-cleanup lock rule as the base. Expected sizes and
-SHA-256 hashes come from the successful deployment snapshot, not from the
-installed directory. A failed deployment read may be retried on the next pin.
-Each new pin verifies its selected base or variant even when the view already
-exists. A changed deployment can incur one copy on first use of an existing
-tool on filesystems without copy-on-write. A damaged required set never repairs
-or replaces a pinned directory in place.
+new files beside the real `payload/` directory. The launchers name the chosen
+root, and its support digest is part of what they are written from. Neither the
+base nor any earlier root is rewritten. Removing a version reclaims its entire
+variant family under the same deferred-cleanup rule as the base. Expected sizes
+and SHA-256 hashes come from the successful deployment snapshot, not from the
+installed directory. A failed deployment read is retried on the next launcher
+write. Each launcher write verifies its selected base or variant. A changed
+deployment can incur one copy on the next start on filesystems without
+copy-on-write. A damaged required set never repairs or replaces an installed
+directory in place.
 
 Configured managed launchers run a same-process preflight before credential
-setup and the CLI entry. It checks the pinned canonical root and relative
+setup and the CLI entry. It checks the chosen canonical root and relative
 paths, rejects linked ancestors and non-regular or multiply linked files,
 checks containment and file size, and hashes each required file (up to 1 MiB).
 A failure exits nonzero with one path-free message and does not execute the CLI
-or switch programs. If a new pin detects an invalid deployment or damaged
-required files, it keeps the command name or conflict alias as a refusal
-launcher in a distinct view, marks it unavailable in `TOOLS.md`, and keeps
-unaffected commands available. Repair can restore the command for new pins.
-The ordinary PATH and its precedence do not change.
-
-Restart Halo and reopen terminals (or start new executions) to use the guarded
-launchers after updating. Older views already issued to a running execution
-are not rewritten or retroactively protected. The launch check verifies the
-files before entry; it does not sandbox a tool or lock its filesystem for the
-rest of the command.
+or switch programs. If a launcher write finds an invalid deployment or damaged
+required files, the tool's launchers become refusal launchers that print that
+message; other tools are unaffected, and a later write after repair restores
+them. The launch check verifies the files before entry; it does not sandbox a
+tool or lock its filesystem for the rest of the command.
 
 On Windows the executable junction is only for the bundled runtime executable.
 Supported entries and helpers use the real CLI store root, not that junction.
 Native Windows packaged execution still requires platform verification.
 
-## Executions: pin, launch, release
+## Launchers and installations
 
-`pinExecution` takes the current non-revoked version of every tool. It writes
-`locks/<executionId>.json` and returns a launcher directory. The caller
-appends that directory to the end of the execution's PATH, as the office
-runtime does, so a launcher never shadows a system command.
+Every usable tool (`toolBlock(tool) === null`, with commands) has a directory
+`tools/<id>/`:
 
-Calling `pinExecution` again with the same execution id returns the original
-pin. A running task therefore keeps the versions it started with, and the next
-execution uses whatever is current at that time. Activating or rolling back a
-version never changes an existing pin.
+```
+tools/<id>/bin/<command>        sh launcher (and <command>.cmd on Windows)
+tools/<id>/argv-preload.cjs     argv fix (see shims.ts)
+tools/<id>/support-<n>.cjs      required support file check, when configured
+tools/<id>/credential-<n>.cjs   credential preload, for a bound tool
+tools/<id>/install.json         the installation record
+```
 
-Launcher directories (`views/<viewKey>/bin`) are content-addressed and
-immutable, so executions with the same tool set share one. A view is built in a
-temporary directory and renamed into place.
+Paths never contain the version, so a skill keeps naming the same file across
+updates. A tool gets an installation id (`CliToolRecord.installId`, six hex
+digits) the first time it becomes usable; it survives version changes,
+disabling and revocation and is dropped with the tool, so a tool installed
+again is a new installation. `install.json` (`CliToolInstallRecord`) records
+the id, the current version and integrity, each command's launcher path, a
+`launchKey` digest of everything the launchers were written from (format,
+platform, runtime path, version, targets, support digest, credential binding,
+external fingerprint), and — once Apps reports it through
+`recordSkillLocation` — the name and file of the skill that belongs to this
+installation. The skill location is carried across launcher rewrites of the
+same installation and ignored for any other.
+
+`writeState` keeps `tools/` in line with state: when the usable set changes it
+rewrites the launchers of tools whose `launchKey` differs and removes the
+directories of tools that are no longer usable, before it fires
+`onDidChangeCurrentTools`, so no skill is published for a launcher that is not
+there yet. `syncLaunchers` does the same once per process from `prepare`,
+which catches a moved runtime, a changed support deployment or changed
+registered programs, and removes the `views/` and `locks/` directories of
+earlier builds. A directory is built beside the live one and swapped in, so a
+command started meanwhile finds either set, never half of each. A tool whose
+launchers cannot be written keeps the ones it had; the failure is logged and
+the next change retries. A missing runtime writes nothing.
 
 Launchers for the bundled runtime set `ELECTRON_RUN_AS_NODE` and clear
 `NODE_PATH` so neither user paths nor Office's packaged modules affect CLI
@@ -266,40 +289,23 @@ junction at `runtime/<hash of its folder>` in the root; a wrong link there is
 replaced, and anything else at that path is left alone and the absolute path is
 used. ASCII paths are written as before.
 
-The runtime also gets `--require <view>/argv-preload.cjs`, which only sets
+The runtime also gets `--require <tools/<id>>/argv-preload.cjs`, which only sets
 `process.defaultApp = true`. Running as Node, Electron still reports
 `process.versions.electron` but leaves `defaultApp` unset, so yargs and
 commander take the process for a packaged Electron app and pass the entry path
 to the tool as its first argument. `defaultApp` is the flag Electron sets when
 it runs a script, and with it those parsers read argv as Node does. The
 preload is CommonJS, so it also loads before `.mjs` entries, and `fork()`
-children inherit it through `execArgv`. It belongs to the view, and the view
-key includes the launcher format, so a format change builds new views.
+children inherit it through `execArgv`.
 
-When `basePath` is given and a command name already resolves there, the command
-is exposed as `halo-<name>`. The user's own tool keeps its name. The lock
-records which name was used.
-
-`releaseExecution` deletes the lock. `removeVersion` returns `IN_USE` while a
-version is current or pinned by any lock. `pruneViews` deletes views that no
-lock references. Deciding when executions end, and clearing locks left by a
-crashed process, is the caller's job.
-
-`pinCurrent` is the form the host uses. It pins the current tool set for a
-`holder` (one per app process) under the id `<holder>-<entry>-<viewKey>`, so
-every environment built for the same entry with the same tool set shares one
-lock, a changed set gets a new one, and each lock records the entry it serves.
-It returns `null` and writes nothing when no tool is usable.
-`releaseOtherHolders` deletes every lock whose holder is not the given one,
-including locks without a holder.
-
-Every view holds `TOOLS.md`: the pinned command aliases, tool IDs, versions,
-side effects, sign-in instructions and guide paths. It explains `halo-` aliases
-and warns against replaying writes whose outcome is unknown. Installation
-channels and origin preferences are not exposed to the agent. `view.json`
-records commands and is written last. Guarded and refusal views use format
-`v: 7`; ordinary views keep `v: 6`. Normal cleanup reclaims older view directories
-when their pins are released.
+Versions are not pinned per session: the next run of a command uses the
+current version, and a command already running finishes on the version it
+started with. A store directory this process gave launchers to may still be
+running a command, so removing its version defers the files to
+`pendingCleanup` (deleted at the next start); a version that never had
+launchers in this process is deleted at once, and one that cannot be deleted
+now also waits. `launchedDirs()` exposes that set; the management view shows
+such a version as in use.
 
 **Administrator guide overrides.** A catalog may replace the package guide of
 one version (`CatalogToolStatus.guides`). `applyCatalogStatus` applies it only
@@ -308,14 +314,11 @@ the catalog's, after re-checking the sha256 and the 64 KiB limit. The text is
 stored once per content as `guides/<sha256>.md`; the version record keeps only
 `guideOverride: {revision, sha256}`, never the text. `override: null` clears
 it and the package guide applies again; a version the catalog omits (for
-example a malformed or unsigned override) is left as it is. The pinned lock
-records the override, the view key includes its sha256 only when one is
-pinned (views without one keep their keys), and the view copies the text to
-`views/<viewKey>/guides/<id>.md`, which TOOLS.md names instead of the package
-guide. A running execution therefore keeps the text it started with; the next
-one gets the new revision. Guide files no record or lock refers to are
-deleted after each catalog apply. A missing or altered file is logged and that
-view falls back to the package guide.
+example a malformed or unsigned override) is left as it is. The override's
+sha256 is part of the tool's skill fingerprint, so a new revision rewrites the
+skill. Guide files no record refers to are deleted after each catalog apply. A
+missing or altered file is logged and the skill falls back to the package
+guide.
 
 A catalog may also carry the tool's skill on the tool entry
 (`CatalogToolStatus.skill`). It is for installed `preset` versions, which are
@@ -326,12 +329,11 @@ covers and that holds no version guide from earlier, stored the same way with
 `guideOverride.tool: true`. `skill: null` (the catalog sets none) clears only
 overrides marked `tool`; an absent value (a malformed or refused skill) leaves
 them as they are. The order is therefore version guide, then tool skill, then
-the package guide. A tool the catalog does not list is not touched. Locks pin
-only `{revision, sha256}`.
+the package guide. A tool the catalog does not list is not touched.
 
-Revocation excludes a tool from new pins. It is not credential revocation: a
-tool's authorization is checked when the tool uses its identity, which a
-version pin never freezes.
+Revocation takes a tool's launchers and skill away; a command already running
+finishes. It is not credential revocation: a tool's authorization is checked
+when the tool uses its identity.
 
 ### Credential bindings
 
@@ -343,41 +345,61 @@ one. Invalid bindings (reserved or malformed variable names such as `PATH`,
 `NODE_OPTIONS`, `DYLD_*`, a relative file, a NUL in a value) are ignored and
 logged by field only.
 
-For a bound command the view holds `credential-<n>.cjs`, loaded as a second
-`--require` after the argv preload. It removes an inherited value of the
+For a bound command the tool directory holds `credential-<n>.cjs`, loaded as a
+second `--require` after the argv preload. It removes an inherited value of the
 variable, sets the binding's fixed variables, and sets the variable from the
 credential file only when the file holds an unexpired token. The binding is
-part of the view key, so bound and unbound tool sets get different views, and a
-tool set without a binding keeps the view it had. TOOLS.md marks a bound tool's
-sign-in as "enterprise sign-in (provided by Halo)" and tells the AI to ask the
-user to sign in under Settings rather than handle a credential.
+part of the `launchKey`, so only the bound tool's launchers change when a
+binding appears. How to sign in reaches the agent through the organization
+status reminder (`services/agent/org-context.ts`), not the skill.
 
 ### Tool skills (`skills.ts`)
 
-CLI Tools describes each currently usable tool through `readCurrentToolSkills`.
-The name is stable from the tool ID. The summary chooses the override guide's
-`description`, package guide's `description`, manifest description, then a
-generated fallback, normalized to one line of at most 300 characters. Usage
-text stays in the pinned guide. The static skill instructs the agent to find
-its tool ID in `$HALO_CLI_TOOLS_BIN/../TOOLS.md` and use only the listed launcher;
-if the pin or row is absent, it must not fall back to a bare command.
+`readCurrentToolSkills` describes the skill of each usable tool with an
+installation id. Its name is `<command>-<tool id>-<install id>`, folded to
+lowercase letters, digits and dashes within 64 characters (a tool id cut to fit
+gets a digest), so two Halo installations sharing the personal skill folder
+never write or remove each other's skill. Its description says which command
+it belongs to, followed by the override guide's `description`, the package
+guide's, the manifest description, or a generated line, as one line of at most
+300 characters. Its body is a Halo header — a comment with the tool id and
+install id, then each command and its absolute launcher path (plus the `.cmd`
+path on Windows) — followed by the effective guide without its frontmatter
+(version guide, tool skill, then package guide; at most 64 KiB), or a pointer
+to `--help` when there is none. The skill names no Halo variable, index or
+session concept: reading it is enough to run the tool.
 
-`onDidChangeCurrentTools` fires after committing a change to the usable set;
-changes during catalog delivery are batched. The current-set revision is stored
-atomically with tool state and exposed after preparation. Apps uses the revision
-and per-tool input fingerprints to sync only changed descriptions through the
-ordinary skill lifecycle. `describeToolSkills(state)` and `previewPackage`
-provide management summaries, not session catalog entries.
+Per-tool fingerprints cover the installation id, integrity, override sha256,
+names, description and commands, so Apps reads guides only for tools whose
+skill changed. `onDidChangeCurrentTools` fires after committing a change to
+the usable set (launchers already written); changes during catalog delivery are
+batched. `describeToolSkills(state)` and `previewPackage` provide management
+summaries, not skill files.
 
 ## Host wiring (`host.ts`)
 
-- **Init.** Bootstrap calls `initCliTools` after the SDK runtime is set up, with
-  root `<userData>/cli`, the headless Electron runtime and the bundled preset
-  directory (`<resources>/cli-preset`, or `resources/cli-preset` in
-  development). It only stores the paths.
-- **Prepare, once per process.** The first of the idle task
-  `prepare-cli-tools` or the first environment request runs it: release the
-  locks of earlier processes, prune views, then import bundled packages.
+- **Init.** Bootstrap calls `initCliTools` with root `<userData>/cli`, the
+  headless Electron runtime and the bundled preset directory
+  (`<resources>/cli-preset`, or `resources/cli-preset` in development). It only
+  stores the paths.
+- **Prepare, once per process.** The idle task `prepare-cli-tools` (or the
+  first management call) runs it: delete directories left in
+  `pendingCleanup`, import bundled packages, then `syncLaunchers`. Sessions
+  never wait for it; on a first start a session opened in the first moments
+  may not list a bundled tool's skill yet.
+- **Skills.** `bootstrap/cli-tool-skills.ts` subscribes Apps to
+  `onDidChangeCurrentTools`: each changed tool's skill is reconciled through
+  the App Manager, and the file Halo now manages (or none) is recorded in the
+  installation with `recordCliToolSkill`. A tool that stops being usable has
+  its skill removed. The idle task never waits for the App Manager.
+- **Organization tools.** `peekOrganizationTools()` returns, from memory, the
+  usable tools whose current version came from the build or an administrator
+  catalog and whose installation records an installed skill: id, display name
+  and skill name. It is refreshed after every change and skill record, for the
+  organization status reminder.
+- **Sessions and terminals** get nothing from this module. Organization access
+  for commands (for example a sign-in broker command) comes from
+  `enterprise-identity` (`applyOrgSessionEnv`).
 - **Bundled tools.** Every `*.hcli` in the preset directory is imported with
   source `preset`. It becomes current only when the tool has no current version
   or the current one is itself a preset, so a version the user or a catalog
@@ -397,36 +419,6 @@ provide management summaries, not session catalog entries.
   guide, tool skill and package guide apply in that order. Bundled text never
   replaces a live catalog decision, including an explicit reset. The snapshot
   isn't a whole catalog apply; it neither fetches nor updates live status.
-- **Environments.** `applyCliToolsEnv(env, { entry, engine })` removes any
-  inherited `HALO_CLI_TOOLS_BIN`, pins the current set, appends the launcher
-  directory to the end of the env's PATH (`Path` on Windows, matched
-  case-insensitively) and sets `HALO_CLI_TOOLS_BIN`. Any failure is logged and
-  the env is left without tools; a session never fails because of a tool.
-  Every pin except a terminal's is remembered as a session pin.
-- **Callers.** `buildUserSessionSdkOptions` applies it for every user session,
-  whatever the engine, with the entry its caller names (`chat`, `app-chat`,
-  `im`, `team`, `automation`; `other` when none is named); internal tasks get
-  no tools. The DSH launch spec copies the directory into its own child env.
-  The AI terminal applies it with entry `terminal` when a terminal opens.
-- **Version timing.** A session or terminal keeps the directory it was built
-  with. A new tool set changes the directory, which changes the credentials
-  fingerprint, so the next request rebuilds the session with the new set while
-  a running turn finishes on the old one.
-- **Releasing session pins.** `holdCliTools(binDir)` marks a session's
-  launcher directory as in use and returns an idempotent release; holds are
-  counted per directory. The agent runtime (`resolved-sdk`) takes one for
-  every engine session and query, resident or transient, and releases it once
-  the session's processes have exited. When the last hold on a directory
-  ends, an unref'd sweep `releaseIdleCliTools(now?)` runs shortly after. A
-  session pin no hold covers is released only once it was already unheld at
-  an earlier sweep at least `CLI_TOOLS_IDLE_GRACE_MS` (10 minutes) ago, which
-  covers an environment assembled for a session that has not started yet;
-  being held again restarts the wait, and the sweep repeats after the grace
-  period while pins are waiting. After a release it deletes removed versions
-  and views nothing pins. It returns `{ released, waiting }` and never throws.
-  Pinning and releasing are serialized, so a release never drops a lock a
-  concurrent environment just reused. Terminal pins, and any pin left when the
-  process exits, are released at the next start.
 - **Catalog packages.** `installCatalogPackage(archive, expected)` imports a
   package the caller downloaded from an administrator catalog with source
   `catalog` and makes it current. The archive sha256, payload integrity, id
@@ -468,11 +460,11 @@ for 10 minutes. `preview` and `register` take that id.
 - User packages carry no signature. The dialog says so.
 
 **Current, disable, delete.**
-- `setCliToolCurrent` uses the existing `activateVersion`. The change applies
-  to new sessions only, through the view fingerprint (see Version timing).
+- `setCliToolCurrent` uses the existing `activateVersion`. The launchers and
+  skill follow at once; the next run of the command uses that version.
 - `disabled` is the user's switch. `revoked` is the catalog's and is never
-  touched by the user's action, and vice versa. Either one keeps the tool out
-  of new pins.
+  touched by the user's action, and vice versa. Either one takes the tool's
+  launchers and skill away.
 - `removeVersion` refuses the current version and preset versions
   (`PRESET_PROTECTED`). A preset can only be disabled, because the next launch
   would reinstall it anyway. `removeTool` refuses a tool that holds a preset
@@ -480,13 +472,13 @@ for 10 minutes. `preview` and `register` take that id.
   tool itself, are refused the same way (`ADMIN_MANAGED`): the next catalog
   read would install them again. Disabling still works; a disabled delivered
   tool keeps receiving updates.
-- **Reference-safe deletion.** The record is removed first. A store directory
-  still named by a live execution lock or a view is written to
-  `state.pendingCleanup` instead of being deleted, and the call returns
-  `{ deferred }`. `prepare` runs `collectPendingCleanup` at the next start,
-  after the locks of earlier processes are released. A re-import of the same
-  directory takes it out of the list. An empty list is removed from the state,
-  so a state that never deleted anything is byte-identical to before.
+- **Deferred deletion.** The record is removed first, which also removes the
+  launchers. A store directory this process gave launchers to, or one that
+  cannot be deleted now, is written to `state.pendingCleanup` instead of being
+  deleted, and the call returns `{ deferred }`. `prepare` runs
+  `collectPendingCleanup` at the next start. A re-import of the same directory
+  takes it out of the list. An empty list is removed from the state, so a
+  state that never deleted anything is byte-identical to before.
 
 **Registered existing programs (F04).**
 - A program is stored as a version named `external` with `external: { path,
@@ -498,22 +490,21 @@ for 10 minutes. `preview` and `register` take that id.
   like packaged tools). Otherwise it is `null` and the file must be executable;
   the launcher `exec`s it directly. The command name follows the manifest rules
   and may not start with `halo-`. The path must be absolute and a regular file.
-- Every new pin checks the fingerprint first (`checkExternals`). Size and mtime
-  are compared, and the file is re-hashed only when they differ. A touched but
-  identical file stays usable. A changed or missing file is marked `changed:
-  modified|missing` and is kept out of new pins until `reconfirmExternal`
-  records the new fingerprint. The fingerprint is part of the view key, so a
-  re-confirmed program gets a new launcher set.
-- TOOLS.md marks the command "existing program, not managed by Halo", and the
-  UI shows the same warning.
+- `syncLaunchers` checks the fingerprint once per process (`checkExternals`).
+  Size and mtime are compared, and the file is re-hashed only when they differ.
+  A touched but identical file stays usable. A changed or missing file is
+  marked `changed: modified|missing` and loses its launcher and skill until
+  `reconfirmExternal` records the new fingerprint, which is part of the
+  `launchKey`.
+- The UI marks the command "existing program, not managed by Halo".
 
 **Catalog status.** `applyCatalogStatus` replaces `applyCatalogRevocations`
 for full catalog reads (the old call still exists for revocation-only data).
 For each tool with a catalog version installed:
 - `revoked` is as before.
 - `delisted` is set when the catalog no longer lists the tool, or lists it
-  with no version and no revocation. It is excluded from new pins. Tools that
-  never came from the catalog are never delisted.
+  with no version and no revocation. It loses its launchers and skill. Tools
+  that never came from the catalog are never delisted.
 - Each catalog version that is no longer listed gets `withdrawn`. This is
   advice only: it does not disable the version, and the UI suggests updating.
 - `catalogUpdate` holds the newest listed version that is higher than every
@@ -567,11 +558,12 @@ has a shared vector (`TestSkillMessageAndVector`).
 
 **State compatibility.** All new fields are optional, and `schema` stays 1.
 An older build reads the state, ignores `disabled`, `delisted`, `withdrawn`,
-`catalogUpdate`, `guideOverride`, `pendingCleanup`, `autoInstall` and
-`deliveryFailures`, and would treat an `external` version as
-a broken store version: it fails that tool's pin, not the session. A
-downgrade therefore loses disables, and a registered program stops working
-until the newer build is back.
+`catalogUpdate`, `guideOverride`, `pendingCleanup`, `autoInstall`,
+`deliveryFailures` and `installId`, and would treat an `external` version as
+a broken store version: it fails that tool, not the session. A downgrade
+therefore loses disables, a registered program stops working until the newer
+build is back, and the older build's own session views come back alongside
+`tools/`.
 
 **UI entry point.** Capability library (`AppsPage` → Library) gets a third
 segment, "Command-line tools", next to Skills and MCP connections. Tools are
@@ -586,7 +578,7 @@ source, plus their catalog status and updates.
 `RuntimeId`, one selected installation per runtime, discovery and probing of
 executables the user installed, and global engine activation. A CLI tool needs
 none of that and needs what it lacks: any number of tools from one package
-contract, several installed versions, and per-execution pins. Registering each
+contract, several installed versions, and a skill per tool. Registering each
 tool as a runtime provider would add per-tool code to a shared module, so this
 service does not depend on it.
 
@@ -600,20 +592,19 @@ other identity-bound store calls) and hands this service a local file.
 
 ## Cost
 
-Nothing runs on the startup path. Bootstrap only stores paths; the work runs
-once in an idle task or on the first session that asks. There is no watcher or
-scan. fflate is loaded only when an archive is extracted.
+Nothing runs on the startup path or when a session starts. Bootstrap only
+stores paths; the work runs once in an idle task. There is no watcher or scan.
+fflate is loaded only when an archive is extracted.
 
-- **Prepare:** reads the lock directory, the views and the preset directory
-  listing. Bundled packages are imported only when the directory changed.
-- **Import:** hashing is proportional to the package (tens
-  of MB for the tested tools), and extraction is synchronous inside fflate,
-  bounded by the limits above.
-- **Pinning:** once per session build or terminal open. Reads `state.json`
-  and one lock file, checks bounded PATH
-  entries (at most 256) for each command, and writes launchers only when a new
-  tool set appears. A new view also reads each tool's guide head (at most
-  72 KiB) for its skill.
+- **Prepare:** reads `state.json`, the preset directory listing and each usable
+  tool's `install.json`. Bundled packages are imported only when the directory
+  changed; launchers are rewritten only when their `launchKey` changed.
+- **Import:** hashing is proportional to the package (tens of MB for the
+  tested tools), and extraction is synchronous inside fflate, bounded by the
+  limits above.
+- **A change to the usable set:** one `install.json` read per usable tool and
+  a launcher write for each changed tool; Apps then reads the guide (at most
+  64 KiB) of each tool whose skill changed.
 - **Management view:** opening it reads, per tool, at most one administrator
   text and one guide head to show the current skill.
 - **Verification:** `verifyVersion` re-hashes a version on request only.
@@ -628,16 +619,16 @@ scan. fflate is loaded only when an archive is extracted.
   that way sees its script path as an argument.
 - On Ctrl+C, cmd.exe may ask "Terminate batch job".
 - Paths containing `"` or line breaks are refused for launchers.
-- A `.cmd` launcher that uses `%~dp0` can resolve wrongly when cmd.exe finds it
-  through PATH and the command name is typed in quotes.
 - A registered program in a non-ASCII folder outside the launcher root keeps
   its absolute path in the `.cmd` launcher and may not start from cmd.exe.
+- On Windows a launcher directory in use by a running `.cmd` may not be
+  replaceable at once; the tool keeps its earlier launchers until the next
+  change or start.
 - Windows behavior has unit-test coverage only, until it is verified on a real
   machine.
-- A removed version used by a closed session is deleted one to two grace
-  periods after the session closed, not at once. Terminal pins last until the
-  app restarts.
-- An environment whose session starts more than `CLI_TOOLS_IDLE_GRACE_MS`
-  after it was assembled may find its tool set already released; that session
-  runs without tools, it does not fail.
-- Lock `entry` is diagnostic only; it never changes which tools a session gets.
+- Several Halo installations on one computer share the personal skill folder:
+  each sees the others' tool skills, which name launchers of the installation
+  that wrote them. Run from another installation, such a tool lacks that
+  installation's organization access.
+- A session that started before a tool was installed lists its skill only once
+  the session is rebuilt, like any other new skill.

@@ -1,16 +1,14 @@
 import { execFileSync, spawnSync } from 'child_process'
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'fs'
-import { delimiter, dirname, join } from 'path'
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'fs'
+import { dirname, join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CliToolStore, type CliSupportFilesConfig, type PinnedExecution } from '../../../../src/main/services/cli-tools'
+import { CliToolStore, type CliSupportFilesConfig } from '../../../../src/main/services/cli-tools'
 import { placeSupportFiles, SUPPORT_FAILURE } from '../../../../src/main/services/cli-tools/support-files'
 import { makeTempDir, removeTree, writePackage } from './helpers'
 
 const ID = 'com.example.tool'
 const VERSION = '1.0.0'
 const TARGET = 'helpers/scripts/loader.cjs'
-const pin = { holder: 'process', entry: 'chat', engine: 'test' } as const
-const entry = { executionId: 'old', entry: 'chat', engine: 'test' } as const
 
 let temp: string
 let root: string
@@ -40,24 +38,32 @@ function versionRoot(digest: string): string {
   return join(root, 'store', ID, `${VERSION}-${Buffer.from(digest.slice(7), 'base64').toString('hex').slice(0, 12)}`)
 }
 
-function run(pin: PinnedExecution): { entry: string; helper: string; value: string | null } {
-  const bin = pin.binDir!
+function binDir(id = ID): string {
+  return join(root, 'tools', id, 'bin')
+}
+
+async function launchKey(cli: CliToolStore): Promise<string | undefined> {
+  return (await cli.readInstallRecord(ID))?.launchKey
+}
+
+function run(): { entry: string; helper: string; value: string | null } {
+  const bin = binDir()
   const output = process.platform === 'win32'
     ? execFileSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/c', join(bin, 'tool.cmd')], { encoding: 'utf8' })
     : execFileSync(join(bin, 'tool'), { encoding: 'utf8' })
   return JSON.parse(output)
 }
 
-function invoke(pinned: PinnedExecution, command = 'tool') {
-  const launcher = join(pinned.binDir!, command)
+function invoke(command = 'tool', id = ID) {
+  const launcher = join(binDir(id), command)
   const options = { encoding: 'utf8' as const, env: { ...process.env, MARKER_FILE: join(temp, 'ran') } }
   return process.platform === 'win32'
     ? spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/c', `${launcher}.cmd`], options)
     : spawnSync(launcher, [], options)
 }
 
-function expectRefusal(pinned: PinnedExecution, command = 'tool'): void {
-  const output = invoke(pinned, command)
+function expectRefusal(): void {
+  const output = invoke()
   expect(output.status).toBe(1)
   expect(output.stderr.trim()).toBe(`SUPPORT_FILES_INVALID: ${SUPPORT_FAILURE}`)
   expect(output.stdout).toBe('')
@@ -90,10 +96,8 @@ describe('managed CLI support files', () => {
     expect(lstatSync(helper).isFile()).toBe(true)
     if (process.platform !== 'win32') expect(lstatSync(helper).mode & 0o222).toBe(0)
     expect(await cli.verifyVersion(ID, VERSION)).toBe(true)
-    const pinned = (await cli.pinCurrent(pin))!
-    expect(pinned.lock.tools[0].supportDigest).toMatch(/^[0-9a-f]{64}$/)
-    expect(pinned.lock.tools[0].supportVariant).toBeUndefined()
-    expect(run(pinned)).toEqual({ entry: join(base, 'payload/vendor/sdk/tool.cjs'), helper, value: 'original' })
+    expect(existsSync(join(root, 'support'))).toBe(false)
+    expect(run()).toEqual({ entry: join(base, 'payload/vendor/sdk/tool.cjs'), helper, value: 'original' })
   })
 
   it('never reads support config or writes helper files for registered external programs', async () => {
@@ -101,9 +105,8 @@ describe('managed CLI support files', () => {
     const program = join(temp, 'external.cjs')
     writeFileSync(program, 'console.log("external")')
     const external = await cli.registerExternal({ path: program, name: 'External', command: 'external', interpreter: 'halo-node' })
-    const pinned = (await cli.pinCurrent(pin))!
-    expect(pinned.lock.tools).toEqual([expect.objectContaining({ id: external.id })])
-    expect(pinned.lock.tools[0].supportDigest).toBeUndefined()
+    expect(invoke('external', external.id).stdout.trim()).toBe('external')
+    expect(readdirSync(join(root, 'tools', external.id)).filter(name => name.startsWith('support-'))).toEqual([])
     expect(existsSync(join(temp, TARGET))).toBe(false)
     expect(existsSync(join(root, 'support'))).toBe(false)
     expect(log.error).not.toHaveBeenCalled()
@@ -181,10 +184,10 @@ describe('managed CLI support files', () => {
       if (change === 'symlink' && process.platform === 'win32') return
       const cli = store(configured())
       const result = await cli.importPackage(makeTool(), { source: 'catalog' })
-      const pinned = (await cli.pinCurrent(pin))!
+      const healthy = await launchKey(cli)
       const helper = join(versionRoot(result.integrity), TARGET)
       const original = readFileSync(helper)
-      expect(invoke(pinned).status).toBe(0)
+      expect(invoke().status).toBe(0)
       expect(readFileSync(join(temp, 'ran'), 'utf8')).toBe('entry ran')
       unlinkSync(join(temp, 'ran'))
       if (change === 'linked ancestor' || change === 'linked root') {
@@ -209,122 +212,100 @@ describe('managed CLI support files', () => {
           }
         }
       }
-      expectRefusal(pinned)
-      const refused = (await cli.pinCurrent(pin))!
-      expect(refused.lock.viewKey).not.toBe(pinned.lock.viewKey)
-      expectRefusal(refused)
+      expectRefusal()
+      await cli.syncLaunchers()
+      expect(await launchKey(cli)).not.toBe(healthy)
+      expectRefusal()
     },
   )
 
-  it('refuses an incomplete variant even after a previous pin cached its view', async () => {
+  it('refuses an incomplete variant, then runs again once it is repaired', async () => {
     const base = store()
     await base.importPackage(makeTool(), { source: 'catalog' })
     const cli = store(configured())
-    const healthy = (await cli.pinCurrent(pin))!
-    expect(healthy.lock.tools[0].supportVariant).toBe(true)
-    const helper = run(healthy).helper
+    await cli.syncLaunchers()
+    const healthy = await launchKey(cli)
+    const helper = run().helper
+    expect(helper).toContain(join(root, 'support'))
     chmodSync(dirname(helper), 0o755)
     chmodSync(helper, 0o644)
     unlinkSync(helper)
-    expectRefusal(healthy)
-    const refused = (await cli.pinCurrent(pin))!
-    expect(refused.lock.viewKey).not.toBe(healthy.lock.viewKey)
-    expectRefusal(refused)
+    expectRefusal()
+    await cli.syncLaunchers()
+    expect(await launchKey(cli)).not.toBe(healthy)
+    expectRefusal()
     writeFileSync(helper, 'module.exports = "original"')
-    expect((await cli.pinCurrent(pin))?.lock.viewKey).toBe(healthy.lock.viewKey)
-    expect(run(healthy).value).toBe('original')
+    await cli.syncLaunchers()
+    expect(await launchKey(cli)).toBe(healthy)
+    expect(run().value).toBe('original')
   })
 
-  it('refuses a bad deployment without masking a system command or blocking a registered program', async () => {
+  it('refuses a bad deployment for managed tools only, and recovers once it is fixed', async () => {
     const legacy = store(configured())
     const result = await legacy.importPackage(makeTool(), { source: 'catalog' })
     const program = join(temp, 'external.cjs')
     writeFileSync(program, 'console.log("external marker")')
-    await legacy.registerExternal({ path: program, name: 'External', command: 'external', interpreter: 'halo-node' })
-    const system = join(temp, 'system')
-    mkdirSync(system)
-    const systemPath = join(system, process.platform === 'win32' ? 'tool.cmd' : 'tool')
-    writeFileSync(systemPath, process.platform === 'win32' ? '@echo system marker\r\n' : '#!/bin/sh\necho system marker\n', { mode: 0o755 })
+    const external = await legacy.registerExternal({ path: program, name: 'External', command: 'external', interpreter: 'halo-node' })
     const missing = 'not-present.cjs'
     const cli = store(configured([{ source: missing, target: TARGET }]))
-    const options = { ...pin, basePath: [system, process.env.PATH].join(delimiter) }
-    const refused = (await cli.pinCurrent(options))!
-    expect(refused.lock.commands).toEqual(expect.arrayContaining([expect.objectContaining({ command: 'tool', exposedAs: 'halo-tool' })]))
-    expect(existsSync(join(refused.binDir!, 'tool'))).toBe(false)
-    expectRefusal(refused, 'halo-tool')
-    expect(invoke(refused, 'external').stdout.trim()).toBe('external marker')
-    const guide = readFileSync(join(refused.binDir!, '..', 'TOOLS.md'), 'utf8')
-    expect(guide).toContain('Unavailable commands')
-    expect(guide).not.toContain('| `halo-tool` |')
-    expect(guide).toContain('| `external` |')
+    await cli.syncLaunchers()
+    expectRefusal()
+    expect(invoke('external', external.id).stdout.trim()).toBe('external marker')
     expect(readFileSync(join(versionRoot(result.integrity), TARGET), 'utf8')).toContain('original')
     writeFileSync(join(deployment, missing), 'module.exports = "original"')
-    const repaired = (await cli.pinCurrent(options))!
-    expect(repaired.lock.viewKey).not.toBe(refused.lock.viewKey)
-    expectRefusal(refused, 'halo-tool')
-    expect(invoke(repaired, 'halo-tool').status).toBe(0)
+    await store(configured([{ source: missing, target: TARGET }])).syncLaunchers()
+    expect(invoke().status).toBe(0)
   })
 
-  it('does not give an existing unguarded view to a newly configured execution', async () => {
+  it('rewrites launchers written without support files once the deployment requires them', async () => {
     const legacy = store(configured([]))
     await legacy.importPackage(makeTool(), { source: 'user-import' })
-    const old = await legacy.pinExecution(entry)
-    const opened = await legacy.pinCurrent(pin)
-    expect(opened?.binDir).toBe(old.binDir)
-    expect(run(old).value).toBeNull()
-    const cli = store(configured())
-    await expect(cli.pinExecution(entry)).rejects.toMatchObject({ code: 'SUPPORT_FILES_INVALID' })
-    const next = (await cli.pinCurrent(pin))!
-    expect(next.binDir).not.toBe(old.binDir)
-    expect(run(next).value).toBe('original')
+    expect(run().value).toBeNull()
+    await store(configured()).syncLaunchers()
+    expect(run().value).toBe('original')
   })
 
   it('uses a distinct immutable runtime for changed and removed support files, then cleans up with the version', async () => {
     const first = store(configured())
     const result = await first.importPackage(makeTool(), { source: 'user-import' })
-    const before = await first.pinExecution(entry)
-    const old = run(before)
+    const old = run()
     writeFileSync(join(deployment, 'helper.cjs'), 'module.exports = "updated"')
     const next = store(configured())
-    const after = (await next.pinCurrent(pin))!
-    const updated = run(after)
-    expect(after.lock.viewKey).not.toBe(before.lock.viewKey)
-    expect(after.lock.tools[0]).toMatchObject({ integrity: result.integrity, supportVariant: true })
+    await next.syncLaunchers()
+    const updated = run()
     expect(updated.value).toBe('updated')
-    expect(run(await next.pinExecution(entry))).toEqual(old)
     expect(updated.entry).not.toBe(old.entry)
     expect(updated.helper).not.toBe(old.helper)
+    expect(existsSync(old.entry)).toBe(true)
     expect(realpathSync(updated.entry)).toBe(updated.entry)
     expect(realpathSync(updated.helper)).toBe(updated.helper)
     expect(dirname(dirname(dirname(dirname(updated.entry))))).toBe(dirname(dirname(dirname(updated.helper))))
     expect(lstatSync(updated.entry).isFile()).toBe(true)
     expect(await next.verifyVersion(ID, VERSION)).toBe(true)
+    expect((await next.readState()).tools[ID].versions[VERSION].integrity).toBe(result.integrity)
 
     const removed = store()
-    const withoutSupport = (await removed.pinCurrent(pin))!
-    const empty = run(withoutSupport)
+    await removed.syncLaunchers()
+    const empty = run()
     expect(empty.value).toBeNull()
-    expect(withoutSupport.lock.viewKey).not.toBe(after.lock.viewKey)
-    expect(run(after)).toEqual(updated)
     expect(await removed.removeTool(ID)).toEqual({ deferred: 1 })
-    expect(await removed.collectPendingCleanup()).toBe(0)
-    for (const pinned of [before, after, withoutSupport]) await removed.releaseExecution(pinned.lock.executionId)
-    expect(await removed.collectPendingCleanup()).toBe(1)
+    expect(existsSync(binDir())).toBe(false)
+    expect(await store().collectPendingCleanup()).toBe(1)
     for (const path of [old.entry, old.helper, updated.entry, updated.helper, empty.entry]) expect(existsSync(path)).toBe(false)
   })
 
-  it('reinstalls a pending version without replacing the files an earlier pin reads', async () => {
+  it('reinstalls a pending version without replacing the files a running command reads', async () => {
     const cli = store(configured())
     const packagePath = makeTool()
     await cli.importPackage(packagePath, { source: 'user-import' })
-    const before = await cli.pinExecution(entry)
-    const old = run(before)
+    const old = run()
     await cli.removeTool(ID)
     writeFileSync(join(deployment, 'helper.cjs'), 'module.exports = "new"')
     const next = store(configured())
     await next.importPackage(packagePath, { source: 'user-import' })
-    expect(run(before)).toEqual(old)
-    expect(run((await next.pinCurrent(pin))!).value).toBe('new')
+    expect(existsSync(old.entry)).toBe(true)
+    expect(readFileSync(old.helper, 'utf8')).toBe('module.exports = "original"')
+    expect(run().value).toBe('new')
     expect((await next.readState()).pendingCleanup).toBeUndefined()
   })
 })

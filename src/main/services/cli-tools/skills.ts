@@ -9,6 +9,8 @@ export type CliSkillSource = 'admin' | 'package' | 'manifest' | 'default'
 
 export interface CliToolSkill {
   toolId: string
+  /** The tool's installation on this device; recorded with the skill's location. */
+  installId: string
   name: string
   description: string
   body: string
@@ -57,21 +59,57 @@ export function resolveSkillDescription(input: {
   }
 }
 
-/** Stable across command renames, exposed aliases and other installed tools. */
-export function cliSkillName(toolId: string): string {
-  const slug = toolId.replace(/\./g, '-').slice(0, 47).replace(/-$/, '')
-  const hash = createHash('sha256').update(toolId).digest('hex').slice(0, 12)
-  return `cli-${slug}-${hash}`
+const SKILL_NAME_MAX = 64
+
+/**
+ * `<command>-<tool id>-<install id>`; without an install id (a package not yet
+ * installed) the last part is left out. The install id keeps two Halo
+ * installations on one computer, which share the personal skill folder, from
+ * writing or removing each other's skill. A tool id cut to fit gets a digest,
+ * so different ids never fold into one name.
+ */
+export function cliSkillName(command: string, toolId: string, installId: string): string {
+  const fold = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  const head = (fold(command) || 'tool').slice(0, 24).replace(/-+$/, '')
+  let slug = fold(toolId)
+  const room = SKILL_NAME_MAX - head.length - (installId ? installId.length + 2 : 1)
+  if (slug.length > room) {
+    const digest = createHash('sha256').update(toolId).digest('hex').slice(0, 8)
+    slug = `${slug.slice(0, Math.max(0, room - digest.length - 1)).replace(/-+$/, '')}-${digest}`.replace(/^-/, '')
+  }
+  return [head, slug, installId].filter(Boolean).join('-')
 }
 
-export function renderCliSkill(toolId: string): string {
-  return [
-    `# ${toolId}`,
+/** A skill description that names the command it belongs to, within the length limit. */
+export function cliSkillDescription(command: string, description: string): string {
+  return normalizeSkillDescription(`Companion skill for the ${command} command-line tool. ${description}`)!
+}
+
+export interface CliSkillLaunch {
+  command: string
+  /** Absolute launcher path for sh-family shells (Git Bash on Windows). */
+  path: string
+  /** Absolute launcher path for cmd.exe and PowerShell; Windows only. */
+  cmdPath?: string
+}
+
+/**
+ * The skill body: where the tool is, then the guide as the administrator or
+ * package wrote it. The guide uses the bare command name, but the tool is not
+ * on the shell's PATH, so the header names the file that command is.
+ */
+export function renderCliSkill(input: { toolId: string; installId: string; launches: CliSkillLaunch[]; guide?: string }): string {
+  const lines = [
+    `<!-- Installed by Halo for ${input.toolId} (install ${input.installId}). Halo rewrites this file when the tool changes. -->`,
     '',
-    '- Check `HALO_CLI_TOOLS_BIN` in your shell environment. If it is unset or empty, this session has no tool pin: do not run this tool or fall back to a bare command.',
-    `- Read \`$HALO_CLI_TOOLS_BIN/../TOOLS.md\` (use your shell's environment variable syntax). Find the tool ID \`${toolId}\` in the available commands table. If the index cannot be read or the tool is unavailable or unlisted, do not run it or use another program in its place.`,
-    '- Read the guide linked there before using the tool. Invoke only the command listed for it, from the launcher directory; do not use a bare command, start the runtime or search for another copy. If no guide is provided, use `--help` with the listed launcher.',
-    '- Do not install, upgrade or remove this tool. Never ask for, print or pass credentials in arguments or files. If a command changed data and its outcome is unclear, check the result before trying again.',
+    'Run the tool by the absolute path below, quoted, wherever the guide writes its command name:',
     '',
-  ].join('\n')
+  ]
+  for (const launch of input.launches) {
+    lines.push(`- \`${launch.command}\`: \`${launch.path}\``)
+    if (launch.cmdPath) lines.push(`  (cmd.exe and PowerShell: \`${launch.cmdPath}\`)`)
+  }
+  const guide = input.guide?.trim()
+  lines.push('', guide || 'No usage guide was provided. Run the tool with `--help` to learn its commands.', '')
+  return lines.join('\n')
 }

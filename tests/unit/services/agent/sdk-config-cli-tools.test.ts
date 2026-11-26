@@ -1,6 +1,8 @@
 /**
- * Installed CLI tools reach every user session through the one builder all
- * user entries share, whatever the engine, and never an internal task.
+ * Installed CLI tools need nothing in a session's environment: their skills
+ * name the launchers by absolute path. User sessions still get organization
+ * access and, where the engine runs hooks, the organization status reminders;
+ * internal tasks get neither.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
@@ -8,14 +10,7 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-const state = vi.hoisted(() => ({ configDir: '', workDir: '' }))
-const cliTools = vi.hoisted(() => ({
-  apply: vi.fn(async (env: Record<string, unknown>, _request: { entry: string; engine: string }) => {
-    env.PATH = `${String(env.PATH ?? '')}:/cli/views/v/bin`
-    env.HALO_CLI_TOOLS_BIN = '/cli/views/v/bin'
-    return '/cli/views/v/bin'
-  }),
-}))
+const state = vi.hoisted(() => ({ configDir: '', workDir: '', hooks: true, signIn: 'active' as string }))
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: () => ({ agent: {} }),
@@ -30,14 +25,21 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   getDefaultEngine: () => 'anthropic', resolveDefaultEngine: async () => 'anthropic',
-  getEngineCapabilities: () => ({ features: { hooks: true } }),
+  getEngineCapabilities: () => ({ features: { hooks: state.hooks } }),
 }))
 vi.mock('../../../../src/main/foundation/device-identity', () => ({
   getDeviceIdentity: () => ({ deviceId: 'test-device' }),
 }))
+vi.mock('../../../../src/main/services/enterprise-identity', () => ({
+  applyOrgSessionEnv: (env: Record<string, unknown>) => {
+    if (state.signIn !== 'active') return ''
+    env.EC_BROKER_COMMAND = '["broker"]'
+    return 'EC_BROKER_COMMAND=["broker"]'
+  },
+  peekEnterpriseIdentityState: () => ({ status: state.signIn, capabilities: [], boundTools: [], signingIn: false, canUnbindDevice: false }),
+}))
 vi.mock('../../../../src/main/services/cli-tools', () => ({
-  CLI_TOOLS_BIN_ENV: 'HALO_CLI_TOOLS_BIN',
-  applyCliToolsEnv: cliTools.apply,
+  peekOrganizationTools: () => [],
 }))
 
 import { buildInternalTaskSdkOptions, buildUserSessionSdkOptions } from '../../../../src/main/services/agent/sdk-config'
@@ -61,27 +63,35 @@ afterAll(() => {
 })
 
 beforeEach(() => {
-  cliTools.apply.mockClear()
+  state.hooks = true
+  state.signIn = 'active'
 })
 
-describe('installed CLI tools in session options', () => {
-  it.each(['anthropic', 'codex', 'halo', 'dsh'] as const)('reach a user session on %s', async engineId => {
+describe('user session options and installed CLI tools', () => {
+  it.each(['anthropic', 'codex', 'halo', 'dsh'] as const)('add no tool directory to a user session on %s', async engineId => {
+    const internal = await buildInternalTaskSdkOptions({ ...params(), engineId })
     const options = await buildUserSessionSdkOptions({ ...params(), engineId })
-    expect(cliTools.apply).toHaveBeenCalledTimes(1)
-    expect(cliTools.apply).toHaveBeenCalledWith(options.env, { entry: 'other', engine: engineId })
-    expect(options.env.HALO_CLI_TOOLS_BIN).toBe('/cli/views/v/bin')
-    expect(String(options.env.PATH).endsWith(':/cli/views/v/bin')).toBe(true)
+    expect(options.env.PATH).toBe(internal.env.PATH)
+    expect(Object.keys(options.env).filter(key => /CLI_TOOLS/.test(key))).toEqual([])
+    expect(options.env.EC_BROKER_COMMAND).toBe('["broker"]')
+    expect(options.orgSessionEnv).toMatch(/^[0-9a-f]{16}$/)
   })
 
-  it('pin the entry the caller names, and only pin it', async () => {
-    const options = await buildUserSessionSdkOptions({ ...params(), engineId: 'halo', cliToolsEntry: 'automation' })
-    expect(cliTools.apply).toHaveBeenCalledWith(options.env, { entry: 'automation', engine: 'halo' })
-    expect(options).not.toHaveProperty('cliToolsEntry')
+  it('adds the organization reminder hooks where the engine runs hooks and the build has sign-in', async () => {
+    const options = await buildUserSessionSdkOptions({ ...params(), engineId: 'halo' })
+    expect(options.hooks.PostToolUse).toEqual(expect.arrayContaining([expect.objectContaining({ matcher: 'Bash' })]))
+    expect(options.hooks.PreCompact).toHaveLength(1)
+
+    state.hooks = false
+    expect((await buildUserSessionSdkOptions({ ...params(), engineId: 'dsh' })).hooks?.PreCompact).toBeUndefined()
+    state.hooks = true
+    state.signIn = 'unconfigured'
+    expect((await buildUserSessionSdkOptions({ ...params(), engineId: 'halo' })).hooks?.PreCompact).toBeUndefined()
   })
 
-  it('never reach an internal task', async () => {
+  it('give an internal task neither organization access nor reminders', async () => {
     const options = await buildInternalTaskSdkOptions(params())
-    expect(cliTools.apply).not.toHaveBeenCalled()
-    expect(options.env.HALO_CLI_TOOLS_BIN).toBeUndefined()
+    expect(options.env.EC_BROKER_COMMAND).toBeUndefined()
+    expect(options.hooks?.PreCompact).toBeUndefined()
   })
 })

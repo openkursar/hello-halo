@@ -1,10 +1,11 @@
 /**
  * Preset CLI tools in an installed (packaged) Halo.
  *
- * The build copies resources/cli-preset/*.hcli into the package; on first use
- * the app imports them and every user-facing entry gets a launcher directory
- * appended to PATH. A scripted model asks each entry to run the tools once;
- * the assertions read what the shell sent back.
+ * The build copies resources/cli-preset/*.hcli into the package; on first
+ * start the app imports them, writes each tool's launchers at a fixed path and
+ * installs a skill that names that path. A scripted model asks each entry to
+ * run the tools the way the agent does — by the path the skill names — and the
+ * assertions read what the shell sent back.
  *
  * Needs a package built with prettier 3.9.10, tsc 5.9.3 and js-yaml 5.5.0 in
  * resources/cli-preset (git-ignored), so it is not part of any default project.
@@ -22,14 +23,18 @@ test.setTimeout(300000)
 const ENTRIES = { chat: 'CLI_PROBE_CHAT', dh: 'CLI_PROBE_DH', auto: 'CLI_PROBE_AUTO' } as const
 type Entry = keyof typeof ENTRIES
 
+/** The launcher path a command's installed skill names. */
+const fromSkill = (name: string) => `"$(sed -n 's/^- \`${name}\`: \`\\(.*\\)\`$/\\1/p' "$HOME"/.agents/skills/${name}-*/SKILL.md 2>/dev/null | head -1)"`
+
 const PROBE = [
-  `printf 'CLI_BIN=%s\\n' "$HALO_CLI_TOOLS_BIN"`,
-  `printf 'PRETTIER_PATH=%s\\n' "$(command -v prettier)"`,
-  'prettier --version',
-  'tsc --version',
-  `printf 'a: 1\\n' | js-yaml -`,
-  `printf 'PATH_TAIL=%s\\n' "\${PATH##*:}"`,
-  `head -3 "$HALO_CLI_TOOLS_BIN/../TOOLS.md"`,
+  `PRETTIER=${fromSkill('prettier')}`,
+  `TSC=${fromSkill('tsc')}`,
+  `YAML=${fromSkill('js-yaml')}`,
+  `printf 'PRETTIER_PATH=%s\\n' "$PRETTIER"`,
+  '"$PRETTIER" --version',
+  '"$TSC" --version',
+  `printf 'a: 1\\n' | "$YAML" -`,
+  `printf 'CLI_ON_PATH=%s\\n' "$(printf %s "$PATH" | grep -c '/cli/tools/')"`,
 ].join('; ')
 
 interface ScriptedModel {
@@ -68,7 +73,7 @@ async function startScriptedModel(): Promise<ScriptedModel> {
         res.end('{}')
         return
       }
-      if (/cli-(tsc|prettier)\b/.test(body)) model.skillAdvertised = true
+      if (/(tsc-org-typescriptlang-tsc|prettier-io-prettier-cli)-[0-9a-f]{6}/.test(body)) model.skillAdvertised = true
       const request = JSON.parse(body || '{}') as { stream?: boolean; tools?: Array<{ name: string }>; messages?: Array<{ content: unknown }> }
       const entry = (['auto', 'dh', 'chat'] as const).find(key => body.includes(ENTRIES[key]))
       const id = entry ? `toolu_cli_${entry}` : ''
@@ -100,26 +105,22 @@ async function startScriptedModel(): Promise<ScriptedModel> {
 }
 
 function parseProbe(text: string) {
-  const bin = /CLI_BIN=(.*)/.exec(text)?.[1]?.trim() ?? ''
   return {
-    bin,
     prettierPath: /PRETTIER_PATH=(.*)/.exec(text)?.[1]?.trim() ?? '',
     prettier: /^3\.9\.10$/m.test(text),
     tsc: /Version 5\.9\.3/.test(text),
     jsYaml: /"a"\s*:\s*1/.test(text),
-    pathTail: /PATH_TAIL=(.*)/.exec(text)?.[1]?.trim() ?? '',
-    guide: text.includes('prettier') && text.includes('#'),
+    onPath: /CLI_ON_PATH=(\d+)/.exec(text)?.[1] ?? '',
   }
 }
 
 function expectProbe(label: string, text: string, cliRoot: string) {
   const probe = parseProbe(text)
-  expect.soft(probe.bin, `${label}: HALO_CLI_TOOLS_BIN points into the app's own tool views`).toMatch(new RegExp(`^${cliRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/views/[^/]+/bin$`))
-  expect.soft(probe.prettierPath, `${label}: prettier resolves to the launcher`).toBe(path.join(probe.bin, 'prettier'))
+  expect.soft(probe.prettierPath, `${label}: the prettier skill names its fixed launcher`).toBe(path.join(cliRoot, 'tools', 'io.prettier.cli', 'bin', 'prettier'))
   expect.soft(probe.prettier, `${label}: prettier 3.9.10 runs`).toBe(true)
   expect.soft(probe.tsc, `${label}: tsc 5.9.3 runs`).toBe(true)
   expect.soft(probe.jsYaml, `${label}: js-yaml (ESM entry) runs`).toBe(true)
-  expect.soft(probe.pathTail, `${label}: launchers are appended after every existing PATH entry`).toBe(probe.bin)
+  expect.soft(probe.onPath, `${label}: nothing is added to the session PATH`).toBe('0')
   return probe
 }
 
@@ -222,8 +223,8 @@ for (const sdkEngine of ['halo', 'anthropic', 'dsh'] as const) {
         expect.soft(model.results.get('auto')!.isError, 'automation: probe command exits 0').toBe(false)
         const auto = expectProbe('automation', model.results.get('auto')!.text, cliRoot)
 
-        // Same tool set, same view, for every entry in one process.
-        expect.soft(new Set([chat.bin, dh.bin, auto.bin]).size, 'one tool set maps to one view').toBe(1)
+        // Every entry reaches the same launcher.
+        expect.soft(new Set([chat.prettierPath, dh.prettierPath, auto.prettierPath]).size, 'one launcher per tool for every entry').toBe(1)
 
         // AI terminal.
         const created = await window.evaluate(() => (globalThis as unknown as { halo: HaloAPI }).halo.createTerminal({ spaceId: 'halo-temp' }))
@@ -241,7 +242,7 @@ for (const sdkEngine of ['halo', 'anthropic', 'dsh'] as const) {
         const terminalText = JSON.parse(replay) as unknown
         const flat = typeof terminalText === 'string' ? terminalText : JSON.stringify(terminalText)
         evidence.terminal = flat.slice(-4000)
-        expect.soft(/CLI_BIN=\S*\/cli\/views\/[^/\s]+\/bin/.test(flat), 'terminal: HALO_CLI_TOOLS_BIN is set').toBe(true)
+        expect.soft(flat.includes(path.join(cliRoot, 'tools', 'io.prettier.cli', 'bin', 'prettier')), 'terminal: the skill names the fixed launcher').toBe(true)
         expect.soft(/Version 5\.9\.3/.test(flat), 'terminal: tsc runs').toBe(true)
         expect.soft(/3\.9\.10/.test(flat), 'terminal: prettier runs').toBe(true)
         await window.evaluate(id => (globalThis as unknown as { halo: HaloAPI }).halo.killTerminal({ sessionId: id }), sessionId)
@@ -252,13 +253,12 @@ for (const sdkEngine of ['halo', 'anthropic', 'dsh'] as const) {
         const shellAfter = Object.fromEntries(SHELL_FILES.map(name => [name, fs.existsSync(path.join(runtime.home, name))]))
         evidence.shellFiles = { before: shellBefore, after: shellAfter }
         expect.soft(shellAfter, 'no shell startup file is created or removed').toEqual(shellBefore)
-        evidence.views = fs.readdirSync(path.join(cliRoot, 'views'))
-        const locks = fs.existsSync(path.join(cliRoot, 'locks')) ? fs.readdirSync(path.join(cliRoot, 'locks')) : []
-        evidence.locks = locks
-        // Each pin records the entry it was taken for.
-        const lockEntries = locks.map(name => (JSON.parse(fs.readFileSync(path.join(cliRoot, 'locks', name), 'utf-8')) as { entry: string }).entry)
-        evidence.lockEntries = lockEntries
-        expect.soft(lockEntries, 'pins record their entries').toEqual(expect.arrayContaining(['chat', 'app-chat', 'automation', 'terminal']))
+        evidence.tools = fs.readdirSync(path.join(cliRoot, 'tools')).sort()
+        expect.soft(evidence.tools, 'one launcher directory per tool').toEqual(['com.github.nodeca.js-yaml', 'io.prettier.cli', 'org.typescriptlang.tsc'])
+        expect.soft(fs.existsSync(path.join(cliRoot, 'views')) || fs.existsSync(path.join(cliRoot, 'locks')), 'no per-session views or pins').toBe(false)
+        const installs = (evidence.tools as string[]).map(id => JSON.parse(fs.readFileSync(path.join(cliRoot, 'tools', id, 'install.json'), 'utf-8')) as { skill?: { path: string } })
+        evidence.skillFiles = installs.map(record => record.skill?.path)
+        expect.soft(installs.every(record => record.skill && fs.existsSync(record.skill.path)), 'each installation records the skill file it owns').toBe(true)
       } finally {
         await testInfo.attach('cli-preset-evidence', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' })
         await model.close()

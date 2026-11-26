@@ -8,7 +8,6 @@ import { getEngineAvailability } from './engine-availability'
 import { defaultCapabilitiesFor, type EngineCapabilities } from './capabilities'
 import { tool as defineTool, createSdkMcpServer as defineMcpServer } from './mcp/sdk-server'
 import { withClaudeCodeSkills } from './skill-availability'
-import { holdCliTools, CLI_TOOLS_BIN_ENV } from '../cli-tools'
 import type { ReadSessionToolContextModeOptions, SessionToolContextMode } from '@hello-halo/agent-sdk/native'
 
 export interface SessionPreparation {
@@ -251,16 +250,15 @@ async function borrowEngine(engineId: EngineId, parent?: AbortSignal): Promise<E
   } catch (error) { release(); throw error }
 }
 
-function ownSession(session: any, engineId: EngineId, borrow: EngineBorrow, releaseTools: () => void): any {
+function ownSession(session: any, engineId: EngineId, borrow: EngineBorrow): any {
   let closing: Promise<void> | undefined
-  const release = () => { borrow.release(); releaseTools() }
   const close = (...args: unknown[]) => {
     if (closing) return
     let result
-    try { result = session.close?.(...args) } catch (error) { release(); throw error }
+    try { result = session.close?.(...args) } catch (error) { borrow.release(); throw error }
     closing = Promise.resolve(result).then(() => session.flush?.()).catch(error => {
       console.warn('[SDK] Engine session cleanup failed', { engineId, error })
-    }).finally(release)
+    }).finally(borrow.release)
     return result
   }
   const flush = async () => { if (closing) await closing; else await session.flush?.() }
@@ -283,15 +281,9 @@ export async function createSession(
   options: Record<string, any>,
   prepare?: (preparation: SessionPreparation) => Promise<Record<string, any>>,
 ): Promise<any> {
-  // The session's CLI tool set stays pinned until its processes have exited.
-  const releaseTools = holdCliTools(options.env?.[CLI_TOOLS_BIN_ENV])
-  let engineId: EngineId
-  let borrow: EngineBorrow
-  try {
-    await waitForSdkInitialization()
-    engineId = options.engineId ?? await resolveDefaultEngine()
-    borrow = await borrowEngine(engineId, options.abortController?.signal)
-  } catch (error) { releaseTools(); throw error }
+  await waitForSdkInitialization()
+  const engineId = options.engineId ?? await resolveDefaultEngine()
+  const borrow = await borrowEngine(engineId, options.abortController?.signal)
   try {
     const create = borrow.module.createSession ?? borrow.module.unstable_v2_createSession
     if (!create) throw new EngineUnavailableError(engineId, 'The adapter does not expose session creation')
@@ -315,24 +307,21 @@ export async function createSession(
     const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, engineHandoffRecovered: _engineHandoffRecovered, ...sessionOptions } = preparedOptions
     const prepared = { ...sessionOptions, abortController: borrow.controller }
     const session = await create(engineId === 'anthropic' ? withClaudeCodeSkills(prepared) : prepared)
-    return ownSession(session, engineId, borrow, releaseTools)
-  } catch (error) { borrow.release(); releaseTools(); throw error }
+    return ownSession(session, engineId, borrow)
+  } catch (error) { borrow.release(); throw error }
 }
 
 export function query(params: any): AsyncIterable<any> { return queryIterable(params) }
 
 async function* queryIterable(params: any): AsyncGenerator<any> {
-  const releaseTools = holdCliTools(params.options?.env?.[CLI_TOOLS_BIN_ENV])
+  await waitForSdkInitialization()
+  const engineId = params.options?.engineId ?? await resolveDefaultEngine()
+  const borrow = await borrowEngine(engineId, params.options?.abortController?.signal)
+  const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, engineHandoffRecovered: _engineHandoffRecovered, ...options } = params.options ?? {}
   try {
-    await waitForSdkInitialization()
-    const engineId = params.options?.engineId ?? await resolveDefaultEngine()
-    const borrow = await borrowEngine(engineId, params.options?.abortController?.signal)
-    const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, engineHandoffRecovered: _engineHandoffRecovered, ...options } = params.options ?? {}
-    try {
-      const prepared = { ...options, abortController: borrow.controller }
-      yield* borrow.module.query({ ...params, options: engineId === 'anthropic' ? withClaudeCodeSkills(prepared) : prepared })
-    } finally { borrow.release() }
-  } finally { releaseTools() }
+    const prepared = { ...options, abortController: borrow.controller }
+    yield* borrow.module.query({ ...params, options: engineId === 'anthropic' ? withClaudeCodeSkills(prepared) : prepared })
+  } finally { borrow.release() }
 }
 
 /** Startup prewarms only the default; other runtimes start when a session borrows them. */

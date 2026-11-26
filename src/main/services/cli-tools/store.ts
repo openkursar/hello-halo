@@ -1,6 +1,6 @@
 /**
  * The CLI tool store: installed versions, the current choice per tool, and the
- * pinned command views running executions use. See DESIGN.md.
+ * launchers that run the current version of each usable tool. See DESIGN.md.
  *
  * Layout under `root` (the caller passes e.g. `<userData>/cli`):
  *
@@ -8,12 +8,9 @@
  *   support/<id>/<version>-<digest12>/<supportDigest>/    immutable runtime variants
  *   staging/<txid>/                    one import transaction; removed on exit
  *   guides/<sha256>.md                 administrator guide overrides, by content
- *   views/<viewKey>/bin/               launchers for one exact tool set
- *   views/<viewKey>/TOOLS.md           what those launchers are, for the agent
- *   views/<viewKey>/guides/<id>.md     overrides that view was pinned to (copies)
- *   views/<viewKey>/view.json          the view's commands; written last
- *   views/<viewKey>/argv-preload.cjs   argv fix the launchers load (see shims.ts)
- *   locks/<executionId>.json           the tool set an execution is pinned to
+ *   tools/<id>/bin/                    launchers for the tool's current version
+ *   tools/<id>/install.json            that installation: its id, launchers and skill
+ *   tools/<id>/*.cjs                   preloads the launchers load (see shims.ts)
  *   state.json                         versions, current choice, revocation
  *
  * The module is pure Node and takes every environment fact as a parameter
@@ -21,7 +18,7 @@
  * or agent code and starts no work on its own.
  */
 
-import { createHash, randomUUID } from 'crypto'
+import { createHash, randomBytes, randomUUID } from 'crypto'
 import { existsSync, promises as fsp } from 'fs'
 import { basename, dirname, isAbsolute, join } from 'path'
 import { extractPackageArchive, DEFAULT_ARCHIVE_LIMITS, type ArchiveLimits } from './archive'
@@ -42,9 +39,10 @@ import type { PresetCatalog } from './preset-catalog'
 import {
   assertRealDirectories, assertSupportFiles, BASE_SUPPORT_FILE, copyPackageTree, loadSupportFiles,
   placeSupportFiles, renderSupportPreload, supportDigest, supportError, supportExpectations,
-  supportPathExists, SUPPORT_FAILURE, type CliSupportFilesConfig, type SupportCheck,
+  supportPathExists, type CliSupportFilesConfig, type SupportCheck,
 } from './support-files'
 import {
+  cliSkillDescription,
   cliSkillName,
   GUIDE_MAX_BYTES,
   renderCliSkill,
@@ -80,9 +78,6 @@ export interface CliExternalRecord {
   /** Set when the file went missing or changed since it was confirmed; excluded from new executions. */
   changed?: 'missing' | 'modified'
 }
-
-/** Which surface started an execution; recorded for diagnosis only. */
-export type CliExecutionEntry = 'chat' | 'app-chat' | 'im' | 'automation' | 'team' | 'terminal' | 'other'
 
 export interface CliToolVersionRecord {
   /** Payload integrity, `sha256-<base64>`; the content address. */
@@ -133,6 +128,13 @@ export interface CliToolRecord {
    * versions without asking, and its catalog versions cannot be deleted.
    */
   autoInstall?: true
+  /**
+   * This tool's installation on this device, set when it first becomes usable
+   * and kept across version changes; removing the tool drops it. Part of the
+   * skill's name, so installations sharing a skill folder never touch each
+   * other's skill.
+   */
+  installId?: string
   versions: Record<string, CliToolVersionRecord>
 }
 
@@ -151,7 +153,8 @@ export interface CliToolState {
   tools: Record<string, CliToolRecord>
   /**
    * Store directories (relative to root) whose records were removed while a
-   * running execution still pinned them; deleted by `collectPendingCleanup`.
+   * command started earlier in that process could still be running them;
+   * deleted by `collectPendingCleanup` at the next start.
    */
   pendingCleanup?: string[]
   /** Keyed `id@version`; dropped once the catalog stops listing that version. */
@@ -271,68 +274,35 @@ export interface ImportResult {
   previous: string | null
 }
 
-export interface ExposedCommand {
-  toolId: string
-  version: string
-  command: string
-  /** Name on PATH; `halo-<command>` when the plain name is already taken. */
-  exposedAs: string
-  conflict: boolean
-}
-
-export interface CliExecutionLock {
+/** `tools/<id>/install.json`: one usable tool's launchers and where its skill went. */
+export interface CliToolInstallRecord {
   schema: 1
-  executionId: string
-  entry: CliExecutionEntry
-  engine: string
-  /** Process that owns a pin taken with `pinCurrent`; absent for `pinExecution`. */
-  holder?: string
-  viewKey: string
-  runtimeNodeVersion: string
-  tools: Array<{
-    id: string
-    version: string
-    integrity: string
-    guide?: string
-    guideOverride?: { revision: number; sha256: string }
-    supportDigest?: string
-    supportVariant?: true
-    supportCheck?: SupportCheck | null
-  }>
-  commands: ExposedCommand[]
-  createdAt: string
+  toolId: string
+  installId: string
+  version: string
+  integrity: string
+  /** Digest of everything the launchers were written from; a different one rewrites them. */
+  launchKey: string
+  commands: Array<{ name: string; launcher: string; cmdLauncher?: string }>
+  /** The skill file the host installed for this installation; absent until it exists. */
+  skill?: { name: string; path: string }
 }
 
-export interface PinExecutionOptions {
-  executionId: string
-  entry: CliExecutionEntry
-  engine: string
-  /**
-   * PATH the execution would otherwise see. A command name already resolvable
-   * there is exposed as `halo-<name>` instead, so the user's own tool keeps
-   * its name. Omit to skip the check.
-   */
-  basePath?: string
+/** The support files a version runs with: which copy, and the check its launchers make. */
+interface SupportSelection {
+  supportDigest?: string
+  supportVariant?: true
+  supportCheck?: SupportCheck | null
 }
 
-export interface PinCurrentOptions {
-  /**
-   * Owner of the pin, e.g. one app process. Every caller with the same holder
-   * and the same current tool set shares one lock; `releaseOtherHolders`
-   * clears the locks of holders that are gone.
-   */
-  holder: string
-  entry: CliExecutionEntry
-  engine: string
-  basePath?: string
-}
-
-export interface PinnedExecution {
-  /** Directory to append to the execution's PATH. Null when no tool is usable. */
-  binDir: string | null
-  lock: CliExecutionLock
-  /** True when an existing pin was returned unchanged. */
-  reused: boolean
+interface LauncherTarget {
+  command: string
+  entry: string
+  direct?: true
+  fingerprint?: string
+  credential?: CliCredentialBinding
+  supportDigest?: string
+  supportCheck?: SupportCheck | null
 }
 
 export { GUIDE_MAX_BYTES } from './skills'
@@ -412,7 +382,8 @@ async function fileSha256(path: string): Promise<string> {
   return hash.digest('hex')
 }
 const MAX_PATH_ENTRIES = 256
-const EXECUTION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/
+/** Bumped when launcher layout or skill text changes, so every tool gets new ones. */
+const LAUNCH_FORMAT = 1
 
 /**
  * Whether `link` is a link to `target`. A stale link is removed, never
@@ -437,18 +408,32 @@ function currentToolRecords(state: CliToolState) {
     const tool = state.tools[id]
     if (toolBlock(tool) !== null) return []
     const record = tool.versions[tool.current!]
-    return record.commands.length > 0 ? [{ id, version: tool.current!, record }] : []
+    return record.commands.length > 0 ? [{ id, tool, version: tool.current!, record }] : []
   })
 }
 
-function toolSkillFingerprint(record: CliToolVersionRecord): string {
-  return sha256(JSON.stringify([record.integrity, record.guideOverride?.sha256, record.name, record.description]))
+function toolSkillFingerprint(tool: CliToolRecord, record: CliToolVersionRecord): string {
+  return sha256(JSON.stringify([
+    LAUNCH_FORMAT, tool.installId, record.integrity, record.guideOverride?.sha256, record.name, record.description,
+    record.commands.map(command => command.name),
+  ]))
 }
 
 function currentToolsRevision(state: CliToolState): string {
-  return sha256(JSON.stringify(currentToolRecords(state).map(({ id, version, record }) => [
-    id, version, toolSkillFingerprint(record), record.external?.sha256,
+  return sha256(JSON.stringify(currentToolRecords(state).map(({ id, tool, version, record }) => [
+    id, version, toolSkillFingerprint(tool, record), record.external?.sha256,
   ])))
+}
+
+/** Give every usable tool an installation id; true when one was added. */
+function assignInstallIds(state: CliToolState): boolean {
+  let added = false
+  for (const { tool } of currentToolRecords(state)) {
+    if (tool.installId) continue
+    tool.installId = randomBytes(3).toString('hex')
+    added = true
+  }
+  return added
 }
 
 /** Read only the beginning of a guide to find its frontmatter. */
@@ -467,9 +452,19 @@ async function readGuideHead(path: string): Promise<{ text: string } | null> {
   }
 }
 
-function lockFileName(executionId: string): string {
-  // Ids that are not file-name safe are stored under their hash; the lock keeps the original.
-  return EXECUTION_ID_PATTERN.test(executionId) ? `${executionId}.json` : `x-${sha256(executionId).slice(0, 32)}.json`
+/** Read a whole guide, up to the administrator guide limit. */
+async function readGuide(path: string): Promise<string | null> {
+  let handle: fsp.FileHandle | null = null
+  try {
+    handle = await fsp.open(path, 'r')
+    const buffer = Buffer.alloc(GUIDE_MAX_BYTES)
+    const { bytesRead } = await handle.read(buffer, 0, GUIDE_MAX_BYTES, 0)
+    return buffer.subarray(0, bytesRead).toString('utf-8').replace(/\uFFFD+$/, '')
+  } catch {
+    return null
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
 }
 
 async function writeFileAtomic(file: string, content: string): Promise<void> {
@@ -533,6 +528,8 @@ export class CliToolStore {
   readonly onDidChangeCurrentTools = this.currentToolsChanged.event
   private currentRevision: string | undefined
   private currentFingerprint: string | undefined
+  /** Store directories this process has given launchers; a command may still run from them. */
+  private readonly launched = new Set<string>()
   /** Serializes every mutation in this process; Halo runs as a single instance. */
   private queue: Promise<unknown> = Promise.resolve()
 
@@ -593,35 +590,80 @@ export class CliToolStore {
     return this.currentRevision
   }
 
-  private async writeState(state: CliToolState): Promise<void> {
+  /**
+   * Persist state. A changed usable set also rewrites the launchers before
+   * anyone is told, so a skill is never published for a launcher that is not
+   * there yet; `syncLaunchers` forces that rewrite.
+   */
+  private async writeState(state: CliToolState, syncLaunchers = false): Promise<void> {
+    assignInstallIds(state)
     const previous = state.currentToolsRevision ?? this.currentRevision
+    const previousFingerprint = state.currentToolsFingerprint ?? this.currentFingerprint
     const fingerprint = currentToolsRevision(state)
-    const revision = (state.currentToolsFingerprint ?? this.currentFingerprint) === fingerprint ? previous ?? fingerprint : randomUUID()
+    const revision = previousFingerprint === fingerprint ? previous ?? fingerprint : randomUUID()
     state.currentToolsRevision = revision
     state.currentToolsFingerprint = fingerprint
     await fsp.mkdir(this.root, { recursive: true })
     await writeFileAtomic(this.path('state.json'), `${JSON.stringify(state, null, 2)}\n`)
     this.currentRevision = revision
     this.currentFingerprint = fingerprint
+    if (syncLaunchers || previousFingerprint !== fingerprint) await this.syncLaunchersLocked(state)
     if (revision !== previous) this.currentToolsChanged.fire(revision)
   }
 
-  /** Only the descriptions for changed inputs need to read package or override guides. */
-  async readCurrentToolSkills() {
-    const state = await this.readState()
-    const tools = currentToolRecords(state)
-    return {
-      revision: state.currentToolsRevision ?? currentToolsRevision(state),
-      skills: tools.map(({ id, record }) => ({
-        toolId: id,
-        fingerprint: toolSkillFingerprint(record),
-        describe: async (): Promise<CliToolSkill> => ({
+  /**
+   * The skill of each usable tool. Fingerprints let a caller read guides only
+   * for tools whose skill inputs changed.
+   */
+  readCurrentToolSkills() {
+    return this.serialize(async () => {
+      const state = await this.readState()
+      const tools = currentToolRecords(state).filter(({ tool }) => tool.installId)
+      return {
+        revision: state.currentToolsRevision ?? currentToolsRevision(state),
+        skills: tools.map(({ id, tool, record }) => ({
           toolId: id,
-          name: cliSkillName(id),
-          description: (await this.describeSkill(id, record)).description,
-          body: renderCliSkill(id),
-        }),
-      })),
+          fingerprint: toolSkillFingerprint(tool, record),
+          describe: () => this.renderToolSkill(id, tool.installId!, record),
+        })),
+      }
+    })
+  }
+
+  /** Absolute launcher path of one command of a usable tool. */
+  launcherPath(toolId: string, command: string, shell: 'sh' | 'cmd' = 'sh'): string {
+    return this.path('tools', toolId, 'bin', shell === 'cmd' ? `${command}.cmd` : command)
+  }
+
+  private async renderToolSkill(id: string, installId: string, record: CliToolVersionRecord): Promise<CliToolSkill> {
+    const command = record.commands[0].name
+    const summary = await this.describeSkill(id, record)
+    const guidePath = record.guideOverride ? this.path('guides', `${record.guideOverride.sha256}.md`) : null
+    let text = guidePath ? await readGuide(guidePath) : null
+    if (guidePath && (text === null || sha256(text) !== record.guideOverride!.sha256)) {
+      this.log.error('[CliTools] Guide override unavailable; using the package guide', { tool: id })
+      text = null
+    }
+    const packagePath = this.packageGuidePath(record)
+    if (text === null && packagePath) {
+      text = await readGuide(packagePath)
+      if (text === null) this.log.error('[CliTools] Package guide unreadable; the skill names only the tool', { tool: id })
+    }
+    return {
+      toolId: id,
+      installId,
+      name: cliSkillName(command, id, installId),
+      description: cliSkillDescription(command, summary.description),
+      body: renderCliSkill({
+        toolId: id,
+        installId,
+        launches: record.commands.map(({ name }) => ({
+          command: name,
+          path: this.launcherPath(id, name),
+          ...(this.platform === 'win32' ? { cmdPath: this.launcherPath(id, name, 'cmd') } : {}),
+        })),
+        guide: text === null ? undefined : splitGuide(text).body,
+      }),
     }
   }
 
@@ -642,7 +684,7 @@ export class CliToolStore {
     return `support/${dir.slice('store/'.length)}`
   }
 
-  private async selectSupport(record: CliToolVersionRecord): Promise<Pick<CliExecutionLock['tools'][number], 'supportDigest' | 'supportVariant' | 'supportCheck'>> {
+  private async selectSupport(record: CliToolVersionRecord): Promise<SupportSelection> {
     if (record.external || (!this.supportFilesConfig && !record.baseSupportDigest)) return {}
     const files = await this.readSupportFiles()
     if (files.length === 0 && !record.baseSupportDigest) return {}
@@ -792,7 +834,7 @@ export class CliToolStore {
         const archiveBytes = (await fsp.stat(archivePath)).size
         const guide = manifest.guide ? await readGuideHead(join(staging, manifest.guide)) : null
         const skill = {
-          name: cliSkillName(manifest.id),
+          name: cliSkillName(manifest.commands[0]?.name ?? manifest.id, manifest.id, ''),
           ...resolveSkillDescription({
             package: guide ? splitGuide(guide.text).description : undefined,
             manifest: manifest.description,
@@ -1074,30 +1116,44 @@ export class CliToolStore {
   }
 
   /**
-   * Write `state` (whose records no longer name `victims`), then delete the
-   * victims' store directories that no lock pins. Pinned ones go to
-   * `pendingCleanup`. State is written first: a crash afterwards leaves an
-   * orphan directory, never a record pointing at deleted files.
+   * Write `state` (whose records no longer name `victims`), which also takes
+   * away their launchers, then delete the victims' store directories. One this
+   * process gave launchers to may still run a command, so it waits in
+   * `pendingCleanup` for the next start, as does one that cannot be deleted
+   * now. State is written first: a crash afterwards leaves an orphan
+   * directory, never a record pointing at deleted files.
    */
   private async dropFiles(
     state: CliToolState,
     victims: Array<{ id: string; version: string; record: CliToolVersionRecord }>,
   ): Promise<string[]> {
-    const locks = await this.listExecutionLocks()
     const now: string[] = []
     const deferred: string[] = []
-    for (const { id, version, record } of victims) {
+    for (const { record } of victims) {
       if (record.external || !record.dir) continue
-      const pinned = locks.some(lock => lock.tools.some(t => t.id === id && t.version === version && t.integrity === record.integrity))
-      if (pinned) deferred.push(record.dir)
+      if (this.launched.has(record.dir)) deferred.push(record.dir)
       else now.push(record.dir)
     }
     if (deferred.length > 0) {
       state.pendingCleanup = [...new Set([...(state.pendingCleanup ?? []), ...deferred])]
     }
     await this.writeState(state)
-    for (const rel of now) await this.deleteVersionDirs(rel)
-    return deferred
+    const failed: string[] = []
+    for (const rel of now) {
+      try {
+        await this.deleteVersionDirs(rel)
+      } catch (err) {
+        failed.push(rel)
+        this.log.error('[CliTools] Removed version could not be deleted now; retrying at the next start', {
+          dir: rel, code: (err as NodeJS.ErrnoException).code,
+        })
+      }
+    }
+    if (failed.length > 0) {
+      state.pendingCleanup = [...new Set([...(state.pendingCleanup ?? []), ...failed])]
+      await this.writeState(state)
+    }
+    return [...deferred, ...failed]
   }
 
   private async deleteStoreDir(rel: string): Promise<void> {
@@ -1113,8 +1169,8 @@ export class CliToolStore {
   }
 
   /**
-   * Delete directories waiting in `pendingCleanup` that no record and no lock
-   * refers to any more. Run after earlier processes' locks are released.
+   * Delete directories waiting in `pendingCleanup` that no record refers to
+   * any more. Run at the start of a process, before it gives out launchers.
    * Returns the number deleted.
    */
   collectPendingCleanup(): Promise<number> {
@@ -1126,17 +1182,17 @@ export class CliToolStore {
       if (pending.length === 0) return 0
       const recorded = new Set<string>()
       for (const tool of Object.values(state.tools)) for (const v of Object.values(tool.versions)) if (v.dir) recorded.add(v.dir)
-      const pinned = new Set<string>()
-      for (const lock of await this.listExecutionLocks()) {
-        for (const t of lock.tools) pinned.add(`store/${t.id}/${t.version}-${integrityShortHex(t.integrity)}`)
-      }
       const keep: string[] = []
       let removed = 0
       for (const rel of pending) {
         if (recorded.has(rel)) continue
-        if (pinned.has(rel)) { keep.push(rel); continue }
-        await this.deleteVersionDirs(rel)
-        removed += 1
+        try {
+          await this.deleteVersionDirs(rel)
+          removed += 1
+        } catch (err) {
+          keep.push(rel)
+          this.log.error('[CliTools] Removed version still cannot be deleted', { dir: rel, code: (err as NodeJS.ErrnoException).code })
+        }
       }
       if (keep.length > 0) state.pendingCleanup = keep
       else delete state.pendingCleanup
@@ -1230,10 +1286,10 @@ export class CliToolStore {
   }
 
   /**
-   * Check the current registered programs before a pin: size and mtime
-   * first, the hash only when they moved. A missing or different file is
-   * marked changed (and so excluded); an identical one just refreshes its
-   * stamp. Returns true when state changed and was written.
+   * Check the current registered programs: size and mtime first, the hash
+   * only when they moved. A missing or different file is marked changed (and
+   * so loses its launcher); an identical one just refreshes its stamp.
+   * Returns true when `state` changed; the caller writes it.
    */
   private async checkExternals(state: CliToolState): Promise<boolean> {
     let dirty = false
@@ -1259,7 +1315,6 @@ export class CliToolStore {
       }
       dirty = true
     }
-    if (dirty) await this.writeState(state)
     return dirty
   }
 
@@ -1430,7 +1485,7 @@ export class CliToolStore {
     return true
   }
 
-  /** Delete guide files no version record and no execution lock refers to. */
+  /** Delete guide files no version record refers to. */
   private async pruneGuides(state: CliToolState): Promise<void> {
     let names: string[]
     try {
@@ -1443,11 +1498,6 @@ export class CliToolStore {
     for (const tool of Object.values(state.tools)) {
       for (const record of Object.values(tool.versions)) {
         if (record.guideOverride) referenced.add(`${record.guideOverride.sha256}.md`)
-      }
-    }
-    for (const lock of await this.listExecutionLocks()) {
-      for (const pinned of lock.tools ?? []) {
-        if (pinned.guideOverride) referenced.add(`${pinned.guideOverride.sha256}.md`)
       }
     }
     for (const name of names) {
@@ -1466,232 +1516,151 @@ export class CliToolStore {
     return ok
   }
 
-  // ── executions ───────────────────────────────────────────────────────
+  // ── launchers ────────────────────────────────────────────────────────
 
   /**
-   * Pin an execution to the current tool set and return the launcher
-   * directory for its PATH. Calling again with the same execution id returns
-   * the original pin, so a running task keeps the versions it started with
-   * while the next execution picks up whatever is current then.
+   * Bring `tools/` in line with state once per process: re-check registered
+   * programs, give usable tools an installation id, and rewrite launchers a
+   * moved runtime or changed support files made stale. Later changes keep the
+   * launchers current through `writeState`.
    */
-  pinExecution(options: PinExecutionOptions): Promise<PinnedExecution> {
-    return this.serialize(() => this.pinLocked(options))
+  syncLaunchers(): Promise<void> {
+    return this.serialize(async () => {
+      await this.removeLegacyViews()
+      const state = await this.readState()
+      const changed = await this.checkExternals(state)
+      if (changed || currentToolRecords(state).some(({ tool }) => !tool.installId)) await this.writeState(state, true)
+      else await this.syncLaunchersLocked(state)
+    })
   }
 
-  private async pinLocked(options: PinExecutionOptions): Promise<PinnedExecution> {
-    const existing = await this.readExecutionLock(options.executionId)
-    const state = await this.readState()
-    if (!existing) await this.checkExternals(state)
-    if (existing) {
-      const required = this.hasRequiredSupport()
-      for (const pinned of existing.tools) {
-        const record = state.tools[pinned.id]?.versions[pinned.version]
-        if (pinned.supportCheck === undefined && required && record && !record.external) {
-          this.log.error('[CliTools] Unguarded execution pin refused; create a new execution', { tool: pinned.id })
-          throw supportError()
-        }
-        if (pinned.supportCheck) {
+  /** Earlier builds kept per-session command views and pins; nothing reads them now. */
+  private async removeLegacyViews(): Promise<void> {
+    for (const name of ['views', 'locks']) {
+      if (existsSync(this.path(name))) await fsp.rm(this.path(name), { recursive: true, force: true })
+    }
+  }
+
+  /** Store directories this process gave launchers to (see `CliToolView.inUse`). */
+  launchedDirs(): ReadonlySet<string> {
+    return new Set(this.launched)
+  }
+
+  /** The installation record of a tool's launchers, or null when it has none. */
+  async readInstallRecord(toolId: string): Promise<CliToolInstallRecord | null> {
+    try {
+      const record = JSON.parse(await fsp.readFile(this.path('tools', toolId, 'install.json'), 'utf-8')) as CliToolInstallRecord
+      return record?.schema === 1 && record.toolId === toolId && typeof record.installId === 'string' ? record : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Record where the skill of one installation went (or that it has none), in
+   * that installation's own record. Ignored when the tool was reinstalled since.
+   */
+  recordSkillLocation(toolId: string, installId: string, skill: { name: string; path: string } | null): Promise<boolean> {
+    return this.serialize(async () => {
+      const record = await this.readInstallRecord(toolId)
+      if (!record || record.installId !== installId) return false
+      if (JSON.stringify(record.skill ?? null) === JSON.stringify(skill)) return true
+      const next: CliToolInstallRecord = { ...record }
+      if (skill) next.skill = skill
+      else delete next.skill
+      await writeFileAtomic(this.path('tools', toolId, 'install.json'), `${JSON.stringify(next, null, 2)}\n`)
+      return true
+    })
+  }
+
+  /**
+   * Write launchers for the current version of every usable tool and remove
+   * those of every other tool. A tool whose launchers cannot be written keeps
+   * the ones it had; the failure is logged and the next change retries.
+   */
+  private async syncLaunchersLocked(state: CliToolState): Promise<void> {
+    if (!existsSync(this.runtimePath)) {
+      this.log.error('[CliTools] Runtime executable is missing; launchers left as they are')
+      return
+    }
+    const wanted = new Set<string>()
+    let invalidDeployment = false
+    for (const { id, tool, record } of currentToolRecords(state)) {
+      if (!tool.installId) continue
+      wanted.add(id)
+      try {
+        let support: SupportSelection = {}
+        if (!record.external && (this.hasRequiredSupport() || record.baseSupportDigest)) {
           try {
-            await assertSupportFiles(pinned.supportCheck)
+            if (invalidDeployment) throw supportError()
+            await this.readSupportFiles().catch(error => {
+              invalidDeployment = true
+              throw error
+            })
+            support = await this.selectSupport(record)
           } catch {
-            this.log.error('[CliTools] Existing pin refused: required support files could not be verified', { tool: pinned.id })
-            throw supportError()
+            support = { supportCheck: null }
+            if (!invalidDeployment) this.log.error('[CliTools] Managed command blocked: required support files could not be verified', { tool: id })
           }
         }
-      }
-      const binDir = existing.commands.length > 0 ? await this.ensureView(existing, state) : null
-      return { binDir, lock: existing, reused: true }
-    }
-    const lock = await this.composeLock(options, state)
-    const binDir = lock.commands.length > 0 ? await this.ensureView(lock, state) : null
-    await this.writeLock(lock)
-    return { binDir, lock, reused: false }
-  }
-
-  /**
-   * Pin the tool set that is current right now on behalf of `holder`. The
-   * same holder, entry and tool set map to one lock
-   * (`<holder>-<entry>-<viewKey>`), so a caller that assembles an environment
-   * per request can call this every time: it gets the current set, a set it
-   * used earlier stays pinned until that lock is released, and each lock
-   * records the entry it serves. Nothing is written when no tool is usable.
-   */
-  pinCurrent(options: PinCurrentOptions): Promise<PinnedExecution | null> {
-    return this.serialize(async () => {
-      const state = await this.readState()
-      if (!Object.values(state.tools).some(tool => toolBlock(tool) === null)) return null
-      await this.checkExternals(state)
-      const draft = await this.composeLock({ ...options, executionId: options.holder }, state)
-      if (draft.commands.length === 0) return null
-      const executionId = `${options.holder}-${options.entry}-${draft.viewKey}`
-      const existing = await this.readExecutionLock(executionId)
-      if (existing && existing.viewKey === draft.viewKey) {
-        const lock = draft.tools.some(tool => tool.supportCheck !== undefined)
-          ? { ...draft, executionId, holder: options.holder, createdAt: existing.createdAt } : existing
-        return { binDir: await this.ensureView(lock, state), lock, reused: true }
-      }
-      const lock: CliExecutionLock = { ...draft, executionId, holder: options.holder }
-      const binDir = await this.ensureView(lock, state)
-      await this.writeLock(lock)
-      return { binDir, lock, reused: false }
-    })
-  }
-
-  /** Release every lock not taken by `holder`, e.g. those of a previous app process. */
-  releaseOtherHolders(holder: string): Promise<number> {
-    return this.serialize(async () => {
-      let names: string[]
-      try {
-        names = await fsp.readdir(this.path('locks'))
+        const targets = this.launcherTargets(id, record, support)
+        const launchKey = sha256(JSON.stringify({
+          v: LAUNCH_FORMAT, platform: this.platform, runtime: this.runtimePath, installId: tool.installId,
+          version: tool.current, integrity: record.integrity, targets,
+        }))
+        const existing = await this.readInstallRecord(id)
+        if (existing?.launchKey !== launchKey) {
+          await this.writeToolLaunchers(id, tool.installId, tool.current!, record, targets, launchKey, existing)
+        }
+        if (record.dir) this.launched.add(record.dir)
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0
-        throw err
-      }
-      let released = 0
-      for (const name of names.filter(n => n.endsWith('.json'))) {
-        const file = this.path('locks', name)
-        let owner: string | undefined
-        try {
-          owner = (JSON.parse(await fsp.readFile(file, 'utf-8')) as CliExecutionLock).holder
-        } catch {
-          owner = undefined
-        }
-        if (owner === holder) continue
-        await fsp.rm(file, { force: true })
-        released += 1
-      }
-      if (released > 0) this.log.log('[CliTools] Released locks of earlier holders', { released })
-      return released
-    })
-  }
-
-  private async writeLock(lock: CliExecutionLock): Promise<void> {
-    await fsp.mkdir(this.path('locks'), { recursive: true })
-    await writeFileAtomic(this.path('locks', lockFileName(lock.executionId)), `${JSON.stringify(lock, null, 2)}\n`)
-  }
-
-  private async composeLock(options: PinExecutionOptions, state: CliToolState): Promise<CliExecutionLock> {
-    if (!existsSync(this.runtimePath)) {
-      this.log.error('[CliTools] Runtime executable is missing; no tools exposed', {
-        execution: options.executionId,
-      })
-      throw new CliToolError('RUNTIME_MISSING', 'the runtime executable does not exist')
-    }
-
-    const tools: CliExecutionLock['tools'] = []
-    const commands: ExposedCommand[] = []
-    const taken = new Set<string>()
-    const viewsDir = this.path('views')
-    let invalidDeployment = false
-    for (const id of Object.keys(state.tools).sort()) {
-      const tool = state.tools[id]
-      if (toolBlock(tool) !== null || !tool.current) continue
-      const record = tool.versions[tool.current]
-      if (!record) continue
-      let support: Pick<CliExecutionLock['tools'][number], 'supportDigest' | 'supportVariant' | 'supportCheck'> = {}
-      if (!record.external && (this.hasRequiredSupport() || record.baseSupportDigest)) {
-        try {
-          if (invalidDeployment) throw supportError()
-          await this.readSupportFiles().catch(error => {
-            invalidDeployment = true
-            throw error
-          })
-          support = await this.selectSupport(record)
-        } catch {
-          support = { supportCheck: null }
-          if (!invalidDeployment) this.log.error('[CliTools] Managed command blocked: required support files could not be verified', { tool: id })
-        }
-      }
-      tools.push({
-        id,
-        version: tool.current,
-        integrity: record.integrity,
-        ...support,
-        ...(record.guide ? { guide: record.guide } : {}),
-        ...(record.guideOverride
-          ? { guideOverride: { revision: record.guideOverride.revision, sha256: record.guideOverride.sha256 } }
-          : {}),
-      })
-      for (const command of record.commands) {
-        const conflict = taken.has(command.name) ||
-          (options.basePath !== undefined && commandOnPath(command.name, options.basePath, this.platform, [viewsDir]))
-        const exposedAs = conflict ? `halo-${command.name}` : command.name
-        if (taken.has(exposedAs)) {
-          this.log.error('[CliTools] Command not exposed: name and alias both taken', {
-            tool: id, command: command.name,
-          })
-          continue
-        }
-        taken.add(exposedAs)
-        commands.push({ toolId: id, version: tool.current, command: command.name, exposedAs, conflict })
+        this.log.error('[CliTools] Launchers could not be written; the tool keeps its earlier ones', {
+          tool: id,
+          code: isCliToolError(err) ? err.code : (err as NodeJS.ErrnoException).code ?? 'UNEXPECTED',
+        })
       }
     }
-
-    const lock: CliExecutionLock = {
-      schema: 1,
-      executionId: options.executionId,
-      entry: options.entry,
-      engine: options.engine,
-      viewKey: '',
-      runtimeNodeVersion: this.runtimeNodeVersion,
-      tools,
-      commands,
-      createdAt: new Date().toISOString(),
+    let names: string[] = []
+    try {
+      names = await fsp.readdir(this.path('tools'))
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
-    lock.viewKey = this.viewKeyOf(lock, state)
-    return lock
+    for (const name of names) {
+      if (wanted.has(name)) continue
+      try {
+        await fsp.rm(this.path('tools', name), { recursive: true, force: true })
+        if (!name.startsWith('.')) this.log.log('[CliTools] Launchers removed', { tool: name })
+      } catch (err) {
+        this.log.error('[CliTools] Launchers could not be removed now; retrying on the next change', {
+          tool: name, code: (err as NodeJS.ErrnoException).code,
+        })
+      }
+    }
   }
 
-  private launcherTargets(
-    lock: CliExecutionLock,
-    state: CliToolState,
-  ): Array<{ exposedAs: string; entry: string; origin: ReturnType<typeof toolOrigin>; direct?: true; fingerprint?: string; credential?: CliCredentialBinding; supportDigest?: string; supportCheck?: SupportCheck | null }> {
-    const pinnedTools = new Map(lock.tools.map(tool => [tool.id, tool]))
-    return lock.commands.map(command => {
-      const record = state.tools[command.toolId]?.versions[command.version]
-      if (!record) {
-        throw new CliToolError('NOT_FOUND', `${command.toolId}@${command.version} pinned by an execution is missing`)
-      }
-      const origin = toolOrigin(record.source)
-      if (record.external) {
-        // The fingerprint keys the view, so a re-confirmed program gets a new view and session.
-        return {
-          exposedAs: command.exposedAs,
-          entry: record.external.path,
-          origin,
-          ...(record.external.interpreter === null ? { direct: true as const } : {}),
-          fingerprint: record.external.sha256,
-        }
-      }
-      const entry = record.commands.find(c => c.name === command.command)?.entry
-      if (!entry) throw new CliToolError('NOT_FOUND', `command "${command.command}" is missing`)
-      // Part of the view key: a bound tool gets its own view, unbound views keep theirs.
-      const credential = sourceMayBind(record.source) ? this.bindings.get(command.toolId) : undefined
-      const pinned = pinnedTools.get(command.toolId)
-      const supportDigest = pinned?.supportDigest
-      const supportCheck = pinned?.supportCheck
-      const dir = pinned?.supportVariant && supportDigest && /^[0-9a-f]{64}$/.test(supportDigest)
-        ? `${this.variantParent(record.dir)}/${supportDigest}` : record.dir
-      return {
-        exposedAs: command.exposedAs,
-        entry: supportCheck === null ? '' : join(supportCheck?.root ??
-          join(supportDigest ? this.canonicalRoot ?? this.root : this.root, dir), 'payload', entry),
-        origin,
-        ...(credential && supportCheck !== null ? { credential } : {}),
-        ...(supportDigest ? { supportDigest } : {}),
-        ...(supportCheck !== undefined ? { supportCheck } : {}),
-      }
-    })
-  }
-
-  private viewKeyOf(lock: CliExecutionLock, state: CliToolState): string {
-    const targets = this.launcherTargets(lock, state)
-    // Only present when an override is pinned, so views without one keep their keys.
-    const guides = lock.tools.filter(t => t.guideOverride).map(t => [t.id, t.guideOverride?.sha256])
-    return sha256(JSON.stringify({
-      v: targets.some(target => target.supportCheck !== undefined) ? 7 : 6,
-      platform: this.platform, runtime: this.runtimePath, targets, ...(guides.length > 0 ? { guides } : {}),
-    })).slice(0, 20)
+  private launcherTargets(id: string, record: CliToolVersionRecord, support: SupportSelection): LauncherTarget[] {
+    if (record.external) {
+      const external = record.external
+      return record.commands.map(command => ({
+        command: command.name,
+        entry: external.path,
+        ...(external.interpreter === null ? { direct: true as const } : {}),
+        fingerprint: external.sha256,
+      }))
+    }
+    const credential = sourceMayBind(record.source) ? this.bindings.get(id) : undefined
+    const { supportDigest, supportCheck, supportVariant } = support
+    const dir = supportVariant && supportDigest && /^[0-9a-f]{64}$/.test(supportDigest)
+      ? `${this.variantParent(record.dir)}/${supportDigest}` : record.dir
+    return record.commands.map(command => ({
+      command: command.name,
+      entry: supportCheck === null ? '' : join(supportCheck?.root ??
+        join(supportDigest ? this.canonicalRoot ?? this.root : this.root, dir), 'payload', command.entry),
+      ...(credential && supportCheck !== null ? { credential } : {}),
+      ...(supportDigest ? { supportDigest } : {}),
+      ...(supportCheck !== undefined ? { supportCheck } : {}),
+    }))
   }
 
   /**
@@ -1722,96 +1691,79 @@ export class CliToolStore {
   }
 
   /**
-   * Views are immutable and content-addressed: the same tool set shares one
-   * directory, a different set gets a new one. Built in a temporary directory
-   * and renamed into place, so a reader never sees a half-written view.
+   * Build a tool's launcher directory beside the live one and swap it in, so
+   * a command started meanwhile finds either the old set or the new one, never
+   * half of each. The skill location carries over within one installation.
    */
-  private async ensureView(lock: CliExecutionLock, state: CliToolState): Promise<string> {
-    const viewDir = this.path('views', lock.viewKey)
-    const binDir = join(viewDir, 'bin')
-    if (existsSync(join(viewDir, 'view.json'))) return binDir
-    if (lock.tools.some(tool => tool.supportDigest && !tool.supportCheck)) this.canonicalRoot ??= await fsp.realpath(this.root)
-
-    const tmp = this.path('views', `.tmp-${randomUUID()}`)
+  private async writeToolLaunchers(
+    id: string,
+    installId: string,
+    version: string,
+    record: CliToolVersionRecord,
+    targets: LauncherTarget[],
+    launchKey: string,
+    existing: CliToolInstallRecord | null,
+  ): Promise<void> {
+    const dir = this.path('tools', id)
+    const binDir = join(dir, 'bin')
+    const tmp = this.path('tools', `.tmp-${randomUUID()}`)
+    const old = this.path('tools', `.old-${randomUUID()}`)
     try {
       await fsp.mkdir(join(tmp, 'bin'), { recursive: true })
-      // Launchers name the preload by its final path, where the view lands after the rename.
+      // Launchers name their preloads by final path, where the directory lands after the swap.
       await fsp.writeFile(join(tmp, ARGV_PRELOAD_FILE), renderArgvPreload(), 'utf-8')
-      const preloadPath = join(viewDir, ARGV_PRELOAD_FILE)
+      const preloadPath = join(dir, ARGV_PRELOAD_FILE)
       const runtimePath = await this.launcherRuntimePath()
-      for (const [index, target] of this.launcherTargets(lock, state).entries()) {
+      for (const [index, target] of targets.entries()) {
         let supportPreloadPath: string | undefined
         if (target.supportCheck !== undefined) {
           const file = `support-${index}.cjs`
           await fsp.writeFile(join(tmp, file), renderSupportPreload(target.supportCheck), 'utf-8')
-          supportPreloadPath = join(viewDir, file)
+          supportPreloadPath = join(dir, file)
         }
         let credentialPreloadPath: string | undefined
         if (target.credential) {
           const file = credentialPreloadFile(index)
           await fsp.writeFile(join(tmp, file), renderCredentialPreload(target.credential), 'utf-8')
-          credentialPreloadPath = join(viewDir, file)
+          credentialPreloadPath = join(dir, file)
         }
         const paths = {
           runtimePath, preloadPath, supportPreloadPath, credentialPreloadPath, binDir,
           entryPath: target.supportCheck === null ? supportPreloadPath! : target.entry,
           direct: target.direct === true,
         }
-        for (const file of launcherFiles(this.platform, target.exposedAs, paths)) {
-          const path = join(tmp, 'bin', file.name)
-          await fsp.writeFile(path, file.content, { encoding: 'utf-8', mode: file.executable ? 0o755 : 0o644 })
+        for (const file of launcherFiles(this.platform, target.command, paths)) {
+          await fsp.writeFile(join(tmp, 'bin', file.name), file.content, { encoding: 'utf-8', mode: file.executable ? 0o755 : 0o644 })
         }
       }
-      const overridden = await this.copyGuideOverrides(lock, join(tmp, 'guides'))
-      await fsp.writeFile(join(tmp, 'TOOLS.md'), this.renderToolsGuide(lock, state, viewDir, overridden), 'utf-8')
-      await fsp.writeFile(join(tmp, 'view.json'), `${JSON.stringify({ viewKey: lock.viewKey, commands: lock.commands }, null, 2)}\n`)
-      if (existsSync(viewDir)) await fsp.rm(viewDir, { recursive: true, force: true })
-      await fsp.rename(tmp, viewDir)
-      this.log.log('[CliTools] Command view created', { view: lock.viewKey, commands: lock.commands.length })
-      return binDir
-    } catch (err) {
-      await fsp.rm(tmp, { recursive: true, force: true }).catch(() => undefined)
-      this.log.error('[CliTools] Command view could not be created', {
-        view: lock.viewKey,
-        message: err instanceof Error ? err.message : String(err),
-      })
-      throw err
-    }
-  }
-
-  /**
-   * Copy the guide overrides a lock pins into the view, so a later edit never
-   * changes what a running execution reads. A missing or altered file is
-   * logged and that tool falls back to its package guide. Returns the IDs copied.
-   */
-  private async copyGuideOverrides(lock: CliExecutionLock, dir: string): Promise<Set<string>> {
-    const copied = new Set<string>()
-    for (const pinned of lock.tools) {
-      if (!pinned.guideOverride) continue
-      let text: string | null = null
+      const install: CliToolInstallRecord = {
+        schema: 1,
+        toolId: id,
+        installId,
+        version,
+        integrity: record.integrity,
+        launchKey,
+        commands: targets.map(({ command }) => ({
+          name: command,
+          launcher: this.launcherPath(id, command),
+          ...(this.platform === 'win32' ? { cmdLauncher: this.launcherPath(id, command, 'cmd') } : {}),
+        })),
+        ...(existing?.installId === installId && existing.skill ? { skill: existing.skill } : {}),
+      }
+      await fsp.writeFile(join(tmp, 'install.json'), `${JSON.stringify(install, null, 2)}\n`, 'utf-8')
+      const replacing = existsSync(dir)
+      if (replacing) await fsp.rename(dir, old)
       try {
-        text = await fsp.readFile(this.path('guides', `${pinned.guideOverride.sha256}.md`), 'utf-8')
-      } catch {
-        text = null
+        await fsp.rename(tmp, dir)
+      } catch (err) {
+        if (replacing) await fsp.rename(old, dir).catch(() => undefined)
+        throw err
       }
-      if (text === null || sha256(text) !== pinned.guideOverride.sha256) {
-        this.log.error('[CliTools] Guide override unavailable; using the package guide', {
-          tool: `${pinned.id}@${pinned.version}`, revision: pinned.guideOverride.revision,
-        })
-        continue
-      }
-      await fsp.mkdir(dir, { recursive: true })
-      await fsp.writeFile(join(dir, `${pinned.id}.md`), text, 'utf-8')
-      copied.add(pinned.id)
+      if (replacing) await fsp.rm(old, { recursive: true, force: true }).catch(() => undefined)
+      this.log.log('[CliTools] Launchers written', { tool: id, version, commands: targets.length })
+    } finally {
+      await fsp.rm(tmp, { recursive: true, force: true }).catch(() => undefined)
     }
-    return copied
-  }
-
-  /** How a tool signs in, as TOOLS.md and its skill state it. */
-  private signInOf(toolId: string, record: CliToolVersionRecord | undefined): { text: string; enterprise: boolean } {
-    if (!record || record.external) return { text: 'unknown', enterprise: false }
-    const enterprise = sourceMayBind(record.source) && this.bindings.has(toolId)
-    return { text: enterprise ? 'enterprise sign-in (provided by Halo)' : record.auth ?? 'unknown', enterprise }
   }
 
   /** Absolute path of a version's package guide, or null when it has none. */
@@ -1819,7 +1771,7 @@ export class CliToolStore {
     return record.guide && !record.external ? join(this.path(...record.dir.split('/')), ...record.guide.split('/')) : null
   }
 
-  private async describeSkill(id: string, record: CliToolVersionRecord): Promise<CliToolSkillSummary> {
+  private async describeSkill(id: string, record: CliToolVersionRecord, installId = ''): Promise<CliToolSkillSummary> {
     let admin: string | undefined
     if (record.guideOverride) {
       const text = await fsp.readFile(this.path('guides', `${record.guideOverride.sha256}.md`), 'utf-8').catch(() => null)
@@ -1830,7 +1782,7 @@ export class CliToolStore {
     const head = packagePath && !admin ? await readGuideHead(packagePath) : null
     if (packagePath && !admin && !head) this.log.error('[CliTools] Package guide unreadable; using the manifest description', { tool: id })
     return {
-      name: cliSkillName(id),
+      name: cliSkillName(record.commands[0]?.name ?? id, id, installId),
       ...resolveSkillDescription({
         admin,
         package: head ? splitGuide(head.text).description : undefined,
@@ -1845,128 +1797,8 @@ export class CliToolStore {
     const result: Record<string, CliToolSkillSummary> = {}
     for (const [id, tool] of Object.entries(state.tools)) {
       const record = tool.current ? tool.versions[tool.current] : undefined
-      if (record?.commands.length) result[id] = await this.describeSkill(id, record)
+      if (record?.commands.length) result[id] = await this.describeSkill(id, record, tool.installId)
     }
     return result
-  }
-
-  /** The agent-facing index of the pinned commands and where to read their guides. */
-  private renderToolsGuide(lock: CliExecutionLock, state: CliToolState, viewDir: string, overridden: Set<string>): string {
-    const lines = [
-      '# Command-line tools in this session',
-      '',
-      'Run these commands from the launcher directory. Do not install, update or remove them yourself.',
-      '',
-      '| Command | Tool ID | Version | Side effects | Sign-in | Guide |',
-      '|---|---|---|---|---|---|',
-    ]
-    let anyBound = false
-    const blockedTools = new Set(lock.tools.filter(tool => tool.supportCheck === null).map(tool => tool.id))
-    for (const command of lock.commands) {
-      if (blockedTools.has(command.toolId)) continue
-      const record = state.tools[command.toolId]?.versions[command.version]
-      if (record?.external) {
-        lines.push(`| \`${command.exposedAs}\` | ${command.toolId} | - | unknown | unknown | - |`)
-        continue
-      }
-      const guide = overridden.has(command.toolId)
-        ? join(viewDir, 'guides', `${command.toolId}.md`)
-        : record?.guide ? join(this.path(...record.dir.split('/')), ...record.guide.split('/')) : ''
-      const { text: signIn, enterprise } = this.signInOf(command.toolId, record)
-      if (enterprise) anyBound = true
-      lines.push(`| \`${command.exposedAs}\` | ${command.toolId} | ${command.version} | ${record?.sideEffects ?? 'unknown'} | ${signIn} | ${guide ? `\`${guide}\`` : '-'} |`)
-    }
-    if (blockedTools.size > 0) {
-      lines.push('', 'Unavailable commands (do not run these or use a different program in their place):', '')
-      for (const command of lock.commands) {
-        if (blockedTools.has(command.toolId)) lines.push(`- \`${command.exposedAs}\` (${command.toolId})`)
-      }
-      lines.push('', SUPPORT_FAILURE)
-    }
-    if (anyBound) {
-      lines.push(
-        '',
-        'A tool marked "enterprise sign-in" gets its credential from Halo while the user is signed in.',
-        'If it reports that it is not signed in or not authorized, ask the user to sign in from the',
-        'organization icon beside the send button, then run it again. Never ask for, print, store or pass a credential.',
-      )
-    }
-    lines.push(
-      '',
-      'Read a tool\'s guide before its first use in a task.',
-      'A command shown as `halo-<name>` has that prefix because another `<name>` already exists on this',
-      'computer; plain `<name>` runs that other program, not this tool.',
-      'If a tool that writes data fails with an unknown outcome, check the result before running it again.',
-      '',
-    )
-    return lines.join('\n')
-  }
-
-  /** Release an execution's pin. Its versions become removable once no pin remains. */
-  releaseExecution(executionId: string): Promise<boolean> {
-    return this.serialize(async () => {
-      try {
-        await fsp.unlink(this.path('locks', lockFileName(executionId)))
-        return true
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false
-        throw err
-      }
-    })
-  }
-
-  async readExecutionLock(executionId: string): Promise<CliExecutionLock | null> {
-    try {
-      const lock = JSON.parse(
-        await fsp.readFile(this.path('locks', lockFileName(executionId)), 'utf-8')
-      ) as CliExecutionLock
-      return lock.executionId === executionId ? lock : null
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
-      this.log.error('[CliTools] Execution lock unreadable; treating as absent', { execution: executionId })
-      return null
-    }
-  }
-
-  async listExecutionLocks(): Promise<CliExecutionLock[]> {
-    let names: string[]
-    try {
-      names = await fsp.readdir(this.path('locks'))
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw err
-    }
-    const locks: CliExecutionLock[] = []
-    for (const name of names.filter(n => n.endsWith('.json'))) {
-      try {
-        locks.push(JSON.parse(await fsp.readFile(this.path('locks', name), 'utf-8')) as CliExecutionLock)
-      } catch {
-        // An unreadable lock still protects nothing we can name; report it once.
-        this.log.error('[CliTools] Skipping unreadable execution lock', { file: name })
-      }
-    }
-    return locks
-  }
-
-  /** Delete views no execution lock refers to. Returns the number removed. */
-  pruneViews(): Promise<number> {
-    return this.serialize(async () => {
-      const referenced = new Set((await this.listExecutionLocks()).map(lock => lock.viewKey))
-      let names: string[]
-      try {
-        names = await fsp.readdir(this.path('views'))
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0
-        throw err
-      }
-      let removed = 0
-      for (const name of names) {
-        if (referenced.has(name)) continue
-        await fsp.rm(this.path('views', name), { recursive: true, force: true })
-        removed += 1
-      }
-      if (removed > 0) this.log.log('[CliTools] Pruned unused command views', { removed })
-      return removed
-    })
   }
 }

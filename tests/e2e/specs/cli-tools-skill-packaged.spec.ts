@@ -1,16 +1,15 @@
 /**
  * Command-line tool skills in an installed (packaged) Halo.
  *
- * A scripted model checks that a static tool skill is offered, loads it
- * through the engine's Skill tool, reads the pinned TOOLS.md it points to,
- * and runs the command in ordinary chat and digital-human chat.
+ * A scripted model checks that the tool's skill is offered, loads it through
+ * the engine's Skill tool and runs the command by the absolute path the skill
+ * names — two tool calls — in ordinary chat and digital-human chat.
  *
  * Needs a package built with npm.cowsay-1.6.0.hcli in resources/cli-preset
  * (git-ignored), so it is not part of any default project. The model is
  * scripted: this shows the wiring, not that a real model picks the skill.
  */
 
-import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
@@ -21,17 +20,17 @@ import { navigateToChat } from '../fixtures/helpers'
 test.setTimeout(300000)
 
 const TOOL_ID = 'npm.cowsay'
-const SKILL = `cli-npm-cowsay-${createHash('sha256').update(TOOL_ID).digest('hex').slice(0, 12)}`
+/** `<command>-<tool id>-<install id>`; the install id is chosen on this device. */
+const SKILL = /cowsay-npm-cowsay-[0-9a-f]{6}/
 const ENTRIES = { chat: 'CLI_SKILL_CHAT', dh: 'CLI_SKILL_DH' } as const
 type Entry = keyof typeof ENTRIES
-const PINNED_GUIDE = 'HALO_CLI_TOOLS_BIN/../TOOLS.md'
 
 interface EntryRecord {
   advertised: boolean
+  skillName?: string
   skillTool?: string
   skillResult?: { text: string; isError: boolean }
-  bodyReached: boolean
-  guide?: { text: string; isError: boolean }
+  launcher?: string
   run?: { text: string; isError: boolean }
 }
 
@@ -95,32 +94,26 @@ async function startScriptedModel(): Promise<ScriptedModel> {
       const skillTool = request.tools?.find(tool => tool.name === 'Skill' || tool.name === 'skill')?.name
       const shell = request.tools?.find(tool => tool.name === 'Bash' || tool.name === 'bash')?.name
       if (!entry || !shell) { sse(res, { type: 'text', text: 'done' }); return }
-      const record = entries.get(entry) ?? { advertised: false, bodyReached: false }
+      const record = entries.get(entry) ?? { advertised: false }
       entries.set(entry, record)
       const messages = request.messages ?? []
       const loadId = `toolu_skill_${entry}`
-      const guideId = `toolu_guide_${entry}`
       const runId = `toolu_run_${entry}`
       const loaded = toolResult(messages, loadId)
-      const guide = toolResult(messages, guideId)
       const ran = toolResult(messages, runId)
-      if (!loaded && !guide && !ran) {
-        record.advertised = body.includes(SKILL)
+      if (!loaded && !ran) {
+        record.skillName = SKILL.exec(body)?.[0]
+        record.advertised = !!record.skillName
         record.skillTool = skillTool
-        if (skillTool && record.advertised) {
-          sse(res, { type: 'tool_use', id: loadId, name: skillTool, input: skillTool === 'skill' ? { name: SKILL } : { skill: SKILL } })
+        if (skillTool && record.skillName) {
+          sse(res, { type: 'tool_use', id: loadId, name: skillTool, input: skillTool === 'skill' ? { name: record.skillName } : { skill: record.skillName } })
           return
         }
       }
-      if (loaded && !guide && !ran) {
+      if (loaded && !ran) {
         record.skillResult = loaded
-        record.bodyReached = body.includes(PINNED_GUIDE) && body.includes(TOOL_ID)
-        sse(res, { type: 'tool_use', id: guideId, name: shell, input: { command: `cat "$${PINNED_GUIDE}"`, description: 'Read the pinned command guide' } })
-        return
-      }
-      if (!ran) {
-        record.guide = guide
-        sse(res, { type: 'tool_use', id: runId, name: shell, input: { command: 'cowsay CLI_SKILL_MOO', description: 'Run the command in the guide' } })
+        record.launcher = /- `cowsay`: `([^`]+)`/.exec(loaded.text)?.[1]
+        sse(res, { type: 'tool_use', id: runId, name: shell, input: { command: `"${record.launcher ?? 'missing-launcher'}" CLI_SKILL_MOO`, description: 'Run the command the skill names' } })
         return
       }
       record.run = ran
@@ -138,7 +131,9 @@ for (const sdkEngine of ['halo', 'anthropic', 'dsh'] as const) {
   test.describe(`Command-line tool skills with ${ENGINE_NAMES[sdkEngine]}`, () => {
     test.use({ sdkEngine, hostCommands: 'system-only', explicitClaudeCode: sdkEngine === 'anthropic' })
 
-    test('a tool skill is offered, loads through the Skill tool and leads to the command, in chat and digital-human chat', async ({ electronApp, window }, testInfo) => {
+    test('a tool skill is offered, loads through the Skill tool and leads to the command, in chat and digital-human chat', {
+      annotation: { type: 'acceptance', description: JSON.stringify({ caseId: 'capabilities.command-line-tools.skill-runs-tool', evidence: 'app-e2e', mode: 'scripted', variant: { engine: sdkEngine } }) },
+    }, async ({ electronApp, window }, testInfo) => {
       expect(await electronApp.evaluate(({ app }) => app.isPackaged)).toBe(true)
       const engine = await window.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.getEngineAvailability())
       const engineState = engine.data as { activeEngine?: string; degradedFrom?: string | null } | undefined
@@ -155,9 +150,13 @@ for (const sdkEngine of ['halo', 'anthropic', 'dsh'] as const) {
       expect(packaged).toContain('npm.cowsay-1.6.0.hcli')
       expect(runtime.builtinSkills, 'the package ships its built-in skills').not.toBeNull()
       expect(runtime.builtinSkills, 'the generic tool guide skill no longer ships').not.toContain('halo-cli-tools')
-      const staticSkill = path.join(runtime.home, '.agents', 'skills', SKILL, 'SKILL.md')
-      await expect.poll(() => fs.existsSync(staticSkill), { timeout: 30000 }).toBe(true)
-      expect(fs.readFileSync(staticSkill, 'utf8')).toContain(PINNED_GUIDE)
+      const skillsDir = path.join(runtime.home, '.agents', 'skills')
+      const skillName = () => (fs.existsSync(skillsDir) ? fs.readdirSync(skillsDir) : []).find(name => SKILL.test(name))
+      await expect.poll(skillName, { timeout: 30000 }).toBeTruthy()
+      const launcher = path.join(cliRoot, 'tools', TOOL_ID, 'bin', 'cowsay')
+      const skillText = fs.readFileSync(path.join(skillsDir, skillName()!, 'SKILL.md'), 'utf8')
+      expect(skillText).toContain(`- \`cowsay\`: \`${launcher}\``)
+      expect(skillText).not.toMatch(/HALO_CLI_TOOLS_BIN|TOOLS\.md/)
 
       const model = await startScriptedModel()
       const evidence: Record<string, unknown> = { engine: sdkEngine, packaged }
@@ -189,12 +188,10 @@ for (const sdkEngine of ['halo', 'anthropic', 'dsh'] as const) {
         const check = (label: string, entry: Entry) => {
           const record = model.entries.get(entry)!
           evidence[entry] = record
-          expect.soft(record.advertised, `${label}: ${SKILL} is offered to the model`).toBe(true)
+          expect.soft(record.advertised, `${label}: the cowsay skill is offered to the model`).toBe(true)
           expect.soft(record.skillTool, `${label}: the session has a Skill tool`).toBeTruthy()
-          expect.soft(record.skillResult?.isError, `${label}: loading ${SKILL} succeeds`).toBe(false)
-          expect.soft(record.bodyReached, `${label}: the skill body names the tool and TOOLS.md`).toBe(true)
-          expect.soft(record.guide?.isError, `${label}: the pinned guide is readable`).toBe(false)
-          expect.soft(record.guide?.text, `${label}: the pinned guide names the runnable command`).toContain('| `cowsay` | npm.cowsay |')
+          expect.soft(record.skillResult?.isError, `${label}: loading the skill succeeds`).toBe(false)
+          expect.soft(record.launcher, `${label}: the skill names the fixed launcher`).toBe(path.join(cliRoot, 'tools', TOOL_ID, 'bin', 'cowsay'))
           expect.soft(record.run?.isError, `${label}: the command exits 0`).toBe(false)
           expect.soft(record.run?.text ?? '', `${label}: the command ran`).toContain('CLI_SKILL_MOO')
         }
@@ -218,11 +215,8 @@ for (const sdkEngine of ['halo', 'anthropic', 'dsh'] as const) {
         await expect.poll(() => model.entries.get('dh')?.run !== undefined, { timeout: 120000 }).toBe(true)
         check('digital-human chat', 'dh')
 
-        const views = path.join(cliRoot, 'views')
-        const keys = fs.readdirSync(views).filter(key => fs.existsSync(path.join(views, key, 'view.json')))
-        expect(keys.length).toBeGreaterThan(0)
-        evidence.views = keys
-        for (const key of keys) expect(fs.existsSync(path.join(views, key, 'skills'))).toBe(false)
+        expect(fs.existsSync(path.join(cliRoot, 'views'))).toBe(false)
+        evidence.install = JSON.parse(fs.readFileSync(path.join(cliRoot, 'tools', TOOL_ID, 'install.json'), 'utf8'))
       } finally {
         await testInfo.attach('cli-skill-evidence', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' })
         await model.close()

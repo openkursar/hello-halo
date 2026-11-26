@@ -12,6 +12,8 @@ import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
 
 export interface ManagedToolSkillInput {
   toolId: string
+  /** One installation of the tool; a new one replaces the skill of the previous. */
+  installId: string
   name: string
   description: string
   body: string
@@ -439,7 +441,8 @@ export interface AppManagerService {
   /** Stored package for migration; never hydrates or rewrites personal files. */
   getSkillRecord(appId: string): InstalledApp | null
 
-  reconcileManagedToolSkill(input: ManagedToolSkillInput): Promise<void>
+  /** Resolves to the skill file Halo now manages for the tool, or null when it manages none. */
+  reconcileManagedToolSkill(input: ManagedToolSkillInput): Promise<string | null>
   removeManagedToolSkill(toolId: string): Promise<void>
   listManagedToolSkillIds(): string[]
 

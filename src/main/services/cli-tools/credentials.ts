@@ -11,9 +11,9 @@
  *   2. sets the binding's fixed variables (e.g. the server address);
  *   3. reads the file and sets the variable when it holds an unexpired value.
  *
- * Signing in or out therefore needs no new view: the next run of the tool reads
- * whatever the file holds at that moment. The value never appears in the
- * launcher, the view, TOOLS.md, the session environment or a log.
+ * Signing in or out therefore needs no new launcher: the next run of the tool
+ * reads whatever the file holds at that moment. The value never appears in
+ * the launcher, the tool's skill, the session environment or a log.
  *
  * Only versions shipped with the build or installed from the enterprise
  * catalog are bound; a user import or a registered program with the same id
@@ -43,7 +43,7 @@ export function sourceMayBind(source: CliToolSource): boolean {
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 /** Variables that control how the runtime or the shell starts; a binding never sets them. */
-const RESERVED_ENV = /^(PATH|PATHEXT|HOME|USERPROFILE|SHELL|COMSPEC|SYSTEMROOT|TEMP|TMP|TMPDIR|NODE_OPTIONS|NODE_PATH|NODE_EXTRA_CA_CERTS|HALO_CLI_TOOLS_BIN|ELECTRON_.*|LD_.*|DYLD_.*)$/i
+const RESERVED_ENV = /^(PATH|PATHEXT|HOME|USERPROFILE|SHELL|COMSPEC|SYSTEMROOT|TEMP|TMP|TMPDIR|NODE_OPTIONS|NODE_PATH|NODE_EXTRA_CA_CERTS|ELECTRON_.*|LD_.*|DYLD_.*)$/i
 const MAX_VALUE = 4096
 
 function validEnvName(name: unknown): name is string {
@@ -79,7 +79,7 @@ export function validateCredentialBinding(
   }
 }
 
-/** File name of a view's credential preload for one launcher target. */
+/** File name of the credential preload for one launcher of a tool. */
 export function credentialPreloadFile(index: number): string {
   return `credential-${index}.cjs`
 }

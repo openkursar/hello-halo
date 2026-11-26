@@ -269,12 +269,12 @@ test.describe('organization tool launchers', () => {
     await expect.poll(async () => (await readState(window)).boundTools[0]?.access).toBe('ready')
     const commands = [boundCommand, unboundCommand]
     const signedIn = parseProbe((await terminalProbe(window, commands)).text)
-    expect(signedIn.bin).not.toBe('')
+    expect(Object.keys(signedIn.bins).sort()).toEqual(commands.slice().sort())
     expect(signedIn.commands).toEqual({ [boundCommand]: 'credential-present', [unboundCommand]: 'credential-absent' })
     await settingsCard(window).getByRole('button', { name: 'Sign out', exact: true }).click()
     await expect(settingsStatus(window)).toHaveAttribute('data-status', 'signed-out')
     const signedOut = parseProbe((await terminalProbe(window, commands)).text)
-    expect(signedOut.bin).not.toBe('')
+    expect(signedOut.bins).toEqual(signedIn.bins)
     expect(signedOut.commands).toEqual({ [boundCommand]: 'credential-absent', [unboundCommand]: 'credential-absent' })
   })
 

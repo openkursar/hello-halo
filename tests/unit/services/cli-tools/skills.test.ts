@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CLI_SKILL_DESCRIPTION_MAX,
+  cliSkillDescription,
   cliSkillName,
   renderCliSkill,
   resolveSkillDescription,
@@ -34,21 +35,33 @@ describe('CLI skill descriptions', () => {
   })
 })
 
-describe('static CLI skills', () => {
-  it('uses a stable bounded name and disambiguates equal slugs', () => {
-    expect(cliSkillName('com.example-tool')).toMatch(/^cli-com-example-tool-[a-z0-9]{12}$/)
-    expect(cliSkillName('com.example-tool')).not.toBe(cliSkillName('com.example.tool'))
-    expect(cliSkillName(`${'a'.repeat(46)}-long-tool`)).toMatch(/^cli-a{46}-[a-z0-9]{12}$/)
-    expect(cliSkillName('z'.repeat(128)).length).toBeLessThanOrEqual(64)
+describe('CLI tool skills', () => {
+  it('names the command, the tool and the installation, within the length limit', () => {
+    expect(cliSkillName('tickets', 'npm.example.tickets-cli', '7f3a9c')).toBe('tickets-npm-example-tickets-cli-7f3a9c')
+    expect(cliSkillName('tool', 'com.example.tool', '')).toBe('tool-com-example-tool')
+    const long = cliSkillName('tool', `com.example.${'very-long-name.'.repeat(8)}a`, '7f3a9c')
+    const other = cliSkillName('tool', `com.example.${'very-long-name.'.repeat(8)}b`, '7f3a9c')
+    expect(long.length).toBeLessThanOrEqual(64)
+    expect(long).toMatch(/^tool-com-example-very-long-name-.*-[0-9a-f]{8}-7f3a9c$/)
+    expect(long).not.toBe(other)
   })
 
-  it('uses the active pin only, and tells the agent not to fall back', () => {
-    const body = renderCliSkill('com.example-tool')
-    expect(body).toContain('`com.example-tool`')
-    expect(body).toContain('`$HALO_CLI_TOOLS_BIN/../TOOLS.md`')
-    expect(body).toMatch(/unset or empty.*do not run this tool or fall back to a bare command/)
-    expect(body).toMatch(/tool is unavailable or unlisted, do not run it or use another program in its place/)
-    expect(body).toContain('from the launcher directory')
-    expect(body).not.toMatch(/organization|^---/)
+  it('says which command a description belongs to', () => {
+    expect(cliSkillDescription('tickets', 'Query tickets.')).toBe('Companion skill for the tickets command-line tool. Query tickets.')
+    expect(Array.from(cliSkillDescription('tickets', '工'.repeat(400)))).toHaveLength(CLI_SKILL_DESCRIPTION_MAX)
+  })
+
+  it('names the launcher by absolute path ahead of the guide, and nothing about sessions', () => {
+    const body = renderCliSkill({
+      toolId: 'com.example.tool', installId: '7f3a9c',
+      launches: [{ command: 'tool', path: '/data/cli/tools/com.example.tool/bin/tool', cmdPath: 'C:\\data\\tool.cmd' }],
+      guide: '# Example\nRun `tool list`.\n',
+    })
+    expect(body).toContain('- `tool`: `/data/cli/tools/com.example.tool/bin/tool`')
+    expect(body).toContain('(cmd.exe and PowerShell: `C:\\data\\tool.cmd`)')
+    expect(body.indexOf('/bin/tool')).toBeLessThan(body.indexOf('Run `tool list`.'))
+    expect(body).toContain('install 7f3a9c')
+    expect(body).not.toMatch(/HALO_CLI_TOOLS_BIN|TOOLS\.md|PATH/)
+    expect(renderCliSkill({ toolId: 'x', installId: 'a', launches: [{ command: 'x', path: '/x' }] })).toContain('`--help`')
   })
 })

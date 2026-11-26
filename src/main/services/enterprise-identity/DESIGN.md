@@ -41,7 +41,7 @@ Withdrawal invalidates pending issuance and atomically replaces the affected
 slot with an expired tombstone or unlinks it. A subject change blocks all new
 issuance until every old slot is withdrawn, even if display names match. Failed
 withdrawal is reported and does not permit replacement issuance; an already
-pinned launcher can still read the old value until withdrawal or its own expiry
+running launcher can still read the old value until withdrawal or its own expiry
 if the filesystem rejects both operations. Sign-out and device unbinding
 withdraw local slots before contacting the provider. Quit withdraws synchronously;
 configured startup clears or detaches leftovers before allowing issuance.

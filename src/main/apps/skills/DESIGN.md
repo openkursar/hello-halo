@@ -80,11 +80,12 @@ to the affected skill. Successful preservation is not a library-wide warning.
 
 ### Installed CLI tools
 
-Bootstrap subscribes to the usable CLI set as soon as App Manager is ready. A
-user session with a CLI pin can await static reconciliation before its engine
-reads the catalog, even when background preparation has not run. A failed or
-timed-out reconciliation does not block the session or remove its pin. Terminals
-and sessions without a CLI pin do not wait. The first check in a process reads only
+Bootstrap subscribes to the usable CLI set once the tool store is prepared
+and App Manager is ready; no session or terminal waits for it. Each tool's skill
+is installed with the tool, names its launchers by absolute path and carries
+its guide (see `services/cli-tools/DESIGN.md`). After each reconciliation the
+file App Manager manages for the tool, or none, is recorded in the tool's
+installation. The first check in a process reads only
 a fixed-size stamp header for an unchanged revision; later requests for a
 reconciled revision do not read it again. A changed revision compares per-tool
 fingerprints before updating managed skills. An interrupted pass leaves the

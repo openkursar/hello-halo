@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
-import { delimiter, join } from 'path'
+import { join } from 'path'
 import { createHash } from 'crypto'
 import { CliToolStore } from '../../../../src/main/services/cli-tools'
 import type { CatalogPackageExpectation } from '../../../../src/main/services/cli-tools'
@@ -59,88 +59,60 @@ afterEach(() => {
   removeTree(dir)
 })
 
-describe('cli-tools host: environments', () => {
-  it('leaves an environment unchanged before init and when no tool exists', async () => {
-    vi.resetModules()
-    const bare = await import('../../../../src/main/services/cli-tools/host')
-    const env: Record<string, string | undefined> = { PATH: '/usr/bin', HALO_CLI_TOOLS_BIN: '/stale' }
-    expect(await bare.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })).toBeNull()
-    expect(env).toEqual({ PATH: '/usr/bin' })
+const launcherOf = (command = 'tool', id = ID) => join(root, 'tools', id, 'bin', process.platform === 'win32' ? `${command}.cmd` : command)
 
-    const host = await startHost()
-    const empty: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    expect(await host.applyCliToolsEnv(empty, { entry: 'other', engine: 'claude' })).toBeNull()
-    expect(empty).toEqual({ PATH: '/usr/bin' })
-  })
-
-  it('imports a bundled tool on first use and appends its launchers after the existing PATH', async () => {
+describe('cli-tools host: launchers and skills', () => {
+  it('imports a bundled tool when prepared and gives it launchers at a fixed path', async () => {
     preset('1.0.0')
     const host = await startHost()
-    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    const binDir = await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })
-    expect(binDir).toBeTruthy()
-    expect(env.PATH).toBe(`/usr/bin${delimiter}${binDir}`)
-    expect(env[host.CLI_TOOLS_BIN_ENV]).toBe(binDir)
-    expect(existsSync(join(binDir!, process.platform === 'win32' ? 'tool.cmd' : 'tool'))).toBe(true)
-    expect(existsSync(join(binDir!, '..', 'TOOLS.md'))).toBe(true)
+    await host.prepareCliTools()
+    expect(existsSync(launcherOf())).toBe(true)
     const state = await directStore().readState()
-    expect(state.tools[ID]).toMatchObject({ current: '1.0.0' })
+    expect(state.tools[ID]).toMatchObject({ current: '1.0.0', installId: expect.stringMatching(/^[0-9a-f]{6}$/) })
     expect(state.tools[ID].versions['1.0.0'].source).toBe('preset')
     expect(existsSync(join(root, 'preset-stamp.json'))).toBe(true)
+    expect(existsSync(join(root, 'views'))).toBe(false)
+    expect(existsSync(join(root, 'locks'))).toBe(false)
   })
 
-  it('keeps the same directory until the tool set changes', async () => {
+  it('keeps the launcher path across versions and writes no launcher without a runtime', async () => {
     preset('1.0.0')
     const host = await startHost()
-    const first = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'other', engine: 'claude' })
-    const second = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'terminal', engine: 'terminal' })
-    expect(second).toBe(first)
-
+    await host.prepareCliTools()
     await directStore().importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'user-import' })
-    const third = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'other', engine: 'codex' })
-    expect(third).not.toBe(first)
-    expect(readFileSync(join(third!, '..', 'TOOLS.md'), 'utf-8')).toContain('2.0.0')
-    // The earlier set stays pinned while this process lives.
-    expect(existsSync(first!)).toBe(true)
+    expect(readFileSync(launcherOf(), 'utf-8')).toContain('2.0.0-')
+
+    removeTree(root)
+    vi.resetModules()
+    const missing = await import('../../../../src/main/services/cli-tools/host')
+    missing.initCliTools({ root, runtimePath: join(dir, 'missing-runtime'), presetDir })
+    await missing.prepareCliTools()
+    expect(existsSync(join(root, 'tools'))).toBe(false)
   })
 
-  it('exposes a command the user already has as halo-<name> and leaves theirs first on PATH', async () => {
-    const userBin = join(dir, 'user-bin')
-    mkdirSync(userBin)
-    writeFileSync(join(userBin, process.platform === 'win32' ? 'tool.cmd' : 'tool'), '#!/bin/sh\n', { mode: 0o755 })
+  it('lists organization tools whose skill is installed, and drops them with their launchers', async () => {
     preset('1.0.0')
     const host = await startHost()
-    const env: Record<string, string | undefined> = { PATH: userBin }
-    const binDir = await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })
-    expect(env.PATH!.split(delimiter)[0]).toBe(userBin)
-    expect(readdirSync(binDir!).some(name => name.startsWith('halo-tool'))).toBe(true)
-    expect(readdirSync(binDir!).some(name => name === 'tool' || name === 'tool.cmd')).toBe(false)
-  })
+    await host.prepareCliTools()
+    expect(host.peekOrganizationTools()).toEqual([])
+    const { installId } = (await directStore().readInstallRecord(ID))!
+    const skill = { name: `tool-com-example-tool-${installId}`, path: join(dir, 'skills', 'SKILL.md') }
+    await host.recordCliToolSkill(ID, installId, skill)
+    expect(host.peekOrganizationTools()).toEqual([{ toolId: ID, name: ID, skillName: skill.name }])
+    expect((await directStore().readInstallRecord(ID))?.skill).toEqual(skill)
 
-  it('degrades to no tools when the runtime is missing', async () => {
-    preset('1.0.0')
-    vi.resetModules()
-    const host = await import('../../../../src/main/services/cli-tools/host')
-    host.initCliTools({ root, runtimePath: join(dir, 'missing-runtime'), presetDir })
-    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    expect(await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })).toBeNull()
-    expect(env).toEqual({ PATH: '/usr/bin' })
+    await directStore().importPackage(writePackage(pkgs, { id: 'com.example.mine', commands: [{ name: 'mine', entry: 'bin/tool.js' }] }), { source: 'user-import' })
+    const mine = (await directStore().readInstallRecord('com.example.mine'))!
+    await host.recordCliToolSkill('com.example.mine', mine.installId, { name: 'mine-x', path: join(dir, 'mine') })
+    expect(host.peekOrganizationTools().map(tool => tool.toolId)).toEqual([ID])
+
+    await host.setCliToolDisabled(ID, true)
+    await vi.waitFor(() => expect(host.peekOrganizationTools()).toEqual([]))
+    expect(existsSync(launcherOf())).toBe(false)
   })
 })
 
 describe('cli-tools host: bundled tools across launches', () => {
-  it('releases the pins of the previous process on start', async () => {
-    preset('1.0.0')
-    const before = await startHost()
-    await before.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'other', engine: 'claude' })
-    expect(readdirSync(join(root, 'locks'))).toHaveLength(1)
-
-    await new Promise(resolve => setTimeout(resolve, 5))
-    const after = await startHost()
-    await after.prepareCliTools()
-    expect(existsSync(join(root, 'locks')) ? readdirSync(join(root, 'locks')) : []).toEqual([])
-  })
-
   it('upgrades a bundled version but keeps a version the user chose', async () => {
     preset('1.0.0')
     await (await startHost()).prepareCliTools()
@@ -246,23 +218,19 @@ describe('cli-tools host: administrator catalog', () => {
     expect(await host.readCliToolState()).toEqual(before)
   })
 
-  it('revokes only listed installed tools and keeps them out of new executions', async () => {
+  it('revokes only listed installed tools and takes their launchers away', async () => {
     preset('1.0.0')
     const host = await startHost()
-    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    expect(await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })).toBeTruthy()
+    await host.prepareCliTools()
+    expect(existsSync(launcherOf())).toBe(true)
 
     expect(await host.applyCatalogRevocations({ [ID]: true, 'com.example.absent': true })).toEqual([ID])
     expect(await host.applyCatalogRevocations({ [ID]: true })).toEqual([])
     expect((await host.readCliToolState())!.tools['com.example.absent']).toBeUndefined()
-
-    const after: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    expect(await host.applyCliToolsEnv(after, { entry: 'other', engine: 'claude' })).toBeNull()
-    expect(after).toEqual({ PATH: '/usr/bin' })
+    expect(existsSync(launcherOf())).toBe(false)
 
     expect(await host.applyCatalogRevocations({ [ID]: false })).toEqual([ID])
-    const restored: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    expect(await host.applyCliToolsEnv(restored, { entry: 'other', engine: 'claude' })).toBeTruthy()
+    expect(existsSync(launcherOf())).toBe(true)
   })
 })
 
@@ -314,8 +282,7 @@ describe('cli-tools host: local management', () => {
     const file = writePackage(pkgs)
     const preview = await host.previewUserPackage(file)
     await host.importUserPackage(file, { archiveSha256: preview.archiveSha256, makeCurrent: true })
-    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    expect(await host.applyCliToolsEnv(env, { entry: 'other', engine: 'claude' })).toBeTruthy()
+    expect(existsSync(launcherOf())).toBe(true)
     expect(await host.removeCliTool(ID)).toEqual({ deferred: 1 })
     expect(readdirSync(join(root, 'store', ID))).toHaveLength(1)
 
@@ -323,90 +290,5 @@ describe('cli-tools host: local management', () => {
     await next.prepareCliTools()
     expect(existsSync(join(root, 'store', ID)) ? readdirSync(join(root, 'store', ID)) : []).toEqual([])
     expect((await next.getCliToolsOverview()).pendingCleanup).toBe(0)
-  })
-})
-
-describe('cli-tools host: releasing session pins', () => {
-  const lockEntries = () => (existsSync(join(root, 'locks')) ? readdirSync(join(root, 'locks')) : [])
-    .map(name => JSON.parse(readFileSync(join(root, 'locks', name), 'utf-8')) as { entry: string; executionId: string })
-
-  // Only the sweep timer is faked, so a test decides when a sweep runs.
-  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
-  afterEach(() => { vi.useRealTimers() })
-
-  it('records the entry on each pin and does nothing without a session pin', async () => {
-    preset('1.0.0')
-    const host = await startHost()
-    expect(await host.releaseIdleCliTools()).toEqual({ released: 0, waiting: 0 })
-    await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'app-chat', engine: 'claude' })
-    await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'automation', engine: 'claude' })
-    expect(lockEntries().map(lock => lock.entry).sort()).toEqual(['app-chat', 'automation'])
-    expect(lockEntries().every(lock => lock.executionId.includes(`-${lock.entry}-`))).toBe(true)
-  })
-
-  it('releases an unheld pin only after the grace period, keeping a held one', async () => {
-    const host = await startHost({ presetDir: null })
-    await directStore().importPackage(writePackage(pkgs), { source: 'user-import' })
-    const v1 = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'chat', engine: 'claude' })
-    await directStore().importPackage(writePackage(pkgs, { version: '2.0.0' }), { source: 'user-import' })
-    const v2 = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'chat', engine: 'claude' })
-    expect(v2).not.toBe(v1)
-    host.holdCliTools(v2!)
-    await host.removeCliToolVersion(ID, '1.0.0')
-    expect(existsSync(v1!)).toBe(true)
-
-    const t0 = 1_000_000
-    // The first sweep only notes that v1 is unheld; v2 is held.
-    expect(await host.releaseIdleCliTools(t0)).toEqual({ released: 0, waiting: 1 })
-    expect(await host.releaseIdleCliTools(t0 + host.CLI_TOOLS_IDLE_GRACE_MS - 1)).toEqual({ released: 0, waiting: 1 })
-    expect(existsSync(v1!)).toBe(true)
-
-    expect(await host.releaseIdleCliTools(t0 + host.CLI_TOOLS_IDLE_GRACE_MS)).toEqual({ released: 1, waiting: 0 })
-    expect(existsSync(v1!)).toBe(false)
-    expect(existsSync(v2!)).toBe(true)
-    expect(readdirSync(join(root, 'store', ID))).toHaveLength(1)
-    expect((await host.getCliToolsOverview()).pendingCleanup).toBe(0)
-  })
-
-  it('restarts the grace period while a pin is held again', async () => {
-    preset('1.0.0')
-    const host = await startHost()
-    const bin = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'im', engine: 'claude' })
-    const grace = host.CLI_TOOLS_IDLE_GRACE_MS
-    expect((await host.releaseIdleCliTools(0)).waiting).toBe(1)
-    const release = host.holdCliTools(bin!)
-    expect((await host.releaseIdleCliTools(grace)).waiting).toBe(0)
-    release()
-    expect(await host.releaseIdleCliTools(grace + 1)).toEqual({ released: 0, waiting: 1 })
-    expect(await host.releaseIdleCliTools(2 * grace + 1)).toEqual({ released: 1, waiting: 0 })
-    expect(lockEntries()).toEqual([])
-  })
-
-  it('counts holds, ignores a repeated release and sweeps after the last one ends', async () => {
-    preset('1.0.0')
-    const host = await startHost()
-    const bin = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'automation', engine: 'claude' })
-    const first = host.holdCliTools(bin!)
-    const second = host.holdCliTools(bin!)
-    first()
-    first()
-    // Still held by the second session: no sweep is scheduled.
-    expect(vi.getTimerCount()).toBe(0)
-    second()
-    expect(vi.getTimerCount()).toBe(1)
-    // The scheduled sweep finds the pin unheld and waits out the grace period.
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(lockEntries().map(lock => lock.entry)).toEqual(['automation'])
-    expect(vi.getTimerCount()).toBe(1)
-    expect(host.holdCliTools(undefined)).toBeTypeOf('function')
-  })
-
-  it('never releases a terminal pin', async () => {
-    preset('1.0.0')
-    const host = await startHost()
-    await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'terminal', engine: 'terminal' })
-    expect(await host.releaseIdleCliTools(0)).toEqual({ released: 0, waiting: 0 })
-    expect(await host.releaseIdleCliTools(10 * host.CLI_TOOLS_IDLE_GRACE_MS)).toEqual({ released: 0, waiting: 0 })
-    expect(lockEntries().map(lock => lock.entry)).toEqual(['terminal'])
   })
 })

@@ -42,8 +42,8 @@ import { assertDelegatedAuthReady } from './cli-auth'
 import { waitForSdkInitialization } from './initialization'
 import { getDeviceIdentity } from '../../foundation/device-identity'
 import { applyOfficeRuntimeEnv } from '../office-runtime'
-import { applyCliToolsEnv, CLI_TOOLS_BIN_ENV, type CliExecutionEntry } from '../cli-tools'
 import { applyOrgSessionEnv } from '../enterprise-identity'
+import { orgConversationKey, orgReminderHooks } from './org-context'
 import { applyProxyEnv, mcpServerUrls } from '../proxy-policy'
 import { WorkingDirectoryUnavailableError } from './working-dir'
 import { createMemoryWriteHooks, type MemoryWriteGuardConfig } from '../../platform/memory'
@@ -271,10 +271,7 @@ export interface SessionSdkOptionsParams {
 }
 
 /** A session the user is, in effect, running: chat, automation, a team member's turn. */
-export type UserSessionSdkOptionsParams = SessionSdkOptionsParams & {
-  /** Where the session was started from; recorded on its CLI tool pin. Defaults to `other`. */
-  cliToolsEntry?: CliExecutionEntry
-}
+export type UserSessionSdkOptionsParams = SessionSdkOptionsParams
 
 /** A background task nobody asked for by name. It carries no session-shaped extras. */
 export type InternalTaskSdkOptionsParams = Pick<
@@ -474,11 +471,6 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
     // So is the picked level baked into the router key. It can change while
     // the level above does not: picking the value Model Config already has.
     String(sdkOptions.pickedReasoningEffort ?? ''),
-    // The installed CLI tool set is fixed in the spawned process's PATH. Its
-    // directory changes with any version, so an idle session picks up an
-    // update and a busy one keeps its tools until the turn ends. Absent
-    // without tools, which leaves earlier fingerprints unchanged.
-    ...(env[CLI_TOOLS_BIN_ENV] ? [`cli:${String(env[CLI_TOOLS_BIN_ENV])}`] : []),
     // Organization sign-in variables are fixed at spawn too: signing in or out
     // rebuilds an idle session so its programs see the current access point.
     ...(sdkOptions.orgSessionEnv ? [`org:${String(sdkOptions.orgSessionEnv)}`] : []),
@@ -980,13 +972,14 @@ const unpricedModelsLogged = new Set<string>()
 export async function buildUserSessionSdkOptions(
   params: UserSessionSdkOptionsParams
 ): Promise<Record<string, any>> {
-  const { cliToolsEntry = 'other', ...sessionParams } = params
-  const sdkOptions = await assembleSdkOptions(sessionParams, readUserAgentSettings())
-  // Installed CLI tools are for the user's own sessions; internal tasks never
-  // get them. Appended to PATH, so no command the user has is shadowed.
-  await applyCliToolsEnv(sdkOptions.env, { entry: cliToolsEntry, engine: String(sdkOptions.engineId) })
+  const sdkOptions = await assembleSdkOptions(params, readUserAgentSettings())
   const orgEnv = applyOrgSessionEnv(sdkOptions.env)
   if (orgEnv) sdkOptions.orgSessionEnv = createHash('sha256').update(orgEnv).digest('hex').slice(0, 16)
+  const engineId = sdkOptions.engineId as EngineId
+  const orgHooks = getEngineCapabilities(engineId)?.features.hooks
+    ? orgReminderHooks(orgConversationKey(params.spaceId, params.conversationId), engineId)
+    : undefined
+  if (orgHooks) addSdkHooks(sdkOptions, orgHooks)
   return sdkOptions
 }
 
