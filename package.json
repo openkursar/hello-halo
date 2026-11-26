@@ -319,6 +319,7 @@
         "from": "resources/cli-preset",
         "to": "cli-preset",
         "filter": [
+          "*.zip",
           "*.hcli",
           "trusted-keys.json",
           "catalog.json"

@@ -17,7 +17,9 @@ shadowed or renamed.
 There is one store for every source. A tool may be bundled with the build
 (`preset`), delivered by an administrator catalog (`catalog`) or imported by
 the user (`user-import`). The host records the source from the import path and
-never trusts a source declared inside a package.
+never trusts a source declared inside a package. The build and the catalog
+deliver a tool as one delivery bundle (`halo.cli.bundle/1`): its unchanged
+`.hcli` package and its skill, checked and switched together.
 
 The module is pure Node. `store.ts` takes the store root, runtime executable,
 runtime Node version and platform from its caller. `host.ts` is the one place
@@ -307,29 +309,40 @@ launchers in this process is deleted at once, and one that cannot be deleted
 now also waits. `launchedDirs()` exposes that set; the management view shows
 such a version as in use.
 
-**Administrator guide overrides.** A catalog may replace the package guide of
-one version (`CatalogToolStatus.guides`). `applyCatalogStatus` applies it only
-to an installed `preset` or `catalog` version whose payload integrity equals
-the catalog's, after re-checking the sha256 and the 64 KiB limit. The text is
-stored once per content as `guides/<sha256>.md`; the version record keeps only
-`guideOverride: {revision, sha256}`, never the text. `override: null` clears
-it and the package guide applies again; a version the catalog omits (for
-example a malformed or unsigned override) is left as it is. The override's
-sha256 is part of the tool's skill fingerprint, so a new revision rewrites the
-skill. Guide files no record refers to are deleted after each catalog apply. A
-missing or altered file is logged and the skill falls back to the package
-guide.
+### Delivery bundles (`bundle.ts`)
 
-A catalog may also carry the tool's skill on the tool entry
-(`CatalogToolStatus.skill`). It is for installed `preset` versions, which are
-not catalog versions and so receive no version guide; a tool shipped with the
-build is listed with no versions so that its skill and revocation still reach
-it. The skill goes to each preset version that no listed version guide
-covers and that holds no version guide from earlier, stored the same way with
-`guideOverride.tool: true`. `skill: null` (the catalog sets none) clears only
-overrides marked `tool`; an absent value (a malformed or refused skill) leaves
-them as they are. The order is therefore version guide, then tool skill, then
-the package guide. A tool the catalog does not list is not touched.
+A delivery bundle is a zip holding `bundle.json`, an optional `bundle.sig`,
+`cli.hcli` (the approved package, byte for byte) and `skill/` (SKILL.md and
+its files; absent when the tool has none). It is identified by `(id, version,
+revision)` and never changes; the Registry issues a new revision of an
+approved version when its skill or the signing key changes, never for a new
+CLI. `readBundle(bytes, reference, trust)` checks, stopping at the first
+failure:
+
+1. the whole bundle's sha256 and size against the catalog reference;
+2. the entry layout and limits, read from the zip directory before anything
+   is inflated (129 MiB bundle, 128 MiB `cli.hcli`, 2,000 skill files, 32 MiB
+   of skill, safe relative paths, no case-insensitive collisions);
+3. the signature under the build's trust policy (below), then `bundle.json`
+   strictly (unknown keys refused) with the same id, version and revision;
+4. `cli.hcli` against `cli.archiveSha256` and `cli.size`;
+5. `skill/` against `skill.sha256` (`halo.cli.skillpkg/1`: sha256 over
+   `"halo.cli.skillpkg/1\n"`, then `"<path>\n<sha256 of the file>\n"` per file
+   sorted by UTF-8 path bytes) and `skill.files`; SKILL.md must be UTF-8 text
+   within 1 MiB.
+
+The CLI package then goes through the ordinary import with `cli.archiveSha256`,
+`cli.integrity`, id and version as its expectations. When that content is
+already installed (same version and payload integrity), nothing is
+reinstalled: only the version's recorded `bundle` revision and `skill` change.
+A version installed before bundles, such as an earlier build's preset, takes
+its first bundle this way. A bundle's skill is recorded only on a `preset` or
+`catalog` version; a user's import of the same version keeps its package
+guide. The skill files are kept once per content in `skills/<sha256>/`,
+written through staging and left read-only, and are deleted when no version
+refers to them. A stored copy that no longer matches its digest is reported
+and the package guide stands in. Records and `guides/` texts that earlier
+builds kept for catalog guide overrides are dropped at the next start.
 
 Revocation takes a tool's launchers and skill away; a command already running
 finishes. It is not credential revocation: a tool's authorization is checked
@@ -360,16 +373,17 @@ installation id. Its name is `<command>-<tool id>-<install id>`, folded to
 lowercase letters, digits and dashes within 64 characters (a tool id cut to fit
 gets a digest), so two Halo installations sharing the personal skill folder
 never write or remove each other's skill. Its description says which command
-it belongs to, followed by the override guide's `description`, the package
+it belongs to, followed by the bundle skill's `description`, the package
 guide's, the manifest description, or a generated line, as one line of at most
 300 characters. Its body is a Halo header — a comment with the tool id and
 install id, then each command and its absolute launcher path (plus the `.cmd`
-path on Windows) — followed by the effective guide without its frontmatter
-(version guide, tool skill, then package guide; at most 64 KiB), or a pointer
-to `--help` when there is none. The skill names no Halo variable, index or
+path on Windows) — followed by the bundle's SKILL.md without its frontmatter,
+else the package guide (at most 64 KiB), or a pointer to `--help` when there is
+none. The bundle skill's other files travel with it as `attachments` and are
+installed beside SKILL.md. The skill names no Halo variable, index or
 session concept: reading it is enough to run the tool.
 
-Per-tool fingerprints cover the installation id, integrity, override sha256,
+Per-tool fingerprints cover the installation id, integrity, bundle skill sha256,
 names, description and commands, so Apps reads guides only for tools whose
 skill changed. `onDidChangeCurrentTools` fires after committing a change to
 the usable set (launchers already written); changes during catalog delivery are
@@ -400,31 +414,26 @@ summaries, not skill files.
 - **Sessions and terminals** get nothing from this module. Organization access
   for commands (for example a sign-in broker command) comes from
   `enterprise-identity` (`applyOrgSessionEnv`).
-- **Bundled tools.** Every `*.hcli` in the preset directory is imported with
-  source `preset`. It becomes current only when the tool has no current version
+- **Bundled tools.** Every delivery bundle (`*.zip`) and plain `*.hcli` in the
+  preset directory is imported with source `preset`. A bundle must be named
+  `<id>-<version>-r<revision>.zip` by the build's catalog snapshot
+  (`catalog.json`, `halo.cli.catalog/2`), which gives its sha256 and size and
+  may revoke the tool; an unnamed or revoked bundle is refused without
+  touching installed state, and the whole bundle check runs as for a download.
+  A plain package carries no skill of its own. A bundle becomes current only
+  when newly installed and above the version that was current, so an older
+  build never takes back a newer choice. It becomes current only when the tool has no current version
   or the current one is itself a preset, so a version the user or a catalog
   chose is kept. One exception: a tool the administrator delivers
   (`autoInstall`) takes a preset higher than its current catalog version, so
   a newer installer is not held back by an older delivery. `preset-stamp.json` records the file names, sizes and mtimes;
   an unchanged directory is skipped. Any failure leaves the stamp unwritten so
   the next launch retries.
-- **Bundled catalog.** An optional `catalog.json` (`halo.cli.catalog/1`) and,
-  when present alongside it, `trusted-keys.json` also enter the preset stamp.
-  The importer checks built-in entries against the staged package before
-  publishing and rejects a matching revoked entry without changing existing
-  revocation state. An explicitly listed version must match the ID, version,
-  archive digest and payload integrity and pass the configured signature
-  policy. A zero-version entry may supply signed tool-level text for a valid
-  matching preset archive, but cannot install anything on its own. Version
-  guide, tool skill and package guide apply in that order. Bundled text never
-  replaces a live catalog decision, including an explicit reset. The snapshot
-  isn't a whole catalog apply; it neither fetches nor updates live status.
-- **Catalog packages.** `installCatalogPackage(archive, expected)` imports a
-  package the caller downloaded from an administrator catalog with source
-  `catalog` and makes it current. The archive sha256, payload integrity, id
-  and version must all equal the catalog's (`expectedArchiveSha256`,
-  `expectedIntegrity`, `expectedTool`); any difference fails before publish
-  and leaves the installed versions unchanged.
+- **Catalog bundles.** `installCatalogBundle(bytes, reference)` installs a
+  bundle the store downloaded with source `catalog` and makes it current, or
+  only takes its skill when that CLI content is installed. Any refusal leaves
+  the installed versions unchanged. The verified CLI package is written to
+  `downloads/` only for the import and removed after it.
 - **Catalog revocation.** `applyCatalogRevocations({ id: revoked })` sets the
   revocation flag of each installed tool the catalog lists, whatever its
   source; tools the catalog does not list are untouched. The catalog is the
@@ -514,51 +523,36 @@ For each tool with a catalog version installed:
   `store/DESIGN.md` §3.13). It is kept while the catalog lists the tool with
   no version, so the store can still fall back to the preset copy, and
   dropped when the tool is listed with versions and no mark, or not listed.
-- `deliveryFailures` (`id@version` → `{integrity, code, at}`) records a
-  delivered version whose package was refused, so background reads skip it.
+- `deliveryFailures` (`id@version` → `{bundle, code, at}`) records a
+  delivered bundle that was refused, so background reads skip it.
   `recordDeliveryFailure` writes it; a catalog read drops entries whose
-  version is no longer listed with the same integrity; a successful import of
-  that version drops it too. The
+  version is no longer listed with the same bundle sha256; a successful
+  import of that version drops it too. The
   overview returns them for the tools page.
 - A failed catalog read changes nothing.
 
-**Signatures (A07).** `signature.ts` checks catalog versions with Ed25519 over
-the bytes
-`"halo.cli.sig/1\n" + id + "\n" + version + "\n" + archiveSha256 (lowercase hex) + "\n" + integrity + "\n"`.
-Trust comes from `<presetDir>/trusted-keys.json` (`halo.cli.trust/1`, raw
-32-byte base64 public keys), which the main build ships with the presets. A
-private deployment only injects the file.
+**Signatures (A07).** `signature.ts` checks a bundle's `bundle.sig`
+(`{alg: 'ed25519', keyId, value}`) with Ed25519 over
+`"halo.cli.bundle/1\n"` followed by the raw bytes of its `bundle.json`. Trust
+comes from `<presetDir>/trusted-keys.json` (`halo.cli.trust/1`, raw 32-byte
+base64 public keys), which the main build ships with the presets. A private
+deployment only injects the file.
 
-| Trust file | Mode | Catalog install |
+| Trust file | Mode | Bundle install (catalog and preset) |
 |---|---|---|
-| absent, or `keys: []` | `off` | not verified. UI shows "signature verification not enabled" |
+| absent, or `keys: []` | `off` | `bundle.sig` is ignored; digests alone. UI shows "signature verification not enabled" |
 | at least one valid key | `on` | needs a valid signature from a listed key, otherwise `SIGNATURE_MISSING` / `SIGNATURE_INVALID` |
-| unreadable, wrong schema, bad key | `broken` | every signed install fails (`SIGNATURE_INVALID`) — fail closed |
+| unreadable, wrong schema, bad key | `broken` | every bundle is refused (`SIGNATURE_INVALID`) — fail closed |
 
-Verification runs before download, inside `installCatalogPackage`, so a
-caller that skips the store layer is still checked. Presets and user imports
-are not catalog packages and are not signature-checked. The real backend
-sample (key id `halo-test-2026-11`) is a unit-test fixture.
-
-An administrator guide override is signed separately, because it can change
-after the version was approved:
-`"halo.cli.guide/1\n" + id + "\n" + version + "\n" + revision + "\n" + sha256 of the text (lowercase hex) + "\n"`.
-The host (`withAcceptedGuides`) applies the same trust modes: `off` accepts
-it, `on` needs a valid signature from a listed key, `broken` accepts none. A
-refused override is dropped with a log line (no text) and the version keeps
-the guide it had. The registry's Go test and `signature.test.ts` share one
-RFC 8032 vector.
-
-A tool's skill has no version and is signed in its own domain, so neither
-signature passes for the other:
-`"halo.cli.skill/1\n" + id + "\n" + revision + "\n" + sha256 of the text (lowercase hex) + "\n"`.
-`withAcceptedGuides` checks it under the same trust modes; a refused skill is
-dropped with a log line and the preset versions keep what they had. It also
-has a shared vector (`TestSkillMessageAndVector`).
+The check runs inside `readBundle`, so a caller that skips the store layer is
+still checked. Plain `.hcli` presets and user imports carry no signature. The
+skill is inside the signed `bundle.json` digest, so it needs no signature of
+its own. `signature.test.ts` holds a vector the Registry's
+`signing.VerifyBundle` also accepts.
 
 **State compatibility.** All new fields are optional, and `schema` stays 1.
 An older build reads the state, ignores `disabled`, `delisted`, `withdrawn`,
-`catalogUpdate`, `guideOverride`, `pendingCleanup`, `autoInstall`,
+`catalogUpdate`, `bundle`, `skill`, `pendingCleanup`, `autoInstall`,
 `deliveryFailures` and `installId`, and would treat an `external` version as
 a broken store version: it fails that tool, not the session. A downgrade
 therefore loses disables, a registered program stops working until the newer
@@ -601,12 +595,15 @@ fflate is loaded only when an archive is extracted.
   changed; launchers are rewritten only when their `launchKey` changed.
 - **Import:** hashing is proportional to the package (tens of MB for the
   tested tools), and extraction is synchronous inside fflate, bounded by the
-  limits above.
+  limits above. A bundle is read into memory once (its size is checked
+  first); a skill-only revision of installed content costs that read and the
+  skill write, no package extraction.
 - **A change to the usable set:** one `install.json` read per usable tool and
-  a launcher write for each changed tool; Apps then reads the guide (at most
-  64 KiB) of each tool whose skill changed.
-- **Management view:** opening it reads, per tool, at most one administrator
-  text and one guide head to show the current skill.
+  a launcher write for each changed tool; Apps then reads the skill (the
+  stored bundle skill, re-hashed, or the package guide up to 64 KiB) of each
+  tool whose skill changed.
+- **Management view:** opening it reads, per tool, at most one SKILL.md head
+  and one guide head to show the current skill.
 - **Verification:** `verifyVersion` re-hashes a version on request only.
 
 ## Known limits

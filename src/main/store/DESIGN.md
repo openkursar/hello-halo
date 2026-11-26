@@ -411,7 +411,7 @@ reaches account strength changes `auth.type` only; no client changes.
 ### 3.13 The CLI tool catalog installs through cli-tools
 
 `backend/cli-catalog.ts` reads the primary source's administrator-reviewed CLI
-catalog (`GET /clis.json`, schema `halo.cli.catalog/1`) with the identity
+catalog (`GET /clis.json`, schema `halo.cli.catalog/2`) with the identity
 token, like "my publications" (§3.4). It is the only store file that depends on
 `services/cli-tools`, and only on its public surface; cli-tools knows nothing of
 stores, URLs or tokens. The dependency points downward (a domain module calling
@@ -419,13 +419,16 @@ a service), and the store stays the only owner of source transport.
 
 - **On demand.** Listing never downloads a package. Partner tools install
   only when the user asks; administrator-delivered tools are below.
-  `installCliTool({id,
+  Each listed version names one delivery bundle (`bundle: {revision, sha256,
+  size, url}`): the approved `.hcli` and its skill in one zip. `installCliTool({id,
   version})` re-reads the catalog, refuses a tool that is revoked, missing,
-  withdrawn or unsupported on this platform, downloads the archive through the
-  driver (capped at the cli-tools archive limit), checks its sha256 against the
-  catalog, and hands a temp file to `installCatalogPackage`, which checks the
-  payload integrity, id and version before publishing it as current.
-- **Untrusted paths.** `downloadUrl` comes from the catalog body. The driver
+  withdrawn or unsupported on this platform, downloads the bundle through the
+  driver (capped at its listed size), and hands the bytes with the catalog's
+  reference to cli-tools `installCatalogBundle`, which runs every bundle check
+  (see `services/cli-tools/DESIGN.md` → Delivery bundles) before publishing it
+  as current. An unknown catalog schema, `halo.cli.catalog/1` included, is
+  refused as unsupported and changes nothing installed.
+- **Untrusted paths.** The bundle `url` comes from the catalog body. The driver
   accepts only a plain absolute path and joins it to the source URL, so the
   token never leaves the source and a gateway prefix is kept.
 - **Revocation.** Every catalog read applies the catalog's `revoked` flags to
@@ -467,10 +470,18 @@ a service), and the store stays the only owner of source transport.
   catalog lists the tool with no version, so that fallback still runs after
   the last version is withdrawn. Delivered versions cannot be deleted
   (`ADMIN_MANAGED`); the tool can be disabled and still updates.
+- **Bundle revisions.** A version's bundle changes when the administrator
+  changes its skill or the signing key; the CLI inside stays the same. Every
+  read compares the current preset or catalog version of each listed tool
+  (partner tools included) with the bundle the catalog names for it, and a
+  different one is fetched and installed: identical CLI content is not
+  reinstalled, only the skill and recorded revision change. This is also how
+  a copy installed before bundles (an earlier build's preset, rc.15 and
+  similar) gets its skill after an upgrade, without uninstalling anything.
 - **Delivery failures.** A refusal that would repeat (digest, manifest,
   path, platform, runtime, signature, `VERSION_CONFLICT`) is recorded per
-  `id@version` with the catalog integrity and not tried again by background
-  reads until the catalog lists that version with different content or stops
+  `id@version` with the bundle sha256 and not tried again by background
+  reads until the catalog lists that version with a different bundle or stops
   listing it. The user's "Sync" tries it once more, since a transfer corrupted
   on the way looks the same as a bad package; success clears the record, as
   does a successful manual import. Network and server faults are not recorded
@@ -483,30 +494,13 @@ a service), and the store stays the only owner of source transport.
   failed, how many tools changed and how many partner updates wait for the
   user; the page shows it as one line. Without `force` the call is an event
   and answers `null` when nothing was read.
-- **Signatures.** Each version's `signature` (`{alg: 'ed25519', keyId,
-  value}`) is parsed and passed with the expectation. When the build ships
-  `cli-preset/trusted-keys.json` with keys, `installCliTool` refuses a missing
-  or invalid signature **before** downloading. cli-tools checks again at
-  install. Without the file, verification is off and the UI says so. See
-  `services/cli-tools/DESIGN.md` → Signatures.
-- **Administrator guides.** A version may carry `guide: {revision, sha256,
-  content, signature}`, the administrator's replacement for the package guide.
-  `parseCliCatalog` checks the revision, the 64 KiB limit and that the text
-  hashes to `sha256`; a malformed one is left out of the status, so the
-  installed version keeps what it had. A version without `guide` clears any
-  earlier override. `catalogStatusOf` passes each version's integrity with
-  it, and cli-tools applies it to the matching installed version (signature
-  checked in the host). `installCliTool` applies the catalog again after the
-  install, so a new version gets its override at once. The text never reaches
-  the renderer.
-- **Tool skill.** A tool entry may carry `skill` in the same shape, the text
-  every version shares. Catalog versions already receive it through their
-  `guide`; the tool-level copy is for preset tools, which a registry lists
-  with no versions. `parseCliCatalog` checks it like a guide; a malformed one
-  is left out of the status (preset copies keep what they had), a missing one
-  is passed as `null` (cli-tools clears a skill it applied earlier). The
-  signature is checked in the host. A catalog delivery pass batches the CLI
-  current-set notification; Apps reconciles its static skills after delivery.
+- **Signatures and skills live in the bundle.** The catalog carries neither:
+  `bundle.sig` signs the bundle's own description, and its `skill/` is the
+  tool's skill for that version. Signatures are checked once the bundle is
+  downloaded, when the build ships `cli-preset/trusted-keys.json` with keys;
+  without the file, verification is off and the UI says so. A catalog
+  delivery pass batches the CLI current-set notification; Apps reconciles its
+  static skills after delivery. Skill text never reaches the renderer.
 - **Renderer view.** `CliCatalog` carries no URL, digest or token. The entry is
   gated on `capabilities.cliTools` (handshake `features.cliTools` and an
   identity provider in this build), per §3.1 the handshake gates the surface,

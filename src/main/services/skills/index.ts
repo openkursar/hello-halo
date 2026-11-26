@@ -6,7 +6,7 @@ export { discoverPersonalSkills, inspectSkill, readSkillMetadata, parseSkillMeta
 export type { DiscoveredSkill, SkillMetadata } from './discovery'
 export {
   insideAsar, readSkillPackage, writeSkillPackage, writeSkillContent, moveSkillFiles,
-  skillRevision, skillPackageDigest, withoutIncidentalFiles, assertSkillRevision, skillRemovalPath, prepareSkillPackage, prepareSkillRemoval,
+  skillRevision, skillPackageDigest, skillPackageFromBytes, withoutIncidentalFiles, assertSkillRevision, skillRemovalPath, prepareSkillPackage, prepareSkillRemoval,
 } from './files'
 export type { SkillPackage } from './files'
 export { readSkillPreference, writeSkillPreference, removeSkillPreference } from './preferences'

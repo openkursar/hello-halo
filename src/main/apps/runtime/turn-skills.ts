@@ -18,10 +18,16 @@
  * asking — run the tools its `allowed-tools` pre-approve for the rest of the
  * turn, run its own hooks, run itself as a sub-agent — must already be within
  * the policy, or the skill does not load.
+ *
+ * The skill Halo installed for a command-line tool is the exception to the
+ * skill list: it only tells how to run a command, and every command is still
+ * judged as one, so it loads whenever the turn may run commands, listed or
+ * not. Only a folder whose files are exactly what Halo wrote counts, and a
+ * skill of the same name that is not granted still blocks the name.
  */
 
 import { parse as parseYaml } from 'yaml'
-import { allowsSkill, canonicalBuiltinTool } from '../../../shared/apps/capability-policy'
+import { SKILL_TOOL, allowsBuiltin, allowsSkill, canonicalBuiltinTool, resolveBashAccess } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { AvailableSkill } from '../../../shared/apps/app-types'
 import { toSkillDirName } from '../../../shared/skill-naming'
@@ -38,6 +44,8 @@ export interface TurnSkill {
   granted: boolean
   /** Why it may not load here even so, or null */
   refusal: string | null
+  /** The skill Halo installed for a command-line tool */
+  tool?: boolean
 }
 
 export interface TurnSkillAccess {
@@ -63,12 +71,36 @@ export interface SkillCeiling {
   hooked: readonly string[]
 }
 
-/** Which skills are granted and which of those still cannot load. */
+/**
+ * Whether a turn may load command-line tool skills: it may run commands under
+ * the policy, and the session does not withhold the shell altogether.
+ */
+export function allowsToolSkills(
+  policy: CapabilityPolicy | undefined,
+  mode: CapabilityMode,
+  disallowed: readonly string[]
+): boolean {
+  return resolveBashAccess(policy, mode).scope !== 'none'
+    && !disallowed.some(entry => !entry.includes('(') && canonicalBuiltinTool(entry) === 'Bash')
+}
+
+/** Whether any command-line tool skill may load this turn. */
+export function grantsToolSkill(access: TurnSkillAccess | undefined): boolean {
+  return !!access?.skills.some(skill => skill.tool && skill.granted)
+}
+
+/**
+ * Which skills are granted and which of those still cannot load.
+ * `toolSkillFolders` are the folders of the command-line tool skills Halo
+ * manages; the skills in them follow {@link allowsToolSkills} instead of the
+ * skill list.
+ */
 export function turnSkillAccess(
   available: readonly AvailableSkill[],
   policy: CapabilityPolicy | undefined,
   mode: CapabilityMode,
-  ceiling: SkillCeiling
+  ceiling: SkillCeiling,
+  toolSkillFolders: readonly string[] = []
 ): TurnSkillAccess {
   const allowed = new Set(ceiling.allowedRules.map(normalizeRule))
   const denied = new Set(ceiling.disallowed.filter(entry => !entry.includes('(')).map(canonicalBuiltinTool))
@@ -89,10 +121,24 @@ export function turnSkillAccess(
       legacyNames.set(alias, names)
     }
   }
+  // Without the skill tool itself only command-line tool skills may load.
+  const skillTool = allowsBuiltin(policy, SKILL_TOOL, mode)
+  const toolFolders = new Set(toolSkillFolders)
+  const commands = toolFolders.size > 0 && allowsToolSkills(policy, mode, ceiling.disallowed)
   const skills = available.map((skill): TurnSkill => {
+    if (toolFolders.has(skill.path)) {
+      return {
+        dirName: skill.dirName,
+        name: skill.name,
+        path: skill.path,
+        granted: commands,
+        refusal: commands ? preApprovalRefusal(skill, covered, allowed) : null,
+        tool: true,
+      }
+    }
     const exact = policy?.allowedSkills?.includes(skill.dirName)
     const unambiguous = legacyNames.get(toSkillDirName(skill.dirName))?.size === 1
-    const granted = allowsSkill(policy, skill.dirName, mode)
+    const granted = skillTool && allowsSkill(policy, skill.dirName, mode)
       && (policy?.allowedSkills === undefined || exact || unambiguous)
     return {
       dirName: skill.dirName,

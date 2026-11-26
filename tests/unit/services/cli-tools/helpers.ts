@@ -1,13 +1,14 @@
 /**
- * Builders for `.hcli` test packages. Packages are assembled in memory and
- * zipped with the same library the store uses to read them.
+ * Builders for `.hcli` test packages and the delivery bundles that carry
+ * them, assembled in memory and zipped with the same library the store uses
+ * to read them.
  */
 
-import { chmodSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { strToU8, zipSync } from 'fflate'
+import { strToU8, unzipSync, zipSync } from 'fflate'
 
 export type Files = Record<string, string | Uint8Array>
 
@@ -89,4 +90,57 @@ export function removeTree(dir: string): void {
   }
   unlock(dir)
   rmSync(dir, { recursive: true, force: true })
+}
+
+export interface BundleSpec {
+  /** The `.hcli` the bundle carries, as written by `writePackage`. */
+  hcli: string
+  id?: string
+  version?: string
+  revision?: number
+  /** Files under `skill/`; null leaves the skill out. */
+  skill?: Files | null
+  skillSource?: 'store' | 'text' | 'package-guide'
+  /** Edit bundle.json before it is written (and signed). */
+  editJson?: (json: Record<string, unknown>) => void
+  /** Produces `bundle.sig` from the exact bundle.json bytes. */
+  sign?: (bundleJson: Uint8Array) => unknown
+  /** Extra raw zip entries. */
+  extra?: Files
+}
+
+/** The `halo.cli.skillpkg/1` digest, computed independently of bundle.ts. */
+export function skillDigestOf(files: Files): string {
+  const hash = createHash('sha256').update('halo.cli.skillpkg/1\n')
+  for (const path of Object.keys(files).sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))) {
+    const data = files[path]
+    hash.update(`${path}\n${createHash('sha256').update(typeof data === 'string' ? Buffer.from(data) : data).digest('hex')}\n`)
+  }
+  return hash.digest('hex')
+}
+
+/** A `halo.cli.bundle/1` zip and the catalog reference that names it. */
+export function buildBundle(spec: BundleSpec) {
+  const hcli = readFileSync(spec.hcli)
+  const manifest = JSON.parse(Buffer.from(unzipSync(hcli)['manifest.json']).toString('utf-8'))
+  const id = spec.id ?? manifest.id
+  const version = spec.version ?? manifest.version
+  const revision = spec.revision ?? 1
+  const skill = spec.skill === undefined ? { 'SKILL.md': '---\ndescription: Use for example tickets.\n---\nRun `tool --check` first.\n' } : spec.skill
+  const json: Record<string, unknown> = {
+    schema: 'halo.cli.bundle/1', id, version, revision,
+    cli: { archiveSha256: createHash('sha256').update(hcli).digest('hex'), integrity: manifest.integrity, size: hcli.length },
+    skill: skill ? { sha256: skillDigestOf(skill), files: Object.keys(skill).length, source: spec.skillSource ?? 'text', sourceRef: 'tool r1' } : null,
+  }
+  spec.editJson?.(json)
+  const bundleJson = strToU8(JSON.stringify(json))
+  const entries: Record<string, Uint8Array> = { 'bundle.json': bundleJson, 'cli.hcli': new Uint8Array(hcli) }
+  if (spec.sign) entries['bundle.sig'] = strToU8(JSON.stringify(spec.sign(bundleJson)))
+  for (const [path, data] of Object.entries(skill ?? {})) entries[`skill/${path}`] = typeof data === 'string' ? strToU8(data) : data
+  for (const [path, data] of Object.entries(spec.extra ?? {})) entries[path] = typeof data === 'string' ? strToU8(data) : data
+  const bytes = zipSync(entries)
+  return {
+    bytes,
+    ref: { id, version, revision, sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.byteLength },
+  }
 }

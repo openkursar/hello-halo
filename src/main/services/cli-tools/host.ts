@@ -9,6 +9,7 @@
  * stops a conversation or a terminal from starting.
  */
 
+import { randomUUID } from 'crypto'
 import { existsSync, promises as fsp } from 'fs'
 import { join } from 'path'
 import { Emitter } from '../../platform/event'
@@ -28,17 +29,9 @@ import {
 import { CliToolError, isCliToolError, type CliToolErrorCode } from './errors'
 import type { CliCredentialBinding } from './credentials'
 import type { CliSupportFilesConfig } from './support-files'
-import { PRESET_CATALOG_FILE, readPresetCatalog } from './preset-catalog'
-import {
-  TRUSTED_KEYS_FILE,
-  assertCatalogSignature,
-  guideSignatureAccepted,
-  loadTrustStore,
-  skillSignatureAccepted,
-  type CatalogSignature,
-  type TrustMode,
-  type TrustStore,
-} from './signature'
+import { PRESET_CATALOG_FILE, readPresetCatalog, type PresetCatalog } from './preset-catalog'
+import { BUNDLE_MAX_BYTES, readBundle, type BundleReference } from './bundle'
+import { TRUSTED_KEYS_FILE, loadTrustStore, type TrustMode } from './signature'
 import type {
   CliDeliveryFailureView,
   CliToolView,
@@ -51,7 +44,7 @@ export interface CliToolsHostOptions {
   root: string
   /** Executable launched as Node. */
   runtimePath: string
-  /** Directory of `.hcli` packages shipped with the build; null when the build has none. */
+  /** Directory of the delivery bundles (and plain `.hcli` packages) shipped with the build; null when it has none. */
   presetDir: string | null
   /** Tools whose process receives a host-held credential; supplied by the caller, never read here. */
   credentialBindings?: CliCredentialBinding[]
@@ -176,6 +169,7 @@ async function runPrepare(): Promise<void> {
   if (!cliStore || !options) return
   try {
     await cliStore.collectPendingCleanup()
+    await fsp.rm(join(options.root, 'downloads'), { recursive: true, force: true })
     if (options.presetDir) await importPresets(cliStore, options.presetDir, options.root)
     await cliStore.syncLaunchers()
     await refreshOrganizationTools()
@@ -192,42 +186,54 @@ interface PresetStamp {
 }
 
 /**
- * Import every `.hcli` in the build's preset directory. A preset becomes
- * current only when the tool has no current version or its current version
- * also came from a preset: a version the user or a catalog chose is kept.
- * An unchanged preset directory is skipped by its stamp, so later launches
+ * Import what the build ships in its preset directory: delivery bundles
+ * (`*.zip`), each checked against the build's catalog snapshot exactly as a
+ * catalog download is, and plain `.hcli` packages, which carry no skill of
+ * their own. A preset becomes current only when the tool has no current
+ * version or its current version also came from a preset; a bundle further
+ * needs to be newly installed and above the current version, so an older
+ * build never takes back a version a newer one or the catalog set. An
+ * unchanged preset directory is skipped by its stamp, so later launches
  * re-hash nothing.
  */
 async function importPresets(cliStore: CliToolStore, presetDir: string, root: string): Promise<void> {
   if (!existsSync(presetDir)) return
   const entries = await fsp.readdir(presetDir)
-  const names = entries.filter(name => name.endsWith('.hcli')).sort()
+  const names = entries.filter(name => name.endsWith('.hcli') || name.endsWith('.zip')).sort()
   if (names.length === 0) return
-  const hasCatalog = entries.includes(PRESET_CATALOG_FILE)
-  const metadata = hasCatalog ? [PRESET_CATALOG_FILE, ...entries.filter(name => name === TRUSTED_KEYS_FILE)] : []
+  const metadata = entries.filter(name => name === PRESET_CATALOG_FILE || name === TRUSTED_KEYS_FILE)
   const files: PresetStamp['files'] = []
   for (const name of [...names, ...metadata]) {
     const stat = await fsp.stat(join(presetDir, name))
-    files.push({ name, size: stat.size, mtimeMs: name.endsWith('.hcli') ? Math.trunc(stat.mtimeMs) : stat.mtimeMs })
+    files.push({ name, size: stat.size, mtimeMs: Math.trunc(stat.mtimeMs) })
   }
   const stampFile = join(root, 'preset-stamp.json')
   const stamp = JSON.stringify({ files } satisfies PresetStamp)
   const previous = await fsp.readFile(stampFile, 'utf-8').catch(() => '')
   if (previous === stamp) return
 
-  const catalog = hasCatalog ? await readPresetCatalog(join(presetDir, PRESET_CATALOG_FILE)) : undefined
   let failures = 0
+  let catalog: PresetCatalog | undefined
+  if (entries.includes(PRESET_CATALOG_FILE)) {
+    try {
+      catalog = await readPresetCatalog(join(presetDir, PRESET_CATALOG_FILE))
+    } catch (err) {
+      failures += 1
+      console.error('[CliTools] Bundled CLI catalog unreadable; bundled bundles are not imported', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
   for (const name of names) {
     try {
       const state = await cliStore.readState()
-      const result = await cliStore.importPackage(join(presetDir, name), {
-        source: 'preset',
-        activate: false,
-        presetCatalog: catalog,
-      })
+      const bundled = name.endsWith('.zip')
+      const result = bundled
+        ? await importPresetBundle(cliStore, presetDir, name, catalog)
+        : await cliStore.importPackage(join(presetDir, name), { source: 'preset', activate: false })
       const tool = (await cliStore.readState()).tools[result.id]
       const current = state.tools[result.id]?.current
-      const canActivate = !result.matchedPresetCatalog ||
+      const canActivate = !bundled ||
         (result.installed && !tool?.revoked && (!current || compareVersions(result.version, current) > 0))
       if (canActivate && shouldActivatePreset(state, result.id, result.version) && tool && tool.current !== result.version) {
         await cliStore.activateVersion(result.id, result.version)
@@ -249,35 +255,61 @@ async function importPresets(cliStore: CliToolStore, presetDir: string, root: st
   console.log('[CliTools] Bundled tools checked', { packages: names.length, failures })
 }
 
-/** What an administrator catalog promises about one package version. */
-export interface CatalogPackageExpectation {
-  id: string
-  version: string
-  /** sha256 hex of the archive. */
-  archiveSha256: string
-  /** Payload integrity, `sha256-<base64>`. */
-  integrity: string
-  /** The catalog's signature for this version; required when the build ships trusted keys. */
-  signature?: CatalogSignature | null
+async function importPresetBundle(
+  cliStore: CliToolStore,
+  presetDir: string,
+  name: string,
+  catalog: PresetCatalog | undefined,
+): Promise<ImportResult> {
+  const ref = catalog?.bundle(name)
+  if (!ref) throw new CliToolError('PACKAGE_INVALID', 'bundled bundle is not named by the bundled CLI catalog')
+  if (catalog!.revoked(ref.id)) throw new CliToolError('PACKAGE_INVALID', 'bundled CLI catalog marks this tool as revoked')
+  return importBundleBytes(cliStore, await readFileWithin(join(presetDir, name), BUNDLE_MAX_BYTES), ref, 'preset', false)
+}
+
+async function readFileWithin(file: string, maxBytes: number): Promise<Buffer> {
+  const stat = await fsp.stat(file)
+  if (stat.size > maxBytes) throw new CliToolError('PACKAGE_INVALID', 'bundle exceeds its size limit')
+  return fsp.readFile(file)
+}
+
+/**
+ * Verify a bundle and import its CLI package with the bundle's revision and
+ * skill. Identical installed content only takes the new skill.
+ */
+async function importBundleBytes(
+  cliStore: CliToolStore,
+  bytes: Uint8Array,
+  ref: BundleReference,
+  source: 'preset' | 'catalog',
+  activate: boolean,
+): Promise<ImportResult> {
+  const bundle = await readBundle(bytes, ref, await loadTrustStore(trustFile()))
+  const dir = join(options!.root, 'downloads')
+  const archive = join(dir, `${randomUUID()}.hcli`)
+  await fsp.mkdir(dir, { recursive: true })
+  try {
+    await fsp.writeFile(archive, bundle.hcli, { flag: 'wx' })
+    return await cliStore.importPackage(archive, {
+      source,
+      expectedArchiveSha256: bundle.cli.archiveSha256,
+      expectedIntegrity: bundle.cli.integrity,
+      expectedTool: { id: ref.id, version: ref.version },
+      activate,
+      bundle,
+    })
+  } finally {
+    await fsp.rm(archive, { force: true }).catch(() => undefined)
+  }
 }
 
 function trustFile(): string | null {
   return options?.presetDir ? join(options.presetDir, TRUSTED_KEYS_FILE) : null
 }
 
-/** Whether catalog signatures are checked on this build (see signature.ts). */
+/** Whether bundle signatures are checked on this build (see signature.ts). */
 export async function catalogSignatureMode(): Promise<TrustMode> {
   return (await loadTrustStore(trustFile())).mode
-}
-
-/**
- * Enforce the signature policy for one catalog version; throws
- * SIGNATURE_MISSING / SIGNATURE_INVALID. Callers may run it before
- * downloading; `installCatalogPackage` runs it again regardless.
- */
-export async function verifyCatalogSignature(expected: CatalogPackageExpectation): Promise<void> {
-  const trust = await loadTrustStore(trustFile())
-  assertCatalogSignature(trust, expected, expected.signature ?? null)
 }
 
 /** Installed tools once the store is prepared; null when the host has no store. */
@@ -289,26 +321,18 @@ export async function readCliToolState(): Promise<CliToolState | null> {
 }
 
 /**
- * Import a package fetched from an administrator catalog and make it current.
- * The archive digest, payload integrity, id and version must all match what
- * the catalog promised; any difference leaves the installed versions as they
- * were. A command already running finishes on the version it started with.
+ * Install a delivery bundle downloaded from an administrator catalog. The
+ * bundle must match the catalog's reference and pass every bundle check; its
+ * CLI package then imports with source `catalog` and becomes current, or, when
+ * that content is already installed, only its skill and revision change. Any
+ * failure leaves the installed versions as they were. A command already
+ * running finishes on the version it started with.
  */
-export async function installCatalogPackage(
-  archivePath: string,
-  expected: CatalogPackageExpectation,
-): Promise<ImportResult> {
+export async function installCatalogBundle(bytes: Uint8Array, ref: BundleReference): Promise<ImportResult> {
   const cliStore = getStore()
   if (!cliStore) throw new CliToolError('RUNTIME_MISSING', 'the CLI tool store is not available in this process')
   await prepareCliTools()
-  await verifyCatalogSignature(expected)
-  return cliStore.importPackage(archivePath, {
-    source: 'catalog',
-    expectedArchiveSha256: expected.archiveSha256,
-    expectedIntegrity: expected.integrity,
-    expectedTool: { id: expected.id, version: expected.version },
-    activate: true,
-  })
+  return importBundleBytes(cliStore, bytes, ref, 'catalog', true)
 }
 
 /**
@@ -341,52 +365,7 @@ export async function applyCatalogStatus(catalog: CatalogToolStatus[]): Promise<
   const cliStore = getStore()
   if (!cliStore) return []
   await prepareCliTools()
-  return cliStore.applyCatalogStatus(await withAcceptedGuides(catalog))
-}
-
-/**
- * Drop guide overrides and tool skills whose signature the build does not
- * accept, under the same policy as packages (see signature.ts). What a dropped
- * text would have reached is left as it is on this device rather than
- * reverted to the package guide.
- */
-async function withAcceptedGuides(catalog: CatalogToolStatus[]): Promise<CatalogToolStatus[]> {
-  const hasOverride = catalog.some(tool =>
-    tool.skill || Object.values(tool.guides ?? {}).some(guide => guide.override))
-  if (!hasOverride) return catalog
-  const trust = await loadTrustStore(trustFile())
-  return catalog.map(original => {
-    const tool = withAcceptedSkill(trust, original)
-    if (!tool.guides) return tool
-    const guides: NonNullable<CatalogToolStatus['guides']> = {}
-    for (const [version, guide] of Object.entries(tool.guides)) {
-      const override = guide.override
-      if (override) {
-        const fields = { id: tool.id, version, revision: override.revision, sha256: override.sha256 }
-        if (!guideSignatureAccepted(trust, fields, override.signature)) {
-          console.warn('[CliTools] Guide override ignored: signature not accepted', {
-            tool: `${tool.id}@${version}`, revision: override.revision, trust: trust.mode,
-          })
-          continue
-        }
-      }
-      guides[version] = guide
-    }
-    return { ...tool, guides }
-  })
-}
-
-function withAcceptedSkill(trust: TrustStore, tool: CatalogToolStatus): CatalogToolStatus {
-  const skill = tool.skill
-  if (!skill) return tool
-  const fields = { id: tool.id, revision: skill.revision, sha256: skill.sha256 }
-  if (skillSignatureAccepted(trust, fields, skill.signature)) return tool
-  console.warn('[CliTools] Tool skill ignored: signature not accepted', {
-    tool: tool.id, revision: skill.revision, trust: trust.mode,
-  })
-  const rest = { ...tool }
-  delete rest.skill
-  return rest
+  return cliStore.applyCatalogStatus(catalog)
 }
 
 function requireStore(): CliToolStore {
@@ -556,7 +535,7 @@ export async function removeCliTool(id: string): Promise<{ deferred: number }> {
 export async function recordCliDeliveryFailure(
   id: string,
   version: string,
-  failure: { integrity: string; code: CliToolErrorCode },
+  failure: { bundle: string; code: CliToolErrorCode },
 ): Promise<void> {
   const cliStore = requireStore()
   await prepareCliTools()

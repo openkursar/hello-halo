@@ -414,6 +414,13 @@ verified copy. Recovery reads this intent on the next reconciliation, not by
 scanning skills at startup. The active package is a standard global skill, with
 no owner metadata in its instructions.
 
+A tool skill may carry files beside SKILL.md (its delivery bundle's `skill/`).
+The digest covers every file. A change to SKILL.md alone is written in place; a
+change to any other file withdraws the verified folder (to the trash, like a
+removal) and installs the new package, so the two never mix.
+`listManagedToolSkillFolders` returns the folders of active, untouched managed
+copies with nothing in flight, for the runtime's skill gate.
+
 Customized managed packages keep their entire current version during
 `upgradeSpec`/built-in refresh, with `toVersion` unchanged. Untouched packages take
 the complete author package, never a mixture, without changing paused status.

@@ -139,7 +139,7 @@ describe('cli-tools manage: disable, preset protection, deferred removal', () =>
     const state = await store.readState()
     expect(state.tools[ID]).toMatchObject({ disabled: true, revoked: false })
     expect(launchable()).toBe(false)
-    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.0.0'] }])
+    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: { '1.0.0': 'b' } }])
     expect((await store.readState()).tools[ID].disabled).toBe(true)
     await store.setDisabled(ID, false)
     expect(launchable()).toBe(true)
@@ -291,10 +291,10 @@ describe('cli-tools manage: catalog status', () => {
     expect((await store.readState()).tools[ID].delisted).toBe(true)
     expect(launchable()).toBe(false)
 
-    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: [] }])
+    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: {} }])
     expect((await store.readState()).tools[ID].delisted).toBe(true)
 
-    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.0.0'] }])
+    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: { '1.0.0': 'b' } }])
     expect((await store.readState()).tools[ID].delisted).toBeUndefined()
     expect(launchable()).toBe(true)
   })
@@ -302,7 +302,7 @@ describe('cli-tools manage: catalog status', () => {
   it('treats a revocation-only entry as revoked, not delisted', async () => {
     const store = newStore()
     await catalogTool(store)
-    await store.applyCatalogStatus([{ id: ID, revoked: true, versions: [] }])
+    await store.applyCatalogStatus([{ id: ID, revoked: true, versions: {} }])
     const tool = (await store.readState()).tools[ID]
     expect(tool).toMatchObject({ revoked: true })
     expect(tool.delisted).toBeUndefined()
@@ -318,7 +318,7 @@ describe('cli-tools manage: catalog status', () => {
   it('flags a withdrawn version without disabling it and offers the update', async () => {
     const store = newStore()
     await catalogTool(store)
-    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.1.0', '2.0.0'] }])
+    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: { '1.1.0': 'b', '2.0.0': 'b' } }])
     const tool = (await store.readState()).tools[ID]
     expect(tool.versions['1.0.0'].withdrawn).toBe(true)
     expect(tool.catalogUpdate).toBe('2.0.0')
@@ -330,18 +330,18 @@ describe('cli-tools manage: catalog status', () => {
   it('offers no update when an installed version is as new, and none to a revoked tool', async () => {
     const store = newStore()
     await catalogTool(store, '2.0.0')
-    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.0.0', '2.0.0'] }])
+    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: { '1.0.0': 'b', '2.0.0': 'b' } }])
     expect((await store.readState()).tools[ID].catalogUpdate).toBeUndefined()
-    await store.applyCatalogStatus([{ id: ID, revoked: true, versions: ['3.0.0'] }])
+    await store.applyCatalogStatus([{ id: ID, revoked: true, versions: { '3.0.0': 'b' } }])
     expect((await store.readState()).tools[ID].catalogUpdate).toBeUndefined()
-    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['10.0.0'] }])
+    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: { '10.0.0': 'b' } }])
     expect((await store.readState()).tools[ID].catalogUpdate).toBe('10.0.0')
   })
 
   it('stops offering an update once that version is installed, without waiting for the next catalog read', async () => {
     const store = newStore()
     await catalogTool(store)
-    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.0.0', '2.0.0'] }])
+    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: { '1.0.0': 'b', '2.0.0': 'b' } }])
     expect((await store.readState()).tools[ID].catalogUpdate).toBe('2.0.0')
     await catalogTool(store, '1.5.0')
     expect((await store.readState()).tools[ID].catalogUpdate).toBe('2.0.0')

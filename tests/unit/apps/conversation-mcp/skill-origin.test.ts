@@ -71,7 +71,7 @@ vi.mock('../../../../src/main/services/api-ref', () => ({ createApiRefMcpServer:
 vi.mock('../../../../src/main/services/ocr', () => ({ createOcrMcpServer: () => ({ name: 'ocr' }) }))
 vi.mock('../../../../src/main/services/email-mcp', () => ({ createEmailMcpServer: vi.fn() }))
 vi.mock('../../../../src/main/services/conversation-interop', () => ({ getPendingConversationInputIds: () => [], holdConversationAfterStop: vi.fn() }))
-vi.mock('../../../../src/main/apps/manager', () => ({ getAppManager: () => ({ getApp: () => app }) }))
+vi.mock('../../../../src/main/apps/manager', () => ({ getAppManager: () => ({ getApp: () => app, listManagedToolSkillFolders: () => [] }) }))
 vi.mock('../../../../src/main/apps/skills', () => ({ getSkillLibrary: () => library }))
 vi.mock('../../../../src/main/store', () => ({ installFromStore: vi.fn() }))
 vi.mock('../../../../src/main/store/registry.service', () => ({ installRequiredSkills: vi.fn() }))

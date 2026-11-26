@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { createHash } from 'crypto'
 import { CliToolStore } from '../../../../src/main/services/cli-tools'
-import type { CatalogPackageExpectation } from '../../../../src/main/services/cli-tools'
-import { buildManifest, makeTempDir, removeTree, writePackage } from './helpers'
+import { buildBundle, makeTempDir, removeTree, writePackage, type Files } from './helpers'
 
 const ID = 'com.example.tool'
 
@@ -163,57 +161,93 @@ describe('cli-tools host: bundled tools across launches', () => {
   })
 })
 
+describe('cli-tools host: bundles shipped with the build', () => {
+  function shipBundle(version: string, revision: number, skill: Files | null, options: { revoked?: boolean; listed?: boolean } = {}) {
+    const { bytes, ref } = buildBundle({ hcli: writePackage(pkgs, { version }), revision, skill })
+    writeFileSync(join(presetDir, `${ID}-${version}-r${revision}.zip`), bytes)
+    const versions = options.listed === false ? [] : [{ version, bundle: { revision, sha256: ref.sha256, size: ref.size, url: '/x' } }]
+    writeFileSync(join(presetDir, 'catalog.json'), JSON.stringify({
+      schema: 'halo.cli.catalog/2', generatedAt: 'now',
+      tools: [{ id: ID, source: 'builtin', revoked: options.revoked === true, latest: version, versions }],
+    }))
+  }
+
+  it('imports a bundle the build catalog names, with its skill', async () => {
+    shipBundle('1.0.0', 3, { 'SKILL.md': '---\ndescription: Bundled.\n---\nBundled text.\n' })
+    await (await startHost()).prepareCliTools()
+    const record = (await directStore().readState()).tools[ID].versions['1.0.0']
+    expect(record).toMatchObject({ source: 'preset', bundle: { revision: 3 }, skill: { files: 1 } })
+    const skill = await (await directStore().readCurrentToolSkills()).skills[0].describe()
+    expect(skill.body).toContain('Bundled text.')
+  })
+
+  it('gives an earlier build\'s copy of the same version its skill without reinstalling it', async () => {
+    const file = writePackage(pkgs, { version: '1.0.0' })
+    writeFileSync(join(presetDir, 'tool-1.0.0.hcli'), readFileSync(file))
+    await (await startHost()).prepareCliTools()
+    const before = (await directStore().readState()).tools[ID].versions['1.0.0']
+    expect(before.bundle).toBeUndefined()
+
+    rmPreset()
+    const { bytes, ref } = buildBundle({ hcli: file, revision: 2, skill: { 'SKILL.md': 'From the bundle.\n' } })
+    writeFileSync(join(presetDir, `${ID}-1.0.0-r2.zip`), bytes)
+    writeFileSync(join(presetDir, 'catalog.json'), JSON.stringify({
+      schema: 'halo.cli.catalog/2', generatedAt: 'now',
+      tools: [{ id: ID, source: 'builtin', revoked: false, latest: '1.0.0', versions: [{ version: '1.0.0', bundle: { revision: 2, sha256: ref.sha256, size: ref.size } }] }],
+    }))
+    await (await startHost()).prepareCliTools()
+    const after = (await directStore().readState()).tools[ID].versions['1.0.0']
+    expect(after).toMatchObject({ dir: before.dir, importedAt: before.importedAt, bundle: { revision: 2 }, skill: { files: 1 } })
+  })
+
+  it('refuses a bundle the build catalog does not name or revokes, and retries at the next launch', async () => {
+    shipBundle('1.0.0', 1, null, { listed: false })
+    await (await startHost()).prepareCliTools()
+    expect((await directStore().readState()).tools[ID]).toBeUndefined()
+    expect(existsSync(join(root, 'preset-stamp.json'))).toBe(false)
+
+    rmPreset()
+    shipBundle('1.0.0', 1, null, { revoked: true })
+    await (await startHost()).prepareCliTools()
+    expect((await directStore().readState()).tools[ID]).toBeUndefined()
+  })
+})
+
 describe('cli-tools host: administrator catalog', () => {
-  function sha256(file: string): string {
-    return createHash('sha256').update(readFileSync(file)).digest('hex')
-  }
-
-  function expectation(file: string, version: string, overrides: Partial<CatalogPackageExpectation> = {}) {
-    return {
-      id: ID,
-      version,
-      archiveSha256: sha256(file),
-      integrity: buildManifest({ version }).integrity as string,
-      ...overrides,
-    }
-  }
-
   it('reports no state and refuses an install before the host is initialized', async () => {
     vi.resetModules()
     const bare = await import('../../../../src/main/services/cli-tools/host')
     expect(await bare.readCliToolState()).toBeNull()
     expect(await bare.applyCatalogRevocations({ [ID]: true })).toEqual([])
-    const file = writePackage(pkgs, { version: '1.0.0' })
-    await expect(bare.installCatalogPackage(file, expectation(file, '1.0.0'))).rejects.toMatchObject({ code: 'RUNTIME_MISSING' })
+    const { bytes, ref } = buildBundle({ hcli: writePackage(pkgs, { version: '1.0.0' }) })
+    await expect(bare.installCatalogBundle(bytes, ref)).rejects.toMatchObject({ code: 'RUNTIME_MISSING' })
   })
 
-  it('installs a verified catalog package as the current version over a bundled one', async () => {
+  it('installs a verified bundle as the current version over a bundled one', async () => {
     preset('1.0.0')
     const host = await startHost()
-    const file = writePackage(pkgs, { version: '1.1.0' })
-    const result = await host.installCatalogPackage(file, expectation(file, '1.1.0'))
+    const { bytes, ref } = buildBundle({ hcli: writePackage(pkgs, { version: '1.1.0' }), revision: 4 })
+    const result = await host.installCatalogBundle(bytes, ref)
     expect(result).toMatchObject({ id: ID, version: '1.1.0' })
 
     const state = await host.readCliToolState()
     expect(state!.tools[ID].current).toBe('1.1.0')
-    expect(state!.tools[ID].versions['1.1.0'].source).toBe('catalog')
+    expect(state!.tools[ID].versions['1.1.0']).toMatchObject({ source: 'catalog', bundle: { revision: 4, sha256: ref.sha256 } })
     expect(state!.tools[ID].versions['1.0.0']).toBeTruthy()
+    expect(readdirSync(join(root, 'downloads'))).toEqual([])
   })
 
-  it('leaves the installed versions untouched when the package differs from the catalog', async () => {
+  it('leaves the installed versions untouched when the bundle differs from the catalog', async () => {
     preset('1.0.0')
     const host = await startHost()
-    const file = writePackage(pkgs, { version: '1.1.0' })
+    const { bytes, ref } = buildBundle({ hcli: writePackage(pkgs, { version: '1.1.0' }) })
     const before = await host.readCliToolState()
 
-    await expect(host.installCatalogPackage(file, expectation(file, '1.1.0', { archiveSha256: '0'.repeat(64) })))
-      .rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
-    await expect(host.installCatalogPackage(file, expectation(file, '1.1.0', { integrity: `sha256-${'A'.repeat(43)}=` })))
-      .rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
-    await expect(host.installCatalogPackage(file, expectation(file, '1.1.0', { id: 'com.example.other' })))
-      .rejects.toMatchObject({ code: 'PACKAGE_INVALID' })
-    await expect(host.installCatalogPackage(file, expectation(file, '1.2.0')))
-      .rejects.toMatchObject({ code: 'PACKAGE_INVALID' })
+    await expect(host.installCatalogBundle(bytes, { ...ref, sha256: '0'.repeat(64) })).rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
+    await expect(host.installCatalogBundle(bytes, { ...ref, revision: 2 })).rejects.toMatchObject({ code: 'PACKAGE_INVALID' })
+    await expect(host.installCatalogBundle(bytes, { ...ref, version: '1.2.0' })).rejects.toMatchObject({ code: 'PACKAGE_INVALID' })
+    const other = buildBundle({ hcli: writePackage(pkgs, { version: '1.1.0' }), id: 'com.example.other' })
+    await expect(host.installCatalogBundle(other.bytes, other.ref)).rejects.toMatchObject({ code: 'PACKAGE_INVALID' })
 
     expect(await host.readCliToolState()).toEqual(before)
   })

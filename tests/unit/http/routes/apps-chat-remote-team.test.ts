@@ -57,7 +57,7 @@ vi.mock('../../../../src/main/http/routes/_shared', () => {
     getAppChatConversationId: (appId: string) => `app-chat:${appId}`,
     getAppChatSessionState: (appId: string, conversationId?: string) =>
       getAppChatSessionState(appId, conversationId),
-    getAppManager: () => ({ getApp: (id: string) => ({ id, spaceId: 'space-a', spec: {} }) }),
+    getAppManager: () => ({ getApp: (id: string) => ({ id, spaceId: 'space-a', spec: {} }), listManagedToolSkillFolders: () => [] }),
     getAppRuntime: () => ({}),
     getSpace: () => ({ id: 'space-a', path: '/tmp/space-a' }),
     isAppChatGenerating: () => false,

@@ -438,7 +438,7 @@ const { apps, environment, activityStore } = vi.hoisted(() => {
   }
 })
 vi.mock('../../../../../src/main/apps/manager', () => ({
-  getAppManager: () => ({ getApp: (id: string) => apps.get(id) }),
+  getAppManager: () => ({ getApp: (id: string) => apps.get(id), listManagedToolSkillFolders: () => [] }),
 }))
 vi.mock('../../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveChatEnvironment: () => environment,

@@ -22,9 +22,8 @@ export {
   removeCliToolVersion,
   setCliToolCurrent,
   setCliToolDisabled,
-  verifyCatalogSignature,
   initCliTools,
-  installCatalogPackage,
+  installCatalogBundle,
   prepareCliTools,
   getPreparedCurrentToolsRevision,
   onDidChangeCurrentTools,
@@ -32,9 +31,11 @@ export {
   readCliToolState,
   recordCliDeliveryFailure,
 } from './host'
-export type { CatalogPackageExpectation, CliToolsHostOptions, OrganizationTool, UserPackagePreview } from './host'
-export { parseCatalogSignature, signedBytes, signedGuideBytes, signedSkillBytes, guideSignatureAccepted, skillSignatureAccepted, TRUSTED_KEYS_FILE } from './signature'
-export type { CatalogSignature, TrustMode } from './signature'
+export type { CliToolsHostOptions, OrganizationTool, UserPackagePreview } from './host'
+export { BUNDLE_MAX_BYTES, BUNDLE_SCHEMA, skillPackageSha256 } from './bundle'
+export type { BundleReference } from './bundle'
+export { signedBundleBytes, TRUSTED_KEYS_FILE } from './signature'
+export type { TrustMode } from './signature'
 export type {
   CliDeliveryFailure,
   CliToolInstallRecord,
@@ -44,7 +45,6 @@ export type {
   CliToolStoreOptions,
   CliToolVersionRecord,
   CliExternalRecord,
-  CatalogGuideOverride,
   CatalogToolStatus,
   PackagePreview,
   RegisterExternalOptions,

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 
 export const CLI_SKILL_DESCRIPTION_MAX = 300
-/** Largest administrator guide accepted, in UTF-8 bytes. */
+/** Largest package guide read into a skill, in UTF-8 bytes; a bundle's SKILL.md has its own limit. */
 export const GUIDE_MAX_BYTES = 64 * 1024
 
 export type CliSkillSource = 'admin' | 'package' | 'manifest' | 'default'
@@ -14,6 +14,8 @@ export interface CliToolSkill {
   name: string
   description: string
   body: string
+  /** The bundle skill's other files, paths relative to the skill folder. */
+  attachments: Array<{ path: string; bytes: Buffer }>
 }
 
 const FRONTMATTER = /^\uFEFF?---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)/
@@ -94,8 +96,8 @@ export interface CliSkillLaunch {
 }
 
 /**
- * The skill body: where the tool is, then the guide as the administrator or
- * package wrote it. The guide uses the bare command name, but the tool is not
+ * The skill body: where the tool is, then the bundle's SKILL.md or the
+ * package guide as written. The guide uses the bare command name, but the tool is not
  * on the shell's PATH, so the header names the file that command is.
  */
 export function renderCliSkill(input: { toolId: string; installId: string; launches: CliSkillLaunch[]; guide?: string }): string {

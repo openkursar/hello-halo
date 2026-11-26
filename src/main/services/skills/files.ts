@@ -309,6 +309,19 @@ export function withoutIncidentalFiles<T extends Pick<SkillPackage, 'files' | 'a
   return { ...pkg, files: keep(pkg.files), assets: keep(pkg.assets) }
 }
 
+/** Split raw package files into text files and binary assets the way `readSkillPackage` reads them back. */
+export function skillPackageFromBytes(entries: Iterable<[string, Uint8Array]>): Pick<SkillPackage, 'files' | 'assets'> {
+  const files: Record<string, string> = Object.create(null)
+  const assets: SkillAssets = Object.create(null)
+  for (const [path, raw] of entries) {
+    const bytes = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength)
+    const text = decodeText(bytes)
+    if (text === undefined) assets[path] = { encoding: 'base64', content: bytes.toString('base64') }
+    else files[path] = text
+  }
+  return { files, assets }
+}
+
 /** Content fingerprint of a package as read from disk; unlike a revision it ignores timestamps, permissions and incidental files. */
 export function skillPackageDigest(pkg: Pick<SkillPackage, 'files' | 'assets'>): string {
   const { files, assets } = withoutIncidentalFiles(pkg)

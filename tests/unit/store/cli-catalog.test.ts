@@ -1,19 +1,18 @@
 /**
- * Unit tests for the CLI tool catalog backend.
+ * Unit tests for the CLI tool catalog backend (`halo.cli.catalog/2`).
  *
  * The source driver and the account token are stubbed; the cli-tools host is
- * real, on a temporary root, so the install path runs the same archive checks
+ * real, on a temporary root, so the install path runs the same bundle checks
  * and publish steps a device does.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHash, generateKeyPairSync, sign } from 'crypto'
+import { generateKeyPairSync, sign } from 'crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
 import { join } from 'path'
 import { STORE_NOT_SIGNED_IN } from '../../../src/shared/store/store-types'
 import type { RegistrySource } from '../../../src/shared/store/store-types'
-import { buildManifest, makeTempDir, removeTree, writePackage } from '../services/cli-tools/helpers'
+import { buildBundle, makeTempDir, removeTree, writePackage, type BundleSpec, type Files } from '../services/cli-tools/helpers'
 
 vi.mock('../../../src/main/store/registry.service', () => ({ getPrimaryRegistry: vi.fn(() => null) }))
 vi.mock('../../../src/main/store/adapters', () => ({ getAdapter: vi.fn(() => ({})) }))
@@ -43,31 +42,32 @@ async function load(driver: Driver | null, presetDir: string | null = null) {
   return { catalog, sync, host, identity: vi.mocked(identity.getStoreIdentityToken) }
 }
 
-function sha256(bytes: Uint8Array): string {
-  return createHash('sha256').update(bytes).digest('hex')
+type Shipped = ReturnType<typeof buildBundle>
+
+/** A bundle of a fresh package of `version`, or of `spec.hcli` when given. */
+function bundleOf(version: string, spec: Partial<BundleSpec> = {}): Shipped {
+  return buildBundle({ hcli: spec.hcli ?? writePackage(pkgs, { version }), ...spec })
 }
 
-function versionEntry(version: string, bytes: Uint8Array, overrides: Record<string, unknown> = {}) {
+const FAKE: Pick<Shipped, 'ref'> = { ref: { id: ID, version: '0.0.0', revision: 1, sha256: 'a'.repeat(64), size: 1 } }
+
+function versionEntry(version: string, shipped: Pick<Shipped, 'ref'> = FAKE, overrides: Record<string, unknown> = {}) {
+  const { revision, sha256, size } = shipped.ref
   return {
     version,
-    manifestSchema: 'halo.cli/1',
-    integrity: buildManifest({ version }).integrity,
-    archiveSha256: sha256(bytes),
-    size: bytes.length,
     platforms: ['any'],
     minNode: '22.14',
     sideEffects: 'read-only',
     auth: { method: 'none' },
     commands: ['tool'],
-    downloadUrl: `/clis/${ID}/${version}/package.hcli`,
     publishedAt: '2026-11-19T08:00:00Z',
-    signature: null,
+    bundle: { revision, sha256, size, url: `/clis/${ID}/${version}/bundles/${revision}.zip` },
     ...overrides,
   }
 }
 
 function catalogBody(tools: unknown[]) {
-  return { schema: 'halo.cli.catalog/1', generatedAt: '2026-11-19T08:00:00Z', tools }
+  return { schema: 'halo.cli.catalog/2', generatedAt: '2026-11-19T08:00:00Z', tools }
 }
 
 /** What the source driver answers for a catalog it serves. */
@@ -76,15 +76,21 @@ function served(tools: unknown[]) {
 }
 
 function tool(versions: unknown[], overrides: Record<string, unknown> = {}) {
-  return { id: ID, displayName: 'Example tool', source: 'npm', revoked: false, latest: '1.0.0', versions, ...overrides }
+  return { id: ID, displayName: 'Example tool', source: 'partner', revoked: false, latest: '1.0.0', versions, ...overrides }
 }
 
-function packageBytes(version: string): Uint8Array {
-  return new Uint8Array(readFileSync(writePackage(pkgs, { version })))
+/** A driver download that serves each listed bundle by its URL. */
+function downloads(...bundles: Shipped[]) {
+  return vi.fn(async (_source: unknown, url: string) => {
+    const found = bundles.find(b => url === `/clis/${b.ref.id}/${b.ref.version}/bundles/${b.ref.revision}.zip`)
+    if (!found) throw new Error('This CLI version is no longer available from the store')
+    return found.bytes
+  })
 }
 
-function downloadDirs(): string[] {
-  return readdirSync(tmpdir()).filter(name => name.startsWith('halo-cli-download-'))
+async function skillBody(host: Awaited<ReturnType<typeof load>>['host'], id = ID): Promise<string> {
+  const snapshot = await host.readCurrentToolSkills()
+  return (await snapshot!.skills.find(skill => skill.toolId === id)!.describe()).body
 }
 
 beforeEach(() => {
@@ -104,33 +110,35 @@ afterEach(() => {
 describe('cli catalog: parsing', () => {
   it('drops malformed tools and versions instead of guessing', async () => {
     const { catalog } = await load(null)
-    const good = versionEntry('1.0.0', new Uint8Array([1]))
+    const good = versionEntry('1.0.0')
+    const bundle = good.bundle
     const tools = catalog.parseCliCatalog(catalogBody([
       tool([good]),
       tool([good], { id: 'Bad ID' }),
-      tool([{ ...good, archiveSha256: 'xyz' }], { id: 'com.example.badsha' }),
-      tool([{ ...good, integrity: 'md5-abc' }], { id: 'com.example.badint' }),
+      tool([{ ...good, bundle: { ...bundle, sha256: 'xyz' } }], { id: 'com.example.badsha' }),
+      tool([{ ...good, bundle: { ...bundle, revision: 0 } }], { id: 'com.example.badrev' }),
       tool([{ ...good, version: '1.0' }], { id: 'com.example.badver' }),
-      tool([{ ...good, downloadUrl: '' }], { id: 'com.example.nourl' }),
+      tool([{ ...good, bundle: { ...bundle, url: '' } }], { id: 'com.example.nourl' }),
+      tool([{ ...good, bundle: undefined, downloadUrl: '/x' }], { id: 'com.example.oldshape' }),
       tool([good], { displayName: 'Duplicate' }),
     ]))
     // A tool keeps its entry (its revocation still applies) but malformed versions are dropped.
-    expect(tools.map(t => t.id)).toEqual([ID, 'com.example.badsha', 'com.example.badint', 'com.example.badver', 'com.example.nourl'])
+    expect(tools.map(t => t.id)).toEqual([ID, 'com.example.badsha', 'com.example.badrev', 'com.example.badver', 'com.example.nourl', 'com.example.oldshape'])
     expect(tools.slice(1).every(t => t.versions.length === 0)).toBe(true)
     expect(tools[0].displayName).toBe('Example tool')
   })
 
-  it('refuses a body with an unknown schema', async () => {
+  it('refuses a body with an unknown schema, including the retired catalog/1', async () => {
     const { catalog } = await load(null)
+    expect(() => catalog.parseCliCatalog({ schema: 'halo.cli.catalog/1', tools: [] })).toThrow('unsupported CLI catalog')
     expect(() => catalog.parseCliCatalog({ schema: 'other/1', tools: [] })).toThrow('unsupported CLI catalog')
     expect(() => catalog.parseCliCatalog(null)).toThrow('invalid CLI catalog')
   })
 
   it('falls back to the newest listed version when latest is not listed', async () => {
     const { catalog } = await load(null)
-    const bytes = new Uint8Array([1])
     const [parsed] = catalog.parseCliCatalog(catalogBody([
-      tool([versionEntry('2.0.0', bytes), versionEntry('1.0.0', bytes)], { latest: '9.9.9' }),
+      tool([versionEntry('2.0.0'), versionEntry('1.0.0')], { latest: '9.9.9' }),
     ]))
     expect(parsed.latest).toBe('2.0.0')
   })
@@ -159,11 +167,10 @@ describe('cli catalog: listing', () => {
   })
 
   it('maps versions for the renderer without download paths or digests', async () => {
-    const bytes = new Uint8Array([1])
     const fetchCliCatalog = vi.fn(async () => served([
       tool([
-        versionEntry('1.0.0', bytes),
-        versionEntry('0.9.0', bytes, { platforms: ['plan9-mips'], sideEffects: 'sometimes', auth: { method: 'magic' } }),
+        versionEntry('1.0.0'),
+        versionEntry('0.9.0', FAKE, { platforms: ['plan9-mips'], sideEffects: 'sometimes', auth: { method: 'magic' } }),
       ]),
     ]))
     const { catalog } = await load({ fetchCliCatalog })
@@ -184,54 +191,52 @@ describe('cli catalog: listing', () => {
     expect(tools[0].versions[1].supported).toBe(false)
     expect(tools[0].versions[1].sideEffects).toBeUndefined()
     expect(tools[0].versions[1].auth).toBeUndefined()
-    expect(JSON.stringify(tools)).not.toMatch(/downloadUrl|archiveSha256|integrity|package\.hcli/)
+    expect(JSON.stringify(tools)).not.toMatch(/bundles|sha256|revision/)
   })
 })
 
 describe('cli catalog: install and revocation', () => {
-  it('installs only the version the user asked for, verified, and cleans its download', async () => {
-    const bytes = packageBytes('1.0.0')
-    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes)])]))
-    const downloadCliPackage = vi.fn(async () => bytes)
+  it('installs only the bundle the user asked for, with its skill, and keeps no download', async () => {
+    const shipped = bundleOf('1.0.0', { skill: { 'SKILL.md': '---\ndescription: Example.\n---\nRun `tool --check`.\n', 'refs/a.md': 'a' } })
+    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', shipped)])]))
+    const downloadCliPackage = downloads(shipped)
     const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage })
-    const before = downloadDirs()
 
     await catalog.fetchCliCatalog()
     expect(downloadCliPackage).not.toHaveBeenCalled()
 
     const view = await catalog.installCliTool({ id: ID, version: '1.0.0' })
-    expect(downloadCliPackage).toHaveBeenCalledWith(PRIMARY, `/clis/${ID}/1.0.0/package.hcli`, { token: 'tok' }, expect.any(Number))
+    expect(downloadCliPackage).toHaveBeenCalledWith(PRIMARY, `/clis/${ID}/1.0.0/bundles/1.zip`, { token: 'tok' }, shipped.ref.size)
     expect(view.installed).toEqual({ current: '1.0.0', versions: ['1.0.0'], revoked: false })
-    const state = await host.readCliToolState()
-    expect(state!.tools[ID].versions['1.0.0'].source).toBe('catalog')
-    expect(downloadDirs()).toEqual(before)
+    const record = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
+    expect(record).toMatchObject({ source: 'catalog', bundle: { revision: 1, sha256: shipped.ref.sha256 }, skill: { files: 2 } })
+    expect(await skillBody(host)).toContain('Run `tool --check`.')
+    expect(readdirSync(join(dir, 'cli', 'downloads'))).toEqual([])
   })
 
-  it('refuses a download whose digest differs from the catalog and installs nothing', async () => {
-    const bytes = packageBytes('1.0.0')
-    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes)])]))
-    const downloadCliPackage = vi.fn(async () => packageBytes('1.0.0').map((b, i) => (i === 0 ? b ^ 1 : b)))
+  it('refuses a download that differs from the catalog and installs nothing', async () => {
+    const shipped = bundleOf('1.0.0')
+    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', shipped)])]))
+    const downloadCliPackage = vi.fn(async () => shipped.bytes.map((b, i) => (i === 0 ? b ^ 1 : b)))
     const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage })
 
-    await expect(catalog.installCliTool({ id: ID, version: '1.0.0' })).rejects.toThrow('does not match the store catalog')
+    await expect(catalog.installCliTool({ id: ID, version: '1.0.0' })).rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
     expect((await host.readCliToolState())!.tools[ID]).toBeUndefined()
   })
 
-  it('refuses a package whose payload differs from the catalog integrity', async () => {
-    const bytes = packageBytes('1.0.0')
-    const entry = versionEntry('1.0.0', bytes, { integrity: `sha256-${'A'.repeat(43)}=` })
-    const fetchCliCatalog = vi.fn(async () => served([tool([entry])]))
-    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
+  it('refuses a bundle whose CLI payload differs from its bundle.json', async () => {
+    const shipped = bundleOf('1.0.0', { editJson: json => { (json.cli as Record<string, unknown>).integrity = `sha256-${'A'.repeat(43)}=` } })
+    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', shipped)])]))
+    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: downloads(shipped) })
 
     await expect(catalog.installCliTool({ id: ID, version: '1.0.0' })).rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
     expect((await host.readCliToolState())!.tools[ID]).toBeUndefined()
   })
 
   it('refuses revoked, unlisted and unsupported versions before downloading', async () => {
-    const bytes = new Uint8Array([1])
     const body = catalogBody([
-      tool([versionEntry('1.0.0', bytes)], { revoked: true }),
-      tool([versionEntry('1.0.0', bytes, { platforms: ['plan9-mips'] })], { id: 'com.example.other' }),
+      tool([versionEntry('1.0.0')], { revoked: true }),
+      tool([versionEntry('1.0.0', FAKE, { platforms: ['plan9-mips'] })], { id: 'com.example.other' }),
     ])
     const downloadCliPackage = vi.fn()
     const { catalog } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage })
@@ -244,10 +249,10 @@ describe('cli catalog: install and revocation', () => {
   })
 
   it('applies a revocation to the installed tool on the next read and keeps it out of new executions', async () => {
-    const bytes = packageBytes('1.0.0')
+    const shipped = bundleOf('1.0.0')
     let revoked = false
-    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes)], { revoked })]))
-    const { catalog, sync, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
+    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', shipped)], { revoked })]))
+    const { catalog, sync, host } = await load({ fetchCliCatalog, downloadCliPackage: downloads(shipped) })
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
 
     revoked = true
@@ -280,14 +285,14 @@ describe('cli catalog: install and revocation', () => {
 
 describe('cli catalog: status and signatures', () => {
   it('marks an installed catalog tool delisted, flags withdrawn versions and updates without downloading', async () => {
-    const bytes1 = packageBytes('1.0.0')
-    let body = catalogBody([tool([versionEntry('1.0.0', bytes1)])])
-    const downloadCliPackage = vi.fn(async () => bytes1)
+    const shipped = bundleOf('1.0.0')
+    let body = catalogBody([tool([versionEntry('1.0.0', shipped)])])
+    const downloadCliPackage = downloads(shipped)
     const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage })
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
     expect(downloadCliPackage).toHaveBeenCalledTimes(1)
 
-    body = catalogBody([tool([versionEntry('2.0.0', new Uint8Array([2]))], { latest: '2.0.0' })])
+    body = catalogBody([tool([versionEntry('2.0.0')], { latest: '2.0.0' })])
     await catalog.fetchCliCatalog()
     let record = (await host.readCliToolState())!.tools[ID]
     expect(record.versions['1.0.0'].withdrawn).toBe(true)
@@ -304,17 +309,17 @@ describe('cli catalog: status and signatures', () => {
   })
 
   it('does not delist anything when the catalog cannot be read', async () => {
-    const bytes = packageBytes('1.0.0')
+    const shipped = bundleOf('1.0.0')
     let fail = false
-    const fetchCliCatalog = vi.fn(async () => { if (fail) throw new Error('503'); return served([tool([versionEntry('1.0.0', bytes)])]) })
-    const { catalog, sync, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
+    const fetchCliCatalog = vi.fn(async () => { if (fail) throw new Error('503'); return served([tool([versionEntry('1.0.0', shipped)])]) })
+    const { catalog, sync, host } = await load({ fetchCliCatalog, downloadCliPackage: downloads(shipped) })
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
     fail = true
     await sync.requestCliCatalogSync('startup')
     expect((await host.readCliToolState())!.tools[ID].delisted).toBeUndefined()
   })
 
-  it('refuses a missing or invalid signature before downloading when the build ships keys', async () => {
+  it('requires a valid bundle signature when the build ships keys', async () => {
     const { publicKey, privateKey } = generateKeyPairSync('ed25519')
     const presetDir = join(dir, 'preset')
     mkdirSync(presetDir)
@@ -322,266 +327,81 @@ describe('cli catalog: status and signatures', () => {
       schema: 'halo.cli.trust/1',
       keys: [{ keyId: 'k1', alg: 'ed25519', publicKey: Buffer.from(publicKey.export({ format: 'jwk' }).x as string, 'base64url').toString('base64') }],
     }))
-    const bytes = packageBytes('1.0.0')
-    const fields = { version: '1.0.0', integrity: buildManifest({ version: '1.0.0' }).integrity as string, archiveSha256: sha256(bytes) }
-    const value = (version: string) => sign(null, Buffer.from(`halo.cli.sig/1\n${ID}\n${version}\n${fields.archiveSha256}\n${fields.integrity}\n`), privateKey).toString('base64')
-    let signature: unknown = null
-    const downloadCliPackage = vi.fn(async () => bytes)
+    const hcli = writePackage(pkgs, { version: '1.0.0' })
+    const signer = (json: Uint8Array) => ({
+      alg: 'ed25519', keyId: 'k1',
+      value: sign(null, Buffer.concat([Buffer.from('halo.cli.bundle/1\n'), json]), privateKey).toString('base64'),
+    })
+    const unsigned = bundleOf('1.0.0', { hcli })
+    const signed = bundleOf('1.0.0', { hcli, revision: 2, sign: signer })
+    let listed = unsigned
     const { catalog, host } = await load({
-      fetchCliCatalog: vi.fn(async () => served([tool([versionEntry('1.0.0', bytes, { signature })])])),
-      downloadCliPackage,
+      fetchCliCatalog: vi.fn(async () => served([tool([versionEntry('1.0.0', listed)])])),
+      downloadCliPackage: downloads(unsigned, signed),
     }, presetDir)
 
     await expect(catalog.installCliTool({ id: ID, version: '1.0.0' })).rejects.toMatchObject({ code: 'SIGNATURE_MISSING' })
-    signature = { alg: 'ed25519', keyId: 'k1', value: value('9.9.9') }
-    await expect(catalog.installCliTool({ id: ID, version: '1.0.0' })).rejects.toMatchObject({ code: 'SIGNATURE_INVALID' })
-    expect(downloadCliPackage).not.toHaveBeenCalled()
     expect((await host.readCliToolState())!.tools[ID]).toBeUndefined()
 
-    signature = { alg: 'ed25519', keyId: 'k1', value: value('1.0.0') }
+    listed = signed
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
     expect((await host.readCliToolState())!.tools[ID].current).toBe('1.0.0')
   })
 })
 
-describe('cli catalog: administrator guide overrides', () => {
-  const TEXT = '# Bank notes\nAlways run `tool --check` first.\n'
+describe('cli catalog: skills arrive with bundles', () => {
+  const skillText = (line: string): Files => ({ 'SKILL.md': `---\ndescription: ${line}\n---\n${line}\n` })
 
-  function guideOf(content: string, revision = 1, extra: Record<string, unknown> = {}) {
-    return { revision, sha256: createHash('sha256').update(content).digest('hex'), content, signature: null, ...extra }
-  }
-
-  /** The guide the tool's skill carries now. */
-  async function skillBody(host: Awaited<ReturnType<typeof load>>['host']): Promise<string> {
-    const snapshot = await host.readCurrentToolSkills()
-    return (await snapshot!.skills.find(skill => skill.toolId === ID)!.describe()).body
-  }
-
-  it('parses a valid override and drops a malformed one without touching the version', async () => {
-    const { catalog } = await load(null)
-    const bytes = new Uint8Array([1])
-    const parsed = catalog.parseCliCatalog(catalogBody([
-      tool([
-        versionEntry('3.0.0', bytes, { guide: guideOf(TEXT, 2) }),
-        versionEntry('2.0.0', bytes, { guide: { ...guideOf(TEXT), sha256: '0'.repeat(64) } }),
-        versionEntry('1.0.0', bytes),
-      ]),
-    ]))
-    expect(parsed[0].versions.map(v => v.guide)).toEqual([
-      { revision: 2, sha256: guideOf(TEXT).sha256, content: TEXT, signature: null },
-      'invalid',
-      null,
-    ])
-    const [status] = catalog.catalogStatusOf(parsed)
-    expect(Object.keys(status.guides!)).toEqual(['3.0.0', '1.0.0'])
-    expect(status.guides!['1.0.0'].override).toBeNull()
-    // The renderer never sees guide text.
-    const view = await catalog.fetchCliCatalog()
-    expect(JSON.stringify(view)).not.toContain('Bank notes')
-  })
-
-  it('applies an override on install, takes a new revision into the skill, and reverts when the administrator resets it', async () => {
-    const bytes = packageBytes('1.0.0')
-    let guide: unknown = guideOf(TEXT)
-    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes, { guide })])]))
-    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
-
+  it('takes a new revision of an installed version: the skill changes, the CLI is not reinstalled', async () => {
+    const hcli = writePackage(pkgs, { version: '1.0.0' })
+    const r1 = bundleOf('1.0.0', { hcli, skill: skillText('First text.') })
+    const r2 = bundleOf('1.0.0', { hcli, revision: 2, skill: skillText('Second text.') })
+    let listed = r1
+    const downloadCliPackage = downloads(r1, r2)
+    const { catalog, sync, host } = await load({ fetchCliCatalog: vi.fn(async () => served([tool([versionEntry('1.0.0', listed)])])), downloadCliPackage })
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
-    const record = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
-    expect(record.guideOverride).toEqual({ revision: 1, sha256: guideOf(TEXT).sha256 })
-    expect(JSON.stringify(record)).not.toContain('Bank notes')
-    expect(await skillBody(host)).toContain(TEXT.trim())
+    const before = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
+    expect(await skillBody(host)).toContain('First text.')
 
-    const edited = `${TEXT}Second revision.\n`
-    guide = guideOf(edited, 2)
-    await catalog.fetchCliCatalog()
-    expect(await skillBody(host)).toContain(edited.trim())
+    // Nothing new: no download.
+    expect((await sync.syncCliCatalogNow()).changed).toBe(0)
+    expect(downloadCliPackage).toHaveBeenCalledTimes(1)
 
-    // Reset: the package guide applies again and unreferenced texts are pruned.
-    guide = undefined
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
-    expect(await skillBody(host)).not.toContain('Bank notes')
-    expect(existsSync(join(dir, 'cli', 'guides', `${guideOf(edited, 2).sha256}.md`))).toBe(false)
+    listed = r2
+    const result = await sync.syncCliCatalogNow()
+    expect(result.installed).toEqual([])
+    expect(result.changed).toBeGreaterThan(0)
+    const after = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
+    expect(after).toMatchObject({ dir: before.dir, importedAt: before.importedAt, bundle: { revision: 2 } })
+    expect(await skillBody(host)).toContain('Second text.')
   })
 
-  it('leaves the guide as it is when the override is malformed or for another payload', async () => {
-    const bytes = packageBytes('1.0.0')
-    let entry: Record<string, unknown> = { guide: guideOf(TEXT) }
-    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes, entry)])]))
-    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) })
-    await catalog.installCliTool({ id: ID, version: '1.0.0' })
-
-    entry = { guide: { ...guideOf('other'), content: 'tampered' } }
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(1)
-
-    entry = { guide: guideOf('for a different build', 5), integrity: `sha256-${'B'.repeat(43)}=` }
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(1)
-    expect(await skillBody(host)).toContain(TEXT.trim())
-  })
-
-  it('requires a guide signature when the build ships keys', async () => {
-    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+  it('gives a copy shipped before bundles its skill without reinstalling it', async () => {
     const presetDir = join(dir, 'preset')
     mkdirSync(presetDir)
-    writeFileSync(join(presetDir, 'trusted-keys.json'), JSON.stringify({
-      schema: 'halo.cli.trust/1',
-      keys: [{ keyId: 'k1', alg: 'ed25519', publicKey: Buffer.from(publicKey.export({ format: 'jwk' }).x as string, 'base64url').toString('base64') }],
-    }))
-    const bytes = packageBytes('1.0.0')
-    const fields = { version: '1.0.0', integrity: buildManifest({ version: '1.0.0' }).integrity as string, archiveSha256: sha256(bytes) }
-    const packageSig = {
-      alg: 'ed25519', keyId: 'k1',
-      value: sign(null, Buffer.from(`halo.cli.sig/1\n${ID}\n1.0.0\n${fields.archiveSha256}\n${fields.integrity}\n`), privateKey).toString('base64'),
-    }
-    const plain = guideOf(TEXT)
-    const guideSig = (revision: number) => ({
-      alg: 'ed25519', keyId: 'k1',
-      value: sign(null, Buffer.from(`halo.cli.guide/1\n${ID}\n1.0.0\n${revision}\n${plain.sha256}\n`), privateKey).toString('base64'),
-    })
-    let guide: unknown = plain
-    const fetchCliCatalog = vi.fn(async () => served([tool([versionEntry('1.0.0', bytes, { signature: packageSig, guide })])]))
-    const { catalog, host } = await load({ fetchCliCatalog, downloadCliPackage: vi.fn(async () => bytes) }, presetDir)
+    const hcli = writePackage(pkgs, { version: '1.0.0' })
+    writeFileSync(join(presetDir, 'tool-1.0.0.hcli'), readFileSync(hcli))
+    const shipped = bundleOf('1.0.0', { hcli, revision: 3, skill: skillText('From the Registry.') })
+    const { sync, host } = await load({
+      fetchCliCatalog: vi.fn(async () => served([tool([versionEntry('1.0.0', shipped)], { source: 'builtin', autoInstall: true })])),
+      downloadCliPackage: downloads(shipped),
+    }, presetDir)
+    await host.prepareCliTools()
+    const before = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
+    expect(before.bundle).toBeUndefined()
 
-    await catalog.installCliTool({ id: ID, version: '1.0.0' })
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
-
-    guide = { ...plain, revision: 2, signature: guideSig(1) }
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
-
-    guide = { ...plain, revision: 2, signature: guideSig(2) }
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(2)
-    expect(await skillBody(host)).toContain(TEXT.trim())
-  })
-})
-
-describe('cli catalog: tool skill for preset copies', () => {
-  const SKILL = '---\ndescription: Open and track service tickets with the tool command\n---\n# Ticket notes\nRun `tool --check` first.\n'
-  const GUIDE = '# Version notes\nOnly for this build.\n'
-
-  function textOf(content: string, revision = 1, extra: Record<string, unknown> = {}) {
-    return { revision, sha256: createHash('sha256').update(content).digest('hex'), content, signature: null, ...extra }
-  }
-
-  /** A build whose preset directory carries version 1.0.0 of the tool, optionally with trusted keys. */
-  function presetBuild(keys: unknown[] | null = null): string {
-    const presetDir = join(dir, 'preset')
-    mkdirSync(presetDir)
-    writePackage(presetDir, { version: '1.0.0' })
-    if (keys) writeFileSync(join(presetDir, 'trusted-keys.json'), JSON.stringify({ schema: 'halo.cli.trust/1', keys }))
-    return presetDir
-  }
-
-  /** A catalog entry for a tool shipped in the installer: listed, with no versions. */
-  function builtin(skill: unknown, overrides: Record<string, unknown> = {}) {
-    return tool([], { source: 'builtin', latest: '', ...(skill === undefined ? {} : { skill }), ...overrides })
-  }
-
-  async function staticSkill(host: Awaited<ReturnType<typeof load>>['host']) {
-    const snapshot = await host.readCurrentToolSkills()
-    return snapshot!.skills.find(skill => skill.toolId === ID)!.describe()
-  }
-
-  it('parses the tool skill and passes it on; a malformed one leaves copies as they are', async () => {
-    const { catalog } = await load(null)
-    const parsed = catalog.parseCliCatalog(catalogBody([
-      builtin(textOf(SKILL, 3)),
-      builtin({ ...textOf(SKILL), sha256: '0'.repeat(64) }, { id: 'com.example.bad' }),
-      builtin(undefined, { id: 'com.example.none' }),
-    ]))
-    expect(parsed.map(t => t.skill)).toEqual([
-      { revision: 3, sha256: textOf(SKILL).sha256, content: SKILL, signature: null },
-      'invalid',
-      null,
-    ])
-    const status = catalog.catalogStatusOf(parsed)
-    expect(status[0].skill?.revision).toBe(3)
-    expect('skill' in status[1]).toBe(false)
-    expect(status[2].skill).toBeNull()
-  })
-
-  it('gives the skill to the preset copy, uses its description, and clears it when the administrator resets it', async () => {
-    let skill: unknown = textOf(SKILL)
-    const fetchCliCatalog = vi.fn(async () => served([builtin(skill)]))
-    const { catalog, host } = await load({ fetchCliCatalog }, presetBuild())
-
-    // Status-only entries stay out of the store list, but their skill applies.
-    expect((await catalog.fetchCliCatalog()).tools).toEqual([])
-    const record = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
-    expect(record.source).toBe('preset')
-    expect(record.guideOverride).toEqual({ revision: 1, sha256: textOf(SKILL).sha256, tool: true })
-    const first = await staticSkill(host)
-    expect(first.description).toBe('Companion skill for the tool command-line tool. Open and track service tickets with the tool command')
-    expect(first.body).toContain('Ticket notes')
-    const overview = await host.getCliToolsOverview()
-    expect(overview.tools.find(t => t.id === ID)?.skill?.description).toBe('Open and track service tickets with the tool command')
-
-    skill = undefined
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
-    expect((await staticSkill(host)).description).not.toBe(first.description)
-  })
-
-  it('keeps a version guide over the tool skill, and leaves copies alone when the tool is not listed', async () => {
-    const integrity = buildManifest({ version: '1.0.0' }).integrity
-    let body = catalogBody([builtin(textOf(SKILL), {
-      versions: [versionEntry('1.0.0', new Uint8Array([1]), { integrity, guide: textOf(GUIDE, 4) })],
-      latest: '1.0.0',
-    })])
-    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })) }, presetBuild())
-
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride)
-      .toEqual({ revision: 4, sha256: textOf(GUIDE).sha256 })
-
-    // The version leaves the catalog: its guide stays, the tool skill does not displace it.
-    body = catalogBody([builtin(textOf(SKILL, 2))])
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(4)
-
-    // A catalog that does not list the tool changes nothing.
-    body = catalogBody([])
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(4)
-  })
-
-  it('requires a skill signature when the build ships keys and never accepts a guide signature', async () => {
-    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
-    const presetDir = presetBuild([
-      { keyId: 'k1', alg: 'ed25519', publicKey: Buffer.from(publicKey.export({ format: 'jwk' }).x as string, 'base64url').toString('base64') },
-    ])
-    const plain = textOf(SKILL, 2)
-    const sig = (message: string) => ({ alg: 'ed25519', keyId: 'k1', value: sign(null, Buffer.from(message), privateKey).toString('base64') })
-    let skill: unknown = plain
-    const { catalog, host } = await load({ fetchCliCatalog: vi.fn(async () => served([builtin(skill)])) }, presetDir)
-
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
-
-    skill = { ...plain, signature: sig(`halo.cli.guide/1\n${ID}\n1.0.0\n2\n${plain.sha256}\n`) }
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
-
-    skill = { ...plain, signature: sig(`halo.cli.skill/1\n${ID}\n2\n${plain.sha256}\n`) }
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toEqual({ revision: 2, sha256: plain.sha256, tool: true })
-
-    // A refused skill later leaves the applied one in place rather than reverting.
-    skill = { ...textOf(`${SKILL}More.\n`, 3), signature: sig('forged') }
-    await catalog.fetchCliCatalog()
-    expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride?.revision).toBe(2)
+    const result = await sync.syncCliCatalogNow()
+    expect(result.installed).toEqual([])
+    const after = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
+    expect(after).toMatchObject({ source: 'preset', dir: before.dir, bundle: { revision: 3 }, skill: { files: 1 } })
+    expect(await skillBody(host)).toContain('From the Registry.')
   })
 })
 
 describe('cli catalog: revalidation', () => {
   it('sends the previous ETag and reuses the parsed catalog when it is unchanged', async () => {
-    const bytes = new Uint8Array([1])
     const fetchCliCatalog = vi.fn()
-      .mockResolvedValueOnce({ status: 'ok', document: catalogBody([tool([versionEntry('1.0.0', bytes)])]), validator: '"v1"' })
+      .mockResolvedValueOnce({ status: 'ok', document: catalogBody([tool([versionEntry('1.0.0')])]), validator: '"v1"' })
       .mockResolvedValue({ status: 'unchanged' })
     const { catalog } = await load({ fetchCliCatalog })
 
@@ -602,10 +422,11 @@ describe('cli catalog: administrator delivery', () => {
     return presetDir
   }
 
+
   it('installs a delivered tool on sync and keeps it from being deleted', async () => {
-    const bytes = packageBytes('1.0.0')
-    const downloadCliPackage = vi.fn(async () => bytes)
-    const { sync, host } = await load({ fetchCliCatalog: vi.fn(async () => served([delivered([versionEntry('1.0.0', bytes)])])), downloadCliPackage })
+    const shipped = bundleOf('1.0.0')
+    const downloadCliPackage = downloads(shipped)
+    const { sync, host } = await load({ fetchCliCatalog: vi.fn(async () => served([delivered([versionEntry('1.0.0', shipped)])])), downloadCliPackage })
 
     const changed = vi.fn()
     const subscription = host.onDidChangeCurrentTools(changed)
@@ -628,14 +449,14 @@ describe('cli catalog: administrator delivery', () => {
   })
 
   it('leaves partner tools to the user and counts their updates', async () => {
-    const bytes = packageBytes('1.0.0')
-    let body = catalogBody([tool([versionEntry('1.0.0', bytes)])])
-    const downloadCliPackage = vi.fn(async () => bytes)
+    const shipped = bundleOf('1.0.0')
+    let body = catalogBody([tool([versionEntry('1.0.0', shipped)])])
+    const downloadCliPackage = downloads(shipped)
     const { catalog, sync } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage })
 
     expect((await sync.syncCliCatalogNow()).installed).toEqual([])
     await catalog.installCliTool({ id: ID, version: '1.0.0' })
-    body = catalogBody([tool([versionEntry('2.0.0', packageBytes('2.0.0')), versionEntry('1.0.0', bytes)], { latest: '2.0.0' })])
+    body = catalogBody([tool([versionEntry('2.0.0'), versionEntry('1.0.0', shipped)], { latest: '2.0.0' })])
     const result = await sync.syncCliCatalogNow()
     expect(result.installed).toEqual([])
     expect(result.updates).toBe(1)
@@ -643,9 +464,9 @@ describe('cli catalog: administrator delivery', () => {
   })
 
   it('moves past the shipped copy, falls back to it when the delivery is withdrawn, and never downgrades', async () => {
-    const bytes = packageBytes('2.0.0')
-    let body = catalogBody([delivered([versionEntry('2.0.0', bytes)])])
-    const downloadCliPackage = vi.fn(async () => bytes)
+    const shipped = bundleOf('2.0.0')
+    let body = catalogBody([delivered([versionEntry('2.0.0', shipped)])])
+    const downloadCliPackage = downloads(shipped)
     const { sync, host } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage }, presetOf('1.0.0'))
 
     expect((await sync.syncCliCatalogNow()).installed).toEqual([{ id: ID, version: '2.0.0' }])
@@ -660,7 +481,7 @@ describe('cli catalog: administrator delivery', () => {
     expect(record.versions['2.0.0'].withdrawn).toBe(true)
     expect(record.autoInstall).toBe(true)
 
-    body = catalogBody([delivered([versionEntry('0.9.0', packageBytes('0.9.0'))])])
+    body = catalogBody([delivered([versionEntry('0.9.0', bundleOf('0.9.0'))])])
     await sync.syncCliCatalogNow()
     record = (await host.readCliToolState())!.tools[ID]
     expect(record.current).toBe('1.0.0')
@@ -668,11 +489,12 @@ describe('cli catalog: administrator delivery', () => {
     expect(downloadCliPackage).toHaveBeenCalledTimes(1)
   })
 
-  it('remembers a refused package for background reads until the catalog changes it, retries it on Sync, and retries a network fault', async () => {
-    const bytes = packageBytes('1.0.0')
-    const good = versionEntry('1.0.0', bytes)
-    let body = catalogBody([delivered([{ ...good, integrity: `sha256-${'A'.repeat(43)}=` }])])
-    const downloadCliPackage = vi.fn(async () => bytes)
+  it('remembers a refused bundle for background reads until the catalog changes it, retries it on Sync, and retries a network fault', async () => {
+    const hcli = writePackage(pkgs, { version: '1.0.0' })
+    const broken = bundleOf('1.0.0', { hcli, editJson: json => { (json.cli as Record<string, unknown>).integrity = `sha256-${'A'.repeat(43)}=` } })
+    const fixed = bundleOf('1.0.0', { hcli, revision: 2 })
+    let body = catalogBody([delivered([versionEntry('1.0.0', broken)])])
+    const downloadCliPackage = downloads(broken, fixed)
     const { sync, host } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage })
 
     expect((await sync.requestCliCatalogSync('sign-in'))!.failed).toEqual([{ id: ID, version: '1.0.0' }])
@@ -683,7 +505,7 @@ describe('cli catalog: administrator delivery', () => {
     expect((await sync.syncCliCatalogNow()).failed).toEqual([{ id: ID, version: '1.0.0' }])
     expect(downloadCliPackage).toHaveBeenCalledTimes(2)
 
-    body = catalogBody([delivered([good])])
+    body = catalogBody([delivered([versionEntry('1.0.0', fixed)])])
     downloadCliPackage.mockRejectedValueOnce(new Error('socket hang up'))
     expect((await sync.requestCliCatalogSync('sign-in'))!.failed).toEqual([{ id: ID, version: '1.0.0' }])
     expect((await host.getCliToolsOverview()).deliveryFailures).toEqual([])
@@ -691,11 +513,11 @@ describe('cli catalog: administrator delivery', () => {
     expect(downloadCliPackage).toHaveBeenCalledTimes(4)
   })
 
-  it('installs a remembered refusal on Sync once the package arrives intact, and clears the record', async () => {
-    const bytes = packageBytes('1.0.0')
-    const downloadCliPackage = vi.fn(async () => bytes)
+  it('installs a remembered refusal on Sync once the bundle arrives intact, and clears the record', async () => {
+    const shipped = bundleOf('1.0.0')
+    const downloadCliPackage = downloads(shipped)
     downloadCliPackage.mockResolvedValueOnce(Buffer.from('corrupted on the way'))
-    const body = catalogBody([delivered([versionEntry('1.0.0', bytes)])])
+    const body = catalogBody([delivered([versionEntry('1.0.0', shipped)])])
     const { sync, host } = await load({ fetchCliCatalog: vi.fn(async () => ({ status: 'ok', document: body })), downloadCliPackage })
 
     expect((await sync.requestCliCatalogSync('startup'))!.failed).toEqual([{ id: ID, version: '1.0.0' }])

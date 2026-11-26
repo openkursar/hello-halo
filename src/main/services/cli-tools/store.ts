@@ -7,7 +7,7 @@
  *   store/<id>/<version>-<digest12>/   immutable, read-only installed package
  *   support/<id>/<version>-<digest12>/<supportDigest>/    immutable runtime variants
  *   staging/<txid>/                    one import transaction; removed on exit
- *   guides/<sha256>.md                 administrator guide overrides, by content
+ *   skills/<sha256>/                   skills delivered in bundles, by content (read-only)
  *   tools/<id>/bin/                    launchers for the tool's current version
  *   tools/<id>/install.json            that installation: its id, launchers and skill
  *   tools/<id>/*.cjs                   preloads the launchers load (see shims.ts)
@@ -34,8 +34,7 @@ import {
   validateCredentialBinding,
   type CliCredentialBinding,
 } from './credentials'
-import type { CatalogSignature } from './signature'
-import type { PresetCatalog } from './preset-catalog'
+import { BUNDLE_SKILL_MAIN_MAX_BYTES, skillPackageSha256, type BundleSkillSource, type VerifiedBundle } from './bundle'
 import {
   assertRealDirectories, assertSupportFiles, BASE_SUPPORT_FILE, copyPackageTree, loadSupportFiles,
   placeSupportFiles, renderSupportPreload, supportDigest, supportError, supportExpectations,
@@ -99,14 +98,16 @@ export interface CliToolVersionRecord {
   /** A catalog version the catalog no longer lists. Informational: it stays usable. */
   withdrawn?: boolean
   /**
-   * The administrator's replacement for the package guide (`guides/<sha256>.md`).
-   * Only preset and catalog versions take one; the text is never kept in state.
-   * `tool` marks a preset version's copy of the tool's skill rather than a
-   * guide set for this version, so clearing the skill never drops the latter.
+   * The delivery bundle revision this version last took (preset and catalog
+   * versions only). A version installed before bundles has none, and takes
+   * the next bundle of the same content without a reinstall.
    */
-  guideOverride?: { revision: number; sha256: string; tool?: true; bundled?: true }
-  /** A live catalog has decided this preset's text, including resetting it to the package guide. */
-  liveGuideSeen?: true
+  bundle?: { revision: number; sha256: string }
+  /**
+   * The skill that bundle carried (`skills/<sha256>/`); absent when it carried
+   * none, and then the package guide applies.
+   */
+  skill?: { sha256: string; files: number; source: BundleSkillSource }
   /** Present only for `source: 'external'`; `dir` is then empty. */
   external?: CliExternalRecord
   /** Digest of the support files included when this immutable directory was published. */
@@ -138,9 +139,10 @@ export interface CliToolRecord {
   versions: Record<string, CliToolVersionRecord>
 }
 
-/** A delivered version this device refused; not tried again while the catalog lists the same content. */
+/** A delivered bundle this device refused; not tried again while the catalog lists the same bundle. */
 export interface CliDeliveryFailure {
-  integrity: string
+  /** sha256 of the refused bundle. */
+  bundle: string
   code: CliToolErrorCode
   at: string
 }
@@ -157,7 +159,7 @@ export interface CliToolState {
    * deleted by `collectPendingCleanup` at the next start.
    */
   pendingCleanup?: string[]
-  /** Keyed `id@version`; dropped once the catalog stops listing that version. */
+  /** Keyed `id@version`; dropped once the catalog stops listing that bundle. */
   deliveryFailures?: Record<string, CliDeliveryFailure>
 }
 
@@ -198,37 +200,14 @@ export interface RegisterExternalOptions {
   toolId?: string
 }
 
-/** An administrator's guide for one catalog version, replacing the package guide. */
-export interface CatalogGuideOverride {
-  revision: number
-  /** Lowercase hex sha256 of `content` (UTF-8). */
-  sha256: string
-  content: string
-  /** Checked by the host before the store sees it (see signature.ts). */
-  signature?: CatalogSignature | null
-}
-
 /** Catalog facts about one tool, as `applyCatalogStatus` consumes them. */
 export interface CatalogToolStatus {
   id: string
   revoked: boolean
   /** The catalog delivers this tool to every device (see `CliToolRecord.autoInstall`). */
   autoInstall?: boolean
-  /** Approved versions the catalog lists now. */
-  versions: string[]
-  /**
-   * Guide state per listed version, keyed by version. `override: null` means
-   * the package guide applies; a version absent here is left as it is.
-   * Applied only to an installed preset or catalog version whose payload
-   * integrity equals `integrity`.
-   */
-  guides?: Record<string, { integrity: string; override: CatalogGuideOverride | null }>
-  /**
-   * The tool's skill, for installed preset versions that `guides` does not
-   * cover. `null`: the catalog sets none, so a skill applied earlier is
-   * cleared. Absent: leave those versions as they are.
-   */
-  skill?: CatalogGuideOverride | null
+  /** Approved versions the catalog lists now, with the sha256 of each one's current bundle. */
+  versions: Record<string, string>
 }
 
 export interface CliToolStoreOptions {
@@ -258,8 +237,12 @@ export interface ImportOptions {
   expectedTool?: { id: string; version: string }
   /** Make the imported version current (default true). */
   activate?: boolean
-  /** The build's offline expectations, consulted only for preset imports. */
-  presetCatalog?: PresetCatalog
+  /**
+   * The verified delivery bundle the archive came from. Its revision and
+   * skill are recorded on the version, also when identical content is
+   * already installed, which then needs no reinstall.
+   */
+  bundle?: Pick<VerifiedBundle, 'revision' | 'sha256' | 'skill'>
 }
 
 export interface ImportResult {
@@ -268,8 +251,6 @@ export interface ImportResult {
   integrity: string
   /** False when the identical content was already installed. */
   installed: boolean
-  /** This preset was governed by the optional bundled catalog. */
-  matchedPresetCatalog?: true
   current: string | null
   previous: string | null
 }
@@ -308,7 +289,6 @@ interface LauncherTarget {
 export { GUIDE_MAX_BYTES } from './skills'
 
 const STATE_MAX_BYTES = 1024 * 1024
-const GUIDE_SHA256 = /^[0-9a-f]{64}$/
 /** Same rule as manifest command names: bare, lowercase, never the reserved `halo-` prefix. */
 export const COMMAND_NAME_PATTERN = /^(?!halo-)[a-z0-9][a-z0-9._-]{0,63}$/
 const TOOL_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/
@@ -354,11 +334,7 @@ function pruneDeliveryFailures(state: CliToolState, catalog: Map<string, Catalog
     const at = key.lastIndexOf('@')
     const entry = catalog.get(key.slice(0, at))
     const version = key.slice(at + 1)
-    // `guides` omits a version only when its guide is malformed; listing then decides.
-    const listed = entry?.guides?.[version]
-      ? entry.guides[version].integrity === failure.integrity
-      : entry?.versions.includes(version)
-    if (listed) continue
+    if (entry?.versions[version] !== undefined && entry.versions[version] === failure.bundle) continue
     delete failures[key]
     pruned = true
   }
@@ -414,7 +390,7 @@ function currentToolRecords(state: CliToolState) {
 
 function toolSkillFingerprint(tool: CliToolRecord, record: CliToolVersionRecord): string {
   return sha256(JSON.stringify([
-    LAUNCH_FORMAT, tool.installId, record.integrity, record.guideOverride?.sha256, record.name, record.description,
+    LAUNCH_FORMAT, tool.installId, record.integrity, record.skill?.sha256, record.name, record.description,
     record.commands.map(command => command.name),
   ]))
 }
@@ -423,6 +399,24 @@ function currentToolsRevision(state: CliToolState): string {
   return sha256(JSON.stringify(currentToolRecords(state).map(({ id, tool, version, record }) => [
     id, version, toolSkillFingerprint(tool, record), record.external?.sha256,
   ])))
+}
+
+/**
+ * Earlier builds recorded catalog guide texts per version; skills now arrive
+ * in bundles, so those records go. True when any was dropped.
+ */
+function dropLegacyGuideFields(state: CliToolState): boolean {
+  let dropped = false
+  for (const tool of Object.values(state.tools)) {
+    for (const record of Object.values(tool.versions) as Array<CliToolVersionRecord & Record<string, unknown>>) {
+      for (const key of ['guideOverride', 'liveGuideSeen']) {
+        if (!(key in record)) continue
+        delete record[key]
+        dropped = true
+      }
+    }
+  }
+  return dropped
 }
 
 /** Give every usable tool an installation id; true when one was added. */
@@ -465,6 +459,32 @@ async function readGuide(path: string): Promise<string | null> {
   } finally {
     await handle?.close().catch(() => undefined)
   }
+}
+
+const SKILL_TREE_MAX_FILES = 2000
+const SKILL_TREE_MAX_BYTES = 32 * 1024 * 1024
+
+/** Read a stored skill directory: regular files only, within the bundle limits. */
+async function readSkillTree(root: string): Promise<Map<string, Buffer>> {
+  const files = new Map<string, Buffer>()
+  let total = 0
+  const walk = async (dir: string, prefix: string): Promise<void> => {
+    for (const entry of await fsp.readdir(dir, { withFileTypes: true })) {
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(full, path)
+        continue
+      }
+      if (!entry.isFile()) throw new Error('skill tree holds something other than files')
+      const bytes = await fsp.readFile(full)
+      total += bytes.byteLength
+      if (files.size >= SKILL_TREE_MAX_FILES || total > SKILL_TREE_MAX_BYTES) throw new Error('skill tree exceeds its limits')
+      files.set(path, bytes)
+    }
+  }
+  await walk(root, '')
+  return files
 }
 
 async function writeFileAtomic(file: string, content: string): Promise<void> {
@@ -637,23 +657,36 @@ export class CliToolStore {
 
   private async renderToolSkill(id: string, installId: string, record: CliToolVersionRecord): Promise<CliToolSkill> {
     const command = record.commands[0].name
-    const summary = await this.describeSkill(id, record)
-    const guidePath = record.guideOverride ? this.path('guides', `${record.guideOverride.sha256}.md`) : null
-    let text = guidePath ? await readGuide(guidePath) : null
-    if (guidePath && (text === null || sha256(text) !== record.guideOverride!.sha256)) {
-      this.log.error('[CliTools] Guide override unavailable; using the package guide', { tool: id })
-      text = null
-    }
-    const packagePath = this.packageGuidePath(record)
-    if (text === null && packagePath) {
-      text = await readGuide(packagePath)
-      if (text === null) this.log.error('[CliTools] Package guide unreadable; the skill names only the tool', { tool: id })
+    const bundled = await this.readBundleSkill(id, record)
+    const attachments: CliToolSkill['attachments'] = []
+    let text: string | null = null
+    let description: { description: string }
+    if (bundled) {
+      text = bundled.get('SKILL.md')!.toString('utf-8')
+      for (const [path, bytes] of bundled) if (path !== 'SKILL.md') attachments.push({ path, bytes })
+      description = resolveSkillDescription({
+        admin: splitGuide(text).description,
+        manifest: record.description,
+        toolName: record.name ?? id,
+      })
+    } else {
+      const packagePath = this.packageGuidePath(record)
+      if (packagePath) {
+        text = await readGuide(packagePath)
+        if (text === null) this.log.error('[CliTools] Package guide unreadable; the skill names only the tool', { tool: id })
+      }
+      description = resolveSkillDescription({
+        package: text === null ? undefined : splitGuide(text).description,
+        manifest: record.description,
+        toolName: record.name ?? id,
+      })
     }
     return {
       toolId: id,
       installId,
       name: cliSkillName(command, id, installId),
-      description: cliSkillDescription(command, summary.description),
+      description: cliSkillDescription(command, description.description),
+      attachments,
       body: renderCliSkill({
         toolId: id,
         installId,
@@ -884,10 +917,6 @@ export class CliToolStore {
         label = l
       })
 
-      stage = 'preset-catalog'
-      const presetCatalog = options.source === 'preset' ? options.presetCatalog : undefined
-      const match = presetCatalog?.resolve(basename(archivePath), manifest, archive.archiveSha256)
-      const matched = match ? { matchedPresetCatalog: true as const } : {}
       stage = 'publish'
       const state = await this.readState()
       const tool: CliToolRecord = state.tools[manifest.id] ?? { current: null, revoked: false, versions: {} }
@@ -904,15 +933,18 @@ export class CliToolStore {
         await this.selectSupport(existing)
         await fsp.rm(staging, { recursive: true, force: true })
         const previous = tool.current
-        stage = 'preset-guide'
-        const guideChanged = match && !tool.revoked && existing.archiveSha256 === archive.archiveSha256 &&
-          await this.applyBundledGuide(label, existing, match.guide)
+        stage = 'bundle'
+        const bundleChanged = options.bundle ? await this.applyBundle(label, existing, options.bundle) : false
+        if (bundleChanged) this.dropDeliveryFailure(state, label)
         if (activate && tool.current !== manifest.version) tool.current = manifest.version
-        if (guideChanged || previous !== tool.current) await this.writeState(state)
-        this.log.log('[CliTools] Import matched an installed version', { tool: label, current: tool.current })
+        if (bundleChanged || previous !== tool.current) await this.writeState(state)
+        if (bundleChanged) await this.pruneSkills(state)
+        this.log.log('[CliTools] Import matched an installed version', {
+          tool: label, current: tool.current, ...(options.bundle ? { revision: options.bundle.revision, skillChanged: bundleChanged } : {}),
+        })
         return {
           id: manifest.id, version: manifest.version, integrity: inspection.integrity,
-          installed: false, current: tool.current, previous, ...matched,
+          installed: false, current: tool.current, previous,
         }
       }
 
@@ -967,8 +999,8 @@ export class CliToolStore {
         ...(manifest.description ? { description: manifest.description } : {}),
       }
       if (!published) await this.selectSupport(tool.versions[manifest.version])
-      stage = 'preset-guide'
-      if (match && !tool.revoked) await this.applyBundledGuide(label, tool.versions[manifest.version], match.guide)
+      stage = 'bundle'
+      if (options.bundle) await this.applyBundle(label, tool.versions[manifest.version], options.bundle)
       // Reinstalling content a pending cleanup still lists must not lose it later.
       if (state.pendingCleanup) {
         state.pendingCleanup = state.pendingCleanup.filter(d => d !== dirRel)
@@ -976,15 +1008,13 @@ export class CliToolStore {
       }
       // The offered update is now installed (or overtaken): stop offering it until the next catalog read.
       if (tool.catalogUpdate && compareVersions(manifest.version, tool.catalogUpdate) >= 0) delete tool.catalogUpdate
-      if (state.deliveryFailures?.[label]) {
-        delete state.deliveryFailures[label]
-        if (Object.keys(state.deliveryFailures).length === 0) delete state.deliveryFailures
-      }
-      if ((activate || tool.current === null) && !(match && tool.revoked)) tool.current = manifest.version
+      this.dropDeliveryFailure(state, label)
+      if (activate || tool.current === null) tool.current = manifest.version
       state.tools[manifest.id] = tool
       stage = 'state'
       await this.writeState(state)
       published = null
+      if (options.bundle) await this.pruneSkills(state)
 
       this.log.log('[CliTools] Imported package', {
         tool: label,
@@ -996,7 +1026,7 @@ export class CliToolStore {
       })
       return {
         id: manifest.id, version: manifest.version, integrity: inspection.integrity,
-        installed: true, current: tool.current, previous, ...matched,
+        installed: true, current: tool.current, previous,
       }
     } catch (error) {
       const err = stage === 'support' ? supportError() : error
@@ -1017,6 +1047,12 @@ export class CliToolStore {
       })
       throw err
     }
+  }
+
+  private dropDeliveryFailure(state: CliToolState, label: string): void {
+    if (!state.deliveryFailures?.[label]) return
+    delete state.deliveryFailures[label]
+    if (Object.keys(state.deliveryFailures).length === 0) delete state.deliveryFailures
   }
 
   // ── current version, revocation, removal ─────────────────────────────
@@ -1326,10 +1362,10 @@ export class CliToolStore {
    * versions: `delisted` when the catalog has neither an approved version
    * nor a revocation entry for it, `withdrawn` per version the catalog no
    * longer lists, and `catalogUpdate` when an approved version is above
-   * every installed one. Administrator texts: each listed version's guide,
-   * and the tool's skill for preset versions (see `applyToolSkill`). A
-   * delivered tool whose versions are all withdrawn stays listed, so it is not
-   * delisted. Nothing is downloaded. Returns the ids that changed.
+   * every installed one. A delivered tool whose versions are all withdrawn
+   * stays listed, so it is not delisted. Skills arrive only with bundles, so
+   * nothing here changes one. Nothing is downloaded. Returns the ids that
+   * changed.
    */
   applyCatalogStatus(catalog: CatalogToolStatus[]): Promise<string[]> {
     return this.serialize(async () => {
@@ -1339,25 +1375,24 @@ export class CliToolStore {
       for (const [id, tool] of Object.entries(state.tools)) {
         const before = JSON.stringify(tool)
         const entry = byId.get(id)
+        const listed = entry ? Object.keys(entry.versions) : []
         if (entry) tool.revoked = entry.revoked
         // An entry without versions does not carry the flag, so it keeps the last one seen.
         if (entry?.autoInstall) tool.autoInstall = true
-        else if (!entry || entry.versions.length > 0) delete tool.autoInstall
+        else if (!entry || listed.length > 0) delete tool.autoInstall
         const catalogVersions = Object.entries(tool.versions).filter(([, v]) => v.source === 'catalog')
         if (catalogVersions.length > 0) {
-          const gone = !entry || (!entry.revoked && entry.versions.length === 0 && !tool.autoInstall)
+          const gone = !entry || (!entry.revoked && listed.length === 0 && !tool.autoInstall)
           if (gone) tool.delisted = true
           else delete tool.delisted
           for (const [version, record] of catalogVersions) {
-            if (entry && !entry.versions.includes(version)) record.withdrawn = true
+            if (entry && !listed.includes(version)) record.withdrawn = true
             else delete record.withdrawn
           }
         }
-        if (entry?.guides) await this.applyGuides(id, tool, entry.guides)
-        if (entry && entry.skill !== undefined) await this.applyToolSkill(id, tool, entry.skill, entry.guides ?? {})
         const installed = Object.keys(tool.versions).filter(v => v !== EXTERNAL_VERSION)
         const best = entry && !entry.revoked
-          ? [...entry.versions].sort(compareVersions).pop()
+          ? [...listed].sort(compareVersions).pop()
           : undefined
         if (best && installed.length > 0 && installed.every(v => compareVersions(best, v) > 0)) {
           tool.catalogUpdate = best
@@ -1371,7 +1406,7 @@ export class CliToolStore {
         await this.writeState(state)
         if (changed.length > 0) this.log.log('[CliTools] Catalog status applied', { changed })
       }
-      await this.pruneGuides(state)
+      await this.pruneSkills(state)
       return changed
     })
   }
@@ -1386,124 +1421,6 @@ export class CliToolStore {
         tool: `${id}@${version}`, code: failure.code,
       })
     })
-  }
-
-  /**
-   * Set or clear the administrator guide of each matching installed version.
-   * The text is written once per content and re-checked here; a guide that
-   * does not check out leaves the version as it was.
-   */
-  private async applyGuides(
-    id: string,
-    tool: CliToolRecord,
-    guides: NonNullable<CatalogToolStatus['guides']>,
-  ): Promise<void> {
-    for (const [version, guide] of Object.entries(guides)) {
-      const record = tool.versions[version]
-      if (!record || (record.source !== 'catalog' && record.source !== 'preset')) continue
-      if (record.integrity !== guide.integrity) continue
-      const override = guide.override
-      if (!override) {
-        if (record.source === 'preset') record.liveGuideSeen = true
-        delete record.guideOverride
-        continue
-      }
-      if (!(await this.storeGuideText(`${id}@${version}`, override))) continue
-      if (record.source === 'preset') record.liveGuideSeen = true
-      const current = record.guideOverride
-      if (current?.sha256 !== override.sha256 || current.revision !== override.revision || current.tool || current.bundled) {
-        record.guideOverride = { revision: override.revision, sha256: override.sha256 }
-      }
-    }
-  }
-
-  /**
-   * Give the tool's skill to installed preset versions: they are not in the
-   * catalog, so no version guide reaches them. A version `guides` applied to,
-   * or one holding a guide set for that version, keeps it.
-   */
-  private async applyToolSkill(
-    id: string,
-    tool: CliToolRecord,
-    skill: CatalogGuideOverride | null,
-    guides: NonNullable<CatalogToolStatus['guides']>,
-  ): Promise<void> {
-    const targets = Object.entries(tool.versions).filter(([version, record]) =>
-      record.source === 'preset' &&
-      guides[version]?.integrity !== record.integrity &&
-      (!record.guideOverride || record.guideOverride.tool || record.guideOverride.bundled))
-    if (targets.length === 0) return
-    if (!skill) {
-      for (const [, record] of targets) {
-        record.liveGuideSeen = true
-        delete record.guideOverride
-      }
-      return
-    }
-    if (!(await this.storeGuideText(id, skill))) return
-    for (const [, record] of targets) {
-      record.liveGuideSeen = true
-      const current = record.guideOverride
-      if (current?.sha256 !== skill.sha256 || current.revision !== skill.revision || current.bundled) {
-        record.guideOverride = { revision: skill.revision, sha256: skill.sha256, tool: true }
-      }
-    }
-  }
-
-  private async applyBundledGuide(
-    label: string,
-    record: CliToolVersionRecord,
-    guide: (CatalogGuideOverride & { tool: boolean }) | undefined,
-  ): Promise<boolean> {
-    const current = record.guideOverride
-    if (record.source !== 'preset' || record.liveGuideSeen || (current && !current.bundled) || !guide) return false
-    if (current && ((!current.tool && guide.tool) ||
-      (!!current.tool === guide.tool && current.revision >= guide.revision))) return false
-    if (!(await this.storeGuideText(label, guide))) return false
-    record.guideOverride = { revision: guide.revision, sha256: guide.sha256, bundled: true, ...(guide.tool ? { tool: true } : {}) }
-    return true
-  }
-
-  /**
-   * Check an administrator text against its digest and limits and keep it as
-   * `guides/<sha256>.md`, written once per content. False when it does not check out.
-   */
-  private async storeGuideText(label: string, override: CatalogGuideOverride): Promise<boolean> {
-    const bytes = Buffer.byteLength(override.content, 'utf-8')
-    if (!GUIDE_SHA256.test(override.sha256) || !Number.isInteger(override.revision) || override.revision < 1 ||
-      bytes > GUIDE_MAX_BYTES || sha256(override.content) !== override.sha256) {
-      this.log.error('[CliTools] Guide override ignored: it does not match its digest or limits', {
-        tool: label, revision: override.revision,
-      })
-      return false
-    }
-    const file = this.path('guides', `${override.sha256}.md`)
-    if (!existsSync(file)) {
-      await fsp.mkdir(this.path('guides'), { recursive: true })
-      await writeFileAtomic(file, override.content)
-    }
-    return true
-  }
-
-  /** Delete guide files no version record refers to. */
-  private async pruneGuides(state: CliToolState): Promise<void> {
-    let names: string[]
-    try {
-      names = await fsp.readdir(this.path('guides'))
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
-      throw err
-    }
-    const referenced = new Set<string>()
-    for (const tool of Object.values(state.tools)) {
-      for (const record of Object.values(tool.versions)) {
-        if (record.guideOverride) referenced.add(`${record.guideOverride.sha256}.md`)
-      }
-    }
-    for (const name of names) {
-      if (referenced.has(name) || name.includes('.tmp-')) continue
-      await fsp.rm(this.path('guides', name), { force: true })
-    }
   }
 
   /** Re-hash an installed version and compare it with its recorded integrity. */
@@ -1528,15 +1445,16 @@ export class CliToolStore {
     return this.serialize(async () => {
       await this.removeLegacyViews()
       const state = await this.readState()
-      const changed = await this.checkExternals(state)
+      const legacy = dropLegacyGuideFields(state)
+      const changed = await this.checkExternals(state) || legacy
       if (changed || currentToolRecords(state).some(({ tool }) => !tool.installId)) await this.writeState(state, true)
       else await this.syncLaunchersLocked(state)
     })
   }
 
-  /** Earlier builds kept per-session command views and pins; nothing reads them now. */
+  /** Earlier builds kept per-session command views, pins and catalog guide texts; nothing reads them now. */
   private async removeLegacyViews(): Promise<void> {
-    for (const name of ['views', 'locks']) {
+    for (const name of ['views', 'locks', 'guides']) {
       if (existsSync(this.path(name))) await fsp.rm(this.path(name), { recursive: true, force: true })
     }
   }
@@ -1771,21 +1689,106 @@ export class CliToolStore {
     return record.guide && !record.external ? join(this.path(...record.dir.split('/')), ...record.guide.split('/')) : null
   }
 
-  private async describeSkill(id: string, record: CliToolVersionRecord, installId = ''): Promise<CliToolSkillSummary> {
-    let admin: string | undefined
-    if (record.guideOverride) {
-      const text = await fsp.readFile(this.path('guides', `${record.guideOverride.sha256}.md`), 'utf-8').catch(() => null)
-      if (text !== null && sha256(text) === record.guideOverride.sha256) admin = splitGuide(text).description
-      else this.log.error('[CliTools] Guide override unavailable; using the package description', { tool: id })
+  /** A version's bundle skill files, checked against their digest; null when it has none or they do not check out. */
+  private async readBundleSkill(id: string, record: CliToolVersionRecord): Promise<Map<string, Buffer> | null> {
+    if (!record.skill) return null
+    try {
+      const files = await readSkillTree(this.path('skills', record.skill.sha256))
+      const main = files.get('SKILL.md')
+      if (main && main.byteLength <= BUNDLE_SKILL_MAIN_MAX_BYTES && files.size === record.skill.files &&
+        skillPackageSha256(files) === record.skill.sha256) return files
+    } catch {
+      // Reported below; the package guide stands in.
     }
+    this.log.error('[CliTools] Bundle skill unavailable; using the package guide', { tool: id })
+    return null
+  }
+
+  /**
+   * Keep a bundle's skill as `skills/<sha256>/`, written once per content
+   * through staging and left read-only. An existing copy is re-checked and
+   * replaced only when it no longer matches.
+   */
+  private async storeSkillFiles(skill: NonNullable<VerifiedBundle['skill']>): Promise<void> {
+    const target = this.path('skills', skill.sha256)
+    if (existsSync(target)) {
+      const current = await readSkillTree(target).catch(() => null)
+      if (current && current.size === skill.files.size && skillPackageSha256(current) === skill.sha256) return
+      await setTreeReadOnly(target, false, this.platform).catch(() => undefined)
+      await fsp.rm(target, { recursive: true, force: true })
+    }
+    const staging = this.path('staging', `skill-${randomUUID()}`)
+    try {
+      for (const [path, bytes] of skill.files) {
+        const file = join(staging, ...path.split('/'))
+        await fsp.mkdir(dirname(file), { recursive: true })
+        await fsp.writeFile(file, bytes, { flag: 'wx', mode: 0o644 })
+      }
+      await fsp.mkdir(this.path('skills'), { recursive: true })
+      await fsp.rename(staging, target)
+      await setTreeReadOnly(target, true, this.platform)
+    } finally {
+      if (existsSync(staging)) {
+        await setTreeReadOnly(staging, false, this.platform).catch(() => undefined)
+        await fsp.rm(staging, { recursive: true, force: true }).catch(() => undefined)
+      }
+    }
+  }
+
+  /** Delete stored skills no version record refers to. */
+  private async pruneSkills(state: CliToolState): Promise<void> {
+    let names: string[]
+    try {
+      names = await fsp.readdir(this.path('skills'))
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw err
+    }
+    const referenced = new Set<string>()
+    for (const tool of Object.values(state.tools)) {
+      for (const record of Object.values(tool.versions)) if (record.skill) referenced.add(record.skill.sha256)
+    }
+    for (const name of names) {
+      if (referenced.has(name)) continue
+      const dir = this.path('skills', name)
+      await setTreeReadOnly(dir, false, this.platform).catch(() => undefined)
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }
+
+  /**
+   * Record a verified bundle on a preset or catalog version: its revision,
+   * and its skill (stored first) or none. True when the record changed.
+   */
+  private async applyBundle(label: string, record: CliToolVersionRecord, bundle: NonNullable<ImportOptions['bundle']>): Promise<boolean> {
+    if (record.source !== 'preset' && record.source !== 'catalog') {
+      this.log.log('[CliTools] Bundle skill not applied to a version the user installed', { tool: label })
+      return false
+    }
+    if (bundle.skill) await this.storeSkillFiles(bundle.skill)
+    const before = JSON.stringify([record.bundle, record.skill])
+    record.bundle = { revision: bundle.revision, sha256: bundle.sha256 }
+    if (bundle.skill) record.skill = { sha256: bundle.skill.sha256, files: bundle.skill.files.size, source: bundle.skill.source }
+    else delete record.skill
+    return JSON.stringify([record.bundle, record.skill]) !== before
+  }
+
+  private async describeSkill(id: string, record: CliToolVersionRecord, installId = ''): Promise<CliToolSkillSummary> {
+    let bundled: string | undefined
+    if (record.skill) {
+      const head = await readGuideHead(this.path('skills', record.skill.sha256, 'SKILL.md'))
+      if (head) bundled = splitGuide(head.text).description
+      else this.log.error('[CliTools] Bundle skill unreadable; using the package description', { tool: id })
+    }
+    const fromPackageGuide = record.skill?.source === 'package-guide'
     const packagePath = this.packageGuidePath(record)
-    const head = packagePath && !admin ? await readGuideHead(packagePath) : null
-    if (packagePath && !admin && !head) this.log.error('[CliTools] Package guide unreadable; using the manifest description', { tool: id })
+    const head = packagePath && !bundled ? await readGuideHead(packagePath) : null
+    if (packagePath && !bundled && !head) this.log.error('[CliTools] Package guide unreadable; using the manifest description', { tool: id })
     return {
       name: cliSkillName(record.commands[0]?.name ?? id, id, installId),
       ...resolveSkillDescription({
-        admin,
-        package: head ? splitGuide(head.text).description : undefined,
+        admin: fromPackageGuide ? undefined : bundled,
+        package: fromPackageGuide ? bundled : head ? splitGuide(head.text).description : undefined,
         manifest: record.description,
         toolName: record.name ?? id,
       }),

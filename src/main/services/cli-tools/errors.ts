@@ -4,7 +4,7 @@
  */
 
 export type CliToolErrorCode =
-  /** The archive is unreadable, not a package, too large or has an unknown layout. */
+  /** The archive or delivery bundle is unreadable, too large or has an unknown layout. */
   | 'PACKAGE_INVALID'
   /** manifest.json is missing or does not satisfy the `halo.cli/1` schema. */
   | 'MANIFEST_INVALID'
@@ -38,9 +38,9 @@ export type CliToolErrorCode =
   | 'ADMIN_MANAGED'
   /** An existing program cannot be registered: path, interpreter or command name is unusable. */
   | 'EXTERNAL_INVALID'
-  /** Signature checking is on and the catalog version carries no signature. */
+  /** Signature checking is on and the delivery bundle carries no signature. */
   | 'SIGNATURE_MISSING'
-  /** The catalog signature is malformed, from an untrusted key, or does not verify. */
+  /** The bundle signature is malformed, from an untrusted key, or does not verify. */
   | 'SIGNATURE_INVALID'
 
 export class CliToolError extends Error {

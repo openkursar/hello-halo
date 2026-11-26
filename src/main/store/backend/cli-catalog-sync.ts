@@ -13,10 +13,15 @@
  * at a time. It never downgrades, except that a withdrawn current version
  * falls back to the highest remaining one (usually the copy shipped with
  * Halo). A current version the user imported or registered is left alone.
- * A version whose package fails its checks is remembered and not tried again
- * by background reads while the catalog lists the same content; the user's
- * "Sync" tries it once more. A network fault is retried at the next read.
  * Partner tools are never installed here.
+ *
+ * Every tool's current preset or catalog version also follows its listed
+ * bundle: when the catalog names a bundle this version has not taken (a new
+ * skill, a new signing key, or a version installed before bundles), that
+ * bundle is fetched and, its CLI content being the same, only the skill
+ * changes. A bundle that fails its checks is remembered and not tried again
+ * by background reads while the catalog lists the same bundle; the user's
+ * "Sync" tries it once more. A network fault is retried at the next read.
  *
  * See DESIGN.md §3.13.
  */
@@ -89,23 +94,48 @@ export class CliCatalogSchedule {
   }
 }
 
-export type DeliveryStep = { action: 'install' | 'activate'; version: string }
+/** `realign` takes the listed bundle of the version already current. */
+export type DeliveryStep = { action: 'install' | 'activate' | 'realign'; version: string }
 
 function highest(versions: string[]): string | undefined {
   return [...versions].sort(compareVersions).pop()
+}
+
+type DeliveryFailures = CliToolState['deliveryFailures']
+
+function refused(tool: CatalogToolRecord, entry: CatalogToolRecord['versions'][number], failures: DeliveryFailures): boolean {
+  return failures?.[`${tool.id}@${entry.view.version}`]?.bundle === entry.bundle.sha256
+}
+
+/**
+ * Whether the current version should take its listed bundle: it came from the
+ * build or the catalog, the catalog still lists it, and the bundle differs
+ * from the one it last took. Pure, exported for tests.
+ */
+export function planRealign(
+  tool: CatalogToolRecord,
+  installed: CliToolRecord | undefined,
+  failures: DeliveryFailures,
+): DeliveryStep | null {
+  const version = installed?.current
+  const record = version ? installed!.versions[version] : undefined
+  if (!version || !record || (record.source !== 'preset' && record.source !== 'catalog')) return null
+  const entry = tool.versions.find(v => v.view.version === version)
+  if (!entry || refused(tool, entry, failures) || record.bundle?.sha256 === entry.bundle.sha256) return null
+  return { action: 'realign', version }
 }
 
 /** What the delivery pass should do for one `autoInstall` tool; pure, exported for tests. */
 export function planDelivery(
   tool: CatalogToolRecord,
   installed: CliToolRecord | undefined,
-  failures: CliToolState['deliveryFailures'],
+  failures: DeliveryFailures,
   nodeVersion: string,
 ): DeliveryStep | null {
   const candidates = tool.versions.filter(v =>
     v.view.supported &&
     (!v.view.minNode || compareVersions(nodeVersion, v.view.minNode) >= 0) &&
-    failures?.[`${tool.id}@${v.view.version}`]?.integrity !== v.integrity)
+    !refused(tool, v, failures))
   const best = highest(candidates.map(v => v.view.version))
   if (!installed) return best ? { action: 'install', version: best } : null
 
@@ -119,7 +149,8 @@ export function planDelivery(
   if (!target) return null
   if (!installed.versions[target]) return { action: 'install', version: target }
   const fallBack = !current || (current.source === 'catalog' && current.withdrawn === true)
-  return fallBack && target !== installed.current ? { action: 'activate', version: target } : null
+  if (fallBack && target !== installed.current) return { action: 'activate', version: target }
+  return planRealign(tool, installed, failures)
 }
 
 function failureCode(error: unknown): CliToolErrorCode | null {
@@ -138,10 +169,13 @@ async function deliver(
   retryRefused: boolean,
 ): Promise<void> {
   for (const tool of tools) {
+    if (tool.revoked) continue
+    const failures = retryRefused ? undefined : state.deliveryFailures
     // With every delivered version withdrawn the catalog drops the mark; the
     // device keeps it (applyCatalogStatus) so the fallback below still runs.
-    if (tool.revoked || !(tool.autoInstall || state.tools[tool.id]?.autoInstall)) continue
-    const step = planDelivery(tool, state.tools[tool.id], retryRefused ? undefined : state.deliveryFailures, process.versions.node)
+    const step = tool.autoInstall || state.tools[tool.id]?.autoInstall
+      ? planDelivery(tool, state.tools[tool.id], failures, process.versions.node)
+      : planRealign(tool, state.tools[tool.id], failures)
     if (!step) continue
     const label = `${tool.id}@${step.version}`
     try {
@@ -152,14 +186,19 @@ async function deliver(
         continue
       }
       const entry = tool.versions.find(v => v.view.version === step.version)!
-      await downloadAndInstall(tool, entry)
+      await downloadAndInstall(entry)
+      if (step.action === 'realign') {
+        result.changed += 1
+        console.log('[CliCatalog] Installed version took its current bundle', { tool: label, revision: entry.bundle.revision })
+        continue
+      }
       result.installed.push({ id: tool.id, version: step.version })
-      console.log('[CliCatalog] Delivered version installed', { tool: label })
+      console.log('[CliCatalog] Delivered version installed', { tool: label, revision: entry.bundle.revision })
     } catch (error) {
       result.failed.push({ id: tool.id, version: step.version })
       const code = failureCode(error)
       const entry = tool.versions.find(v => v.view.version === step.version)
-      if (code && entry) await recordCliDeliveryFailure(tool.id, step.version, { integrity: entry.integrity, code })
+      if (code && entry) await recordCliDeliveryFailure(tool.id, step.version, { bundle: entry.bundle.sha256, code })
       else console.warn('[CliCatalog] Delivered version not installed; retried at the next sync', { tool: label, reason: describe(error) })
     }
   }
@@ -173,7 +212,7 @@ async function syncOnce(retryRefused: boolean): Promise<CliCatalogSyncResult> {
   const before = await readCliToolState()
   if (!before) return result
   await deliver(loaded.tools, before, result, retryRefused)
-  // New versions get their flags and administrator texts now, not at the next read.
+  // New versions get their flags now, not at the next read.
   if (result.installed.length > 0) for (const id of await applyStatus(loaded.tools)) changed.add(id)
   for (const item of result.installed) changed.add(item.id)
   result.changed += changed.size

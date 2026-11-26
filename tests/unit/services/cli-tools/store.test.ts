@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { spawnSync } from 'child_process'
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
-import { createHash } from 'crypto'
 import { dirname, join } from 'path'
 import { strToU8, zipSync } from 'fflate'
 import { CliToolError, CliToolStore, buildToolViews, cliSkillName } from '../../../../src/main/services/cli-tools'
-import { defaultPayload, makeTempDir, removeTree, writePackage, type Files } from './helpers'
+import { readBundle } from '../../../../src/main/services/cli-tools/bundle'
+import { buildBundle, defaultPayload, makeTempDir, removeTree, writePackage, type Files } from './helpers'
 
 const silent = { log: () => undefined, error: () => undefined }
 const ID = 'com.example.tool'
@@ -447,8 +447,9 @@ describe('cli-tools store: tool skills', () => {
     return (await store.readCurrentToolSkills()).skills.find(skill => skill.toolId === toolId)?.describe()
   }
 
-  function overrideOf(content: string, revision: number) {
-    return { revision, sha256: createHash('sha256').update(content).digest('hex'), content, signature: null }
+  function bundleOf(hcli: string, revision: number, skill: Files | null) {
+    const { bytes, ref } = buildBundle({ hcli, revision, skill })
+    return readBundle(bytes, ref, { mode: 'off', keys: new Map() })
   }
 
   it('names the installation and carries the launcher path and the guide itself', async () => {
@@ -458,7 +459,8 @@ describe('cli-tools store: tool skills', () => {
     await store.importPackage(file, { source: 'user-import' })
     const { installId } = (await store.readInstallRecord(ID))!
     const skill = await skillOf(store)
-    expect(Object.keys(skill!)).toEqual(['toolId', 'installId', 'name', 'description', 'body'])
+    expect(Object.keys(skill!).sort()).toEqual(['attachments', 'body', 'description', 'installId', 'name', 'toolId'])
+    expect(skill!.attachments).toEqual([])
     expect(skill).toMatchObject({
       toolId: ID, installId, name: cliSkillName('tool', ID, installId),
       description: 'Companion skill for the tool command-line tool. Query example tickets.',
@@ -486,21 +488,57 @@ describe('cli-tools store: tool skills', () => {
     expect((await skillOf(store, 'com.example.other'))!.body).toContain('Run the tool with `--help`')
   })
 
-  it('takes an administrator guide into the skill and keeps the name', async () => {
+  it('takes a bundle skill with its files, and a later revision of the same CLI changes only the skill', async () => {
     const store = newStore()
-    await store.importPackage(guidedPackage(), { source: 'catalog' })
-    const integrity = (await store.readState()).tools[ID].versions['1.0.0'].integrity
+    const hcli = guidedPackage()
+    const first = await bundleOf(hcli, 1, {
+      'SKILL.md': '---\ndescription: Use for example tickets.\n---\n# Usage notes\nRun `tool --check` first.\n',
+      'refs/notes.md': 'notes',
+    })
+    await store.importPackage(hcli, { source: 'catalog', bundle: first })
     const before = await skillOf(store)
     const { skills: [{ fingerprint }] } = await store.readCurrentToolSkills()
-
-    const full = '---\ndescription: Use for example tickets.\n---\n# Usage notes\nRun `tool --check` first.\n'
-    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.0.0'], guides: { '1.0.0': { integrity, override: overrideOf(full, 1) } } }])
-    const after = await skillOf(store)
-    expect(after).toMatchObject({ name: before!.name, description: 'Companion skill for the tool command-line tool. Use for example tickets.' })
-    expect(after!.body).toContain('Run `tool --check` first.')
-    expect(after!.body).not.toContain('Run `tool list`.')
-    expect((await store.readCurrentToolSkills()).skills[0].fingerprint).not.toBe(fingerprint)
+    expect(before).toMatchObject({ description: 'Companion skill for the tool command-line tool. Use for example tickets.' })
+    expect(before!.body).toContain('Run `tool --check` first.')
+    expect(before!.body).not.toContain('Run `tool list`.')
+    expect(before!.attachments.map(file => [file.path, file.bytes.toString()])).toEqual([['refs/notes.md', 'notes']])
     expect((await store.describeToolSkills(await store.readState()))[ID]).toMatchObject({ description: 'Use for example tickets.', source: 'admin' })
+    expect((await store.readState()).tools[ID].versions['1.0.0']).toMatchObject({ bundle: { revision: 1 }, skill: { files: 2, source: 'text' } })
+
+    const second = await bundleOf(hcli, 2, { 'SKILL.md': '---\ndescription: Newer text.\n---\nRun `tool --new`.\n' })
+    const result = await store.importPackage(hcli, { source: 'catalog', bundle: second })
+    expect(result.installed).toBe(false)
+    const after = await skillOf(store)
+    expect(after).toMatchObject({ name: before!.name, description: 'Companion skill for the tool command-line tool. Newer text.' })
+    expect(after!.attachments).toEqual([])
+    expect((await store.readCurrentToolSkills()).skills[0].fingerprint).not.toBe(fingerprint)
+    expect(readdirSync(join(root, 'skills'))).toEqual([second.skill!.sha256])
+  })
+
+  it('falls back to the package guide when a bundle carries no skill or its stored copy is damaged', async () => {
+    const store = newStore()
+    const hcli = guidedPackage()
+    const bundle = await bundleOf(hcli, 1, { 'SKILL.md': '---\ndescription: From the bundle.\n---\nBundle text.\n' })
+    await store.importPackage(hcli, { source: 'preset', bundle })
+    const stored = join(root, 'skills', bundle.skill!.sha256, 'SKILL.md')
+    chmodSync(dirname(stored), 0o755)
+    chmodSync(stored, 0o644)
+    writeFileSync(stored, 'changed')
+    expect((await skillOf(store))!.body).toContain('Run `tool list`.')
+
+    await store.importPackage(hcli, { source: 'preset', bundle: await bundleOf(hcli, 2, null) })
+    expect((await store.readState()).tools[ID].versions['1.0.0'].skill).toBeUndefined()
+    expect((await skillOf(store))!.body).toContain('Run `tool list`.')
+  })
+
+  it('never puts a bundle skill on a version the user imported', async () => {
+    const store = newStore()
+    const hcli = guidedPackage()
+    await store.importPackage(hcli, { source: 'user-import' })
+    await store.importPackage(hcli, { source: 'catalog', bundle: await bundleOf(hcli, 1, { 'SKILL.md': 'x' }) })
+    const record = (await store.readState()).tools[ID].versions['1.0.0']
+    expect(record.source).toBe('user-import')
+    expect(record.skill).toBeUndefined()
   })
 
   it.skipIf(process.platform === 'win32')('writes a skill for a registered program', async () => {

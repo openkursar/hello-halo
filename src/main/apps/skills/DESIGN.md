@@ -92,8 +92,10 @@ fingerprints before updating managed skills. An interrupted pass leaves the
 stamp pending; the next pass reconciles actual managed records. The stamp is
 bookkeeping, not a second skill store.
 
-Tool skills live in the ordinary global `.agents/skills` root. They receive no
-special catalog priority or digital-human allowlist exception. App Manager can
+Tool skills live in the ordinary global `.agents/skills` root, with every file
+the delivery bundle carried beside SKILL.md. They receive no special catalog
+priority. A restricted turn may load an unchanged one without listing it, as
+long as it may run commands (see `apps/runtime/DESIGN.md`). App Manager can
 replace or remove only its own unchanged copy when the CLI is its sole owner;
 shared, customized and colliding personal files are preserved.
 

@@ -17,6 +17,8 @@ export interface ManagedToolSkillInput {
   name: string
   description: string
   body: string
+  /** Files placed beside SKILL.md, paths relative to the skill folder. */
+  attachments?: ReadonlyArray<{ path: string; bytes: Uint8Array }>
 }
 
 // ============================================
@@ -445,6 +447,8 @@ export interface AppManagerService {
   reconcileManagedToolSkill(input: ManagedToolSkillInput): Promise<string | null>
   removeManagedToolSkill(toolId: string): Promise<void>
   listManagedToolSkillIds(): string[]
+  /** Folders of the tool skills Halo installed whose files are unchanged; see the runtime's skill gate. */
+  listManagedToolSkillFolders(): string[]
 
   /**
    * Apply an author's new version — a store or bundled upgrade — without

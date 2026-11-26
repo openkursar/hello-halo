@@ -2475,10 +2475,15 @@ itself has no switch: it exists for a caller exactly when some skill does.
   every skill it could mean must be allowed. A skill Halo does not list (built
   into the engine, from a plugin) has no switch, so no restricted caller may load
   one.
-- **Command-line tool skills follow the same allowlist.** Granting Bash does
-  not grant a skill, and granting a skill does not grant Bash. A tool skill
-  names its launcher by absolute path; the policy still judges every command
-  and file access as usual.
+- **Halo's command-line tool skills follow the shell, not the skill list.**
+  A skill Halo installed for a command-line tool only tells how to run a
+  command, so it loads whenever the turn may run commands (Bash not withheld),
+  listed or not; the skill tool stays mounted for it alone when the policy
+  grants no skill. Only a folder App Manager still manages with exactly the
+  files it wrote counts (`listManagedToolSkillFolders`); a customized or
+  moved copy is an ordinary skill. A name that an ungranted skill also
+  answers to does not load. Granting the skill grants nothing else: every
+  command and file access is judged as usual.
 - **A skill grants nothing beyond itself.** Each tool call it makes is judged by
   the policy like any other. What the engine lets a loaded skill do without
   asking — run the tools its `allowed-tools` pre-approve for the rest of the

@@ -270,7 +270,7 @@ const { app, environment, activityStore } = vi.hoisted(() => ({
   activityStore: { getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn() },
 }))
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: () => ({ getApp: () => app }),
+  getAppManager: () => ({ getApp: () => app, listManagedToolSkillFolders: () => [] }),
 }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveChatEnvironment: () => environment,

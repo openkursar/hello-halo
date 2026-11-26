@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { generateKeyPairSync, sign } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
@@ -8,8 +8,8 @@ import { createAppManagerService } from '../../../../src/main/apps/manager/servi
 import { AppManagerStore } from '../../../../src/main/apps/manager/store'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../src/main/apps/manager/migrations'
 import { createSkillLibrary, subscribeToolSkillSync } from '../../../../src/main/apps/skills'
-import { signedBytes, signedGuideBytes, signedSkillBytes } from '../../../../src/main/services/cli-tools/signature'
-import { buildManifest, removeTree, writePackage, type PackageSpec } from '../../services/cli-tools/helpers'
+import { signedBundleBytes } from '../../../../src/main/services/cli-tools/signature'
+import { buildBundle, removeTree, writePackage, type BundleSpec, type Files, type PackageSpec } from '../../services/cli-tools/helpers'
 
 vi.mock('node:os', async importOriginal => ({
   ...await importOriginal<typeof import('node:os')>(), homedir: () => globalThis.__HALO_TEST_DIR__,
@@ -24,10 +24,8 @@ const packageSpec: PackageSpec = {
   extra: { 'guide/usage.md': '---\ndescription: Archive description\n---\nArchive usage\n' },
 }
 const described = (text: string) => `Companion skill for the ${launchName} command-line tool. ${text}`
-const hash = (content: string | Buffer) => createHash('sha256').update(content).digest('hex')
-function guide(description: string, marker: string, revision = 1) {
-  const content = `---\ndescription: ${description}\n---\n${marker}\n`
-  return { revision, sha256: hash(content), content, signature: null }
+function skillFiles(description: string, marker: string, extra: Files = {}): Files {
+  return { 'SKILL.md': `---\ndescription: ${description}\n---\n${marker}\n`, ...extra }
 }
 
 let root: string
@@ -35,6 +33,7 @@ let presetDir: string
 let toolRoot: string
 let archive: string
 let archiveBytes: Buffer
+let sourceArchive: string
 
 beforeEach(() => {
   root = realpathSync(globalThis.__HALO_TEST_DIR__)
@@ -45,23 +44,33 @@ beforeEach(() => {
   archive = join(presetDir, `${id}-${version}.hcli`)
   renameSync(writePackage(root, packageSpec), archive)
   archiveBytes = readFileSync(archive)
+  sourceArchive = join(root, 'source.hcli')
+  writeFileSync(sourceArchive, archiveBytes)
 })
 
 afterEach(() => { removeTree(root) })
 
-function catalogEntry(overrides: Record<string, unknown> = {}) {
-  return { id, source: 'builtin', revoked: false, versions: [], ...overrides }
-}
-
-function exactEntry(overrides: Record<string, unknown> = {}) {
-  return {
-    version, manifestSchema: 'halo.cli/1', archiveSha256: hash(archiveBytes), integrity: String(buildManifest(packageSpec).integrity),
-    downloadUrl: '/unused/offline.hcli', ...overrides,
-  }
-}
-
-function writeCatalog(...tools: Record<string, unknown>[]) {
-  writeFileSync(join(presetDir, 'catalog.json'), JSON.stringify({ schema: 'halo.cli.catalog/1', tools }))
+/**
+ * Ship the preset archive as a delivery bundle named by the build catalog,
+ * in place of the plain package. `listed` and `catalog` shape the catalog
+ * entry for the refusal cases.
+ */
+function shipBundle(revision: number, skill: Files | null, options: Partial<BundleSpec> & {
+  revoked?: boolean
+  listed?: boolean
+  catalog?: (ref: ReturnType<typeof buildBundle>['ref']) => Record<string, unknown>
+  fileName?: string
+} = {}) {
+  const { revoked, listed, catalog, fileName, ...spec } = options
+  const shipped = buildBundle({ hcli: sourceArchive, revision, skill, ...spec })
+  for (const name of readdirSync(presetDir)) if (name.endsWith('.zip') || name.endsWith('.hcli')) rmSync(join(presetDir, name))
+  writeFileSync(join(presetDir, fileName ?? `${id}-${version}-r${revision}.zip`), shipped.bytes)
+  const ref = shipped.ref
+  const entry = catalog?.(ref) ?? { version: ref.version, bundle: { revision: ref.revision, sha256: ref.sha256, size: ref.size, url: '/unused' } }
+  writeFileSync(join(presetDir, 'catalog.json'), JSON.stringify({ schema: 'halo.cli.catalog/2', generatedAt: 'now', tools: [
+    { id, source: 'builtin', revoked: revoked === true, latest: version, versions: listed === false ? [] : [entry] },
+  ] }))
+  return shipped
 }
 
 async function boot() {
@@ -142,7 +151,7 @@ async function coldStart(config: 'preset' | 'empty' | 'unconfigured' = 'preset')
 it('installs the offline CLI skill with its launcher when the store is prepared, and sessions add nothing to their environment', async () => {
   const { db, manager, library } = setupSkillLibrary()
   const { host, startup, start, registerAppBridge } = await coldStart()
-  writeCatalog(catalogEntry({ versions: [exactEntry({ guide: guide('Cold-start guide description', 'Cold-start usage') })] }))
+  shipBundle(1, skillFiles('Cold-start guide description', 'Cold-start usage', { 'refs/notes.md': 'Bundled notes' }))
   registerAppBridge({ getAppManager: () => manager, onMcpAppsChange: () => () => {}, createHaloAppsMcpServer: () => null,
     getEffectiveSkillCatalog: library.effectiveCatalog })
   startup.attachManager(manager)
@@ -160,6 +169,8 @@ it('installs the offline CLI skill with its launcher when the store is prepared,
     const text = readFileSync(file, 'utf8')
     expect(text).toContain(launcherIn(toolRoot).replace(/\.cmd$/, ''))
     expect(text).toContain('Cold-start usage')
+    expect(readFileSync(join(root, '.agents', 'skills', name, 'refs', 'notes.md'), 'utf8')).toBe('Bundled notes')
+    expect(manager.listManagedToolSkillFolders()).toContain(join(root, '.agents', 'skills', name))
     expect(text).not.toMatch(/HALO_CLI_TOOLS_BIN|TOOLS\.md/)
     expect(Object.keys(session.env).filter(key => /HALO_CLI|CLI_TOOLS/.test(key))).toEqual([])
     expect(String(session.env.PATH ?? '')).not.toContain(join(toolRoot, 'tools'))
@@ -215,108 +226,99 @@ it('does not hold the idle queue when App Manager never arrives', async () => {
   await startup.dispose()
 })
 
-it('lists the real static skill on fresh offline install, follows its pinned guide and command, and preserves customization on a sidecar-only change', async () => {
+async function pushSkills(host: Host, manager: ReturnType<typeof setupSkillLibrary>['manager']) {
+  const sync = subscribeToolSkillSync({
+    stampPath: join(root, 'skill-sync'), onDidChange: host.onDidChangeCurrentTools, readSnapshot: host.readCurrentToolSkills,
+    upsert: async skill => { await manager.reconcileManagedToolSkill(skill) }, remove: toolId => manager.removeManagedToolSkill(toolId),
+    listManagedIds: () => manager.listManagedToolSkillIds(),
+  })
+  try {
+    await host.prepareCliTools()
+    await sync.afterPrepare(host.getPreparedCurrentToolsRevision())
+  } finally { await sync.dispose() }
+}
+
+it('follows a newer bundle revision of the same version and preserves a customized skill file', async () => {
   const { db, manager, library } = setupSkillLibrary()
-  const pushSkills = async (host: Host) => {
-    const sync = subscribeToolSkillSync({
-      stampPath: join(root, 'skill-sync'), onDidChange: host.onDidChangeCurrentTools, readSnapshot: host.readCurrentToolSkills,
-      upsert: async skill => { await manager.reconcileManagedToolSkill(skill) }, remove: toolId => manager.removeManagedToolSkill(toolId),
-      listManagedIds: () => manager.listManagedToolSkillIds(),
-    })
-    try {
-      await host.prepareCliTools()
-      await sync.afterPrepare(host.getPreparedCurrentToolsRevision())
-    } finally { await sync.dispose() }
-  }
-  const versionGuide = guide('Version guide description', 'Version guide usage')
-  const skill = guide('Tool skill description', 'Tool skill usage')
-  const missing = catalogEntry({ id: 'example.not-bundled', skill })
-  writeCatalog(catalogEntry({ versions: [exactEntry({ guide: versionGuide })], skill }), missing)
-  const before = statSync(archive).mtimeMs
+  shipBundle(1, skillFiles('First description', 'First usage'))
   try {
     const first = await boot()
-    await pushSkills(first)
+    await pushSkills(first, manager)
     const skillName = (await skillOf(first)).name
     const file = join(root, '.agents', 'skills', skillName, 'SKILL.md')
     expect(library.effectiveCatalog('test-space')).toEqual([
-      { name: skillName, description: described('Version guide description'), source: { kind: 'file', path: file } },
+      { name: skillName, description: described('First description'), source: { kind: 'file', path: file } },
     ])
-    expect(readFileSync(file, 'utf8')).toContain('Version guide usage')
-    await checkTool(first, 'Version guide usage')
-    expect(Object.keys((await first.readCliToolState())!.tools)).toEqual([id])
-    expect(readFileSync(archive)).toEqual(archiveBytes)
+    await checkTool(first, 'First usage')
+    const installed = (await first.readCliToolState())!.tools[id].versions[version]
+
+    shipBundle(2, skillFiles('Second description', 'Second usage'))
+    const second = await boot()
+    await pushSkills(second, manager)
+    expect(readFileSync(file, 'utf8')).toContain('Second usage')
+    expect((await second.readCliToolState())!.tools[id].versions[version]).toMatchObject({ dir: installed.dir, bundle: { revision: 2 } })
 
     const custom = `---\nname: ${skillName}\ndescription: My own description\n---\nMy custom instructions.\n`
     writeFileSync(file, custom)
-    writeCatalog(catalogEntry({ versions: [exactEntry({ guide: guide('New description', 'New usage', 2) })], skill }))
-    const second = await boot()
-    await pushSkills(second)
-    expect(statSync(archive).mtimeMs).toBe(before)
+    shipBundle(3, skillFiles('Third description', 'Third usage'))
+    const third = await boot()
+    await pushSkills(third, manager)
     expect(readFileSync(file, 'utf8')).toBe(custom)
     expect(library.effectiveCatalog('test-space')[0]?.description).toBe('My own description')
-    await checkTool(second, 'New usage')
-
-    const live = guide('Live description', 'Live usage', 3)
-    await second.applyCatalogStatus([{ id, revoked: false, versions: [version], guides: {
-      [version]: { integrity: exactEntry().integrity, override: live },
-    } }])
-    writeCatalog(catalogEntry({ skill: guide('Stale description', 'Stale usage', 4) }))
-    const third = await boot()
-    await pushSkills(third)
-    await checkTool(third, 'Live usage')
-    expect(readFileSync(file, 'utf8')).toBe(custom)
-    await third.applyCatalogStatus([{ id, revoked: false, versions: [version], guides: {
-      [version]: { integrity: exactEntry().integrity, override: null },
-    } }])
-    writeCatalog(catalogEntry({ skill: guide('Stale again', 'Still stale', 5) }))
-    const fourth = await boot()
-    await checkTool(fourth, 'Archive usage')
+    expect(manager.listManagedToolSkillFolders()).toEqual([])
+    await checkTool(third, 'Third usage')
   } finally { db.closeAll() }
 })
 
-it('attaches signed zero-version tool text only to a valid local archive', async () => {
+it('rewrites the whole skill folder when files beside SKILL.md change', async () => {
+  const trashed: string[] = []
+  const db = createDatabaseManager(join(root, 'database'))
+  const appDb = db.getAppDatabase()
+  db.runMigrations(appDb, MIGRATION_NAMESPACE, migrations)
+  const manager = createAppManagerService({
+    store: new AppManagerStore(appDb), getSpacePath: () => null, getAppDataPath: () => null,
+    getGlobalAppDir: () => join(root, 'halo'), trashItem: async path => { trashed.push(path); rmSync(path, { recursive: true, force: true }) },
+  })
+  shipBundle(1, skillFiles('Description', 'Usage', { 'refs/a.md': 'first' }))
+  try {
+    await pushSkills(await boot(), manager)
+    const folder = join(root, '.agents', 'skills', (await skillOf(await boot())).name)
+    expect(readFileSync(join(folder, 'refs', 'a.md'), 'utf8')).toBe('first')
+
+    shipBundle(2, skillFiles('Description', 'Usage', { 'refs/b.md': 'second' }))
+    await pushSkills(await boot(), manager)
+    expect(existsSync(join(folder, 'refs', 'a.md'))).toBe(false)
+    expect(readFileSync(join(folder, 'refs', 'b.md'), 'utf8')).toBe('second')
+    expect(trashed).toHaveLength(1)
+    expect(manager.listManagedToolSkillFolders()).toContain(folder)
+  } finally { db.closeAll() }
+})
+
+it('imports a bundle only with a valid signature when the build trusts keys', async () => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519')
-  const signature = (bytes: Buffer) => ({ alg: 'ed25519', keyId: 'ephemeral', value: sign(null, bytes, privateKey).toString('base64') })
   writeFileSync(join(presetDir, 'trusted-keys.json'), JSON.stringify({ schema: 'halo.cli.trust/1', keys: [{
     keyId: 'ephemeral', alg: 'ed25519', publicKey: publicKey.export({ format: 'jwk' }).x!.replace(/-/g, '+').replace(/_/g, '/') + '=',
   }] }))
-  const plain = guide('Signed description', 'Signed tool usage')
-  const skill = { ...plain, signature: signature(signedSkillBytes({ id, ...plain })) }
-  writeCatalog(catalogEntry({ skill }), catalogEntry({ id: 'example.missing', skill }))
-  const host = await boot()
-  await checkTool(host, 'Signed tool usage')
-  expect(Object.keys((await host.readCliToolState())!.tools)).toEqual([id])
-
-  const otherGuide = guide('Wrong domain', 'Should never load', 2)
-  const fields = { id, ...exactEntry() }
-  writeCatalog(catalogEntry({ versions: [exactEntry({
-    signature: signature(signedBytes(fields)),
-    guide: { ...otherGuide, signature: signature(signedSkillBytes({ id, ...otherGuide })) },
-  })], skill: { ...plain, revision: 2 } }))
-  const app = await boot()
-  app.initCliTools({ root: join(root, 'fresh-cli'), presetDir, runtimePath: process.execPath })
-  await checkTool(app, 'Archive usage', join(root, 'fresh-cli'))
-
-  const valid = guide('Signed version description', 'Signed version usage', 3)
-  writeCatalog(catalogEntry({ versions: [exactEntry({ signature: signature(signedBytes(fields)),
-    guide: { ...valid, signature: signature(signedGuideBytes({ id, version, ...valid })) },
-  })] }))
-  await checkTool(await boot(), 'Signed version usage')
-
-  writeCatalog(catalogEntry({ versions: [exactEntry()] }))
+  shipBundle(1, skillFiles('Unsigned description', 'Unsigned usage'))
   const unsigned = await boot()
-  unsigned.initCliTools({ root: join(root, 'unsigned-cli'), presetDir, runtimePath: process.execPath })
   expect((await unsigned.readCliToolState())?.tools).toEqual({})
+
+  shipBundle(2, skillFiles('Signed description', 'Signed usage'), {
+    sign: json => ({ alg: 'ed25519', keyId: 'ephemeral', value: sign(null, signedBundleBytes(json), privateKey).toString('base64') }),
+  })
+  await checkTool(await boot(), 'Signed usage')
 })
 
-it.each(['archive hash', 'payload integrity', 'tool id', 'version', 'renamed revoked'] as const)(
-  'does not publish a preset rejected by its bundled %s', async error => {
-    if (error === 'tool id') renameSync(writePackage(root, { ...packageSpec, id: 'example.substituted' }), archive)
-    if (error === 'version') renameSync(writePackage(root, { ...packageSpec, version: '2.0.0' }), archive)
-    if (error === 'renamed revoked') renameSync(archive, join(presetDir, 'arbitrary.hcli'))
-    const entry = exactEntry(error === 'archive hash' ? { archiveSha256: 'f'.repeat(64) }
-      : error === 'payload integrity' ? { integrity: `sha256-${Buffer.alloc(32).toString('base64')}` } : {})
-    writeCatalog(catalogEntry({ revoked: error === 'renamed revoked', versions: [entry] }))
+it.each(['bundle hash', 'payload integrity', 'tool id', 'unnamed', 'revoked'] as const)(
+  'does not publish a preset bundle rejected by its %s', async error => {
+    if (error === 'bundle hash') shipBundle(1, null, { catalog: ref => ({ version, bundle: { revision: 1, sha256: 'f'.repeat(64), size: ref.size } }) })
+    if (error === 'payload integrity') shipBundle(1, null, { editJson: json => { (json.cli as Record<string, unknown>).integrity = `sha256-${Buffer.alloc(32).toString('base64')}` } })
+    if (error === 'tool id') {
+      writeFileSync(sourceArchive, readFileSync(writePackage(root, { ...packageSpec, id: 'example.substituted' })))
+      shipBundle(1, null, { id })
+    }
+    if (error === 'unnamed') shipBundle(1, null, { fileName: 'arbitrary.zip' })
+    if (error === 'revoked') shipBundle(1, null, { revoked: true })
     const host = await boot()
     expect((await host.readCliToolState())?.tools).toEqual({})
     await checkNoTool(host)
@@ -326,14 +328,14 @@ it.each(['archive hash', 'payload integrity', 'tool id', 'version', 'renamed rev
 it('does not let a bundled revocation replace a live decision, or clear live revocation with an allowed preset', async () => {
   const noSidecar = await boot()
   await checkTool(noSidecar, 'Archive usage')
-  await noSidecar.applyCatalogStatus([{ id, revoked: false, versions: [] }])
-  writeCatalog(catalogEntry({ revoked: true, versions: [exactEntry()] }))
+  await noSidecar.applyCatalogStatus([{ id, revoked: false, versions: {} }])
+  shipBundle(1, null, { revoked: true })
   const staleRevoke = await boot()
   await checkTool(staleRevoke, 'Archive usage')
   expect((await staleRevoke.readCliToolState())?.tools[id]?.revoked).toBe(false)
 
-  await staleRevoke.applyCatalogStatus([{ id, revoked: true, versions: [] }])
-  writeCatalog(catalogEntry({ versions: [exactEntry()], skill: guide('Should not revive', 'Revive') }))
+  await staleRevoke.applyCatalogStatus([{ id, revoked: true, versions: {} }])
+  shipBundle(2, skillFiles('Should not revive', 'Revive'))
   const stalePermit = await boot()
   expect((await stalePermit.readCliToolState())?.tools[id]).toMatchObject({ revoked: true, current: version })
   await checkNoTool(stalePermit)

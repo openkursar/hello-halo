@@ -1025,6 +1025,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     reconcileManagedToolSkill: skills.reconcileManagedToolSkill,
     removeManagedToolSkill: skills.removeManagedToolSkill,
     listManagedToolSkillIds: () => store.listManagedToolSkillIds(),
+    listManagedToolSkillFolders: skills.listManagedToolSkillFolders,
 
     upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome {
       if (dataHolds.has(appId) || relocating.has(appId) || store.getDataRelocation(appId)) throw new Error('This digital human is moving to another workspace. Retry after the move finishes.')

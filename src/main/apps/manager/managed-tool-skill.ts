@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { lstatSync, opendirSync } from 'node:fs'
+import { lstatSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import type { SkillInstallationState } from '../../../shared/types/skills'
 import {
   canonicalSkillPath, classifySkillSource, moveSkillFiles, parseSkillMetadata, prepareSkillRemoval, readSkillPackage, skillFilePath,
-  skillPackageDigest, skillSearchRoots, validateSkillName, writeSkillContent, writeSkillPackage,
+  skillPackageDigest, skillPackageFromBytes, skillSearchRoots, validateSkillName, writeSkillContent, writeSkillPackage,
 } from '../../services/skills'
+import type { SkillPackage } from '../../services/skills'
 import type { SkillSpec } from '../spec'
 import type { AppManagerDeps } from './service'
 import type { InstalledApp, ManagedToolSkillInput } from './types'
@@ -41,22 +42,24 @@ function stagingPath(filePath: string, id: string): string {
   return join(dirname(dirname(filePath)), STAGING_FOLDER, id, 'SKILL.md')
 }
 
+/** Fingerprint of everything in a package except SKILL.md, which alone can be rewritten in place. */
+function attachmentsDigest(pkg: Pick<SkillPackage, 'files' | 'assets'>): string {
+  const files = { ...pkg.files }
+  delete files['SKILL.md']
+  return skillPackageDigest({ files, assets: pkg.assets })
+}
+
+/** The package in the folder Halo wrote, read only while that folder is the same one and unchanged meanwhile. */
 function currentPackage(filePath: string, identity: string) {
   const entry = directoryEntry(filePath)
   if (!entry?.isDirectory() || directoryId(entry) !== identity) return undefined
   try {
-    const directory = opendirSync(dirname(filePath))
-    try {
-      if (directory.readSync()?.name !== 'SKILL.md' || directory.readSync() !== null) return undefined
-    } finally {
-      directory.closeSync()
-    }
     const pkg = readSkillPackage(filePath)
     const latest = directoryEntry(filePath)
     if (!latest?.isDirectory() || directoryId(latest) !== identity || latest.ctimeNs !== entry.ctimeNs
-      || latest.mtimeNs !== entry.mtimeNs || pkg.entries.length !== 1 || pkg.entries[0].path !== 'SKILL.md') return undefined
+      || latest.mtimeNs !== entry.mtimeNs) return undefined
     const digest = skillPackageDigest(pkg)
-    return { revision: pkg.revision, digest }
+    return { revision: pkg.revision, digest, attachments: attachmentsDigest(pkg) }
   } catch (error) {
     console.warn('[SkillLifecycle] Managed CLI skill could not be verified', { code: (error as NodeJS.ErrnoException).code })
     return undefined
@@ -224,7 +227,10 @@ export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], 
     }
   }
 
-  function create(id: string, spec: SkillSpec, toolId: string, installId: string, filePath: string, content: string, digest: string): void {
+  function create(
+    id: string, spec: SkillSpec, toolId: string, installId: string, filePath: string,
+    pkg: Pick<SkillPackage, 'files' | 'assets'>, digest: string,
+  ): void {
     const occupied = skillSearchRoots(null).some(({ path }) =>
       !!entryOf(join(path, spec.name)) || !!entryOf(join(path, `${spec.name}.md`)))
     if (occupied || store.getBySpecAndSpace(spec.name, null)) {
@@ -233,7 +239,7 @@ export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], 
     }
     const stagingId = randomUUID()
     const staged = stagingPath(filePath, stagingId)
-    writeSkillPackage(staged, { 'SKILL.md': content })
+    writeSkillPackage(staged, pkg.files, pkg.assets)
     const entry = directoryEntry(staged)
     if (!entry?.isDirectory()) throw new Error('Managed CLI skill staging directory could not be verified')
     const state: ManagedState = {
@@ -262,9 +268,14 @@ export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], 
     const id = recordId(toolId, installId)
     const filePath = skillFilePath(null, name)
     const content = `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}`
-    if (!toolId.trim() || !installId.trim() || !description.trim() || parseSkillMetadata(content, name).error) {
+    if (!toolId.trim() || !installId.trim() || !description.trim() || parseSkillMetadata(content, name).error ||
+      input.attachments?.some(file => file.path === 'SKILL.md')) {
       throw new Error('Invalid managed CLI skill input')
     }
+    const pkg = skillPackageFromBytes([
+      ['SKILL.md', Buffer.from(content, 'utf-8')],
+      ...(input.attachments ?? []).map(file => [file.path, file.bytes] as [string, Uint8Array]),
+    ])
     // A skill of an earlier installation, or one from before installations had ids, makes way first.
     for (const earlier of ownedRecords(toolId)) {
       if (earlier.id !== id) await removeRecord(earlier, toolId)
@@ -273,10 +284,10 @@ export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], 
       type: 'skill', name, description, version: '1', spec_version: '1',
       store: { install_source: 'store', registry_id: id, tags: [] }, skill_files: { 'SKILL.md': content },
     }
-    const digest = skillPackageDigest({ files: { 'SKILL.md': content }, assets: {} })
+    const digest = skillPackageDigest(pkg)
     let app = store.getById(id)
     if (!app) {
-      create(id, spec, toolId, installId, filePath, content, digest)
+      create(id, spec, toolId, installId, filePath, pkg, digest)
       return
     }
     let state = stateOf(app, toolId)
@@ -285,7 +296,7 @@ export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], 
     if (reason) return relinquish(app, state, reason)
     if (state.managedTool.removalId) {
       await finishRemoval(app, state)
-      if (!store.getById(id)) create(id, spec, toolId, installId, filePath, content, digest)
+      if (!store.getById(id)) create(id, spec, toolId, installId, filePath, pkg, digest)
       return
     }
     if (state.managedTool.stagingId) {
@@ -297,6 +308,12 @@ export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], 
     const current = currentPackage(filePath, managedTool.directoryId)
     if (!current || (current.digest !== managedTool.writtenDigest && current.digest !== managedTool.pendingDigest)) {
       return relinquish(app, state, 'files no longer match the package Halo wrote')
+    }
+    if (current.digest !== digest && current.attachments !== attachmentsDigest(pkg)) {
+      // Files beside SKILL.md changed: the whole folder is withdrawn and written anew.
+      await removeRecord(app, toolId)
+      if (!store.getById(id)) create(id, spec, toolId, installId, filePath, pkg, digest)
+      return
     }
     if (current.digest !== digest) {
       if (current.digest === managedTool.pendingDigest) {
@@ -324,6 +341,27 @@ export function createManagedToolSkillLifecycle(store: AppManagerDeps['store'], 
       return enqueue(toolId, async () => {
         for (const app of ownedRecords(toolId)) await removeRecord(app, toolId)
       })
+    },
+
+    /**
+     * Folders of the tool skills Halo installed and still manages, whose files
+     * are exactly what it wrote. Nothing in flight, customized or moved counts.
+     */
+    listManagedToolSkillFolders(): string[] {
+      const folders: string[] = []
+      for (const app of store.listSkillRecords(null)) {
+        const state = app.userOverrides.skill
+        const toolId = state?.managedTool?.toolId
+        if (!toolId || app.spec.type !== 'skill' || app.status !== 'active' || pending.has(toolId)) continue
+        const managed = stateOf(app, toolId)
+        if (!managed || !owns(managed, toolId) || managed.deleted || managed.customized) continue
+        const { stagingId, removalId, directoryId, writtenDigest } = managed.managedTool
+        if (stagingId || removalId || managed.digest !== writtenDigest) continue
+        if (currentPackage(managed.filePath, directoryId)?.digest !== writtenDigest) continue
+        // Both spellings, so a folder reached through a linked home directory still matches.
+        folders.push(dirname(managed.filePath), dirname(canonicalSkillPath(managed.filePath)))
+      }
+      return [...new Set(folders)]
     },
   }
 }

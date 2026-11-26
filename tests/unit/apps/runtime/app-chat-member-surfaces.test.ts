@@ -143,7 +143,7 @@ vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({
 vi.mock('../../../../src/main/services/app-bridge', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createHaloAppsMcpServer,
-  getAppManager: () => ({ getApp: () => app, listEffectiveMcpApps }),
+  getAppManager: () => ({ getApp: () => app, listEffectiveMcpApps, listManagedToolSkillFolders: () => [] }),
 }))
 const { buildUserSessionSdkOptions } = vi.hoisted(() => ({ buildUserSessionSdkOptions: vi.fn((_options: Record<string, unknown>) => ({})) }))
 const { getEngineCapabilities } = vi.hoisted(() => ({ getEngineCapabilities: vi.fn((): unknown => null) }))
@@ -324,7 +324,7 @@ const { app, environment, activityStore, listEffectiveMcpApps } = vi.hoisted(() 
   }
 })
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: () => ({ getApp: (id: string) => participantFixture.current?.app.id === id ? null : app, listEffectiveMcpApps }),
+  getAppManager: () => ({ getApp: (id: string) => participantFixture.current?.app.id === id ? null : app, listEffectiveMcpApps, listManagedToolSkillFolders: () => [] }),
 }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/apps/runtime/execution-environment')>()),

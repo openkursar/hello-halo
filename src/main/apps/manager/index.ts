@@ -97,6 +97,10 @@ export function listManagedToolSkillIds(): string[] {
   return requireManager().listManagedToolSkillIds()
 }
 
+export function listManagedToolSkillFolders(): string[] {
+  return requireManager().listManagedToolSkillFolders()
+}
+
 // ============================================
 // Initialization
 // ============================================

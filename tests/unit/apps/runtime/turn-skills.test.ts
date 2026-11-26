@@ -267,3 +267,42 @@ describe('command-line tool skills use the normal allowlist', () => {
     expect(grantedSkillFolders(skills)).toEqual([tool.path])
   })
 })
+
+describe('the skills Halo installed for command-line tools follow the shell, not the skill list', () => {
+  const tool = skill('tickets-com-example-tickets-a1b2c3')
+
+  /** A turn whose policy lists no skill, with `tool` among the folders Halo manages. */
+  function managed(policy: CapabilityPolicy, available: AvailableSkill[] = [tool]) {
+    const options: Record<string, any> = {}
+    const applied = applyCapabilityPolicy(options, { policy, mode: 'strict', mcpServers: {}, dbMcpServers: null, keepFileTools: true, keepSkillTool: true })
+    const skills = turnSkillAccess(available, policy, 'strict', {
+      allowedRules: options.allowedTools ?? [],
+      disallowed: options.disallowedTools ?? [],
+      hooked: ['Skill', ...FILE_TOOLS],
+    }, [tool.path])
+    return { options, applied, skills }
+  }
+
+  it('loads whenever the turn may run commands, keeping the skill tool for it alone', () => {
+    const policy: CapabilityPolicy = { ...LISTED_COMMANDS, allowedSkills: [] }
+    const { options, applied, skills } = managed(policy, [tool, skill('weekly-report')])
+    expect(options.disallowedTools).not.toContain('Skill')
+    expect(call(skills, tool.dirName)).toEqual({ allow: true })
+    expect(call(skills, 'weekly-report').allow).toBe(false)
+    expect(grantedSkillFolders(skills)).toEqual([tool.path])
+    expect(describeWithheld({ policy, mode: 'strict', applied, offered: {}, dbMcpServers: null, fileBoundary: true, skills }))
+      .not.toContain('skills')
+  })
+
+  it('does not load when the turn may run no command', () => {
+    const { skills } = managed({ allowedTools: ['Read'], allowedSkills: [] })
+    expect(call(skills, tool.dirName).allow).toBe(false)
+    expect(grantedSkillFolders(skills)).toEqual([])
+  })
+
+  it('does not load by a name another, ungranted skill also answers to', () => {
+    const namesake = { ...skill(tool.dirName), path: '/space/skills/tickets' }
+    const { skills } = managed({ ...LISTED_COMMANDS, allowedSkills: [] }, [tool, namesake])
+    expect(call(skills, tool.dirName).allow).toBe(false)
+  })
+})
