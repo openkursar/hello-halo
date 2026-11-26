@@ -3,7 +3,6 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { SkillCatalogEntry, SkillNotice } from '../../../shared/types/skills'
 import { getHaloDir } from '../../foundation/config.service'
 import { getEffectiveSkillCatalogForSession, waitForSkillCatalogProvider } from '../app-bridge'
-import { CLI_TOOLS_BIN_ENV, cliSkillEntries } from '../cli-tools'
 import { linkSkillsForClaudeCode } from './engine-skill-links'
 
 interface SessionSkills {
@@ -11,35 +10,10 @@ interface SessionSkills {
   notice?: SkillNotice
 }
 
-/**
- * The skills of the command-line tools pinned for this session, read from its
- * launcher directory. They belong to the session's tools rather than to the
- * space, so they are offered whatever the space catalog holds.
- */
-export function sessionToolSkills(options: Record<string, any>): SkillCatalogEntry[] {
-  const binDir = options.env?.[CLI_TOOLS_BIN_ENV]
-  return typeof binDir === 'string' ? cliSkillEntries(binDir) : []
-}
-
-/**
- * The `cli-` names are the host's: a catalog entry carrying the name of one of
- * the session's tool skills gives way to it.
- */
-export function withToolSkills(catalog: readonly SkillCatalogEntry[], toolSkills: readonly SkillCatalogEntry[]): SkillCatalogEntry[] {
-  if (!toolSkills.length) return [...catalog]
-  const names = new Set(toolSkills.map(skill => skill.name))
-  const kept = catalog.filter(skill => !names.has(skill.name))
-  if (kept.length !== catalog.length) {
-    console.warn('[Agent] Skills replaced by command-line tool skills of the same name:', catalog.filter(skill => names.has(skill.name)).map(skill => skill.name))
-  }
-  return [...kept, ...toolSkills]
-}
-
 /** The host always supplies a catalog; an unavailable provider must not reopen disk discovery. */
 export async function prepareSessionSkills(options: Record<string, any>): Promise<SessionSkills> {
-  const toolSkills = sessionToolSkills(options)
   const spaceId = options.workerGroup
-  if (typeof spaceId !== 'string' || !spaceId) return { catalog: [...toolSkills] }
+  if (typeof spaceId !== 'string' || !spaceId) return { catalog: [] }
   const signal = options.abortController?.signal as AbortSignal | undefined
   signal?.throwIfAborted()
   try {
@@ -48,23 +22,19 @@ export async function prepareSessionSkills(options: Record<string, any>): Promis
       catalog = getEffectiveSkillCatalogForSession(spaceId, options.cwd)
     }
     signal?.throwIfAborted()
-    if (catalog !== undefined) return { catalog: withToolSkills(catalog, toolSkills) }
+    if (catalog !== undefined) return { catalog }
     console.warn('[Agent] Skills omitted for this session: catalog provider did not become ready within 10s', { spaceId })
   } catch (error) {
     if (signal?.aborted) throw error
     console.warn('[Agent] Skills omitted for this session: catalog could not be read', { spaceId, error })
   }
-  return { catalog: [...toolSkills], notice: 'catalog-unavailable' }
+  return { catalog: [], notice: 'catalog-unavailable' }
 }
 
-/**
- * Optional engines do not depend on Halo's catalog and must never wait for it.
- * Undefined only when there is neither a ready catalog nor a tool skill.
- */
+/** Optional engines do not depend on Halo's catalog and must never wait for it. */
 export function readReadySessionSkills(options: Record<string, any>): SkillCatalogEntry[] | undefined {
-  const toolSkills = sessionToolSkills(options)
   const spaceId = options.workerGroup
-  if (typeof spaceId !== 'string' || !spaceId) return toolSkills.length ? toolSkills : undefined
+  if (typeof spaceId !== 'string' || !spaceId) return undefined
   const signal = options.abortController?.signal as AbortSignal | undefined
   signal?.throwIfAborted()
   let catalog: SkillCatalogEntry[] | undefined
@@ -74,8 +44,7 @@ export function readReadySessionSkills(options: Record<string, any>): SkillCatal
     if (signal?.aborted) throw error
     console.warn('[Agent] Skills not offered to the engine: ready catalog could not be read', { spaceId, error })
   }
-  if (catalog === undefined) return toolSkills.length ? toolSkills : undefined
-  return withToolSkills(catalog, toolSkills)
+  return catalog
 }
 
 function inside(file: string, root: string): boolean {

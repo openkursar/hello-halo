@@ -320,7 +320,8 @@
         "to": "cli-preset",
         "filter": [
           "*.hcli",
-          "trusted-keys.json"
+          "trusted-keys.json",
+          "catalog.json"
         ]
       }
     ],

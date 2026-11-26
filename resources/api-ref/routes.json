@@ -1671,15 +1671,11 @@
   },
   {
     "method": "POST",
-    "path": "/api/enterprise-identity/begin"
+    "path": "/api/enterprise-identity/sign-in"
   },
   {
     "method": "POST",
-    "path": "/api/enterprise-identity/poll"
-  },
-  {
-    "method": "POST",
-    "path": "/api/enterprise-identity/cancel"
+    "path": "/api/enterprise-identity/retry"
   },
   {
     "method": "POST",

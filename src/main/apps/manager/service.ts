@@ -1022,6 +1022,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       return app?.spec.type === 'skill' ? app : null
     },
 
+    reconcileManagedToolSkill: skills.reconcileManagedToolSkill,
+    removeManagedToolSkill: skills.removeManagedToolSkill,
+    listManagedToolSkillIds: () => store.listManagedToolSkillIds(),
+
     upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome {
       if (dataHolds.has(appId) || relocating.has(appId) || store.getDataRelocation(appId)) throw new Error('This digital human is moving to another workspace. Retry after the move finishes.')
       const app = requireApp(appId)

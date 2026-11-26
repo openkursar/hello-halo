@@ -119,6 +119,12 @@ export interface SkillCatalogEntry {
   source: { kind: 'file'; path: string }
 }
 
+export interface SkillInstallationOwner {
+  kind: 'digital-human' | 'cli-tool'
+  id: string
+  name: string
+}
+
 /** Internal installation metadata, never accepted from an imported skill package. */
 export interface SkillInstallationState {
   version: 1
@@ -128,6 +134,14 @@ export interface SkillInstallationState {
   deleted?: boolean
   customized?: boolean
   migrationWarning?: string
-  owners?: Array<{ id: string; name: string }>
+  owners?: SkillInstallationOwner[]
   requestId?: string
+  managedTool?: {
+    toolId: string
+    directoryId: string
+    writtenDigest: string
+    stagingId?: string
+    removalId?: string
+    pendingDigest?: string
+  }
 }

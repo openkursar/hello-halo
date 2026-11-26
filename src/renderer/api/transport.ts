@@ -7,6 +7,7 @@
  * 3. Remote    — neither → HTTP to window.location.origin
  */
 
+import { ENTERPRISE_IDENTITY_CHANGED_EVENT } from '../../shared/rpc/contracts/enterprise-identity.contract'
 import i18n from '../i18n'
 
 // ---------------------------------------------------------------------------
@@ -40,6 +41,16 @@ export function isRemoteClient(): boolean {
   return !isElectron() && !isCapacitor()
 }
 
+let remoteOrgSignIn = false
+
+export function setRemoteOrgSignIn(offered: boolean): void {
+  remoteOrgSignIn = offered
+}
+
+export function orgSignInOffered(): boolean {
+  return isElectron() ? window.haloOrgSignIn === true : remoteOrgSignIn
+}
+
 // ---------------------------------------------------------------------------
 // Server URL management (Capacitor mode)
 //
@@ -62,7 +73,9 @@ export function onServerUrlChange(listener: () => void): () => void {
 }
 
 function notifyServerUrlChange(previous: string | null): void {
-  if (previous !== getServerUrl()) serverUrlListeners.forEach(listener => listener())
+  if (previous === getServerUrl()) return
+  remoteOrgSignIn = false
+  serverUrlListeners.forEach(listener => listener())
 }
 
 /**
@@ -538,6 +551,7 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'remote:status-change': 'onRemoteStatusChange',
       'credential:decrypt-failed': 'onCredentialDecryptFailed',
       'ai-sources:catalog-changed': 'onModelCatalogChanged',
+      [ENTERPRISE_IDENTITY_CHANGED_EVENT]: 'onEnterpriseIdentityChanged',
       'subagent-models:changed': 'onSubagentModelsChanged',
       'ai-sources:group-route': 'onAIGroupRoute',
       'browser:state-change': 'onBrowserStateChange',

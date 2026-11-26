@@ -11,6 +11,7 @@ import {
   rejectIfRemoteMcpForbidden,
   rejectIfRemoteBrowserAllowlistForbidden,
 } from './_shared'
+import { getEnterpriseIdentityConfig } from '../../foundation/product-config'
 
 export function registerConfigRoutes(app: Express): void {
   // ===== Security Policy =====
@@ -25,7 +26,7 @@ export function registerConfigRoutes(app: Express): void {
   // ===== Config Routes =====
   app.get('/api/config', async (req: Request, res: Response) => {
     const result = configController.getConfig()
-    res.json(result)
+    res.json({ ...result, orgSignIn: !!getEnterpriseIdentityConfig() })
   })
 
   app.post('/api/config', async (req: Request, res: Response) => {

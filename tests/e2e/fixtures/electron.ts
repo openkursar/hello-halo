@@ -75,7 +75,7 @@ interface ElectronFixtures {
  * format is a build setting (electron.vite.config.ts) and the app's own entry
  * field is the only thing that must agree with the launcher.
  */
-export function getAppEntryPath(): string {
+export function getAppEntryPath({ copyProductConfig = true } = {}): string {
   if (process.env.HALO_E2E_PACKAGED_APP) {
     if (process.env.PERF_CONTENT_IDENTITY_RUN) throw new Error('Frozen performance runtime identity requires the declared production output entry')
     const executable = path.resolve(process.env.HALO_E2E_PACKAGED_APP)
@@ -92,16 +92,30 @@ export function getAppEntryPath(): string {
 
   // Ensure product.json exists in out/main/ so auth-loader can find providers.
   // In E2E, app.getAppPath() returns out/main/, not project root.
-  ensureProductJson(projectRoot)
+  if (copyProductConfig) ensureProductJson(projectRoot)
 
   return appEntryPath
 }
 
 /**
- * Copy product.json to out/main/ with absolute provider paths.
+ * Copy product.json to out/main/ with provider paths rebased to their original targets.
  * This is needed because app.getAppPath() returns out/main/ in E2E,
  * and auth-loader resolves provider paths relative to product.json location.
  */
+function writeProductConfig(source: string, destination: string): void {
+  const product = JSON.parse(fs.readFileSync(source, 'utf8'))
+  const rebase = (provider: string) => path.relative(path.dirname(destination), path.resolve(path.dirname(source), provider))
+
+  for (const provider of product.authProviders ?? []) {
+    if (provider.path?.startsWith('./')) provider.path = rebase(provider.path)
+  }
+  if (product.enterpriseIdentity?.provider) {
+    product.enterpriseIdentity.provider = rebase(product.enterpriseIdentity.provider)
+  }
+
+  fs.writeFileSync(destination, JSON.stringify(product, null, 2))
+}
+
 function ensureProductJson(projectRoot: string): void {
   const srcProductJson = path.join(projectRoot, 'product.json')
   const destDir = path.join(projectRoot, 'out/main')
@@ -110,22 +124,7 @@ function ensureProductJson(projectRoot: string): void {
   if (!fs.existsSync(srcProductJson)) return
 
   try {
-    const product = JSON.parse(fs.readFileSync(srcProductJson, 'utf-8'))
-
-    // Rewrite provider paths to be relative to out/main/ (where product.json will live)
-    // auth-loader resolves paths via: join(dirname(productJsonPath), cleanPath)
-    if (product.authProviders) {
-      for (const provider of product.authProviders) {
-        if (provider.path && provider.path.startsWith('./')) {
-          // Original path is relative to project root, e.g. "./halo-local/dist/..."
-          // We need it relative to out/main/, e.g. "../../halo-local/dist/..."
-          const absolutePath = path.resolve(projectRoot, provider.path)
-          provider.path = path.relative(destDir, absolutePath)
-        }
-      }
-    }
-
-    fs.writeFileSync(destProductJson, JSON.stringify(product, null, 2))
+    writeProductConfig(srcProductJson, destProductJson)
     console.log(`[E2E] Wrote product.json to out/main/ with adjusted provider paths`)
   } catch (err) {
     console.warn('[E2E] Failed to copy product.json:', err)
@@ -291,7 +290,7 @@ export function cleanupTestConfigDir(testDir: string): void {
  * `createTestConfigDir()` and this call, then reuse the exact same launch
  * behavior (env vars, GPU/accel flags) instead of duplicating it.
  */
-export async function launchElectronApp(appEntryPath: string, testConfigDir: string, options: { bootstrapDirectory?: string; env?: Record<string, string>; bootstrapObserver?: string } = {}): Promise<ElectronApplication> {
+export async function launchElectronApp(appEntryPath: string, testConfigDir: string, options: { bootstrapDirectory?: string; env?: Record<string, string>; bootstrapObserver?: string; productConfigPath?: string; cliPresetDirectory?: string } = {}): Promise<ElectronApplication> {
   console.log(`[E2E] App entry: ${appEntryPath}`)
   console.log(`[E2E] Test config dir: ${testConfigDir}`)
 
@@ -303,6 +302,7 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
 
   const hiddenWindows = process.env.HALO_E2E_HIDDEN_WINDOWS === '1'
   if (process.env.HALO_E2E_PACKAGED_APP) {
+    if (options.productConfigPath) throw new Error('A private product configuration requires the source bootstrap')
     if (hiddenWindows) throw new Error('Hidden-window testing requires the controlled source bootstrap')
     if (options.bootstrapObserver) throw new Error('Startup observation requires the source application bootstrap')
     return electron.launch({
@@ -312,13 +312,44 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
     })
   }
 
-  const bootstrap = path.join(options.bootstrapDirectory ?? path.dirname(appEntryPath), `.e2e-bootstrap-${crypto.randomUUID()}.cjs`)
+  if (options.cliPresetDirectory && !options.productConfigPath) throw new Error('Fixture CLI presets require an isolated product configuration')
+  const productDirectory = options.productConfigPath ? path.join(fs.realpathSync(testConfigDir), 'app') : undefined
+  const cleanupProduct = () => { if (productDirectory) fs.rmSync(productDirectory, { recursive: true, force: true }) }
+  const bootstrap = path.join(productDirectory ?? options.bootstrapDirectory ?? path.dirname(appEntryPath), `.e2e-bootstrap-${crypto.randomUUID()}.cjs`)
+  const cleanupBootstrap = () => {
+    fs.rmSync(bootstrap, { force: true })
+    cleanupProduct()
+  }
   const appData = path.join(testConfigDir, 'electron-data')
   const userData = path.join(appData, 'user')
-  fs.mkdirSync(userData, { recursive: true })
   // macOS resolves appData independently of HOME. Isolate browser storage before main imports.
   // Selectors are English UI labels, so the renderer must not follow the OS language.
-  fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.commandLine.appendSwitch('lang', 'en-US');\napp.setPath('appData',${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\n${hiddenWindows ? `require(${JSON.stringify(path.join(__dirname, 'hidden-windows.cjs'))});\n` : ''}${options.bootstrapObserver ? `require(${JSON.stringify(options.bootstrapObserver)});\n` : ''}import(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
+  try {
+    fs.mkdirSync(userData, { recursive: true })
+    if (productDirectory && options.productConfigPath) {
+      const projectRoot = path.resolve(__dirname, '../../..')
+      fs.mkdirSync(productDirectory)
+      writeProductConfig(options.productConfigPath, path.join(productDirectory, 'product.json'))
+      // Electron resolves bundled runtime assets from the bootstrap's app path.
+      for (const relative of ['node_modules', 'out']) {
+        fs.symlinkSync(path.join(projectRoot, relative), path.join(productDirectory, relative), 'junction')
+      }
+      const resources = path.join(projectRoot, 'resources')
+      const target = path.join(productDirectory, 'resources')
+      if (!options.cliPresetDirectory) {
+        fs.symlinkSync(resources, target, 'junction')
+      } else {
+        fs.mkdirSync(target)
+        for (const item of fs.readdirSync(resources)) {
+          if (item === 'cli-preset') continue
+          const source = path.join(resources, item)
+          fs.symlinkSync(source, path.join(target, item), fs.statSync(source).isDirectory() ? 'junction' : 'file')
+        }
+        fs.symlinkSync(options.cliPresetDirectory, path.join(target, 'cli-preset'), 'junction')
+      }
+    }
+    fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.commandLine.appendSwitch('lang', 'en-US');\napp.setPath('appData',${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\n${hiddenWindows ? `require(${JSON.stringify(path.join(__dirname, 'hidden-windows.cjs'))});\n` : ''}${options.bootstrapObserver ? `require(${JSON.stringify(options.bootstrapObserver)});\n` : ''}import(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
+  } catch (error) { cleanupBootstrap(); throw error }
   const identityModule = process.env.PERF_CONTENT_IDENTITY_RUN ? await import('../../perf/build-identity/index.mjs') : undefined
   // Pixel assertions compare CSS sRGB values, not the host monitor's color profile.
   const launchArgs = ['--force-color-profile=srgb', ...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), bootstrap]
@@ -328,7 +359,7 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
       const projectRoot = path.resolve(__dirname, '../../..')
       const productionMain = path.resolve(projectRoot, JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')).main)
       identityFile = await identityModule.prepareLaunch(process.env.PERF_CONTENT_IDENTITY_RUN!, { productionMain, entryPath: appEntryPath, bootstrap, launchArgs })
-    } catch (error) { fs.rmSync(bootstrap, { force: true }); throw error }
+    } catch (error) { cleanupBootstrap(); throw error }
   }
   const instance = await electron.launch({
     args: launchArgs,
@@ -349,9 +380,9 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
     }
   }).catch(error => {
     if (identityModule && identityFile) identityModule.failLaunch(identityFile, error)
-    fs.rmSync(bootstrap, { force: true }); throw error
+    cleanupBootstrap(); throw error
   })
-  instance.once('close', () => fs.rmSync(bootstrap, { force: true }))
+  instance.once('close', cleanupBootstrap)
   if (hiddenWindows) {
     await instance.evaluate(({ BrowserWindow }) => {
       if (BrowserWindow.getAllWindows().some(window => window.isVisible())) throw new Error('An isolated test window became visible')

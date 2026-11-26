@@ -1,0 +1,32 @@
+{
+  "name": "Halo",
+  "appId": "com.halo.orgmock",
+  "dataFolderName": "halo-org-mock",
+  "deepLinkScheme": "halo-org-mock",
+  "version": "1.0.0",
+  "updateConfig": { "provider": "disabled" },
+  "authProviders": [
+    {
+      "type": "custom",
+      "displayName": { "en": "Custom API" },
+      "description": { "en": "Configure a compatible API" },
+      "icon": "key",
+      "iconBgColor": "#da7756",
+      "recommended": true,
+      "builtin": true,
+      "enabled": true
+    }
+  ],
+  "enterpriseIdentity": {
+    "provider": "./provider.mjs",
+    "name": "Example Org",
+    "toolCredentials": [
+      {
+        "toolId": "example-org.mock-tool",
+        "capability": "mail",
+        "audience": "mail-example",
+        "env": "EXAMPLE_ORG_MOCK_TOKEN"
+      }
+    ]
+  }
+}

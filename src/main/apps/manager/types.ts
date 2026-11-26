@@ -10,6 +10,13 @@ import type { SkillInstallationState } from '../../../shared/types/skills'
 import { isBuiltinApp } from '../../../shared/apps/app-types'
 import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
 
+export interface ManagedToolSkillInput {
+  toolId: string
+  name: string
+  description: string
+  body: string
+}
+
 // ============================================
 // App Status
 // ============================================
@@ -431,6 +438,10 @@ export interface AppManagerService {
 
   /** Stored package for migration; never hydrates or rewrites personal files. */
   getSkillRecord(appId: string): InstalledApp | null
+
+  reconcileManagedToolSkill(input: ManagedToolSkillInput): Promise<void>
+  removeManagedToolSkill(toolId: string): Promise<void>
+  listManagedToolSkillIds(): string[]
 
   /**
    * Apply an author's new version — a store or bundled upgrade — without

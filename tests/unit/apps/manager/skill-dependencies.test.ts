@@ -63,7 +63,7 @@ describe('skill dependencies preserve user choices', () => {
     const second = await install('second')
     const records = manager.listSkillRecords('space')
     expect(records).toHaveLength(1)
-    expect(records[0].userOverrides.skill!.owners).toEqual([{ id: first, name: 'first' }, { id: second, name: 'second' }])
+    expect(records[0].userOverrides.skill!.owners).toEqual([{ kind: 'digital-human', id: first, name: 'first' }, { kind: 'digital-human', id: second, name: 'second' }])
     await manager.uninstall(first)
     await manager.deleteApp(first)
     expect(readFileSync(records[0].userOverrides.skill!.filePath, 'utf8')).toContain('Instructions')
@@ -95,7 +95,7 @@ describe('skill dependencies preserve user choices', () => {
     }
     await install('second', incoming)
     expect(manager.listSkillRecords('space')).toHaveLength(1)
-    expect(manager.getApp(dependency.id)!.userOverrides.skill!.owners).toEqual([{ id: first, name: 'first' }])
+    expect(manager.getApp(dependency.id)!.userOverrides.skill!.owners).toEqual([{ kind: 'digital-human', id: first, name: 'first' }])
     expect(readFileSync(dependency.userOverrides.skill!.filePath, 'utf8')).toContain('Instructions')
   })
 

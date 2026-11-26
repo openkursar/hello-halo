@@ -22,6 +22,8 @@ export type CliToolErrorCode =
   | 'RUNTIME_VERSION_UNSUPPORTED'
   /** The runtime executable a shim would launch does not exist. */
   | 'RUNTIME_MISSING'
+  /** Required deployment support files could not be loaded, placed or verified. */
+  | 'SUPPORT_FILES_INVALID'
   /** The same id and version is already installed with different content. */
   | 'VERSION_CONFLICT'
   /** The requested tool or version is not installed. */

@@ -27,6 +27,7 @@ vi.mock('../../../src/renderer/api', () => ({ api: {} }))
 vi.mock('../../../src/renderer/api/transport', () => ({
   isElectron: () => typeof window !== 'undefined' && 'halo' in window,
   isCapacitor: () => false,
+  setRemoteOrgSignIn: vi.fn(),
   httpRequest,
 }))
 vi.mock('../../../src/renderer/stores/app.store', () => ({

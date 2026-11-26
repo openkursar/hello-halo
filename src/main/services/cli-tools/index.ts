@@ -9,6 +9,7 @@ export {
   applyCatalogRevocations,
   applyCatalogStatus,
   applyCliToolsEnv,
+  batchCurrentToolChanges,
   buildToolViews,
   catalogSignatureMode,
   getCliToolsOverview,
@@ -25,6 +26,9 @@ export {
   initCliTools,
   installCatalogPackage,
   prepareCliTools,
+  getPreparedCurrentToolsRevision,
+  onDidChangeCurrentTools,
+  readCurrentToolSkills,
   readCliToolState,
   recordCliDeliveryFailure,
 } from './host'
@@ -53,11 +57,12 @@ export type {
   PinnedExecution,
 } from './store'
 export type { CliToolSkillSummary } from './store'
-export { cliSkillEntries, cliSkillsRoot, CLI_SKILL_DESCRIPTION_MAX } from './skills'
-export type { CliSkillRecord, CliSkillSource } from './skills'
+export { cliSkillName, CLI_SKILL_DESCRIPTION_MAX } from './skills'
+export type { CliSkillSource, CliToolSkill } from './skills'
 export { CliToolError, isCliToolError } from './errors'
 export { validateCredentialBinding } from './credentials'
 export type { CliCredentialBinding } from './credentials'
+export type { CliSupportFilesConfig } from './support-files'
 export type { CliToolErrorCode } from './errors'
 export { CLI_MANIFEST_SCHEMA, parseCliManifest } from './manifest'
 export type { CliManifest } from './manifest'

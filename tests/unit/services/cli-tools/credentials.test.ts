@@ -93,9 +93,10 @@ describe.skipIf(process.platform === 'win32')('cli-tools credential binding', ()
     const guide = readFileSync(join(binDir!, '..', 'TOOLS.md'), 'utf-8')
     expect(guide).toContain('enterprise sign-in (provided by Halo)')
     expect(guide).toContain('Never ask for, print, store or pass a credential')
-    const skill = readFileSync(join(binDir!, '..', 'skills', 'cli-tool', 'SKILL.md'), 'utf-8')
-    expect(skill).toContain('- Sign-in: enterprise sign-in (provided by Halo)')
-    expect(skill).toContain('Settings > Enterprise identity')
+    expect(guide).toContain('organization icon beside the send button')
+    const skill = await (await store.readCurrentToolSkills()).skills[0].describe()
+    expect(skill.body).not.toMatch(/enterprise sign-in|organization icon/i)
+    expect(skill.body).not.toContain(SECRET)
   })
 
   it('binds a version shipped with the build', async () => {

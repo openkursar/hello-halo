@@ -173,6 +173,7 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   )).explainEngineError,
   ...(await import('../../../../src/main/services/agent/session-manager')),
   getSessionEngineId: () => undefined,
+  orgTurnContext: () => '',
 }))
 
 // Every run holds Operate Halo; its server is built by its own module and tested there.

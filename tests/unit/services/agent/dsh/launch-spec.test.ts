@@ -204,16 +204,17 @@ describe('buildDshLaunchSpec', () => {
     expect(roots.indexOf(path.join('/work', '.agents', 'skills'))).toBeGreaterThan(roots.findIndex((root: string) => root.endsWith(path.join('claude-config', 'skills'))))
   })
 
-  it("adds the skills folder of the session's tool view after every other skill folder", () => {
+  it('adds the pinned launchers to the environment without changing the ordinary skill roots', () => {
     setPlatform('darwin')
     detectGitBash.mockReturnValue({ found: true, path: '/bin/bash', source: 'system' })
     const binDir = path.join(dataDir, 'cli', 'views', 'v', 'bin')
 
-    const without = JSON.parse(build().DSH_SKILL_DIRS) as string[]
-    const roots = JSON.parse(build({ cliToolsBinDir: binDir }).DSH_SKILL_DIRS) as string[]
+    const without = build()
+    const env = build({ cliToolsBinDir: binDir })
 
-    expect(without).not.toContain(path.join(dataDir, 'cli', 'views', 'v', 'skills'))
-    expect(roots).toEqual([...without, path.join(dataDir, 'cli', 'views', 'v', 'skills')])
+    expect(env.DSH_SKILL_DIRS).toBe(without.DSH_SKILL_DIRS)
+    expect(env.PATH.split(path.delimiter).at(-1)).toBe(binDir)
+    expect(env.HALO_CLI_TOOLS_BIN).toBe(binDir)
   })
 
   it('carries MCP configuration in the environment, never on the command line', () => {

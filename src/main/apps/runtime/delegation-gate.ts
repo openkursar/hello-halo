@@ -23,7 +23,7 @@ import {
   FILE_TOOLS,
   type TurnFileAccess,
 } from './turn-file-access'
-import { decideSkillCall, grantsToolSkill, type TurnSkillAccess } from './turn-skills'
+import { decideSkillCall, type TurnSkillAccess } from './turn-skills'
 import {
   allowsBuiltin,
   allowsBuiltinAtCallTime,
@@ -181,15 +181,11 @@ function judge(delegation: ActiveDelegation, toolName: string, input: Record<str
   return { allow: false, reason: `"${toolName}" was not granted for this request.` }
 }
 
-/**
- * A skill is decided by name, and only under a policy that withholds anything
- * at all. A policy granting no skill still lets the turn's command-line tool
- * skills load; the name decides which.
- */
+/** A restricted turn can load only the skills its policy grants by name. */
 function judgeSkill(delegation: ActiveDelegation, input: Record<string, unknown>): ToolDecision {
   const { policy, mode, skills } = delegation
   if (!isRestrictivePolicy(policy, mode)) return { allow: true }
-  if (!skills || !(allowsBuiltin(policy, SKILL_TOOL, mode) || grantsToolSkill(skills))) {
+  if (!skills || !allowsBuiltin(policy, SKILL_TOOL, mode)) {
     return { allow: false, reason: 'Skills were not granted for this request.' }
   }
   return decideSkillCall(skills, input)

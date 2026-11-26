@@ -23,6 +23,7 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
 import { ModelSelector } from '../ai-config/ModelSelector'
 import { QuotaPill } from '../ai-config/QuotaPill'
+import { OrgSignInStatus } from '../org-sign-in/OrgSignInStatus'
 import { useChatStore, selectActiveConversationId, conversationKind, digitalHumanAppId } from '../../stores/chat.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
@@ -539,6 +540,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   // the digital human's own, read-only).
   const sendControls = (
     <>
+      <OrgSignInStatus />
       <QuotaPill sourceId={runsOnGroup ? undefined : currentSourceId} />
       <ModelSelector />
     </>
@@ -548,6 +550,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
     <>
     <EngineRecoveryNotice engineId={composerEngineId} spaceId={currentSpaceId} failure={errorType === 'engine_unavailable' ? error : null} />
     <GroupSwitchNotice />
+    <OrgSignInStatus invitation />
     <InputArea
       key={activeConversationId ?? 'none'}
       onSend={handleSend}
@@ -574,7 +577,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
 
   if (isFullTakeoverEmpty) {
     return (
-      <div className="flex-1 flex flex-col h-full bg-background">
+      <div className="flex-1 flex flex-col h-full bg-background" data-chat-area>
         <EmptyState
           conversationId={activeConversationId}
           // Prototype's chips fill the composer, they don't send — the user

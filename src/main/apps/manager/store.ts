@@ -58,6 +58,11 @@ const APP_COLUMNS = `id, spec_id, space_id, spec_json, status, pending_escalatio
  * Convert a database row to an InstalledApp domain object.
  */
 function rowToInstalledApp(row: AppRow): InstalledApp {
+  const userOverrides = JSON.parse(row.user_overrides_json) as InstalledApp['userOverrides']
+  const skill = userOverrides.skill
+  if (skill?.owners) {
+    skill.owners = skill.owners.map(owner => ({ ...owner, kind: owner.kind ?? 'digital-human' }))
+  }
   return {
     id: row.id,
     specId: row.spec_id,
@@ -67,7 +72,7 @@ function rowToInstalledApp(row: AppRow): InstalledApp {
     status: row.status as AppStatus,
     pendingEscalationId: row.pending_escalation_id ?? undefined,
     userConfig: JSON.parse(row.user_config_json) as Record<string, unknown>,
-    userOverrides: JSON.parse(row.user_overrides_json) as InstalledApp['userOverrides'],
+    userOverrides,
     permissions: JSON.parse(row.permissions_json) as InstalledApp['permissions'],
     installedAt: row.installed_at,
     lastRunAt: row.last_run_at ?? undefined,
@@ -506,6 +511,15 @@ export class AppManagerStore {
       WHERE space_id IS ? AND json_extract(spec_json, '$.type') = 'skill'
       ORDER BY installed_at DESC, id ASC`).all(spaceId) as AppRow[]
     return rows.map(rowToInstalledApp)
+  }
+
+  listManagedToolSkillIds(): string[] {
+    const rows = this.db.prepare(`SELECT DISTINCT owner.value ->> '$.id' AS id
+      FROM installed_apps, json_each(user_overrides_json, '$.skill.owners') AS owner
+      WHERE json_extract(user_overrides_json, '$.skill.managedTool.toolId') = owner.value ->> '$.id'
+        AND owner.value ->> '$.kind' = 'cli-tool'
+      ORDER BY id`).all() as Array<{ id: string }>
+    return rows.map(row => row.id)
   }
 
   /** Commit the file operation's metadata without exposing a partly updated record. */

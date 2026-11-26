@@ -9,6 +9,7 @@
 
 import { existsSync, promises as fsp } from 'fs'
 import { delimiter, join } from 'path'
+import { Emitter } from '../../platform/event'
 import {
   CliToolStore,
   EXTERNAL_VERSION,
@@ -25,6 +26,8 @@ import {
 } from './store'
 import { CliToolError, isCliToolError, type CliToolErrorCode } from './errors'
 import type { CliCredentialBinding } from './credentials'
+import type { CliSupportFilesConfig } from './support-files'
+import { PRESET_CATALOG_FILE, readPresetCatalog } from './preset-catalog'
 import {
   TRUSTED_KEYS_FILE,
   assertCatalogSignature,
@@ -54,6 +57,9 @@ export interface CliToolsHostOptions {
   presetDir: string | null
   /** Tools whose process receives a host-held credential; supplied by the caller, never read here. */
   credentialBindings?: CliCredentialBinding[]
+  supportFiles?: CliSupportFilesConfig
+  /** Reconcile static skills before a session with a CLI pin discovers them; must not acquire a pin. */
+  prepareSessionSkills?(): Promise<void> | undefined
 }
 
 type Env = Record<string, string | number | undefined>
@@ -61,8 +67,49 @@ type Env = Record<string, string | number | undefined>
 let options: CliToolsHostOptions | null = null
 let store: CliToolStore | null = null
 let prepared: Promise<void> | null = null
+const currentToolsChanged = new Emitter<string>()
+let currentToolBatchDepth = 0
+let batchedRevision: string | undefined
+
+/** Fires after a committed change to the current usable tool set. */
+export const onDidChangeCurrentTools = currentToolsChanged.event
+
+/** Publish one current-set notification for a catalog delivery pass. */
+export async function batchCurrentToolChanges<T>(task: () => Promise<T>): Promise<T> {
+  currentToolBatchDepth += 1
+  try {
+    return await task()
+  } finally {
+    if (--currentToolBatchDepth === 0 && batchedRevision !== undefined) {
+      const revision = batchedRevision
+      batchedRevision = undefined
+      currentToolsChanged.fire(revision)
+    }
+  }
+}
+
+export function getPreparedCurrentToolsRevision(): string | undefined {
+  return store?.preparedCurrentToolsRevision
+}
+
+export function readCurrentToolSkills() {
+  return getStore()?.readCurrentToolSkills()
+}
 /** Owner of this process's pins; a later process releases them. */
 const holder = `p${process.pid}-${Date.now().toString(36)}`
+const SKILL_READY_TIMEOUT_MS = 10_000
+
+async function waitForSessionSkills(ready: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([ready, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Static skill preparation timed out')), SKILL_READY_TIMEOUT_MS)
+      timer.unref()
+    })])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 /**
  * How long a session pin must stay unheld before it is released. It covers an
@@ -91,12 +138,19 @@ export function initCliTools(hostOptions: CliToolsHostOptions): void {
 
 function getStore(): CliToolStore | null {
   if (!options) return null
-  store ??= new CliToolStore({
-    root: options.root,
-    runtimePath: options.runtimePath,
-    runtimeNodeVersion: process.versions.node,
-    credentialBindings: options.credentialBindings,
-  })
+  if (!store) {
+    store = new CliToolStore({
+      root: options.root,
+      runtimePath: options.runtimePath,
+      runtimeNodeVersion: process.versions.node,
+      credentialBindings: options.credentialBindings,
+      supportFiles: options.supportFiles,
+    })
+    store.onDidChangeCurrentTools(revision => {
+      if (currentToolBatchDepth > 0) batchedRevision = revision
+      else currentToolsChanged.fire(revision)
+    })
+  }
   return store
 }
 
@@ -141,18 +195,22 @@ interface PresetStamp {
  */
 async function importPresets(cliStore: CliToolStore, presetDir: string, root: string): Promise<void> {
   if (!existsSync(presetDir)) return
-  const names = (await fsp.readdir(presetDir)).filter(name => name.endsWith('.hcli')).sort()
+  const entries = await fsp.readdir(presetDir)
+  const names = entries.filter(name => name.endsWith('.hcli')).sort()
+  if (names.length === 0) return
+  const hasCatalog = entries.includes(PRESET_CATALOG_FILE)
+  const metadata = hasCatalog ? [PRESET_CATALOG_FILE, ...entries.filter(name => name === TRUSTED_KEYS_FILE)] : []
   const files: PresetStamp['files'] = []
-  for (const name of names) {
+  for (const name of [...names, ...metadata]) {
     const stat = await fsp.stat(join(presetDir, name))
-    files.push({ name, size: stat.size, mtimeMs: Math.trunc(stat.mtimeMs) })
+    files.push({ name, size: stat.size, mtimeMs: name.endsWith('.hcli') ? Math.trunc(stat.mtimeMs) : stat.mtimeMs })
   }
   const stampFile = join(root, 'preset-stamp.json')
   const stamp = JSON.stringify({ files } satisfies PresetStamp)
   const previous = await fsp.readFile(stampFile, 'utf-8').catch(() => '')
   if (previous === stamp) return
-  if (files.length === 0) return
 
+  const catalog = hasCatalog ? await readPresetCatalog(join(presetDir, PRESET_CATALOG_FILE)) : undefined
   let failures = 0
   for (const name of names) {
     try {
@@ -160,9 +218,13 @@ async function importPresets(cliStore: CliToolStore, presetDir: string, root: st
       const result = await cliStore.importPackage(join(presetDir, name), {
         source: 'preset',
         activate: false,
+        presetCatalog: catalog,
       })
       const tool = (await cliStore.readState()).tools[result.id]
-      if (shouldActivatePreset(state, result.id, result.version) && tool && tool.current !== result.version) {
+      const current = state.tools[result.id]?.current
+      const canActivate = !result.matchedPresetCatalog ||
+        (result.installed && !tool?.revoked && (!current || compareVersions(result.version, current) > 0))
+      if (canActivate && shouldActivatePreset(state, result.id, result.version) && tool && tool.current !== result.version) {
         await cliStore.activateVersion(result.id, result.version)
       }
     } catch (err) {
@@ -567,6 +629,16 @@ export async function applyCliToolsEnv(
       return taken
     })
     if (!pin?.binDir) return null
+    if (request.entry !== 'terminal' && options?.prepareSessionSkills) {
+      try {
+        const ready = options.prepareSessionSkills()
+        if (ready) await waitForSessionSkills(ready)
+      } catch (error) {
+        console.warn('[CliTools] Static skills could not be prepared for this environment; keeping CLI launchers', {
+          entry: request.entry, engine: request.engine, error,
+        })
+      }
+    }
     writeEnvPath(env, basePath ? `${basePath}${delimiter}${pin.binDir}` : pin.binDir)
     env[CLI_TOOLS_BIN_ENV] = pin.binDir
     return pin.binDir

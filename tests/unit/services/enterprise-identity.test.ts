@@ -1,536 +1,550 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { createRequire } from 'module'
+import { runInNewContext } from 'vm'
+import { renderCredentialPreload } from '../../../src/main/services/cli-tools/credentials'
+
+const faults = vi.hoisted(() => ({ replace: new Set<string>(), remove: new Set<string>() }))
+vi.mock('fs', async importOriginal => {
+  const fs = await importOriginal<typeof import('fs')>()
+  return {
+    ...fs,
+    renameSync(from: string, to: string) {
+      if (faults.replace.has(to)) throw new Error('rename denied')
+      fs.renameSync(from, to)
+    },
+    rmSync(path: string, options?: Parameters<typeof fs.rmSync>[1]) {
+      if (faults.remove.has(path)) throw new Error('unlink denied')
+      fs.rmSync(path, options)
+    },
+  }
+})
 import {
   EnterpriseIdentityService,
   toolCredentialBindings,
   type EnterpriseToolBindingConfig,
 } from '../../../src/main/services/enterprise-identity/service'
-import type {
-  EnterpriseIdentityProvider,
-  EnterpriseLoginPoll,
-  EnterpriseLoginStart,
-  EnterpriseSession,
-  EnterpriseToolCredential,
-} from '../../../src/shared/interfaces/enterprise-identity-provider'
-import type { EnterpriseIdentityMethod } from '../../../src/shared/types/enterprise-identity'
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-
-/** Scriptable provider: each poll takes the next queued answer, then repeats the last. */
-class FakeProvider implements EnterpriseIdentityProvider {
-  answers: EnterpriseLoginPoll[] = []
-  issued: string[] = []
-  cancelled: string[] = []
-  signOuts = 0
-  flows = 0
-  credentialLife = 60_000
-  failAudience: string | null = null
-  issueGate: Promise<void> | null = null
-  extraMethods: EnterpriseIdentityMethod[] = []
-  /** Replaces the QR content of the next attempts' answers. */
-  startOverride: Partial<EnterpriseLoginStart> | null = null
-  methods(): EnterpriseIdentityMethod[] {
-    return [
-      { id: 'cloud', label: 'Cloud', kind: 'qr', capabilities: ['intranet', 'mail'] },
-      { id: 'esb', label: 'ESB', kind: 'qr', capabilities: ['intranet'] },
-      ...this.extraMethods,
-    ]
-  }
-  async beginLogin(methodId: string): Promise<EnterpriseLoginStart> {
-    this.flows++
-    const base = { flowId: `flow-${this.flows}-${methodId}`, expiresAt: Date.now() + 60_000 }
-    return this.startOverride ? { ...base, ...this.startOverride } : { ...base, qrContent: `mock://qr/${this.flows}` }
-  }
-  async pollLogin(): Promise<EnterpriseLoginPoll> {
-    return this.answers.length > 1 ? this.answers.shift()! : this.answers[0] ?? { status: 'pending' }
-  }
-  async cancelLogin(flowId: string) { this.cancelled.push(flowId) }
-  async issueCredential(audience: string): Promise<EnterpriseToolCredential> {
-    if (this.issueGate) await this.issueGate
-    this.issued.push(audience)
-    if (audience === this.failAudience) throw new Error('refused')
-    return { token: `secret-${audience}-${this.issued.length}`, expiresAt: Date.now() + this.credentialLife }
-  }
-  async signOut() { this.signOuts++ }
-}
+import type { EnterpriseIdentityProvider, OrgProviderSnapshot, OrgSignInOutcome, OrgToolCredential } from '../../../src/shared/interfaces/enterprise-identity-provider'
+import type { LoginWindowOptions } from '../../../src/main/services/login-window'
 
 const BINDINGS: EnterpriseToolBindingConfig[] = [
-  { toolId: 'npm.gitbeaker', capability: 'intranet', audience: 'code-host', env: 'GITBEAKER_TOKEN', staticEnv: { GITBEAKER_HOST: 'http://h' } },
+  { toolId: 'npm.gitbeaker', capability: 'intranet', audience: 'code-host', env: 'GITBEAKER_TOKEN', staticEnv: { GITBEAKER_HOST: 'https://git.example' } },
   { toolId: 'npm.mailer', capability: 'mail', audience: 'mail', env: 'MAIL_TOKEN' },
 ]
 
-let dir: string
-let credDir: string
-let provider: FakeProvider
-let logs: string[]
+type ServiceOptions = ConstructorParameters<typeof EnterpriseIdentityService>[0]
 
-function session(overrides: Partial<EnterpriseSession> = {}): EnterpriseSession {
-  return { accountId: 'u1', displayName: 'User One', capabilities: ['intranet', 'mail'], expiresAt: Date.now() + 60_000, ...overrides }
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(settle => { resolve = settle })
+  return { promise, resolve }
 }
 
-function newService(overrides: Partial<ConstructorParameters<typeof EnterpriseIdentityService>[0]> = {}) {
-  const sink = (...args: unknown[]) => { logs.push(JSON.stringify(args)) }
-  return new EnterpriseIdentityService({
-    bindings: BINDINGS,
-    credentialDir: credDir,
-    loadProvider: async () => provider,
-    pollIntervalMs: 5,
-    pollWaitMs: 200,
-    log: { log: sink, error: sink },
-    ...overrides,
-  })
-}
+class FakeProvider implements EnterpriseIdentityProvider {
+  readonly contractVersion = 2
+  current: OrgProviderSnapshot = { phase: 'settled', capabilities: {} }
+  private listeners = new Set<() => void>()
+  readonly terminal = deferred<OrgSignInOutcome>()
+  readonly supportsDeviceUnbind = true
+  readonly beginSignIn = vi.fn(async () => ({ flowId: 'flow', url: 'https://login.example/' }))
+  readonly awaitSignIn = vi.fn(() => this.terminal.promise)
+  readonly cancelSignIn = vi.fn(async () => {})
+  readonly signOut = vi.fn(async (_scope: 'session' | 'device') => this.set({ phase: 'settled', capabilities: {} }))
+  readonly verify = vi.fn(async () => {})
+  readonly issueCredential = vi.fn(async (audience: string) => ({ token: `mock-${audience}`, expiresAt: Date.now() + 60_000 }))
 
-async function signIn(service: EnterpriseIdentityService, methodId = 'cloud', s = session()) {
-  const started = await service.beginLogin(methodId)
-  provider.answers = [{ status: 'confirmed', session: s }]
-  return service.pollLogin(started.flow!.flowId)
-}
-
-const cred = (audience: string) => join(credDir, `${audience}.json`)
-
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'halo-enterprise-identity-'))
-  credDir = join(dir, 'enterprise-identity')
-  provider = new FakeProvider()
-  logs = []
-})
-
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true })
-})
-
-describe('enterprise identity: availability', () => {
-  it('is unavailable when the provider cannot be loaded', async () => {
-    const service = newService({ loadProvider: async () => null })
-    expect(await service.getState()).toEqual({ status: 'unavailable', methods: [], capabilities: [], boundTools: [] })
-    await expect(service.beginLogin('cloud')).rejects.toThrow()
-  })
-
-  it('lists methods and bound tools while signed out', async () => {
-    const state = await newService().getState()
-    expect(state.status).toBe('signed-out')
-    expect(state.methods.map(m => m.id)).toEqual(['cloud', 'esb'])
-    expect(state.boundTools).toEqual([
-      { toolId: 'npm.gitbeaker', capability: 'intranet', active: false },
-      { toolId: 'npm.mailer', capability: 'mail', active: false },
-    ])
-  })
-
-  it('refuses an unknown method', async () => {
-    await expect(newService().beginLogin('nope')).rejects.toThrow('Unknown sign-in method')
-  })
-})
-
-describe('enterprise identity: browser approval', () => {
-  beforeEach(() => {
-    provider.extraMethods = [{ id: 'web', label: 'Web', kind: 'browser', capabilities: ['intranet'] }]
-  })
-
-  it('lists a browser method with its kind', async () => {
-    const state = await newService().getState()
-    expect(state.methods.find(m => m.id === 'web')).toEqual({ id: 'web', label: 'Web', kind: 'browser', capabilities: ['intranet'] })
-  })
-
-  it('passes the approval page to the screen and signs in on confirmation', async () => {
-    provider.startOverride = { url: 'https://passport.example/page/consent?code=1', hint: 'check abc' }
-    const service = newService()
-    const started = await service.beginLogin('web')
-    expect(started.flow).toEqual({ flowId: started.flow!.flowId, methodId: 'web', url: 'https://passport.example/page/consent?code=1', phase: 'waiting', expiresAt: started.flow!.expiresAt, hint: 'check abc' })
-    provider.answers = [{ status: 'confirmed', session: session({ capabilities: ['intranet'] }) }]
-    const done = await service.pollLogin(started.flow!.flowId)
-    expect(done.state).toMatchObject({ status: 'ready', methodId: 'web' })
-    expect(existsSync(cred('code-host'))).toBe(true)
-  })
-
-  it('accepts an attempt without a page when nothing is left to approve', async () => {
-    provider.startOverride = { hint: 'resuming' }
-    const started = await newService().beginLogin('web')
-    expect(started.flow).toMatchObject({ methodId: 'web', phase: 'waiting', hint: 'resuming' })
-    expect(started.flow).not.toHaveProperty('url')
-    expect(started.flow).not.toHaveProperty('qrContent')
-  })
-
-  it.each(['javascript:alert(1)', 'file:///etc/passwd', 'not a url', ''])('refuses an approval page %j', async url => {
-    provider.startOverride = { url }
-    const service = newService()
-    await expect(service.beginLogin('web')).rejects.toThrow('unusable sign-in page')
-    expect((await service.getState()).flow).toBeUndefined()
-  })
-
-  it('still requires QR content from a QR method', async () => {
-    provider.startOverride = { url: 'https://passport.example/page/consent' }
-    await expect(newService().beginLogin('cloud')).rejects.toThrow('unusable QR code')
-  })
-})
-
-describe('enterprise identity: QR flow', () => {
-  it('reports the scan, then signs in and writes one private credential per capable audience', async () => {
-    const service = newService()
-    const started = await service.beginLogin('cloud')
-    expect(started.status).toBe('pending')
-    expect(started.flow).toMatchObject({ methodId: 'cloud', qrContent: 'mock://qr/1', phase: 'waiting' })
-
-    provider.answers = [{ status: 'pending' }, { status: 'scanned' }]
-    const scanned = await service.pollLogin(started.flow!.flowId)
-    expect(scanned.outcome).toBe('scanned')
-    expect(scanned.state.flow?.phase).toBe('scanned')
-
-    provider.answers = [{ status: 'scanned' }, { status: 'confirmed', session: session() }]
-    const done = await service.pollLogin(started.flow!.flowId)
-    expect(done.outcome).toBe('ready')
-    expect(done.state).toMatchObject({ status: 'ready', account: { id: 'u1', displayName: 'User One' }, methodId: 'cloud', capabilities: ['intranet', 'mail'] })
-    expect(done.state.flow).toBeUndefined()
-    expect(done.state.boundTools.every(t => t.active)).toBe(true)
-
-    const file = JSON.parse(readFileSync(cred('code-host'), 'utf-8'))
-    expect(file.token).toBe('secret-code-host-1')
-    expect(statSync(cred('code-host')).mode & 0o777).toBe(0o600)
-    expect(statSync(credDir).mode & 0o777).toBe(0o700)
-    expect(JSON.stringify(done)).not.toContain('secret-')
-    expect(logs.join('\n')).not.toContain('secret-')
-  })
-
-  it('only issues credentials for capabilities the session has', async () => {
-    const service = newService()
-    const done = await signIn(service, 'esb', session({ capabilities: ['intranet'] }))
-    expect(done.outcome).toBe('ready')
-    expect(provider.issued).toEqual(['code-host'])
-    expect(existsSync(cred('mail'))).toBe(false)
-    expect(done.state.boundTools).toEqual([
-      { toolId: 'npm.gitbeaker', capability: 'intranet', active: true },
-      { toolId: 'npm.mailer', capability: 'mail', active: false },
-    ])
-  })
-
-  it('answers "pending" after the bounded wait', async () => {
-    const service = newService({ pollWaitMs: 30 })
-    const started = await service.beginLogin('cloud')
-    expect((await service.pollLogin(started.flow!.flowId)).outcome).toBe('pending')
-  })
-
-  it.each(['denied', 'expired', 'cancelled'] as const)('ends the attempt when the service says %s', async status => {
-    const service = newService()
-    const started = await service.beginLogin('cloud')
-    provider.answers = [{ status, message: 'from service' }]
-    const result = await service.pollLogin(started.flow!.flowId)
-    expect(result).toMatchObject({ outcome: status, message: 'from service', state: { status: 'signed-out' } })
-    expect(result.state.flow).toBeUndefined()
-    expect(existsSync(credDir)).toBe(false)
-  })
-
-  it('expires a code that outlived its time without asking the service', async () => {
-    let now = Date.now()
-    const service = newService({ now: () => now })
-    const started = await service.beginLogin('cloud')
-    now = started.flow!.expiresAt + 1
-    const result = await service.pollLogin(started.flow!.flowId)
-    expect(result.outcome).toBe('expired')
-    expect(provider.cancelled).toEqual([started.flow!.flowId])
-  })
-
-  it('stops a waiting poll when the user cancels', async () => {
-    const service = newService({ pollWaitMs: 2000 })
-    const started = await service.beginLogin('cloud')
-    const waiting = service.pollLogin(started.flow!.flowId)
-    await sleep(20)
-    const after = await service.cancelLogin(started.flow!.flowId)
-    expect(after.status).toBe('signed-out')
-    expect((await waiting).outcome).toBe('cancelled')
-    expect(provider.cancelled).toEqual([started.flow!.flowId])
-  })
-
-  it('replaces an earlier attempt when a new one starts', async () => {
-    const service = newService()
-    const first = await service.beginLogin('cloud')
-    const second = await service.beginLogin('esb')
-    expect(provider.cancelled).toEqual([first.flow!.flowId])
-    expect((await service.pollLogin(first.flow!.flowId)).outcome).toBe('cancelled')
-    expect(second.flow!.methodId).toBe('esb')
-  })
-
-  it('treats a provider failure as a failed attempt', async () => {
-    const service = newService()
-    const started = await service.beginLogin('cloud')
-    provider.pollLogin = async () => { throw new Error('network down') }
-    const result = await service.pollLogin(started.flow!.flowId)
-    expect(result.outcome).toBe('failed')
-    expect(result.state.status).toBe('signed-out')
-  })
-
-  it('refuses a confirmation that is already over', async () => {
-    const service = newService()
-    const result = await signIn(service, 'cloud', session({ expiresAt: Date.now() - 1 }))
-    expect(result.outcome).toBe('failed')
-    expect(result.state.status).toBe('signed-out')
-  })
-})
-
-describe('enterprise identity: session lifetime', () => {
-  it('signs out: removes credentials first, then ends the session at the service', async () => {
-    const service = newService()
-    await signIn(service)
-    expect(existsSync(cred('code-host'))).toBe(true)
-    const state = await service.signOut()
-    expect(state.status).toBe('signed-out')
-    expect(state.account).toBeUndefined()
-    expect(existsSync(credDir)).toBe(false)
-    expect(provider.signOuts).toBe(1)
-  })
-
-  it('ends the session when it runs out and keeps the account for display', async () => {
-    const service = newService()
-    await signIn(service, 'cloud', session({ expiresAt: Date.now() + 120 }))
-    expect(existsSync(cred('code-host'))).toBe(true)
-    await sleep(250)
-    const state = await service.getState()
-    expect(state).toMatchObject({ status: 'expired', account: { id: 'u1' }, capabilities: [] })
-    expect(state.boundTools.every(t => !t.active)).toBe(true)
-    expect(existsSync(credDir)).toBe(false)
-    expect(provider.signOuts).toBe(1)
-  })
-
-  it('renews a credential that ends before the session', async () => {
-    provider.credentialLife = 1500
-    const service = newService({ refreshMarginMs: 1000 })
-    await signIn(service, 'esb', session({ capabilities: ['intranet'] }))
-    expect(JSON.parse(readFileSync(cred('code-host'), 'utf-8')).token).toBe('secret-code-host-1')
-    await sleep(1300)
-    expect(JSON.parse(readFileSync(cred('code-host'), 'utf-8')).token).toBe('secret-code-host-2')
-    await service.signOut()
-  })
-
-  it('never lets a credential outlive the session', async () => {
-    const service = newService()
-    const ends = Date.now() + 5_000
-    await signIn(service, 'esb', session({ capabilities: ['intranet'], expiresAt: ends }))
-    expect(JSON.parse(readFileSync(cred('code-host'), 'utf-8')).expiresAt).toBe(ends)
-    await service.signOut()
-  })
-
-  it('reports a credential the service refused, and the tool stays without one', async () => {
-    provider.failAudience = 'code-host'
-    const service = newService()
-    const result = await signIn(service, 'esb', session({ capabilities: ['intranet'] }))
-    expect(result.state).toMatchObject({ status: 'ready', lastError: 'credential-failed' })
-    expect(result.state.boundTools[0].active).toBe(false)
-    expect(existsSync(cred('code-host'))).toBe(false)
-  })
-
-  it('drops a credential that arrives after sign-out', async () => {
-    let release!: () => void
-    provider.issueGate = new Promise(resolve => { release = resolve })
-    const service = newService()
-    const started = await service.beginLogin('esb')
-    provider.answers = [{ status: 'confirmed', session: session({ capabilities: ['intranet'] }) }]
-    const polling = service.pollLogin(started.flow!.flowId)
-    await sleep(20)
-    await service.signOut()
-    release()
-    await polling
-    expect(existsSync(cred('code-host'))).toBe(false)
-    expect((await service.getState()).status).toBe('signed-out')
-  })
-
-  it('withdraws every credential on dispose', async () => {
-    const service = newService()
-    await signIn(service)
-    service.dispose()
-    expect(existsSync(credDir)).toBe(false)
-  })
-})
-
-describe('enterprise identity: tool bindings', () => {
-  it('maps each usable binding to its credential file and drops unsafe audiences', () => {
-    const bindings = toolCredentialBindings([
-      ...BINDINGS,
-      { toolId: 'bad', capability: 'intranet', audience: '../escape', env: 'X' },
-    ], '/data/ei')
-    expect(bindings).toEqual([
-      { toolId: 'npm.gitbeaker', env: 'GITBEAKER_TOKEN', file: join('/data/ei', 'code-host.json'), staticEnv: { GITBEAKER_HOST: 'http://h' } },
-      { toolId: 'npm.mailer', env: 'MAIL_TOKEN', file: join('/data/ei', 'mail.json') },
-    ])
-  })
-})
-
-/** Provider that can resume a session from authorization it still holds. */
-class RestoringProvider extends FakeProvider {
-  restoreCalls: string[] = []
-  restoreResult: EnterpriseSession | 'renewal-required' | null = null
-  restoreError: Error | null = null
-  restoreGate: Promise<void> | null = null
-  async restore(methodId: string) {
-    this.restoreCalls.push(methodId)
-    if (this.restoreGate) await this.restoreGate
-    if (this.restoreError) throw this.restoreError
-    return this.restoreResult
+  snapshot() { return this.current }
+  capabilityCatalog() { return [{ id: 'intranet', label: 'Intranet' }, { id: 'mail', label: 'Mail' }] }
+  onDidChange(listener: () => void) {
+    this.listeners.add(listener)
+    return { dispose: () => this.listeners.delete(listener) }
+  }
+  set(snapshot: OrgProviderSnapshot) {
+    this.current = snapshot
+    for (const listener of this.listeners) listener()
   }
 }
 
-describe('enterprise identity: resuming a sign-in after launch', () => {
-  let marker: string
-  let restoring: RestoringProvider
-  let clock: number
+const active = (subject = 'principal-a', capabilities: OrgProviderSnapshot['capabilities'] = {
+  intranet: { status: 'ready' }, mail: { status: 'ready' },
+}): OrgProviderSnapshot => ({ phase: 'settled', subject, account: { displayName: 'Same name' }, capabilities })
 
-  const writeMarker = (methodId = 'cloud') =>
-    writeFileSync(marker, JSON.stringify({ methodId, account: { id: 'u1', displayName: 'User One' } }))
-  const launch = (overrides: Partial<ConstructorParameters<typeof EnterpriseIdentityService>[0]> = {}) =>
-    newService({ loadProvider: async () => restoring, sessionMarkerFile: marker, ...overrides })
+let dir: string
+let credentialDir: string
+let provider: FakeProvider
+let windowOptions: LoginWindowOptions | undefined
+const services: EnterpriseIdentityService[] = []
+const window = { focus: vi.fn(), close: vi.fn() }
+const loadProvider = vi.fn(async () => provider)
+const openWindow = vi.fn((options: LoginWindowOptions) => { windowOptions = options; return window })
+const log = { warn: vi.fn(), error: vi.fn(), info: vi.fn() }
+const credentialPath = (audience: string) => join(credentialDir, `${audience}.json`)
+const credential = (audience: string): OrgToolCredential => JSON.parse(readFileSync(credentialPath(audience), 'utf8'))
+const require = createRequire(import.meta.url)
+function launcherToken(audience: string): string | undefined {
+  const binding = toolCredentialBindings(BINDINGS, credentialDir).find(binding => binding.file === credentialPath(audience))!
+  const env: Record<string, string> = { [binding.env]: 'inherited' }
+  runInNewContext(renderCredentialPreload(binding), { process: { env }, require, Date })
+  return env[binding.env]
+}
+const flush = () => vi.advanceTimersByTimeAsync(0)
 
-  beforeEach(() => {
-    marker = join(dir, 'enterprise-identity-session.json')
-    restoring = new RestoringProvider()
-    provider = restoring
-    clock = Date.now()
+function newService(overrides: Partial<ServiceOptions> = {}) {
+  const service = new EnterpriseIdentityService({
+    name: 'Organization', bindings: BINDINGS, credentialDir, loadProvider, openWindow, log, ...overrides,
+  })
+  services.push(service)
+  return service
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.useFakeTimers()
+  dir = mkdtempSync(join(tmpdir(), 'halo-enterprise-identity-'))
+  credentialDir = join(dir, 'enterprise-identity')
+  provider = new FakeProvider()
+  windowOptions = undefined
+})
+
+afterEach(() => {
+  faults.replace.clear()
+  faults.remove.clear()
+  for (const service of services.splice(0)) service.dispose()
+  vi.useRealTimers()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+describe('organization sign-in projection', () => {
+  it('loads on state demand and never presents a restoring provider as signed out', async () => {
+    const service = newService()
+    const changed = vi.fn()
+    service.onDidChange(changed)
+    provider.current = { phase: 'restoring', capabilities: {} }
+    expect(service.peekState().status).toBe('loading')
+    expect(loadProvider).not.toHaveBeenCalled()
+    expect(service.getState().status).toBe('loading')
+    await flush()
+    expect(changed.mock.calls.map(([state]) => state.status)).toEqual(['restoring'])
+    expect(service.getState()).toMatchObject({ status: 'restoring', name: 'Organization' })
+    expect(vi.getTimerCount()).toBe(0)
+    provider.set({ phase: 'settled', capabilities: {} })
+    expect(service.getState().status).toBe('signed-out')
+    provider.set(active('principal-a', { intranet: { status: 'expired' } }))
+    expect(service.getState()).toMatchObject({
+      status: 'active',
+      account: { displayName: 'Same name' },
+      capabilities: [
+        { id: 'intranet', label: 'Intranet', status: 'expired' },
+        { id: 'mail', label: 'Mail', status: 'missing' },
+      ],
+    })
+    expect(service.getState()).not.toHaveProperty('subject')
+    expect(loadProvider).toHaveBeenCalledTimes(1)
   })
 
-  it('remembers a sign-in without any credential, and forgets it on sign-out', async () => {
-    const service = launch()
-    await signIn(service)
-    const saved = readFileSync(marker, 'utf-8')
-    expect(JSON.parse(saved)).toEqual({ methodId: 'cloud', account: { id: 'u1', displayName: 'User One' } })
-    expect(saved).not.toContain('secret')
-    expect(statSync(marker).mode & 0o777).toBe(0o600)
-    await service.signOut()
-    expect(existsSync(marker)).toBe(false)
+  it.each(['state', 'sign-in'] as const)('retries a transient provider load failure on the next %s request', async retry => {
+    const load = vi.fn(async () => provider).mockRejectedValueOnce(new Error('temporary'))
+    const service = newService({ loadProvider: load })
+    expect(service.getState().status).toBe('loading')
+    await flush()
+    expect(service.peekState().status).toBe('unavailable')
+    expect(log.error).toHaveBeenCalledOnce()
+    if (retry === 'state') service.getState()
+    else void service.signIn()
+    await flush()
+    expect(service.peekState().status).toBe('signed-out')
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(provider.beginSignIn).toHaveBeenCalledTimes(retry === 'sign-in' ? 1 : 0)
   })
 
-  it('keeps the marker when the session runs out', async () => {
-    const service = launch()
-    await signIn(service, 'cloud', session({ expiresAt: Date.now() + 40 }))
-    await sleep(80)
-    expect((await service.getState()).status).toBe('expired')
-    expect(existsSync(marker)).toBe(true)
+  it('recovers a failed load and a cached provider snapshot on Retry without a provider event', async () => {
+    const load = vi.fn(async () => provider).mockRejectedValueOnce(new Error('temporary load'))
+    const service = newService({ loadProvider: load })
+    vi.spyOn(provider, 'snapshot').mockImplementationOnce(() => { throw new Error('temporary snapshot') })
+    service.getState()
+    await flush()
+    expect(service.peekState()).toMatchObject({ status: 'unavailable', unavailableReason: 'temporary' })
+    expect(await service.retry()).toMatchObject({ status: 'unavailable', unavailableReason: 'temporary' })
+    provider.current = active()
+    expect(await service.retry()).toMatchObject({ status: 'active' })
+    await flush()
+    expect(launcherToken('code-host')).toBe('mock-code-host')
+    expect(load).toHaveBeenCalledTimes(2)
   })
 
-  it('does nothing without a marker', async () => {
-    await launch().restoreSession()
-    expect(restoring.restoreCalls).toEqual([])
+  it('rejects a v1 provider before calling any of its methods', async () => {
+    const snapshot = vi.fn()
+    const unsupported = { contractVersion: 1, snapshot } as unknown as EnterpriseIdentityProvider
+    const load = vi.fn(async () => unsupported)
+    const service = newService({ loadProvider: load })
+    service.getState()
+    await flush()
+    expect(service.getState().status).toBe('unavailable')
+    expect(await service.signIn()).toBe('failed')
+    expect(await service.retry()).toMatchObject({ status: 'unavailable', unavailableReason: 'incompatible' })
+    expect(load).toHaveBeenCalledOnce()
+    expect(snapshot).not.toHaveBeenCalled()
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('contract'))
+  })
+})
+
+describe('organization tool credentials', () => {
+  it.each([
+    ['missing subject', { subject: undefined }],
+    ['blank subject', { subject: ' ' }],
+    ['non-string subject', { subject: 42 }],
+    ['illegal phase', { phase: 'unknown' }],
+    ['illegal status', { capabilities: { unlisted: { status: 'pending' } } }],
+    ['non-finite expiry', { capabilities: { intranet: { status: 'ready', expiresAt: Infinity } } }],
+  ])('rejects %s, removes existing credentials, and discards a late issue', async (_label, invalid) => {
+    const issue = deferred<OrgToolCredential>()
+    provider.issueCredential.mockImplementationOnce(() => issue.promise)
+    provider.current = active()
+    const service = newService()
+    service.getState()
+    await flush()
+    expect(launcherToken('mail')).toBe('mock-mail')
+    provider.set({ ...active(), ...invalid } as OrgProviderSnapshot)
+    expect(service.peekState().status).toBe('unavailable')
+    expect(service.peekState().capabilities).toEqual([])
+    expect(launcherToken('mail')).toBeUndefined()
+    issue.resolve({ token: 'late', expiresAt: Date.now() + 30_000 })
+    await flush()
+    expect(launcherToken('code-host')).toBeUndefined()
+    expect(provider.issueCredential).toHaveBeenCalledTimes(2)
+    expect(log.error.mock.calls).toEqual([['[EnterpriseIdentity] Provider state could not be read']])
   })
 
-  it('resumes the last method and issues credentials as a scan would', async () => {
-    writeMarker()
-    restoring.restoreResult = session()
-    const service = launch()
-    await service.restoreSession()
-    expect(restoring.restoreCalls).toEqual(['cloud'])
-    const state = await service.getState()
-    expect(state).toMatchObject({ status: 'ready', methodId: 'cloud', account: { id: 'u1' } })
-    expect(state.boundTools.every(t => t.active)).toBe(true)
-    expect(existsSync(cred('code-host'))).toBe(true)
+  it.each(['replace', 'remove'] as const)('withdraws just one capability when %s fails', async fault => {
+    provider.current = active()
+    const service = newService()
+    service.getState()
+    await flush()
+    faults[fault].add(credentialPath('code-host'))
+    provider.set(active('principal-a', { intranet: { status: 'expired' }, mail: { status: 'ready' } }))
+    expect(launcherToken('code-host')).toBeUndefined()
+    expect(launcherToken('mail')).toBe('mock-mail')
+    expect(service.peekState().credentialFailed).toBeUndefined()
+    if (fault === 'remove') expect(credential('code-host')).toEqual({ token: '', expiresAt: 0 })
   })
 
-  it('shows the ended account when a new sign-in is required, keeping the marker', async () => {
-    writeMarker()
-    restoring.restoreResult = 'renewal-required'
-    const service = launch()
-    await service.restoreSession()
-    expect(await service.getState()).toMatchObject({ status: 'expired', methodId: 'cloud', account: { id: 'u1', displayName: 'User One' } })
-    expect(existsSync(marker)).toBe(true)
-    expect(existsSync(credDir)).toBe(false)
+  it('marks a single audience withdrawal failure without withdrawing a healthy audience', async () => {
+    provider.current = active()
+    const service = newService()
+    service.getState()
+    await flush()
+    faults.replace.add(credentialPath('code-host'))
+    faults.remove.add(credentialPath('code-host'))
+    const partial = active('principal-a', { intranet: { status: 'expired' }, mail: { status: 'ready' } })
+    provider.set(partial)
+    expect(service.peekState()).toMatchObject({ status: 'active', withdrawalPending: true })
+    expect(service.peekState().credentialFailed).toBeUndefined()
+    expect(service.peekState().boundTools.map(tool => tool.access)).toEqual(['maybe-still-valid', 'ready'])
+    expect(launcherToken('mail')).toBe('mock-mail')
+    expect(launcherToken('code-host')).toBe('mock-code-host')
+    faults.replace.clear()
+    await service.retry()
+    expect(launcherToken('code-host')).toBeUndefined()
+    expect(service.peekState().boundTools.map(tool => tool.access)).toEqual(['none', 'ready'])
+    expect(service.peekState().withdrawalPending).toBeUndefined()
   })
 
-  it('forgets the marker when no authorization is left', async () => {
-    writeMarker()
-    const service = launch()
-    await service.restoreSession()
-    expect((await service.getState()).status).toBe('signed-out')
-    expect(existsSync(marker)).toBe(false)
+  it('does not issue for another subject before every old slot is withdrawn', async () => {
+    provider.current = active()
+    const service = newService()
+    service.getState()
+    await flush()
+    faults.replace.add(credentialPath('code-host'))
+    faults.remove.add(credentialPath('code-host'))
+    provider.issueCredential.mockImplementation(async audience => ({ token: `new-${audience}`, expiresAt: Date.now() + 60_000 }))
+    provider.set(active('principal-b'))
+    await flush()
+    expect(service.peekState()).toMatchObject({ status: 'unavailable', withdrawalPending: true })
+    expect(service.peekState().boundTools.map(tool => tool.access)).toEqual(['maybe-still-valid', 'none'])
+    expect(provider.issueCredential).toHaveBeenCalledTimes(2)
+    expect(launcherToken('mail')).toBeUndefined()
+    expect(launcherToken('code-host')).toBe('mock-code-host')
+    faults.replace.clear()
+    provider.set(active('principal-b'))
+    expect(launcherToken('code-host')).toBeUndefined()
+    faults.remove.clear()
+    await flush()
+    expect(launcherToken('code-host')).toBe('new-code-host')
+    expect(launcherToken('mail')).toBe('new-mail')
   })
 
-  it('forgets a marker for a method the build no longer offers, or one it cannot read', async () => {
-    writeMarker('gone')
-    await launch().restoreSession()
-    expect(restoring.restoreCalls).toEqual([])
-    expect(existsSync(marker)).toBe(false)
-
-    writeFileSync(marker, '{not json')
-    await launch().restoreSession()
-    expect(existsSync(marker)).toBe(false)
+  it('rejects local sign-out on total withdrawal failure and clears launcher access on retry', async () => {
+    provider.current = active()
+    const service = newService()
+    service.getState()
+    await flush()
+    faults.replace.add(credentialPath('code-host'))
+    faults.remove.add(credentialPath('code-host'))
+    await expect(service.signOut('session')).rejects.toThrow('Tool credentials could not be removed')
+    expect(service.peekState()).toMatchObject({ status: 'active', withdrawalPending: true })
+    expect(service.peekState().credentialFailed).toBeUndefined()
+    expect(provider.signOut).not.toHaveBeenCalled()
+    expect(launcherToken('mail')).toBeUndefined()
+    expect(launcherToken('code-host')).toBe('mock-code-host')
+    faults.replace.clear()
+    provider.signOut.mockRejectedValueOnce(new Error('offline'))
+    await expect(service.retry()).rejects.toThrow('Organization sign-out could not be confirmed')
+    expect(launcherToken('code-host')).toBeUndefined()
+    expect(launcherToken('mail')).toBeUndefined()
+    expect(service.peekState().status).toBe('active')
+    expect(service.peekState().withdrawalPending).toBeUndefined()
+    expect((await service.signOut('session')).status).toBe('signed-out')
+  })
+  it('caps expiry and withdraws only the audience for the expired or missing capability', async () => {
+    const service = newService()
+    const expiry = Date.now() + 5_000
+    provider.current = active('principal-a', { intranet: { status: 'ready', expiresAt: expiry }, mail: { status: 'ready' } })
+    service.getState()
+    await flush()
+    expect(credential('code-host').expiresAt).toBe(expiry)
+    if (process.platform !== 'win32') expect(statSync(credentialPath('code-host')).mode & 0o777).toBe(0o600)
+    expect(service.getState().boundTools.every(tool => tool.access === 'ready')).toBe(true)
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(service.getState().capabilities.map(item => item.status)).toEqual(['expired', 'ready'])
+    expect(existsSync(credentialPath('code-host'))).toBe(false)
+    expect(credential('mail').token).toBe('mock-mail')
+    expect(vi.getTimerCount()).toBe(1)
+    provider.set(active('principal-a', { intranet: { status: 'expired' } }))
+    expect(existsSync(credentialPath('mail'))).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('stays signed out when the service is unreachable and retries on a state read after the wait', async () => {
-    writeMarker()
-    restoring.restoreError = new Error('offline')
-    const service = launch({ now: () => clock, restoreRetryMs: 1000 })
-    await service.restoreSession()
-    expect((await service.getState()).status).toBe('signed-out')
-    expect(restoring.restoreCalls).toHaveLength(1)
-    expect(existsSync(marker)).toBe(true)
-
-    clock += 500
-    await service.getState()
-    expect(restoring.restoreCalls).toHaveLength(1)
-
-    clock += 600
-    restoring.restoreError = null
-    restoring.restoreResult = session()
-    expect((await service.getState()).status).toBe('ready')
-    expect(restoring.restoreCalls).toHaveLength(2)
+  it('does not resurrect a withdrawn audience when its issue resolves late', async () => {
+    const issue = deferred<OrgToolCredential>()
+    provider.issueCredential.mockImplementationOnce(() => issue.promise)
+    const service = newService()
+    provider.current = active()
+    service.getState()
+    await flush()
+    expect(provider.issueCredential).toHaveBeenCalledWith('code-host')
+    provider.set(active('principal-a', { mail: { status: 'ready' } }))
+    issue.resolve({ token: 'late', expiresAt: Date.now() + 5_000 })
+    await flush()
+    expect(existsSync(credentialPath('code-host'))).toBe(false)
+    expect(credential('mail').token).toBe('mock-mail')
   })
 
-  it('answers a state read within its wait while a restore is still under way', async () => {
-    writeMarker()
-    let release!: () => void
-    restoring.restoreGate = new Promise<void>(resolve => { release = resolve })
-    restoring.restoreResult = session()
-    const service = launch({ restoreWaitMs: 20 })
-    const work = service.restoreSession()
-    expect((await service.getState()).status).toBe('signed-out')
-    release()
-    await work
-    expect((await service.getState()).status).toBe('ready')
+  it('does not overwrite subject B credentials when subject A has the same name and resolves last', async () => {
+    const issueA = deferred<OrgToolCredential>()
+    provider.issueCredential.mockImplementationOnce(() => issueA.promise)
+    const service = newService()
+    provider.current = active()
+    service.getState()
+    await flush()
+    expect(existsSync(credentialPath('mail'))).toBe(true)
+    provider.issueCredential.mockImplementation(audience => Promise.resolve({ token: `new-${audience}`, expiresAt: Date.now() + 60_000 }))
+    provider.set(active('principal-b'))
+    expect(existsSync(credentialPath('mail'))).toBe(false)
+    await flush()
+    expect(credential('code-host').token).toBe('new-code-host')
+    issueA.resolve({ token: 'prior-principal', expiresAt: Date.now() + 60_000 })
+    await flush()
+    expect(credential('code-host').token).toBe('new-code-host')
+    expect(credential('mail').token).toBe('new-mail')
   })
 
-  it('runs one restore at a time', async () => {
-    writeMarker()
-    restoring.restoreResult = session()
-    const service = launch()
-    await Promise.all([service.restoreSession(), service.restoreSession()])
-    expect(restoring.restoreCalls).toHaveLength(1)
+  it('renews healthy audiences and keeps a failed renewal usable until its own expiry', async () => {
+    const service = newService()
+    provider.current = active()
+    service.getState()
+    await flush()
+    const first = credential('mail').expiresAt
+    provider.issueCredential.mockImplementation(async audience => {
+      if (audience === 'code-host') throw new Error('refused')
+      return { token: 'refreshed', expiresAt: Date.now() + 60_000 }
+    })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(credential('mail')).toMatchObject({ token: 'refreshed', expiresAt: first + 30_000 })
+    expect(launcherToken('code-host')).toBe('mock-code-host')
+    expect(service.getState().credentialFailed).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(launcherToken('code-host')).toBeUndefined()
+    expect(service.getState().credentialFailed).toBe(true)
+    expect(launcherToken('mail')).toBe('refreshed')
   })
 
-  it('lets a sign-out during a restore win: no session, no marker, no credential', async () => {
-    writeMarker()
-    let release!: () => void
-    restoring.restoreGate = new Promise<void>(resolve => { release = resolve })
-    restoring.restoreResult = session()
-    const service = launch()
-    const work = service.restoreSession()
-    await sleep(5)
-    const out = service.signOut()
-    release()
-    await work
-    expect((await out).status).toBe('signed-out')
-    expect(restoring.signOuts).toBe(1)
-    expect(existsSync(marker)).toBe(false)
-    expect(existsSync(credDir)).toBe(false)
+  it.each(['provider change', 'verify', 'Retry'] as const)('bounds renewal retries and resets after %s', async trigger => {
+    const snapshot = active('principal-a', { intranet: { status: 'ready' } })
+    provider.current = snapshot
+    const service = newService()
+    service.getState()
+    await flush()
+    provider.issueCredential.mockRejectedValue(new Error('offline'))
+    for (const [index, delay] of [30_000, 30_000, 120_000, 300_000].entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1)
+      expect(provider.issueCredential).toHaveBeenCalledTimes(index + 1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(provider.issueCredential).toHaveBeenCalledTimes(index + 2)
+    }
+    expect(service.peekState().credentialFailed).toBe(true)
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(provider.issueCredential).toHaveBeenCalledTimes(5)
+    provider.issueCredential.mockResolvedValueOnce({ token: 'recovered', expiresAt: Date.now() + 60_000 })
+    if (trigger === 'verify') await service.verify()
+    else if (trigger === 'Retry') await service.retry()
+    else provider.set(snapshot)
+    await flush()
+    expect(provider.issueCredential).toHaveBeenCalledTimes(6)
+    expect(launcherToken('code-host')).toBe('recovered')
+    expect(service.peekState().credentialFailed).toBeUndefined()
   })
 
-  it('finishes a restore under way before starting a scan', async () => {
-    writeMarker()
-    let release!: () => void
-    restoring.restoreGate = new Promise<void>(resolve => { release = resolve })
-    restoring.restoreResult = session({ accountId: 'restored' })
-    const service = launch({ restoreWaitMs: 5 })
-    const work = service.restoreSession()
-    const begun = service.beginLogin('esb')
-    release()
-    await work
-    const state = await begun
-    expect(state.status).toBe('ready')
-    expect(state.account?.id).toBe('restored')
-    expect(state.flow?.methodId).toBe('esb')
+  it('removes files before device unbinding and on quit', async () => {
+    const service = newService()
+    provider.current = active()
+    service.getState()
+    await flush()
+    provider.signOut.mockImplementation(async () => {
+      expect(existsSync(credentialDir)).toBe(false)
+      provider.set({ phase: 'settled', capabilities: {} })
+    })
+    expect((await service.signOut('device')).status).toBe('signed-out')
+    expect(provider.signOut).toHaveBeenCalledWith('device')
+    const signedInAgain = service.signIn()
+    await flush()
+    provider.set(active())
+    provider.terminal.resolve('succeeded')
+    await signedInAgain
+    await flush()
+    expect(existsSync(credentialPath('mail'))).toBe(true)
+    service.dispose()
+    expect(existsSync(credentialDir)).toBe(false)
   })
 
-  it('ignores the marker when the provider cannot restore', async () => {
-    writeMarker()
-    provider = new FakeProvider()
-    const service = newService({ sessionMarkerFile: marker })
-    await service.restoreSession()
-    expect((await service.getState()).status).toBe('signed-out')
-    expect(existsSync(marker)).toBe(true)
+  it('preserves CLI binding paths and fixed variables while rejecting conflicting audience ownership', () => {
+    expect(toolCredentialBindings(BINDINGS, credentialDir)[0]).toEqual({
+      toolId: 'npm.gitbeaker', env: 'GITBEAKER_TOKEN', file: credentialPath('code-host'),
+      staticEnv: { GITBEAKER_HOST: 'https://git.example' },
+    })
+    expect(toolCredentialBindings([...BINDINGS, { ...BINDINGS[0], capability: 'mail' }], credentialDir))
+      .toEqual(toolCredentialBindings([BINDINGS[1]], credentialDir))
+  })
+})
+
+describe('organization sign-in lifetime', () => {
+  it('expires while activation is pending and a new attempt can use the loaded provider', async () => {
+    const loading = deferred<EnterpriseIdentityProvider>()
+    const service = newService({ loadProvider: () => loading.promise, signInTimeoutMs: 1000 })
+    const first = service.signIn()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await first).toBe('expired')
+    const second = service.signIn()
+    loading.resolve(provider)
+    await flush()
+    expect(second).not.toBe(first)
+    expect(provider.beginSignIn).toHaveBeenCalledOnce()
+    expect(openWindow).toHaveBeenCalledOnce()
+  })
+
+  it('expires a hung beginSignIn, starts fresh on retry, and only cancels the late flow', async () => {
+    const late = deferred<{ flowId: string; url: string }>()
+    provider.beginSignIn.mockImplementationOnce(() => late.promise)
+    const service = newService({ signInTimeoutMs: 1000 })
+    const first = service.signIn()
+    expect(service.signIn()).toBe(first)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await first).toBe('expired')
+    expect(openWindow).not.toHaveBeenCalled()
+    const second = service.signIn()
+    await flush()
+    expect(provider.beginSignIn).toHaveBeenCalledTimes(2)
+    late.resolve({ flowId: 'stale', url: 'https://login.example/' })
+    await flush()
+    expect(provider.cancelSignIn.mock.calls).toEqual([['stale']])
+    expect(openWindow).toHaveBeenCalledOnce()
+    provider.terminal.resolve('succeeded')
+    expect(await second).toBe('succeeded')
+  })
+
+  it.each(['session', 'device'] as const)('cancels the attempt before %s sign-out and ignores stale provider success', async scope => {
+    const service = newService()
+    const result = service.signIn()
+    await flush()
+    expect(service.peekState().signingIn).toBe(true)
+    const signOut = service.signOut(scope)
+    expect(await result).toBe('cancelled')
+    expect(window.close).toHaveBeenCalledOnce()
+    expect(provider.cancelSignIn.mock.calls).toEqual([['flow']])
+    expect((await signOut).status).toBe('signed-out')
+    provider.set(active('stale'))
+    provider.terminal.resolve('succeeded')
+    await flush()
+    expect(service.peekState().status).toBe('signed-out')
+    expect(launcherToken('code-host')).toBeUndefined()
+    expect(provider.issueCredential).not.toHaveBeenCalled()
+  })
+
+  it('cancels a flow ID returned after sign-out without opening its window', async () => {
+    const late = deferred<{ flowId: string; url: string }>()
+    provider.beginSignIn.mockImplementationOnce(() => late.promise)
+    const service = newService()
+    const result = service.signIn()
+    await flush()
+    await service.signOut('session')
+    expect(await result).toBe('cancelled')
+    late.resolve({ flowId: 'stale', url: 'https://login.example/' })
+    await flush()
+    expect(provider.cancelSignIn.mock.calls).toEqual([['stale']])
+    expect(openWindow).not.toHaveBeenCalled()
+    expect(provider.awaitSignIn).not.toHaveBeenCalled()
+  })
+  it('focuses a pending sign-in and closes only when that flow becomes terminal', async () => {
+    const service = newService()
+    const result = service.signIn()
+    await flush()
+    expect(service.getState().signingIn).toBe(true)
+    provider.set(active())
+    await flush()
+    expect(window.close).not.toHaveBeenCalled()
+    expect(service.signIn()).toBe(result)
+    expect(window.focus).toHaveBeenCalledOnce()
+    expect(provider.beginSignIn).toHaveBeenCalledOnce()
+    provider.terminal.resolve('succeeded')
+    expect(await result).toBe('succeeded')
+    expect(window.close).toHaveBeenCalledOnce()
+    expect(provider.cancelSignIn).not.toHaveBeenCalled()
+    expect(service.getState().signingIn).toBe(false)
+  })
+
+  it.each(['cancelled', 'expired'] as const)('cancels once on %s and ignores subsequent outcomes', async outcome => {
+    const service = newService()
+    const result = service.signIn()
+    await flush()
+    windowOptions!.onEnd(outcome)
+    windowOptions!.onEnd(outcome === 'expired' ? 'cancelled' : 'expired')
+    provider.terminal.resolve('succeeded')
+    expect(await result).toBe(outcome)
+    await flush()
+    expect(provider.cancelSignIn.mock.calls).toEqual([['flow']])
+    expect(window.close).toHaveBeenCalledOnce()
+  })
+
+  it('prunes local expiry on resume before a deduplicated verification that may fail', async () => {
+    let now = Date.now()
+    const recheck = deferred<void>()
+    provider.verify.mockImplementation(async () => { await recheck.promise; throw new Error('offline') })
+    provider.current = active('principal-a', { intranet: { status: 'ready', expiresAt: now + 1000 } })
+    const service = newService({ now: () => now })
+    service.getState()
+    await flush()
+    expect(existsSync(credentialPath('code-host'))).toBe(true)
+    now += 2000
+    const check = service.verify()
+    expect(service.verify()).toBe(check)
+    expect(service.getState().capabilities[0].status).toBe('expired')
+    expect(existsSync(credentialPath('code-host'))).toBe(false)
+    recheck.resolve()
+    await check
+    expect(provider.verify).toHaveBeenCalledOnce()
+    expect(provider.signOut).not.toHaveBeenCalled()
+    expect(service.getState().status).toBe('active')
   })
 })

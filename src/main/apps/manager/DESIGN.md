@@ -395,7 +395,19 @@ back to permanent deletion. Legacy records without file ownership must use recov
 before deletion, and no skill record is automatically pruned. Deleting a space
 keeps every skill file, since they sit in the user's folders; only the records go.
 Removing a digital human never cascades into its skill dependencies; recorded
-owner labels may remain as provenance.
+owner labels may remain as provenance. Owners are identified by `(kind, id)`;
+legacy owner metadata without a kind is read as `digital-human`.
+
+`reconcileManagedToolSkill`, `removeManagedToolSkill` and `listManagedToolSkillIds`
+are the host lifecycle for generated CLI skills. They never adopt a same-name
+personal skill. Update and withdrawal require a matching managed record, sole
+CLI ownership, the original directory identity and a digest matching Halo's
+last write. If verification fails, the manager keeps the skill and drops only
+the CLI owner. Install, update and withdrawal record intent in installation
+metadata before publishing a folder, replacing instructions or trashing the
+verified copy. Recovery reads this intent on the next reconciliation, not by
+scanning skills at startup. The active package is a standard global skill, with
+no owner metadata in its instructions.
 
 Customized managed packages keep their entire current version during
 `upgradeSpec`/built-in refresh, with `toVersion` unchanged. Untouched packages take

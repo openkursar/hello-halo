@@ -10,17 +10,11 @@
  * leaves on the session.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { describe, it, expect } from 'vitest'
 import {
-  allowsToolSkills,
   decideSkillCall,
   grantedSkillFolders,
-  grantsToolSkill,
   inertCommandText,
-  toolSkillCopies,
   turnSkillAccess,
 } from '../../../../src/main/apps/runtime/turn-skills'
 import { applyCapabilityPolicy, describeWithheld } from '../../../../src/main/apps/runtime/capability-policy'
@@ -245,86 +239,31 @@ describe('a borrowed turn\'s message never runs as a command', () => {
   })
 })
 
-describe("the skills of the turn's command-line tools", () => {
-  let view = ''
-  let binDir = ''
+describe('command-line tool skills use the normal allowlist', () => {
+  const tool = skill('cli-com-example-tickets-0123456789ab')
 
-  beforeEach(() => {
-    view = mkdtempSync(join(tmpdir(), 'turn-tool-skills-'))
-    binDir = join(view, 'bin')
-    mkdirSync(binDir)
-    mkdirSync(join(view, 'skills', 'cli-tickets'), { recursive: true })
-    writeFileSync(join(view, 'skills', 'cli-tickets', 'SKILL.md'), '---\nname: "cli-tickets"\ndescription: "Tickets."\n---\n\nRun `tickets`.\n')
-    writeFileSync(join(view, 'view.json'), JSON.stringify({ skills: [{ name: 'cli-tickets', description: 'Tickets.' }] }))
-  })
-  afterEach(() => rmSync(view, { recursive: true, force: true }))
-
-  /** The turn as app-chat builds it: the skill tool kept for tool skills, then the access. */
-  function toolTurn(available: AvailableSkill[], policy: CapabilityPolicy, mode: CapabilityMode = 'strict') {
-    const toolSkills = toolSkillCopies(binDir)
+  it.each([undefined, 'listed'] as const)('keeps Skill withheld for Bash access %s without a skill grant', bashScope => {
+    const policy: CapabilityPolicy = { allowedTools: ['Bash'], allowedSkills: [], bashScope, bashRules: ['tickets:*'] }
     const options: Record<string, any> = {}
-    const keepSkillTool = toolSkills.length > 0 && allowsToolSkills(policy, mode, [])
-    const applied = applyCapabilityPolicy(options, { policy, mode, mcpServers: {}, dbMcpServers: null, keepFileTools: mode === 'strict', keepSkillTool })
-    const skills = turnSkillAccess(available, policy, mode, {
-      allowedRules: options.allowedTools ?? [],
-      disallowed: options.disallowedTools ?? [],
-      hooked: mode === 'strict' ? ['Skill', ...FILE_TOOLS] : ['Skill'],
-    }, toolSkills)
-    return { options, applied, skills }
-  }
-
-  it('reads each skill of the view as a global skill named after its folder', () => {
-    expect(toolSkillCopies(binDir)).toEqual([{
-      name: 'cli-tickets', description: 'Tickets.', scope: 'global', dirName: 'cli-tickets',
-      path: join(view, 'skills', 'cli-tickets'),
-      content: '---\nname: "cli-tickets"\ndescription: "Tickets."\n---\n\nRun `tickets`.\n',
-    }])
-    expect(toolSkillCopies(undefined)).toEqual([])
-  })
-
-  it('loads with the shell even when the owner allowed no skill, and only that skill', () => {
-    const { options, skills } = toolTurn([skill('weekly-report')], { allowedTools: ['Bash'], allowedSkills: [] })
-    expect(options.disallowedTools ?? []).not.toContain('Skill')
-    expect(grantsToolSkill(skills)).toBe(true)
-    expect(call(skills, 'cli-tickets')).toEqual({ allow: true })
-    expect(call(skills, 'weekly-report').allow).toBe(false)
-    expect(grantedSkillFolders(skills)).toEqual([join(view, 'skills', 'cli-tickets')])
-  })
-
-  it('does not load when the turn may not run commands', () => {
-    const { options, skills } = toolTurn([], { allowedTools: ['Read'] })
+    const applied = applyCapabilityPolicy(options, { policy, mode: 'strict', mcpServers: {}, dbMcpServers: null })
+    const skills = access([tool], policy)
     expect(options.disallowedTools).toContain('Skill')
-    expect(grantsToolSkill(skills)).toBe(false)
-    expect(call(skills, 'cli-tickets').allow).toBe(false)
-    expect(allowsToolSkills({ allowedTools: ['Bash'] }, 'strict', ['Bash'])).toBe(false)
-    expect(allowsToolSkills({ allowedTools: ['Bash'] }, 'strict', ['Bash(rm:*)'])).toBe(true)
+    expect(call(skills, tool.dirName).allow).toBe(false)
+    expect(grantedSkillFolders(skills)).toEqual([])
+    expect(describeWithheld({ policy, mode: 'strict', applied, offered: {}, dbMcpServers: null, fileBoundary: true, skills }))
+      .toContain('skills')
   })
 
-  it('loads under a command list too: the commands themselves are still judged one by one', () => {
-    const { skills } = toolTurn([], LISTED_COMMANDS)
-    expect(call(skills, 'cli-tickets')).toEqual({ allow: true })
-  })
-
-  it('takes the name from another skill of the same name', () => {
-    const { skills } = toolTurn([skill('cli-tickets'), skill('weekly-report')], { allowedTools: ['Bash'], allowedSkills: ['cli-tickets', 'weekly-report'] })
-    expect(skills.skills.filter(entry => entry.dirName === 'cli-tickets')).toEqual([
-      expect.objectContaining({ path: join(view, 'skills', 'cli-tickets'), tool: true, granted: true }),
-    ])
-    expect(grantedSkillFolders(skills)).not.toContain('/skills/cli-tickets')
-  })
-
-  it('is not reported as withheld when only tool skills may load', () => {
-    const policy: CapabilityPolicy = { allowedTools: ['Bash'], allowedSkills: [] }
-    const { applied, skills } = toolTurn([], policy)
-    const items = describeWithheld({ policy, mode: 'strict', applied, offered: {}, dbMcpServers: null, fileBoundary: true, skills })
-    expect(items).not.toContain('skills')
-  })
-
-  it('leaves out a skill whose file cannot be read', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    rmSync(join(view, 'skills', 'cli-tickets', 'SKILL.md'))
-    mkdirSync(join(view, 'skills', 'cli-tickets', 'SKILL.md'))
-    expect(toolSkillCopies(binDir)).toEqual([])
-    warn.mockRestore()
+  it('grants only the listed skill without widening the existing command rules', () => {
+    const policy: CapabilityPolicy = { ...LISTED_COMMANDS, allowedSkills: [tool.dirName] }
+    const options: Record<string, any> = {}
+    applyCapabilityPolicy(options, { policy, mode: 'strict', mcpServers: {}, dbMcpServers: null })
+    const skills = access([tool, skill('weekly-report')], policy)
+    expect(options.disallowedTools).not.toContain('Skill')
+    expect(options.allowedTools).toContain('Bash(npm run:*)')
+    expect(options.allowedTools).not.toContain('Bash')
+    expect(call(skills, tool.dirName)).toEqual({ allow: true })
+    expect(call(skills, 'weekly-report').allow).toBe(false)
+    expect(grantedSkillFolders(skills)).toEqual([tool.path])
   })
 })

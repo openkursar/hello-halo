@@ -3,7 +3,7 @@
  * Data-driven navigation items for the settings page
  */
 
-import { Brain, Palette, Settings, Globe, Info, Bell, Store, Code, Heart, Network, ShieldCheck } from 'lucide-react'
+import { Building2, Brain, Palette, Settings, Globe, Info, Bell, Store, Code, Heart, Network } from 'lucide-react'
 import type { SettingsNavItem } from './types'
 
 /**
@@ -12,17 +12,17 @@ import type { SettingsNavItem } from './types'
  */
 export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
   {
+    // Shown only in builds that provide an organization sign-in.
+    id: 'enterprise-identity',
+    labelKey: 'Organization sign-in',
+    icon: Building2
+  },
+  {
     id: 'ai-model',
     // Same glyph as the chat header's ModelSelector (ai-config/ModelSelector.tsx)
     // — one icon for "AI model" everywhere it appears, not two.
     labelKey: 'AI Model',
     icon: Brain
-  },
-  {
-    // Shown only in builds that provide a company sign-in.
-    id: 'enterprise-identity',
-    labelKey: 'Enterprise identity',
-    icon: ShieldCheck
   },
   {
     id: 'message-channels',

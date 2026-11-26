@@ -1,0 +1,139 @@
+version: 1
+id: settings.organization-sign-in
+module: settings
+title: Sign in to my organization from Halo
+story: I can connect organization capabilities without interrupting ordinary chat or losing working access when one capability expires.
+basis: documented
+references:
+  - src/main/services/enterprise-identity/DESIGN.md
+  - tests/fixtures/enterprise-identity-mock/README.md
+  - tests/e2e/specs/org-sign-in.spec.ts
+promises:
+  optional: Organization sign-in is not required to chat with an already configured model, and controls are absent when the build has no organization configured.
+  window: The sign-in window stays open across unrelated capability changes. Closing it cancels the attempt without discarding existing access.
+  capabilities: The composer and Settings reflect whether access is missing, connected or expired. Expiry affects only the relevant capability; signing out clears access.
+  tool-access: Only the bound command receives organization access, and it stops receiving it after sign-out.
+  withdrawal: If earlier access could not be withdrawn, Halo warns that it may still work and offers Retry rather than claiming sign-out succeeded.
+  restoration: Halo shows that it is checking existing access rather than asking me to sign in before the check finishes.
+scenarios:
+  - id: settings.organization-sign-in.signed-out
+    title: Chat with an existing model while signed out
+    verifies: [optional, capabilities]
+    platforms: &desktop [darwin, win32, linux]
+    profiles: &regression [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: &engine [halo-sdk]
+    preconditions:
+      - Organization sign-in is configured and no access has been granted. A local scripted model is configured separately.
+    steps:
+      - Open a conversation and send a message. Open the organization card in Settings.
+    expected:
+      - The composer invites me to sign in, my chat gets a reply, and Settings identifies all three capabilities as not signed in.
+  - id: settings.organization-sign-in.home
+    title: Sign in directly from the launch home without changing my model
+    verifies: [optional, window]
+    platforms: *desktop
+    profiles: *regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: *engine
+    steps: [Open the named organization action on the home composer. Cancel and try again.]
+    expected: [The organization window opens directly and signing in leaves the selected model unchanged.]
+  - id: settings.organization-sign-in.first-run
+    title: Sign in on the first screen with a preconfigured model
+    verifies: [optional, window]
+    platforms: *desktop
+    profiles: *regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: *engine
+    steps: [Sign in on the first preferences screen.]
+    expected: [Halo opens home with the same model and no second account sign-in.]
+  - id: settings.organization-sign-in.no-model
+    title: Defer organization access and model setup independently
+    verifies: [optional, window]
+    platforms: *desktop
+    profiles: *regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: *engine
+    steps: [Cancel sign-in and skip it on a first-run profile without a model. Defer model setup.]
+    expected: [Model setup stays available and skipping it does not select a model.]
+  - id: settings.organization-sign-in.lifecycle
+    title: Sign in, cancel a renewal, inspect one expiry, and sign out
+    verifies: [window, capabilities]
+    platforms: *desktop
+    profiles: *regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: *engine
+    preconditions:
+      - The unpackaged desktop app is configured with the loopback organization sign-in fixture.
+    steps:
+      - Open sign-in from the composer and confirm using the mock phone method.
+      - Start another sign-in and expire only Mail while the window is open. Close the window without confirming.
+      - Check the composer and Settings before signing out.
+    expected:
+      - Confirmation closes the window and connects every capability.
+      - A capability update leaves the sign-in window open. Closing it cancels that attempt without signing me out or changing the remaining access.
+      - The composer draws attention to expired Mail; Models and Internal systems remain connected. Signing out resets access.
+  - id: settings.organization-sign-in.restore
+    title: Wait for existing access to be restored
+    verifies: [restoration]
+    platforms: *desktop
+    profiles: *regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: *engine
+    steps:
+      - Launch with the mock configured to restore access silently and observe the composer indicator until it settles.
+    expected:
+      - The indicator shows a pending check and then connected access, with no sign-in warning in between.
+  - id: settings.organization-sign-in.unconfigured
+    title: Omit organization sign-in from an unconfigured build
+    verifies: [optional]
+    platforms: *desktop
+    profiles: *regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: *engine
+    steps:
+      - Launch the unpackaged app without organization sign-in and open the composer and Settings.
+    expected:
+      - Neither the composer indicator nor the Settings card appears.
+  - id: settings.organization-sign-in.bound-tool
+    title: Use a bound tool only while signed in
+    verifies: [tool-access]
+    platforms: [darwin, linux]
+    profiles: *regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: *engine
+    steps:
+      - Sign in and run the bundled probe commands from a Halo terminal. Sign out and run the same commands again.
+    expected:
+      - Only the bound command sees the mock credential while signed in. Neither command sees it after sign-out.
+  - id: settings.organization-sign-in.withdrawal-pending
+    title: See and recover from incomplete credential withdrawal
+    verifies: [withdrawal]
+    platforms: [darwin, linux]
+    profiles: *regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: *engine
+    preconditions:
+      - The test application runs without elevated privileges so it cannot withdraw credentials from a non-writable directory.
+    steps:
+      - Sign out while the credential directory is non-writable. Restore its permissions and select Retry.
+    expected:
+      - Settings warns that earlier access may still work, and confirms sign-out only after Retry completes.

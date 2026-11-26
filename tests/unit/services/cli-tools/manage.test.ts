@@ -180,7 +180,7 @@ describe.skipIf(process.platform === 'win32')('cli-tools manage: registered exis
   }
 
   it('records only path and fingerprint and runs the original file with args and exit code', async () => {
-    const file = program()
+    const file = program('#!/bin/sh\nprintf "%s\\n" "external:$1:$NODE_PATH"\nexit 7\n')
     const before = readFileSync(file, 'utf-8')
     const store = newStore()
     const { id, current } = await store.registerExternal({ path: file, interpreter: null, command: 'mytool', name: 'My tool' })
@@ -192,20 +192,25 @@ describe.skipIf(process.platform === 'win32')('cli-tools manage: registered exis
     expect(existsSync(join(root, 'store', id))).toBe(false)
 
     const pin = await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })
-    const run = spawnSync(join(pin!.binDir!, 'mytool'), ['hello'], { encoding: 'utf-8' })
-    expect(run.stdout.trim()).toBe('external:hello')
+    const run = spawnSync(join(pin!.binDir!, 'mytool'), ['hello'], {
+      encoding: 'utf-8', env: { ...process.env, NODE_PATH: 'inherited-modules' },
+    })
+    expect(run.stdout.trim()).toBe('external:hello:inherited-modules')
     expect(run.status).toBe(7)
-    expect(readFileSync(join(pin!.binDir!, '..', 'TOOLS.md'), 'utf-8')).toContain('not managed by Halo')
+    expect(readFileSync(join(pin!.binDir!, '..', 'TOOLS.md'), 'utf-8'))
+      .toContain('| `mytool` | external.mytool | - | unknown | unknown | - |')
   })
 
-  it('runs a .mjs script on the bundled Node', async () => {
+  it('runs a .mjs script on the bundled Node without the inherited NODE_PATH', async () => {
     const file = join(dir, 'script.mjs')
-    writeFileSync(file, 'console.log("node:" + process.argv.slice(2).join(","))\n')
+    writeFileSync(file, 'console.log("node:" + process.argv.slice(2).join(",") + ":" + (process.env.NODE_PATH ?? ""))\n')
     const store = newStore()
     await store.registerExternal({ path: file, interpreter: 'halo-node', command: 'myscript', name: 'Script' })
     const pin = await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })
-    const run = spawnSync(join(pin!.binDir!, 'myscript'), ['a', 'b'], { encoding: 'utf-8' })
-    expect(run.stdout.trim()).toBe('node:a,b')
+    const run = spawnSync(join(pin!.binDir!, 'myscript'), ['a', 'b'], {
+      encoding: 'utf-8', env: { ...process.env, NODE_PATH: 'inherited-modules' },
+    })
+    expect(run.stdout.trim()).toBe('node:a,b:')
   })
 
   it('validates the command name and the file', async () => {

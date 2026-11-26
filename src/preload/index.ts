@@ -66,7 +66,8 @@ import { gitBashRpc } from '../shared/rpc/contracts/git-bash.contract'
 import { appRpc } from '../shared/rpc/contracts/app.contract'
 import { skillsRpc } from '../shared/rpc/contracts/skills.contract'
 import { cliToolsRpc } from '../shared/rpc/contracts/cli-tools.contract'
-import { enterpriseIdentityRpc } from '../shared/rpc/contracts/enterprise-identity.contract'
+import { ENTERPRISE_IDENTITY_CHANGED_EVENT, enterpriseIdentityRpc } from '../shared/rpc/contracts/enterprise-identity.contract'
+import type { OrgSignInState } from '../shared/types/enterprise-identity'
 import { TEAM_IPC, TEAM_EVENTS } from '../shared/apps/team-types'
 import type {
   CreateTeamInput,
@@ -127,6 +128,10 @@ type EnterpriseIdentityRpcClient = RpcClient<typeof enterpriseIdentityRpc>
   if (theme === 'light' || theme === 'dark' || theme === 'system') {
     contextBridge.exposeInMainWorld('haloBootTheme', theme)
   }
+}
+
+if (process.argv.includes('--halo-org-sign-in=1')) {
+  contextBridge.exposeInMainWorld('haloOrgSignIn', true)
 }
 
 // Type definitions for exposed API
@@ -666,10 +671,10 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
 
   // Enterprise identity (company sign-in for command-line tools)
   enterpriseIdentityState: EnterpriseIdentityRpcClient['enterpriseIdentityState']
-  enterpriseIdentityBegin: EnterpriseIdentityRpcClient['enterpriseIdentityBegin']
-  enterpriseIdentityPoll: EnterpriseIdentityRpcClient['enterpriseIdentityPoll']
-  enterpriseIdentityCancel: EnterpriseIdentityRpcClient['enterpriseIdentityCancel']
+  enterpriseIdentitySignIn: EnterpriseIdentityRpcClient['enterpriseIdentitySignIn']
+  enterpriseIdentityRetry: EnterpriseIdentityRpcClient['enterpriseIdentityRetry']
   enterpriseIdentitySignOut: EnterpriseIdentityRpcClient['enterpriseIdentitySignOut']
+  onEnterpriseIdentityChanged: (callback: (state: OrgSignInState) => void) => () => void
 
   // App Import / Export
   appExportSpec: (appId: string) => Promise<IpcResponse<{ yaml: string; filename: string }>>
@@ -1186,6 +1191,7 @@ const api: HaloAPI = {
   ...bindRpc(skillsRpc),
   ...bindRpc(cliToolsRpc),
   ...bindRpc(enterpriseIdentityRpc),
+  onEnterpriseIdentityChanged: (callback) => createEventListener(ENTERPRISE_IDENTITY_CHANGED_EVENT, callback),
 
   // App Event Listeners
   onAppStatusChanged: (callback) => createEventListener('app:status_changed', callback),
@@ -1329,10 +1335,10 @@ const platformInfo = {
 
 contextBridge.exposeInMainWorld('platform', platformInfo)
 
-// TypeScript declaration for window.halo and window.platform
 declare global {
   interface Window {
     halo: HaloAPI
+    haloOrgSignIn?: true
     platform: {
       platform: 'darwin' | 'win32' | 'linux'
       isMac: boolean

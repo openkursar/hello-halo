@@ -173,6 +173,8 @@ export { markMcpServerSettings } from './sdk-config'
  */
 export { explainEngineError, isRefusedLocalConnection, checkChildLocalConnection } from './local-connection'
 export { parseSDKMessage, buildMessageContent, formatCanvasContext } from './message-utils'
+// Organization sign-in status ahead of an owner's turn; empty without organization sign-in.
+export { orgTurnContext } from './org-context'
 /**
  * What a user turn carries besides its text, as the model reads it (references
  * and built-in task blocks), and the brief form a cross-conversation reader sees.

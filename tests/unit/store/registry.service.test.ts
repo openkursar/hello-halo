@@ -938,7 +938,7 @@ ${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
         } as SkillSpec,
         userOverrides: { skill: {
           version: 1, filePath: "/fixture/space-1/skills/other-skill", deleted,
-          owners: [{ id: "other-app", name: "Other App" }],
+          owners: [{ kind: "digital-human", id: "other-app", name: "Other App" }],
         } as SkillInstallationState },
       }
       const original = structuredClone(otherSkill)
@@ -954,11 +954,11 @@ ${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
       expect(manager.getApp("skill-1")).toMatchObject({
         status: "active",
         spec: { store: { registry_id: "official" } },
-        userOverrides: { skill: { owners: [{ id: "app-1", name: "Ledger App" }] } },
+        userOverrides: { skill: { owners: [{ kind: "digital-human", id: "app-1", name: "Ledger App" }] } },
       })
       expect(manager.updateSkillRecord).toHaveBeenCalledTimes(1)
       expect(manager.updateSkillRecord).toHaveBeenCalledWith("skill-1", {
-        skill: expect.objectContaining({ owners: [{ id: "app-1", name: "Ledger App" }] }),
+        skill: expect.objectContaining({ owners: [{ kind: "digital-human", id: "app-1", name: "Ledger App" }] }),
       })
       expect(otherSkill).toEqual(original)
     })
@@ -986,7 +986,7 @@ ${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
       const manager = getAppManagerMock()
       expect(manager.listSkillRecords).toHaveBeenCalledWith("space-1")
       expect(manager.updateSkillRecord).toHaveBeenCalledWith("skill-1", {
-        skill: expect.objectContaining({ owners: [{ id: "app-1", name: "Ledger App" }] }),
+        skill: expect.objectContaining({ owners: [{ kind: "digital-human", id: "app-1", name: "Ledger App" }] }),
       })
     })
   })

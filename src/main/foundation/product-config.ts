@@ -259,6 +259,8 @@ export interface EnterpriseToolCredentialConfig {
 export interface EnterpriseIdentityProductConfig {
   /** Provider module path, relative to product.json (same rule as `authProviders[].path`). */
   provider: string
+  /** Display name of the sign-in; string or `{ "en": …, "zh-CN": … }`. */
+  name?: string | Record<string, string>
   toolCredentials?: EnterpriseToolCredentialConfig[]
 }
 
@@ -395,6 +397,9 @@ export interface ProductConfig {
    * no Settings entry.
    */
   enterpriseIdentity?: EnterpriseIdentityProductConfig
+
+  /** Non-secret files shipped with the product and placed alongside managed CLI payloads. */
+  cliTools?: { supportFiles?: Array<{ source: string; target: string }> }
 
   /**
    * Identity source for telemetry (optional).

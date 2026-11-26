@@ -486,11 +486,14 @@ function createWindow(): void {
   // starts out in the other theme before the app applies it.
   const theme = getConfig().appearance?.theme ?? 'system'
   const colors = startupWindowColors(theme, nativeTheme.shouldUseDarkColors)
+  const product = loadProductConfig()
+  const additionalArguments = [`--halo-display-scale=${currentDisplayScale()}`, `--halo-boot-theme=${theme}`]
+  if (product.enterpriseIdentity) additionalArguments.push('--halo-org-sign-in=1')
 
   // Create the browser window
   mainWindow = new BrowserWindow({
     // Windows shows the window title on taskbar hover; the product name tells installed variants apart.
-    title: loadProductConfig().name,
+    title: product.name,
     width: 1200,
     height: 800,
     minWidth: 900,
@@ -522,7 +525,7 @@ function createWindow(): void {
       // the zoom natively, and the CLI arg lets the preload set --display-scale
       // synchronously, so chrome-inset compensation is correct on frame one.
       zoomFactor: currentDisplayScale(),
-      additionalArguments: [`--halo-display-scale=${currentDisplayScale()}`, `--halo-boot-theme=${theme}`]
+      additionalArguments
     }
   })
 

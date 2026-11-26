@@ -699,7 +699,8 @@ export async function installRequiredSkills(
       }
       const owners = installed.userOverrides.skill.owners ?? []
       manager.updateSkillRecord(id, { skill: { ...installed.userOverrides.skill,
-        owners: [...owners.filter(owner => owner.id !== parent.id), { id: parent.id, name: parent.spec.display_name ?? parent.spec.name }],
+        owners: [...owners.filter(owner => owner.kind !== 'digital-human' || owner.id !== parent.id),
+          { kind: 'digital-human', id: parent.id, name: parent.spec.display_name ?? parent.spec.name }],
       } })
     }
   }

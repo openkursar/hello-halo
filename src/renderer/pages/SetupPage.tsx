@@ -15,7 +15,8 @@ import { useOAuthLogin } from '../hooks/useOAuthLogin'
 import { proxyRequiredText } from '../utils/proxy-required-text'
 import { useTranslation } from '../i18n'
 import { Loader2 } from 'lucide-react'
-import type { HaloConfig } from '../types'
+import { hasAnyAISource, type HaloConfig } from '../types'
+import { isElectron, orgSignInOffered } from '../api/transport'
 import { HaloLogo } from '../components/brand/HaloLogo'
 
 // First step is `preferences` only on the very first launch (gated by
@@ -95,7 +96,19 @@ export function SetupPage() {
 
   // Render based on derived step (see hasPassedPreferences comment above)
   if (effectiveStep === 'preferences') {
-    return <PreferencesStep onContinue={() => setHasPassedPreferences(true)} />
+    const organizationSetup = isElectron() && orgSignInOffered() ? { hasModel: !!config && hasAnyAISource(config.aiSources) } : undefined
+    return <>
+      <PreferencesStep organizationSetup={organizationSetup} onContinue={async () => {
+        if (!organizationSetup?.hasModel) { setHasPassedPreferences(true); return }
+        try {
+          const saved = await api.setConfig({ isFirstLaunch: false })
+          if (!saved.success) throw new Error(saved.error || t('Failed to save settings'))
+          await useAppStore.getState().refreshConfig()
+          await enterApp()
+        } catch (err) { setError(err instanceof Error ? err.message : t('Failed to save settings')) }
+      }} />
+      {error && <p role="alert" className="fixed bottom-4 inset-x-4 text-center text-sm text-destructive">{error}</p>}
+    </>
   }
 
   if (oauth.login?.redirect) {

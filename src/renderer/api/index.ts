@@ -38,6 +38,8 @@ import { skillsApi } from './skills.api'
 import { cliToolsApi } from './cli-tools.api'
 import { enterpriseIdentityApi } from './enterprise-identity.api'
 
+export { onEnterpriseIdentityChanged } from './enterprise-identity.api'
+
 /**
  * Unified api object — drop-in replacement for window.halo, transport-agnostic.
  */

@@ -8,6 +8,7 @@ import { createSkillLibrary } from './service'
 export { createSkillLibrary } from './service'
 export type { SkillLibraryDependencies } from './service'
 export { resolveSkillGroups } from './catalog'
+export { subscribeToolSkillSync } from './tool-skills'
 
 const library = createSkillLibrary({
   context(spaceId, workDir) {

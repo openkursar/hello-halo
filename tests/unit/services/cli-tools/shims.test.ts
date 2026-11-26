@@ -48,6 +48,23 @@ describe('cli-tools launchers', () => {
     expect(/^[\x00-\x7f]*$/.test(cmd)).toBe(true)
   })
 
+  it('loads the checked support preload before credentials in both Windows templates', () => {
+    const root = 'C:\\Users\\测试\\cli'
+    const view = `${root}\\views\\k`
+    const [cmd, sh] = launcherFiles('win32', 'tool', {
+      binDir: `${view}\\bin`, runtimePath: `${root}\\runtime\\r\\Halo.exe`,
+      preloadPath: `${view}\\argv-preload.cjs`, supportPreloadPath: `${view}\\support-0.cjs`,
+      credentialPreloadPath: `${view}\\credential-0.cjs`, entryPath: `${root}\\store\\tool\\payload\\entry.mjs`,
+    })
+    expect(cmd.content).toContain(
+      '"%~dp0..\\..\\..\\runtime\\r\\Halo.exe" --require "%~dp0..\\argv-preload.cjs" --require "%~dp0..\\support-0.cjs" --require "%~dp0..\\credential-0.cjs" "%~dp0..\\..\\..\\store\\tool\\payload\\entry.mjs" %*',
+    )
+    expect(sh.content).toContain(
+      `--require '${view}\\argv-preload.cjs' --require '${view}\\support-0.cjs' --require '${view}\\credential-0.cjs'`,
+    )
+    expect(/^[\x00-\x7f]*$/.test(cmd.content)).toBe(true)
+  })
+
   it('keeps ASCII paths as they are, and a non-ASCII path with no ASCII relative form', () => {
     const binDir = 'C:\\Users\\a\\cli\\views\\k\\bin'
     expect(renderCmdLauncher({ ...win, binDir })).toBe(renderCmdLauncher(win))
@@ -68,5 +85,13 @@ describe('cli-tools launchers', () => {
   it('writes one launcher on POSIX and two on Windows', () => {
     expect(launcherFiles('darwin', 'tool', posix).map(f => f.name)).toEqual(['tool'])
     expect(launcherFiles('win32', 'tool', win).map(f => f.name)).toEqual(['tool.cmd', 'tool'])
+  })
+
+  it('leaves NODE_PATH alone in both direct-program launchers on Windows', () => {
+    const launchers = launcherFiles('win32', 'tool', { ...win, direct: true })
+    for (const { content } of launchers) {
+      expect(content).not.toContain('NODE_PATH')
+      expect(content).not.toContain('ELECTRON_RUN_AS_NODE')
+    }
   })
 })

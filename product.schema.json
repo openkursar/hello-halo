@@ -348,6 +348,13 @@
           "minLength": 1,
           "description": "Provider module path relative to product.json; it exports a get...Provider() function implementing EnterpriseIdentityProvider (src/shared/interfaces/enterprise-identity-provider.ts)."
         },
+        "name": {
+          "description": "Display name of the sign-in, shown in Settings and beside the composer.",
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "object", "additionalProperties": { "type": "string" } }
+          ]
+        },
         "toolCredentials": {
           "type": "array",
           "description": "Tools that receive a credential while the user is signed in. Only versions shipped with the build or installed from the enterprise catalog are bound.",
@@ -366,6 +373,26 @@
         }
       },
       "required": ["provider"],
+      "additionalProperties": false
+    },
+    "cliTools": {
+      "type": "object",
+      "properties": {
+        "supportFiles": {
+          "type": "array",
+          "maxItems": 32,
+          "description": "Non-secret deployment files copied beside the payload of every managed CLI package. Registered external programs are not affected.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Regular file (at most 1 MiB), relative to product.json, with no symlink segments." },
+              "target": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Normalized path relative to the tool version root, using forward slashes; package paths are reserved." }
+            },
+            "required": ["source", "target"],
+            "additionalProperties": false
+          }
+        }
+      },
       "additionalProperties": false
     },
     "registryOverrides": {

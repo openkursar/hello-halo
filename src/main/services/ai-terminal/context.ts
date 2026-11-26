@@ -21,6 +21,7 @@
 import { EventEmitter } from 'events'
 import { resolveShell } from './shell'
 import { applyCliToolsEnv } from '../cli-tools'
+import { applyOrgSessionEnv } from '../enterprise-identity'
 import { TerminalSessionProxy } from './session-proxy'
 import { TerminalFlowController } from './flow-control'
 import {
@@ -75,6 +76,7 @@ export class TerminalContext extends EventEmitter {
     const shell = resolveShell(opts.shell)
     // A terminal gets the CLI tools current when it opens and keeps them.
     await applyCliToolsEnv(shell.env, { entry: 'terminal', engine: 'terminal' })
+    applyOrgSessionEnv(shell.env)
     const { info } = await ptyHostRequest({
       type: 'create',
       spec: {

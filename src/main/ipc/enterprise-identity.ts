@@ -1,22 +1,18 @@
 import { enterpriseIdentityRpc } from '../../shared/rpc/contracts/enterprise-identity.contract'
-import {
-  beginEnterpriseLogin,
-  cancelEnterpriseLogin,
-  getEnterpriseIdentityState,
-  pollEnterpriseLogin,
-  signOutEnterpriseIdentity,
-} from '../services/enterprise-identity'
+import { getEnterpriseIdentityState, retryEnterpriseIdentity, signInEnterpriseIdentity, signOutEnterpriseIdentity } from '../services/enterprise-identity'
 import { registerRpcHandlers } from './rpc'
 
 export function registerEnterpriseIdentityHandlers(): void {
   registerRpcHandlers(
     enterpriseIdentityRpc,
     {
-      enterpriseIdentityState: () => getEnterpriseIdentityState(),
-      enterpriseIdentityBegin: input => beginEnterpriseLogin(String(input?.methodId ?? '')),
-      enterpriseIdentityPoll: input => pollEnterpriseLogin(String(input?.flowId ?? '')),
-      enterpriseIdentityCancel: input => cancelEnterpriseLogin(String(input?.flowId ?? '')),
-      enterpriseIdentitySignOut: () => signOutEnterpriseIdentity(),
+      enterpriseIdentityState: getEnterpriseIdentityState,
+      enterpriseIdentitySignIn: signInEnterpriseIdentity,
+      enterpriseIdentityRetry: retryEnterpriseIdentity,
+      enterpriseIdentitySignOut: input => {
+        if (input?.scope !== 'session' && input?.scope !== 'device') throw new Error('Invalid organization sign-out scope')
+        return signOutEnterpriseIdentity(input.scope)
+      },
     },
     'EnterpriseIdentity',
   )

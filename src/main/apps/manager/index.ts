@@ -32,11 +32,12 @@ import { getHaloDir } from '../../foundation/config.service'
 import { AppManagerStore } from './store'
 import { createAppManagerService } from './service'
 import { MIGRATION_NAMESPACE, migrations } from './migrations'
-import type { AppManagerService } from './types'
+import type { AppManagerService, ManagedToolSkillInput } from './types'
 
 // Re-export types for consumers
 export type {
   AppManagerService,
+  ManagedToolSkillInput,
   InstalledApp,
   AppStatus,
   RunOutcome,
@@ -77,6 +78,23 @@ let managerInstance: AppManagerService | null = null
  */
 export function getAppManager(): AppManagerService | null {
   return managerInstance
+}
+
+function requireManager(): AppManagerService {
+  if (!managerInstance) throw new Error('App Manager is not initialized')
+  return managerInstance
+}
+
+export async function reconcileManagedToolSkill(input: ManagedToolSkillInput): Promise<void> {
+  await requireManager().reconcileManagedToolSkill(input)
+}
+
+export async function removeManagedToolSkill(toolId: string): Promise<void> {
+  await requireManager().removeManagedToolSkill(toolId)
+}
+
+export function listManagedToolSkillIds(): string[] {
+  return requireManager().listManagedToolSkillIds()
 }
 
 // ============================================

@@ -2475,15 +2475,10 @@ itself has no switch: it exists for a caller exactly when some skill does.
   every skill it could mean must be allowed. A skill Halo does not list (built
   into the engine, from a plugin) has no switch, so no restricted caller may load
   one.
-- **A command-line tool's skill comes with the shell, not the skill list.**
-  The skills of the turn's command-line tools (`cli-<command>`, read from the
-  view its `HALO_CLI_TOOLS_BIN` names) only tell how to run a command the turn
-  already has. Each is granted when the turn may run commands and its session
-  does not withhold the shell, listed or not, even under a policy that grants
-  no skill; then the skill tool stays in the pool (`keepSkillTool`) and the
-  name decides that only those load. Another skill of the same name gives way
-  to the tool's. Pre-approvals are judged as for any skill, and Halo writes
-  their frontmatter with none.
+- **Command-line tool skills follow the same allowlist.** Granting Bash does
+  not grant a skill, and granting a skill does not grant Bash. A tool skill
+  points to the pinned `TOOLS.md`; the policy still judges every command and
+  file access as usual.
 - **A skill grants nothing beyond itself.** Each tool call it makes is judged by
   the policy like any other. What the engine lets a loaded skill do without
   asking — run the tools its `allowed-tools` pre-approve for the rest of the

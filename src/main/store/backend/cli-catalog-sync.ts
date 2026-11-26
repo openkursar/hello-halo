@@ -23,6 +23,7 @@
 
 import {
   EXTERNAL_VERSION,
+  batchCurrentToolChanges,
   compareVersions,
   isCliToolError,
   readCliToolState,
@@ -186,7 +187,7 @@ let running: Promise<CliCatalogSyncResult> | null = null
 let backstop: ReturnType<typeof setTimeout> | null = null
 
 function run(retryRefused = false): Promise<CliCatalogSyncResult> {
-  running ??= syncOnce(retryRefused)
+  running ??= batchCurrentToolChanges(() => syncOnce(retryRefused))
     .then(result => {
       schedule.succeeded()
       return result

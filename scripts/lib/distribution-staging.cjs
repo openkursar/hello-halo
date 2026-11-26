@@ -5,9 +5,9 @@ const os = require('node:os')
 const path = require('node:path')
 const { forbiddenPath, isSourceMapFile, stripSourceMapComments, OUTPUT_ROOTS, RESOURCE_ROOTS, RESOURCE_FILES } = require('./distribution-policy.cjs')
 
-function prepareDistributionStaging(root, providerFiles = [], declaredDirectories = []) {
+function prepareDistributionStaging(root, declaredFiles = [], declaredDirectories = []) {
   root = fs.realpathSync(root)
-  const providers = new Set(providerFiles)
+  const files = new Set(declaredFiles)
   const productionPackages = new Set()
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
   function collect(name, parent, optional = false) {
@@ -34,14 +34,14 @@ function prepareDistributionStaging(root, providerFiles = [], declaredDirectorie
   for (const name of Object.keys(manifest.optionalDependencies || {})) collect(name, root, true)
   const allowed = relative => {
     if (forbiddenPath(relative)) return false
-    if (declaredDirectories.some(dir => relative.startsWith(`${dir}/`))) return true
+    if (files.has(relative) || declaredDirectories.some(dir => relative.startsWith(`${dir}/`))) return true
     if (relative.startsWith('node_modules/')) return !relative.split('/').includes('.bin')
     if (relative.startsWith('out/')) return OUTPUT_ROOTS.some(dir => relative.startsWith(dir))
     if (relative.startsWith('resources/')) {
       const resource = relative.slice('resources/'.length)
       return RESOURCE_ROOTS.some(dir => resource.startsWith(dir)) || RESOURCE_FILES.includes(resource)
     }
-    return relative === 'package.json' || relative === 'product.json' || providers.has(relative) || relative.startsWith('halo-local/dist/')
+    return relative === 'package.json' || relative === 'product.json' || relative.startsWith('halo-local/dist/')
   }
   function copy(source, destination, relative, ancestors = new Set()) {
     const real = fs.realpathSync(source)
@@ -82,11 +82,11 @@ function prepareDistributionStaging(root, providerFiles = [], declaredDirectorie
       if (!source.startsWith(`${root}${path.sep}`)) throw new Error('[distribution] Declared resource escapes project')
       copy(source, path.join(stage, directory), directory)
     }
-    for (const provider of providers) {
-      const source = path.resolve(root, provider)
-      if (source !== root && !source.startsWith(`${root}${path.sep}`)) throw new Error('[distribution] Provider path escapes project')
-      if (!fs.existsSync(source)) throw new Error(`[distribution] Missing provider: ${provider}`)
-      copy(source, path.join(stage, provider), provider)
+    for (const file of files) {
+      const source = path.resolve(root, file)
+      if (!source.startsWith(`${root}${path.sep}`)) throw new Error('[distribution] Declared file escapes project')
+      if (!fs.existsSync(source)) throw new Error(`[distribution] Missing declared file: ${file}`)
+      copy(source, path.join(stage, file), file)
     }
     const applicationManifest = { ...manifest }
     delete applicationManifest.build

@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTestConfigDir, getAppEntryPath, launchElectronApp, cleanupTestConfigDir } from './electron'
+import { removeTree } from '../../unit/services/cli-tools/helpers'
 import { startAcceptanceModel, type AcceptanceModel } from './acceptance-model'
 import { observeAcceptanceShutdown, type AcceptanceShutdownObserver } from './acceptance-shutdown-diagnostics'
 import type { HaloAPI } from '../../../src/preload'
@@ -35,6 +36,11 @@ interface Fixtures {
   sdkEngine: EngineId
   isolatedPath: boolean
   startupObserver: string | undefined
+  firstLaunch: false | 'with-model' | 'without-model'
+  selectedModel: string | undefined
+  productConfigPath: string | undefined
+  cliPresetDirectory: { forProfile: (profile: string) => string } | undefined
+  electronEnvironment: { forProfile: (profile: string) => Record<string, string> } | undefined
   diagnoseShutdown: boolean
   model: AcceptanceModel
   aiSource: AcceptanceSource
@@ -88,10 +94,16 @@ function hasExited(owned: OwnedApplication): boolean {
   return !!owned.child && (owned.child.exitCode != null || owned.child.signalCode != null)
 }
 
-async function open(entry: string, profile: string, register: (app: ElectronApplication) => void | Promise<void>, startupObserver?: string, isolatedPath = false) {
+async function open(entry: string, profile: string, register: (app: ElectronApplication) => void | Promise<void>, options: Pick<Fixtures, 'startupObserver' | 'isolatedPath' | 'productConfigPath' | 'cliPresetDirectory' | 'electronEnvironment'>) {
   const project = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-  const environment = isolatedPath ? { PATH: process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32') : '/usr/bin:/bin:/usr/sbin:/sbin' } : undefined
-  const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project, bootstrapObserver: startupObserver, env: environment })
+  const environment = options.isolatedPath ? { PATH: process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32') : '/usr/bin:/bin:/usr/sbin:/sbin' } : undefined
+  const app = await launchElectronApp(entry, profile, {
+    bootstrapDirectory: project,
+    bootstrapObserver: options.startupObserver,
+    productConfigPath: options.productConfigPath,
+    cliPresetDirectory: options.cliPresetDirectory?.forProfile(profile),
+    env: { ...options.electronEnvironment?.forProfile(profile), ...environment },
+  })
   await register(app)
   const window = await app.firstWindow()
   await window.waitForLoadState('domcontentloaded')
@@ -175,6 +187,11 @@ export const test = base.extend<Fixtures>({
   sdkEngine: ['halo', { option: true }],
   isolatedPath: [false, { option: true }],
   startupObserver: [undefined, { option: true }],
+  firstLaunch: [false, { option: true }],
+  selectedModel: [undefined, { option: true }],
+  productConfigPath: [undefined, { option: true }],
+  cliPresetDirectory: [undefined, { option: true }],
+  electronEnvironment: [undefined, { option: true }],
   diagnoseShutdown: [false, { option: true }],
   model: async ({}, use) => {
     const model = await startAcceptanceModel()
@@ -183,8 +200,8 @@ export const test = base.extend<Fixtures>({
   aiSource: async ({ model }, use) => {
     await use({ provider: 'openai', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'gpt-4o' })
   },
-  acceptanceApp: async ({ model, aiSource, sdkEngine, diagnoseShutdown, startupObserver, isolatedPath }, use, testInfo) => {
-    const entry = getAppEntryPath()
+  acceptanceApp: async ({ model, aiSource, firstLaunch, selectedModel, sdkEngine, diagnoseShutdown, startupObserver, isolatedPath, productConfigPath, cliPresetDirectory, electronEnvironment }, use, testInfo) => {
+    const entry = getAppEntryPath({ copyProductConfig: !productConfigPath })
     const selectedCli = sdkEngine === 'anthropic' ? process.env.HALO_ACCEPTANCE_CLAUDE_CLI : sdkEngine === 'codex' ? process.env.HALO_ACCEPTANCE_CODEX_CLI : undefined
     if (sdkEngine === 'anthropic' || sdkEngine === 'codex') {
       const { externalRuntimeFailure } = await import('../../../scripts/acceptance/lib/external-runtime-readiness.mjs')
@@ -202,6 +219,16 @@ export const test = base.extend<Fixtures>({
       config.agent.ccRuntime = { selectedPath: selectedCli, selectionOrigin: 'user' }
     } else if (sdkEngine === 'codex') {
       config.agent.codexRuntime = { selectedPath: selectedCli, selectionOrigin: 'user' }
+    }
+    if (selectedModel) {
+      const source = config.aiSources.sources[0]
+      config.aiSources.sources.push({ ...source, id: 'acceptance-selected', name: 'Selected local account', model: selectedModel, availableModels: [...source.availableModels, { id: selectedModel, name: selectedModel }] })
+      config.aiSources.currentId = 'acceptance-selected'
+    }
+    if (firstLaunch) config.isFirstLaunch = true
+    if (firstLaunch === 'without-model') {
+      config.aiSources = { version: 2, sources: [], currentId: null }
+      config.api = { provider: 'anthropic', apiKey: '', apiUrl: '', model: '' }
     }
     config.imChannels = { instances: [] }
     config.notificationChannels = {}
@@ -224,7 +251,7 @@ export const test = base.extend<Fixtures>({
               await owned.shutdown.installMain()
             } catch (error) { owned.diagnosticErrors.push(error) }
           }
-        }, startupObserver, isolatedPath)
+        }, { startupObserver, isolatedPath, productConfigPath, cliPresetDirectory, electronEnvironment })
         return opened
       } catch (error) {
         if (!registered) launchWithoutHandle = true
@@ -293,7 +320,10 @@ export const test = base.extend<Fixtures>({
         catch (error) { failures.push(error) }
       }
       if (!launchWithoutHandle && applications.length > 0 && applications.every(hasExited)) {
-        try { cleanupTestConfigDir(profile) } catch (error) { failures.push(error) }
+        try {
+          if (cliPresetDirectory) removeTree(join(profile, '.halo/electron-user-data/cli/store'))
+          cleanupTestConfigDir(profile)
+        } catch (error) { failures.push(error) }
       } else {
         console.error('[AcceptanceApp] Retained the isolated profile because application exit was not established', {
           profile, launchWithoutHandle, pids: applications.filter(owned => !hasExited(owned)).map(owned => owned.child?.pid ?? null),

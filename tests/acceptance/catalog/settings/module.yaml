@@ -9,6 +9,14 @@ description:
 paths:
   - src/renderer/components/settings/**
   - src/renderer/pages/SettingsPage.tsx
+  - src/renderer/components/org-sign-in/**
+  - src/renderer/stores/org-sign-in.store.ts
+  - src/main/services/enterprise-identity/**
+  - src/main/services/login-window.ts
+  - src/main/ipc/enterprise-identity.ts
+  - src/shared/**/*enterprise-identity*
+  - tests/fixtures/enterprise-identity-mock/**
+  - tests/e2e/specs/org-sign-in.spec.ts
   - src/main/foundation/config.service.ts
   - src/main/foundation/config-encryption.ts
   - src/main/foundation/credential-safety.ts
@@ -16,5 +24,5 @@ paths:
 dependsOn:
   - startup
 scope:
-  en: Desktop and remote settings with explicit desktop-only groups; theme/language/scale/send key, proxy, credential faults and shared browser cleanup.
-  zh: 桌面与远程设置及明确的桌面专用分组；主题、语言、缩放、发送键、代理、凭证问题和共享浏览数据清理。
+  en: Desktop and remote settings with explicit desktop-only groups; theme/language/scale/send key, proxy, credential faults, shared browser cleanup and desktop organization sign-in.
+  zh: 桌面与远程设置及明确的桌面专用分组；主题、语言、缩放、发送键、代理、凭证问题、共享浏览数据清理和桌面组织登录。

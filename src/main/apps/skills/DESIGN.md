@@ -78,6 +78,24 @@ Old uninstalled-only content stays recoverable, not reenabled or pruned. Legacy
 disk modifications are preserved; conflicts and unreadable sources remain local
 to the affected skill. Successful preservation is not a library-wide warning.
 
+### Installed CLI tools
+
+Bootstrap subscribes to the usable CLI set as soon as App Manager is ready. A
+user session with a CLI pin can await static reconciliation before its engine
+reads the catalog, even when background preparation has not run. A failed or
+timed-out reconciliation does not block the session or remove its pin. Terminals
+and sessions without a CLI pin do not wait. The first check in a process reads only
+a fixed-size stamp header for an unchanged revision; later requests for a
+reconciled revision do not read it again. A changed revision compares per-tool
+fingerprints before updating managed skills. An interrupted pass leaves the
+stamp pending; the next pass reconciles actual managed records. The stamp is
+bookkeeping, not a second skill store.
+
+Tool skills live in the ordinary global `.agents/skills` root. They receive no
+special catalog priority or digital-human allowlist exception. App Manager can
+replace or remove only its own unchanged copy when the CLI is its sole owner;
+shared, customized and colliding personal files are preserved.
+
 ## Verification
 
 The acceptance catalog is the product contract. Tests must check actual files and

@@ -1,25 +1,16 @@
 import type { Express, Response } from 'express'
-import {
-  beginEnterpriseLogin,
-  cancelEnterpriseLogin,
-  getEnterpriseIdentityState,
-  pollEnterpriseLogin,
-  signOutEnterpriseIdentity,
-} from '../../services/enterprise-identity'
+import { getEnterpriseIdentityState } from '../../services/enterprise-identity'
 
-async function respond(res: Response, operation: string, task: () => unknown): Promise<void> {
-  try {
-    res.json({ success: true, data: await task() })
-  } catch (error) {
-    console.error(`[EnterpriseIdentity] ${operation} error:`, error instanceof Error ? error.message : String(error))
-    res.json({ success: false, error: error instanceof Error ? error.message : String(error) })
-  }
+function desktopOnly(res: Response): void {
+  console.warn('[EnterpriseIdentity] Refused a desktop-only operation over HTTP')
+  res.status(403).json({ success: false, error: 'Open Halo on the desktop to continue.', code: 'DESKTOP_ONLY' })
 }
 
 export function registerEnterpriseIdentityRoutes(app: Express): void {
-  app.post('/api/enterprise-identity/state', (_req, res) => respond(res, 'state', () => getEnterpriseIdentityState()))
-  app.post('/api/enterprise-identity/begin', (req, res) => respond(res, 'begin', () => beginEnterpriseLogin(String(req.body?.methodId ?? ''))))
-  app.post('/api/enterprise-identity/poll', (req, res) => respond(res, 'poll', () => pollEnterpriseLogin(String(req.body?.flowId ?? ''))))
-  app.post('/api/enterprise-identity/cancel', (req, res) => respond(res, 'cancel', () => cancelEnterpriseLogin(String(req.body?.flowId ?? ''))))
-  app.post('/api/enterprise-identity/sign-out', (_req, res) => respond(res, 'sign-out', () => signOutEnterpriseIdentity()))
+  app.post('/api/enterprise-identity/state', (_req, res) => {
+    res.json({ success: true, data: getEnterpriseIdentityState() })
+  })
+  app.post('/api/enterprise-identity/sign-in', (_req, res) => desktopOnly(res))
+  app.post('/api/enterprise-identity/retry', (_req, res) => desktopOnly(res))
+  app.post('/api/enterprise-identity/sign-out', (_req, res) => desktopOnly(res))
 }

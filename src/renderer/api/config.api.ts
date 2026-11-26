@@ -9,6 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import { setRemoteOrgSignIn } from './transport'
 import type { ModelOption, ModelRefreshSummary } from '../../shared/types'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../../shared/types/model-capabilities'
 import { CONFIG_RELOAD_REQUIRED_CODE, CONFIG_UNREADABLE_CODE, type ConfigReadMetadata } from '../../shared/rpc/contracts/config.contract'
@@ -61,8 +62,9 @@ export const configApi = {
     const response: ApiResponse & ConfigReadMetadata = isElectron()
       ? await window.halo.getConfig()
       : await httpRequest('GET', '/api/config')
-    if (options?.snapshot && response?.success && typeof response.configEpoch === 'number') {
-      snapshotEpoch = response.configEpoch
+    if (options?.snapshot && response?.success) {
+      if (typeof response.configEpoch === 'number') snapshotEpoch = response.configEpoch
+      if (!isElectron()) setRemoteOrgSignIn(response.orgSignIn === true)
     }
     return response
   },

@@ -51,6 +51,7 @@ import {
   buildMessageContent,
 } from './message-utils'
 import { formatTurnAttachments } from './references'
+import { orgTurnContext } from './org-context'
 import { opensWithSlashCommand } from './opening-context'
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { captureToolsetExecutionOptions, resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
@@ -442,7 +443,7 @@ async function sendMessageInner(request: AgentRequest, maintenanceSignal: AbortS
     // The space's memory opens a new conversation only: a resumed one carries
     // it forward in its own transcript.
     const attachments = formatTurnAttachments({ references, task, taskInstructions: request.taskInstructions, workDir })
-    const turnMessage = canvasPrefix + attachments + (imageFallback?.contextBlock ?? '') + message
+    const turnMessage = canvasPrefix + orgTurnContext(message) + attachments + (imageFallback?.contextBlock ?? '') + message
     const memoryPreamble = spaceMemory && !sessionId && !opensWithSlashCommand(turnMessage)
       ? await buildSpaceMemoryPreamble(spaceMemory.layout, conversationId)
       : ''

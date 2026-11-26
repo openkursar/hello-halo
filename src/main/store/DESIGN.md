@@ -505,7 +505,8 @@ a service), and the store stays the only owner of source transport.
   with no versions. `parseCliCatalog` checks it like a guide; a malformed one
   is left out of the status (preset copies keep what they had), a missing one
   is passed as `null` (cli-tools clears a skill it applied earlier). The
-  signature is checked in the host.
+  signature is checked in the host. A catalog delivery pass batches the CLI
+  current-set notification; Apps reconciles its static skills after delivery.
 - **Renderer view.** `CliCatalog` carries no URL, digest or token. The entry is
   gated on `capabilities.cliTools` (handshake `features.cliTools` and an
   identity provider in this build), per §3.1 the handshake gates the surface,

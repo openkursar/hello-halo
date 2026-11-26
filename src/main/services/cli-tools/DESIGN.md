@@ -164,8 +164,8 @@ An import runs in this order:
    rejected, as are case-insensitive collisions.
 3. Validate the manifest and host support.
 4. Hash the payload, then check integrity and the pure-JS rule.
-5. Make the tree read-only.
-6. Rename it into place.
+5. Place the configured support files alongside the verified package entries.
+6. Rename the tree into place and make it read-only before exposing it.
 7. Write `state.json` atomically.
 
 If anything fails, staging and any directory published by this transaction are
@@ -181,6 +181,59 @@ Halo runs as a single instance.
 `state.json` holds each tool's versions, its current version and a revocation
 flag. A corrupt file returns `STATE_CORRUPT` and is never silently reset,
 because a reset would orphan installed tools.
+
+### Product support files
+
+A deployment may declare `cliTools.supportFiles` in `product.json`: each entry
+names a `source` relative to that config and a `target` relative to a managed
+version root. The builder ships declared source files at those relative paths.
+An omitted declaration or empty array adds no required files or launch check.
+A nonempty declaration is one required set, not a list of optional files. Every
+source must be a non-secret, nonempty, single-link regular file (up to 1 MiB
+per file, 32 entries) with no linked path segments. Targets use portable
+forward-slash paths outside package-owned roots and cannot collide. Invalid
+sources, malformed lists, colliding targets and incomplete placement refuse the
+whole set, even if none of the declared files can be loaded. Imports fail
+transactionally. Preset, catalog and user-import packages share this rule;
+registered external programs are not changed. Archive and payload integrity
+checks are unchanged.
+
+The first install uses the staged package as its runtime root, so it copies no
+payload. If a later product deployment changes or removes the support files,
+identical re-import or first use publishes a runtime root at
+`support/<id>/<version>-<digest12>/<supportDigest>/`. It copies only the original
+package entries, using filesystem copy-on-write when available, and places the
+new files beside the real `payload/` directory. The lock captures the chosen
+root and support digest; the digest enters the view key. Neither the base nor
+any earlier root is rewritten. Removing a version reclaims its entire variant
+family under the same pending-cleanup lock rule as the base. Expected sizes and
+SHA-256 hashes come from the successful deployment snapshot, not from the
+installed directory. A failed deployment read may be retried on the next pin.
+Each new pin verifies its selected base or variant even when the view already
+exists. A changed deployment can incur one copy on first use of an existing
+tool on filesystems without copy-on-write. A damaged required set never repairs
+or replaces a pinned directory in place.
+
+Configured managed launchers run a same-process preflight before credential
+setup and the CLI entry. It checks the pinned canonical root and relative
+paths, rejects linked ancestors and non-regular or multiply linked files,
+checks containment and file size, and hashes each required file (up to 1 MiB).
+A failure exits nonzero with one path-free message and does not execute the CLI
+or switch programs. If a new pin detects an invalid deployment or damaged
+required files, it keeps the command name or conflict alias as a refusal
+launcher in a distinct view, marks it unavailable in `TOOLS.md`, and keeps
+unaffected commands available. Repair can restore the command for new pins.
+The ordinary PATH and its precedence do not change.
+
+Restart Halo and reopen terminals (or start new executions) to use the guarded
+launchers after updating. Older views already issued to a running execution
+are not rewritten or retroactively protected. The launch check verifies the
+files before entry; it does not sandbox a tool or lock its filesystem for the
+rest of the command.
+
+On Windows the executable junction is only for the bundled runtime executable.
+Supported entries and helpers use the real CLI store root, not that junction.
+Native Windows packaged execution still requires platform verification.
 
 ## Executions: pin, launch, release
 
@@ -198,10 +251,12 @@ Launcher directories (`views/<viewKey>/bin`) are content-addressed and
 immutable, so executions with the same tool set share one. A view is built in a
 temporary directory and renamed into place.
 
-Each launcher only sets `ELECTRON_RUN_AS_NODE`, then runs the fixed runtime on
-the fixed entry and passes arguments through. The sh launcher uses `exec`, so
-cwd, stdio, exit status and signals belong to the tool. On Windows, a `.cmd`
-launcher and an extensionless sh twin for Git Bash are both written.
+Launchers for the bundled runtime set `ELECTRON_RUN_AS_NODE` and clear
+`NODE_PATH` so neither user paths nor Office's packaged modules affect CLI
+dependency resolution. They pass arguments through to the fixed entry. The sh
+launcher uses `exec`, so cwd, stdio, exit status and signals belong to the tool.
+Windows gets both a `.cmd` launcher and an extensionless sh twin for Git Bash.
+Registered programs run directly keep their inherited environment.
 
 cmd.exe reads a batch file in the console code page, so a `.cmd` launcher holds
 no non-ASCII text. A path under the launcher's own root is written relative to
@@ -238,13 +293,13 @@ It returns `null` and writes nothing when no tool is usable.
 `releaseOtherHolders` deletes every lock whose holder is not the given one,
 including locks without a holder.
 
-Every view also holds `TOOLS.md`: a table of each command with its tool,
-version, side effects, sign-in method and the absolute path of its guide, plus
-the meaning of a `halo-` name and the rule not to replay a write whose outcome
-is unknown. Each view also holds one skill per tool (see "Tool skills" below)
-and `view.json`, which lists the view's commands and skills and is written
-last. Sessions load those skills (below); TOOLS.md remains the guide for an
-engine without session skills.
+Every view holds `TOOLS.md`: the pinned command aliases, tool IDs, versions,
+side effects, sign-in instructions and guide paths. It explains `halo-` aliases
+and warns against replaying writes whose outcome is unknown. Installation
+channels and origin preferences are not exposed to the agent. `view.json`
+records commands and is written last. Guarded and refusal views use format
+`v: 7`; ordinary views keep `v: 6`. Normal cleanup reclaims older view directories
+when their pins are released.
 
 **Administrator guide overrides.** A catalog may replace the package guide of
 one version (`CatalogToolStatus.guides`). `applyCatalogStatus` applies it only
@@ -299,67 +354,20 @@ user to sign in under Settings rather than handle a credential.
 
 ### Tool skills (`skills.ts`)
 
-A tool's AI guidance is a skill that belongs to the tool, not a store skill. For
-every pinned tool that exposes a command, view creation writes
-`views/<viewKey>/skills/<name>/SKILL.md` and records
-`{name, description, toolId, version, source}` in `view.json`. The view key
-format is `v: 5`, so views built before the current launcher and skill text
-are rebuilt.
+CLI Tools describes each currently usable tool through `readCurrentToolSkills`.
+The name is stable from the tool ID. The summary chooses the override guide's
+`description`, package guide's `description`, manifest description, then a
+generated fallback, normalized to one line of at most 300 characters. Usage
+text stays in the pinned guide. The static skill instructs the agent to find
+its tool ID in `$HALO_CLI_TOOLS_BIN/../TOOLS.md` and use only the listed launcher;
+if the pin or row is absent, it must not fall back to a bare command.
 
-- **Name.** `cli-` plus the tool's first command, lowercased, with runs of
-  other characters folded to `-` and at most 56 characters; tools whose names
-  fold together get `-2`, `-3`, ... in pin order. The name follows the command,
-  not the exposed `halo-` alias.
-- **Frontmatter.** Halo writes only `name` and `description` (JSON-quoted).
-  Nothing from a package or an administrator reaches the frontmatter, so a
-  tool skill cannot pre-approve tools or change how it is loaded.
-- **Description.** The first of: the administrator override's `description`,
-  the package guide's `description`, the manifest `description`, and
-  ``Use the `<command>` command-line tool (<name>).``. Only the `description`
-  key of a guide's frontmatter is read; invalid YAML yields none, and the
-  block is always removed from the body. It is folded to one line and cut to
-  300 characters, the limit the registry enforces.
-- **Body.** The tool's commands, side effects and sign-in (the same text as
-  TOOLS.md), the meaning of a `halo-` alias, how to run it (by name from the
-session PATH, never the Halo executable or another copy, the launcher
-directory variable and exit status in the current platform's shell syntax,
-and the AI terminal as the fallback when the shell returns nothing), the rules (no install or npm, no
-  credentials, no rerun of a write whose outcome is unknown, where to sign in),
-  then the usage text: the administrator override when its body is not empty,
-  otherwise the package guide, otherwise a `--help` hint. A guide is inlined up
-  to 64 KiB; a longer one is cut and the skill names the full file.
-- **Versions.** The registry resolves a tool-level skill and a per-version
-  override into the one guide override each version carries, so the client
-  sees a single text per version. A preset version takes the tool-level skill
-  from the tool entry instead (see "Administrator guide overrides"). A running execution keeps its view's skill;
-  the next one gets the new text.
-
-`describeToolSkills(state)` gives the management view each tool's skill for its
-current version, and `previewPackage` gives the skill a package would bring.
-`cliSkillEntries(binDir)` is the read-only surface for sessions: given the
-session's `HALO_CLI_TOOLS_BIN`, it reads that view's `view.json` and returns
-skill catalog entries for valid names whose file exists, and nothing on any
-failure.
-
-`cliSkillsRoot(binDir)` is that view's `skills/` directory. Sessions use these
-two and nothing else:
-
-- **Halo and Claude Code engines.** The agent's session skill catalog
-  (`services/agent/skill-availability.ts`) appends the entries of the session's
-  `HALO_CLI_TOOLS_BIN`. `cli-` names are the host's: a catalog skill of the
-  same name is dropped with a log line, so the tool's skill wins.
-- **DSH.** `DSH_SKILL_DIRS` gets `cliSkillsRoot` after the user and project
-  skill roots. DSH ranks custom roots itself, so a project skill named like a
-  tool skill can still shadow it there.
-- **Delegated turns** (digital humans, teams). A tool skill is not subject to
-  the skill list: it loads when the turn may run commands and does not
-  withhold the shell, including under a policy that grants no skill
-  (`apps/runtime/turn-skills.ts`).
-- **Codex** has no session skills; a Codex session keeps only
-  `HALO_CLI_TOOLS_BIN` and TOOLS.md.
-
-The skill describes only the view the session was started with; a later view
-change reaches the next session.
+`onDidChangeCurrentTools` fires after committing a change to the usable set;
+changes during catalog delivery are batched. The current-set revision is stored
+atomically with tool state and exposed after preparation. Apps uses the revision
+and per-tool input fingerprints to sync only changed descriptions through the
+ordinary skill lifecycle. `describeToolSkills(state)` and `previewPackage`
+provide management summaries, not session catalog entries.
 
 ## Host wiring (`host.ts`)
 
@@ -378,6 +386,17 @@ change reaches the next session.
   a newer installer is not held back by an older delivery. `preset-stamp.json` records the file names, sizes and mtimes;
   an unchanged directory is skipped. Any failure leaves the stamp unwritten so
   the next launch retries.
+- **Bundled catalog.** An optional `catalog.json` (`halo.cli.catalog/1`) and,
+  when present alongside it, `trusted-keys.json` also enter the preset stamp.
+  The importer checks built-in entries against the staged package before
+  publishing and rejects a matching revoked entry without changing existing
+  revocation state. An explicitly listed version must match the ID, version,
+  archive digest and payload integrity and pass the configured signature
+  policy. A zero-version entry may supply signed tool-level text for a valid
+  matching preset archive, but cannot install anything on its own. Version
+  guide, tool skill and package guide apply in that order. Bundled text never
+  replaces a live catalog decision, including an explicit reset. The snapshot
+  isn't a whole catalog apply; it neither fetches nor updates live status.
 - **Environments.** `applyCliToolsEnv(env, { entry, engine })` removes any
   inherited `HALO_CLI_TOOLS_BIN`, pins the current set, appends the launcher
   directory to the end of the env's PATH (`Path` on Windows, matched

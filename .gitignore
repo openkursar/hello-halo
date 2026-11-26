@@ -25,6 +25,7 @@ deploy/server/data/
 resources/office-runtime/
 resources/cli-preset/*.hcli
 resources/cli-preset/trusted-keys.json
+resources/cli-preset/catalog.json
 runtimes/office/.font-cache/
 
 # dsh engine, compiled to a single file by runtimes/dsh/build.mjs from

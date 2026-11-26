@@ -495,11 +495,9 @@ describe('cli catalog: tool skill for preset copies', () => {
     return tool([], { source: 'builtin', latest: '', ...(skill === undefined ? {} : { skill }), ...overrides })
   }
 
-  async function sessionSkill(host: Awaited<ReturnType<typeof load>>['host']): Promise<string> {
-    const env: Record<string, string | undefined> = { PATH: '/usr/bin' }
-    const binDir = await host.applyCliToolsEnv(env, { entry: 'chat', engine: 'claude' })
-    expect(binDir).not.toBeNull()
-    return readFileSync(join(binDir!, '..', 'skills', 'cli-tool', 'SKILL.md'), 'utf-8')
+  async function staticSkill(host: Awaited<ReturnType<typeof load>>['host']) {
+    const snapshot = await host.readCurrentToolSkills()
+    return snapshot!.skills.find(skill => skill.toolId === ID)!.describe()
   }
 
   it('parses the tool skill and passes it on; a malformed one leaves copies as they are', async () => {
@@ -530,16 +528,18 @@ describe('cli catalog: tool skill for preset copies', () => {
     const record = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
     expect(record.source).toBe('preset')
     expect(record.guideOverride).toEqual({ revision: 1, sha256: textOf(SKILL).sha256, tool: true })
-    const first = await sessionSkill(host)
-    expect(first).toContain('description: "Open and track service tickets with the tool command"')
-    expect(first).toContain('Ticket notes')
+    const first = await staticSkill(host)
+    expect(first.description).toBe('Open and track service tickets with the tool command')
+    expect(first.body).not.toContain('Ticket notes')
+    const binDir = await host.applyCliToolsEnv({ PATH: '/usr/bin' }, { entry: 'chat', engine: 'claude' })
+    expect(readFileSync(join(binDir!, '..', 'guides', `${ID}.md`), 'utf-8')).toContain('Ticket notes')
     const overview = await host.getCliToolsOverview()
     expect(overview.tools.find(t => t.id === ID)?.skill?.description).toBe('Open and track service tickets with the tool command')
 
     skill = undefined
     await catalog.fetchCliCatalog()
     expect((await host.readCliToolState())!.tools[ID].versions['1.0.0'].guideOverride).toBeUndefined()
-    expect(await sessionSkill(host)).not.toContain('Ticket notes')
+    expect((await staticSkill(host)).description).not.toBe(first.description)
   })
 
   it('keeps a version guide over the tool skill, and leaves copies alone when the tool is not listed', async () => {
@@ -623,9 +623,13 @@ describe('cli catalog: administrator delivery', () => {
     const downloadCliPackage = vi.fn(async () => bytes)
     const { sync, host } = await load({ fetchCliCatalog: vi.fn(async () => served([delivered([versionEntry('1.0.0', bytes)])])), downloadCliPackage })
 
+    const changed = vi.fn()
+    const subscription = host.onDidChangeCurrentTools(changed)
     const result = await sync.syncCliCatalogNow()
+    subscription.dispose()
     expect(result.installed).toEqual([{ id: ID, version: '1.0.0' }])
     expect(result.failed).toEqual([])
+    expect(changed.mock.calls).toEqual([[host.getPreparedCurrentToolsRevision()]])
     const record = (await host.readCliToolState())!.tools[ID]
     expect(record.current).toBe('1.0.0')
     expect(record.autoInstall).toBe(true)

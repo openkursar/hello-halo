@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { createHash } from 'crypto'
 import { dirname, join } from 'path'
 import { strToU8, zipSync } from 'fflate'
-import { CliToolError, CliToolStore, buildToolViews, cliSkillEntries } from '../../../../src/main/services/cli-tools'
+import { CliToolError, CliToolStore, buildToolViews, cliSkillName } from '../../../../src/main/services/cli-tools'
 import { defaultPayload, makeTempDir, removeTree, writePackage, type Files } from './helpers'
 
 const silent = { log: () => undefined, error: () => undefined }
@@ -245,6 +245,49 @@ describe('cli-tools store: execution pins', () => {
     expect(readFileSync(join(next.binDir!, 'tool'), 'utf-8')).toContain('2.0.0-')
   })
 
+  it('keeps a legacy view pinned while new pins of the same tool set get the new format', async () => {
+    const platform = 'linux'
+    const store = newStore({ platform })
+    const { version, integrity } = await store.importPackage(writePackage(pkgs), { source: 'catalog' })
+    const record = (await store.readState()).tools[ID].versions[version]
+    const entry = join(root, record.dir, 'payload', 'bin', 'tool.js')
+    const legacyKey = createHash('sha256').update(JSON.stringify({
+      v: 3, platform, runtime: process.execPath, targets: [{ exposedAs: 'tool', entry }],
+    })).digest('hex').slice(0, 20)
+    const holder = 'process'
+    const executionId = `${holder}-chat-${legacyKey}`
+    const options = { entry: 'chat', engine: 'claude' } as const
+    const commands = [{ toolId: ID, version, command: 'tool', exposedAs: 'tool', conflict: false }]
+    const lock = {
+      schema: 1, executionId, holder, viewKey: legacyKey, runtimeNodeVersion: process.versions.node,
+      ...options, tools: [{ id: ID, version, integrity }], commands, createdAt: new Date().toISOString(),
+    }
+    const legacyView = join(root, 'views', legacyKey)
+    const legacyBin = join(legacyView, 'bin')
+    const legacyLauncher = '#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\n'
+    const legacyGuide = '| Command | Tool | Version | Side effects | Sign-in | Guide |\n'
+    mkdirSync(legacyBin, { recursive: true })
+    mkdirSync(join(root, 'locks'))
+    writeFileSync(join(root, 'locks', `${executionId}.json`), JSON.stringify(lock))
+    writeFileSync(join(legacyView, 'view.json'), JSON.stringify({ viewKey: legacyKey, commands }))
+    writeFileSync(join(legacyBin, 'tool'), legacyLauncher)
+    writeFileSync(join(legacyView, 'TOOLS.md'), legacyGuide)
+
+    const next = await store.pinCurrent({ holder, ...options })
+    expect(next?.reused).toBe(false)
+    expect(next?.lock.tools).toEqual(lock.tools)
+    expect(next?.lock.commands).toEqual(commands)
+    expect(next?.lock.viewKey).not.toBe(legacyKey)
+    expect(readFileSync(join(next!.binDir!, 'tool'), 'utf-8')).toContain('unset NODE_PATH\n')
+    expect(readFileSync(join(next!.binDir!, '..', 'TOOLS.md'), 'utf-8')).not.toContain('| Origin |')
+
+    const existing = await store.pinExecution({ executionId, ...options })
+    expect(existing).toEqual({ binDir: legacyBin, lock, reused: true })
+    expect(await store.pruneViews()).toBe(0)
+    expect(readFileSync(join(legacyBin, 'tool'), 'utf-8')).toBe(legacyLauncher)
+    expect(readFileSync(join(legacyView, 'TOOLS.md'), 'utf-8')).toBe(legacyGuide)
+  })
+
   it('shares one view between executions with the same tool set', async () => {
     const store = newStore()
     await store.importPackage(writePackage(pkgs), { source: 'catalog' })
@@ -330,15 +373,22 @@ describe('cli-tools store: pins held by a process', () => {
     expect(await store.releaseOtherHolders('now')).toBe(0)
   })
 
-  it('writes TOOLS.md describing each command of the view', async () => {
+  it('lists aliases, versions and guides without installation channels in TOOLS.md', async () => {
     const store = newStore()
+    await store.importPackage(writePackage(pkgs, { id: 'com.example.local' }), { source: 'user-import' })
     await store.importPackage(writePackage(pkgs, {
       extra: { 'guide/README.md': '# guide\n' },
       manifest: { guide: 'guide/README.md', sideEffects: 'read-only', auth: { method: 'none' } },
     }), { source: 'catalog' })
+    await store.importPackage(writePackage(pkgs, {
+      id: 'com.example.preset', commands: [{ name: 'built-in', entry: 'bin/tool.js' }],
+    }), { source: 'preset' })
     const pin = await store.pinCurrent({ holder: 'p1', entry: 'other', engine: 'claude' })
     const guide = readFileSync(join(pin!.binDir!, '..', 'TOOLS.md'), 'utf-8')
-    expect(guide).toContain('| `tool` | com.example.tool | 1.0.0 | read-only | none |')
+    expect(guide).toContain('| `tool` | com.example.local | 1.0.0 | unknown |')
+    expect(guide).toContain('| `halo-tool` | com.example.tool | 1.0.0 | read-only | none |')
+    expect(guide).toContain('| `built-in` | com.example.preset | 1.0.0 | unknown |')
+    expect(guide).not.toMatch(/origin|organization|prefer them/i)
     const guidePath = /\| `([^`]+README\.md)` \|/.exec(guide)?.[1]
     expect(guidePath && readFileSync(guidePath, 'utf-8')).toBe('# guide\n')
     expect(guide).toContain('halo-<name>')
@@ -410,6 +460,8 @@ describe('cli-tools store: launchers', () => {
     expect(files).toEqual(['tool', 'tool.cmd'])
     const cmd = readFileSync(join(pinned.binDir!, 'tool.cmd'), 'utf-8')
     expect(cmd).toContain('set ELECTRON_RUN_AS_NODE=1')
+    expect(cmd).toContain('set "NODE_PATH="\r\n')
+    expect(readFileSync(join(pinned.binDir!, 'tool'), 'utf-8')).toContain('unset NODE_PATH\n')
     expect(cmd).toContain(`--require "${join(pinned.binDir!, '..', 'argv-preload.cjs')}"`)
     expect(readFileSync(join(pinned.binDir!, '..', 'argv-preload.cjs'), 'utf-8')).toContain('process.defaultApp = true')
     expect(cmd).toContain('%*')
@@ -448,7 +500,7 @@ describe('cli-tools store: launchers', () => {
         "let input = ''",
         "process.stdin.on('data', d => { input += d })",
         "process.stdin.on('end', () => {",
-        "  console.log(JSON.stringify({ args: process.argv.slice(2), script: process.argv[1], defaultApp: process.defaultApp, cwd: process.cwd(), input, asNode: process.env.ELECTRON_RUN_AS_NODE }))",
+        "  console.log(JSON.stringify({ args: process.argv.slice(2), script: process.argv[1], defaultApp: process.defaultApp, cwd: process.cwd(), input, asNode: process.env.ELECTRON_RUN_AS_NODE, nodePath: process.env.NODE_PATH ?? '' }))",
         '  process.exit(7)',
         '})',
         '',
@@ -464,7 +516,7 @@ describe('cli-tools store: launchers', () => {
       input: 'from-stdin',
       encoding: 'utf-8',
       windowsHide: true,
-      env: { PATH: '/usr/bin:/bin' },
+      env: { PATH: '/usr/bin:/bin', NODE_PATH: join(dir, 'inherited-modules') },
     })
     expect(result.status).toBe(7)
     const out = JSON.parse(result.stdout.trim())
@@ -475,6 +527,7 @@ describe('cli-tools store: launchers', () => {
       cwd: realpathSync(work),
       input: 'from-stdin',
       asNode: '1',
+      nodePath: '',
     })
   })
 })
@@ -490,32 +543,29 @@ describe('cli-tools store: tool skills', () => {
     })
   }
 
-  function skillText(binDir: string, name = 'cli-tool'): string {
-    return readFileSync(join(dirname(binDir), 'skills', name, 'SKILL.md'), 'utf-8')
+  async function staticSkill(store: CliToolStore, toolId = ID) {
+    return (await store.readCurrentToolSkills()).skills.find(skill => skill.toolId === toolId)?.describe()
   }
 
   function overrideOf(content: string, revision: number) {
     return { revision, sha256: createHash('sha256').update(content).digest('hex'), content, signature: null }
   }
 
-  it('writes one skill per tool from the package guide and lists it in view.json', async () => {
+  it('describes one static skill per tool and keeps the guide in the view', async () => {
     const store = newStore()
     const file = guidedPackage()
-    expect((await store.previewPackage(file)).skill).toEqual({ name: 'cli-tool', description: 'Query example tickets.', source: 'package' })
+    expect((await store.previewPackage(file)).skill).toEqual({ name: cliSkillName(ID), description: 'Query example tickets.', source: 'package' })
     await store.importPackage(file, { source: 'user-import' })
     const { binDir } = await store.pinExecution({ executionId: 'e1', entry: 'chat', engine: 'claude' })
-
-    const view = JSON.parse(readFileSync(join(dirname(binDir!), 'view.json'), 'utf-8'))
-    expect(view.skills).toEqual([{ name: 'cli-tool', description: 'Query example tickets.', toolId: ID, version: '1.0.0', source: 'package' }])
-    expect(cliSkillEntries(binDir!)).toEqual([{
-      name: 'cli-tool',
-      description: 'Query example tickets.',
-      source: { kind: 'file', path: join(dirname(binDir!), 'skills', 'cli-tool', 'SKILL.md') },
-    }])
-    const text = skillText(binDir!)
-    expect(text).toContain('Run `tool list`.')
-    expect(text).not.toContain('allowed-tools')
-    expect(existsSync(join(dirname(binDir!), 'TOOLS.md'))).toBe(true)
+    const viewDir = dirname(binDir!)
+    expect(JSON.parse(readFileSync(join(viewDir, 'view.json'), 'utf-8'))).not.toHaveProperty('skills')
+    expect(existsSync(join(viewDir, 'skills'))).toBe(false)
+    const skill = await staticSkill(store)
+    expect(skill).toMatchObject({ toolId: ID, name: cliSkillName(ID), description: 'Query example tickets.' })
+    expect(Object.keys(skill!)).toEqual(['toolId', 'name', 'description', 'body'])
+    expect(skill!.body).toContain('$HALO_CLI_TOOLS_BIN/../TOOLS.md')
+    expect(skill!.body).not.toMatch(/tool list|allowed-tools|1\.0\.0|SKILL\.md/)
+    expect(readFileSync(join(viewDir, 'TOOLS.md'), 'utf-8')).toMatch(/guide\/SKILL\.md/)
   })
 
   it('falls back to the package description, then to a generated line', async () => {
@@ -524,37 +574,28 @@ describe('cli-tools store: tool skills', () => {
     await store.importPackage(writePackage(pkgs, { id: 'com.example.other', commands: [{ name: 'other', entry: 'bin/tool.js' }] }), { source: 'user-import' })
     const skills = await store.describeToolSkills(await store.readState())
     expect(skills).toEqual({
-      [ID]: { name: 'cli-tool', description: 'From the manifest.', source: 'manifest' },
-      'com.example.other': { name: 'cli-other', description: 'Use the `other` command-line tool (com.example.other).', source: 'default' },
+      [ID]: { name: cliSkillName(ID), description: 'From the manifest.', source: 'manifest' },
+      'com.example.other': { name: cliSkillName('com.example.other'), description: 'Use the com.example.other command-line tool.', source: 'default' },
     })
-    const { binDir } = await store.pinExecution({ executionId: 'e1', entry: 'chat', engine: 'claude' })
-    expect(cliSkillEntries(binDir!).map(e => e.name)).toEqual(['cli-other', 'cli-tool'])
-    expect(skillText(binDir!, 'cli-other')).toContain('Run `other --help`')
+    expect((await store.readCurrentToolSkills()).skills.map(skill => skill.toolId)).toEqual(['com.example.other', ID])
   })
 
-  it('uses the administrator text for new tasks and leaves an earlier task skill as it was', async () => {
+  it('updates the static description but leaves earlier pinned guides intact', async () => {
     const store = newStore()
     await store.importPackage(guidedPackage(), { source: 'catalog' })
     const integrity = (await store.readState()).tools[ID].versions['1.0.0'].integrity
     const first = await store.pinExecution({ executionId: 'e1', entry: 'chat', engine: 'claude' })
-    const before = skillText(first.binDir!)
+    const before = await staticSkill(store)
+    const originalIndex = readFileSync(join(dirname(first.binDir!), 'TOOLS.md'), 'utf8')
 
-    const full = '---\ndescription: Use for bank tickets.\n---\n# Bank notes\nAlways run `tool --check` first.\n'
+    const full = '---\ndescription: Use for example tickets.\n---\n# Usage notes\nRun `tool --check` first.\n'
     await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.0.0'], guides: { '1.0.0': { integrity, override: overrideOf(full, 1) } } }])
     const second = await store.pinExecution({ executionId: 'e2', entry: 'chat', engine: 'claude' })
     expect(second.binDir).not.toBe(first.binDir)
-    expect(cliSkillEntries(second.binDir!)[0].description).toBe('Use for bank tickets.')
-    expect(skillText(second.binDir!)).toContain('# Bank notes')
-    expect(skillText(second.binDir!)).not.toContain('Run `tool list`.')
-    expect(skillText(first.binDir!)).toBe(before)
-    expect((await store.describeToolSkills(await store.readState()))[ID]).toEqual({ name: 'cli-tool', description: 'Use for bank tickets.', source: 'admin' })
-
-    // A description alone keeps the package guide as the usage text.
-    const trigger = '---\ndescription: Only the trigger.\n---\n'
-    await store.applyCatalogStatus([{ id: ID, revoked: false, versions: ['1.0.0'], guides: { '1.0.0': { integrity, override: overrideOf(trigger, 2) } } }])
-    const third = await store.pinExecution({ executionId: 'e3', entry: 'chat', engine: 'claude' })
-    expect(cliSkillEntries(third.binDir!)[0].description).toBe('Only the trigger.')
-    expect(skillText(third.binDir!)).toContain('Run `tool list`.')
+    expect(await staticSkill(store)).toEqual({ ...before, description: 'Use for example tickets.' })
+    expect(readFileSync(join(dirname(second.binDir!), 'guides', `${ID}.md`), 'utf8')).toBe(full)
+    expect(readFileSync(join(dirname(first.binDir!), 'TOOLS.md'), 'utf8')).toBe(originalIndex)
+    expect((await store.describeToolSkills(await store.readState()))[ID]).toEqual({ name: cliSkillName(ID), description: 'Use for example tickets.', source: 'admin' })
   })
 
   it.skipIf(process.platform === 'win32')('writes a skill for a registered program', async () => {
@@ -563,11 +604,9 @@ describe('cli-tools store: tool skills', () => {
     chmodSync(file, 0o755)
     const store = newStore()
     await store.registerExternal({ path: file, interpreter: null, command: 'mytool', name: 'My tool' })
-    const pin = await store.pinCurrent({ holder: 'p', entry: 'other', engine: 'claude' })
-    expect(cliSkillEntries(pin!.binDir!).map(e => e.name)).toEqual(['cli-mytool'])
-    const text = skillText(pin!.binDir!, 'cli-mytool')
-    expect(text).toContain('(registered program)')
-    expect(text).toContain('- Side effects: unknown')
+    const skill = await staticSkill(store, 'external.mytool')
+    expect(skill).toMatchObject({ name: cliSkillName('external.mytool'), description: 'Use the My tool command-line tool.' })
+    expect(skill!.body).not.toContain(file)
   })
 
   it('shows the current skill in the management view', async () => {
@@ -575,7 +614,7 @@ describe('cli-tools store: tool skills', () => {
     await store.importPackage(guidedPackage(), { source: 'user-import' })
     const state = await store.readState()
     const [view] = buildToolViews(state, [], await store.describeToolSkills(state))
-    expect(view.skill).toEqual({ name: 'cli-tool', description: 'Query example tickets.', source: 'package' })
+    expect(view.skill).toEqual({ name: cliSkillName(ID), description: 'Query example tickets.', source: 'package' })
     expect(buildToolViews(state, [])[0].skill).toBeUndefined()
   })
 })

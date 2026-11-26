@@ -28,10 +28,11 @@ import { registerAiGroupsHandlers } from '../ipc/ai-groups'
 import { registerSubagentModelsHandlers } from '../ipc/subagent-models'
 import { GROUP_ROUTE_EVENT } from '../../shared/types/ai-groups-runtime'
 import { app, powerMonitor } from 'electron'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess, enableTunnel } from '../services/remote'
 import { getConfig, getFederationGatewayUrl, migrateCredentialEncryption, setCredentialFailureNotifier, getTeamFolderRoot } from '../foundation/config.service'
+import { getProductConfigPath, loadProductConfig } from '../foundation/product-config'
 import { isServerMode } from '../foundation/runtime-mode'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
@@ -63,8 +64,10 @@ import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
 import { closeAllV2Sessions, initializeSdkRuntime, closeSdkRuntime, requestSessionRebuild, getHeadlessElectronPath } from '../services/agent'
-import { initCliTools, prepareCliTools } from '../services/cli-tools'
+import { initCliTools } from '../services/cli-tools'
+import { createCliToolSkillStartup } from './cli-tool-skills'
 import { getToolCredentialBindings, initEnterpriseIdentity, shutdownEnterpriseIdentity } from '../services/enterprise-identity'
+import { ENTERPRISE_IDENTITY_CHANGED_EVENT } from '../../shared/rpc/contracts/enterprise-identity.contract'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
@@ -161,6 +164,7 @@ let stopOwnedCollaborationSources: (() => void) | null = null
 let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
 let stopModelCatalogFreshness: (() => void) | null = null
 let stopCliCatalogFreshness: (() => void) | null = null
+let cliSkillStartup: ReturnType<typeof createCliToolSkillStartup> | undefined
 let stopGroupRouting: (() => void) | null = null
 
 /**
@@ -263,6 +267,7 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
 
   // ── Phase 2: App Manager ─────────────────────────────────────────────────
   const appManager = await initAppManager({ db })
+  cliSkillStartup?.attachManager(appManager)
 
   // ── Phase 2.1: Team data layer ───────────────────────────────────────────
   // Peer of the App Manager: owns the six Digital Team tables under the
@@ -1495,8 +1500,7 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
   registerIdleTask('prune-team-folders', () => getActiveTeamRuntime()?.teamFolders.prune())
   registerIdleTask('seed-builtin-skills', () => seedBuiltinSkills(appManager))
   registerIdleTask('verify-office-runtime', () => verifyOfficeRuntime())
-  // Imports the CLI tools shipped with this build; the first session waits for it if earlier.
-  registerIdleTask('prepare-cli-tools', () => prepareCliTools())
+  registerIdleTask('prepare-cli-tools', async () => { await cliSkillStartup?.prepareInBackground() })
   // Applies the enterprise store's CLI catalog and installs the tools it
   // delivers; no request without a catalog-capable source and a signed-in account.
   registerIdleTask('sync-cli-catalog', async () => { await requestCliCatalogSync('startup') })
@@ -1520,19 +1524,26 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
  */
 export function initializeExtendedServices(): void {
   void initializeSdkRuntime().catch(error => console.error('[Bootstrap] SDK worker prewarm failed:', error))
-  // Paths only, unless a sign-in the user did not end is to be resumed in the background.
   initEnterpriseIdentity({
     credentialDir: join(app.getPath('userData'), 'enterprise-identity'),
-    sessionMarkerFile: join(app.getPath('userData'), 'enterprise-identity-session.json'),
+    onDidChange: state => {
+      sendToRenderer(ENTERPRISE_IDENTITY_CHANGED_EVENT, state)
+      broadcastToAll(ENTERPRISE_IDENTITY_CHANGED_EVENT, { ...state })
+    },
   })
   // Paths only; the store is read when a session or terminal first asks for tools.
+  const supportFiles = loadProductConfig().cliTools?.supportFiles
+  const cliRoot = join(app.getPath('userData'), 'cli')
+  cliSkillStartup = createCliToolSkillStartup(join(cliRoot, 'skill-sync-stamp'))
   initCliTools({
-    root: join(app.getPath('userData'), 'cli'),
+    root: cliRoot,
     runtimePath: getHeadlessElectronPath(),
     presetDir: app.isPackaged
       ? join(process.resourcesPath, 'cli-preset')
       : join(app.getAppPath(), 'resources', 'cli-preset'),
     credentialBindings: getToolCredentialBindings(),
+    supportFiles: supportFiles === undefined ? undefined : { productDir: dirname(getProductConfigPath()), files: supportFiles },
+    prepareSessionSkills: cliSkillStartup.afterPrepare,
   })
   const start = performance.now()
   console.log('[Bootstrap] Extended services starting...')
@@ -1760,6 +1771,7 @@ export function initializeExtendedServices(): void {
   // Platform + Apps: Store, Scheduler, Memory, AppManager, AppRuntime
   // Runs fully asynchronously -- does not block the UI or extended-ready event.
   initPlatformAndApps().catch((err) => {
+    void cliSkillStartup?.dispose()
     // Data written by a newer build is not a failure to log past — the app
     // must stop before anything writes through a schema it cannot read.
     if (isSchemaAheadError(err)) {
@@ -1809,6 +1821,8 @@ export async function cleanupExtendedServices(): Promise<void> {
     stopModelCatalogFreshness = null
     stopCliCatalogFreshness?.()
     stopCliCatalogFreshness = null
+    await cliSkillStartup?.dispose()
+    cliSkillStartup = undefined
     stopGroupRouting?.()
     stopGroupRouting = null
 

@@ -15,6 +15,7 @@ import {
   readSkillPackage, writeSkillPackage, writeSkillContent, moveSkillFiles, skillRevision, skillPackageDigest, withoutIncidentalFiles, skillRemovalPath, prepareSkillRemoval,
 } from '../../services/skills'
 import { AppAlreadyInstalledError, SpaceNotFoundError } from './errors'
+import { createManagedToolSkillLifecycle } from './managed-tool-skill'
 
 export function skillPackage(spec: SkillSpec): {
   files: Record<string, string>
@@ -97,6 +98,7 @@ export function readPersonalSkill(app: InstalledApp): InstalledApp {
 export function createSkillLifecycle(deps: AppManagerDeps) {
   const { store, getSpacePath, getGlobalAppDir } = deps
   const removals = new Map<string, Promise<void>>()
+  const managedToolSkills = createManagedToolSkillLifecycle(store, path => (deps.trashItem ?? shell.trashItem)(path))
 
   function pathFor(app: Pick<InstalledApp, 'id' | 'spaceId'>, spec: SkillSpec): string {
     const workDir = app.spaceId === null ? null : getSpacePath(app.spaceId)
@@ -170,6 +172,7 @@ export function createSkillLifecycle(deps: AppManagerDeps) {
   }
 
   return {
+    ...managedToolSkills,
     install(spaceId: string | null, spec: SkillSpec, userConfig?: Record<string, unknown>): { app: InstalledApp; reused: boolean } {
       const match = findInstallation(spec, spaceId)
       const existing = match ? store.getById(match.id)! : undefined

@@ -27,7 +27,7 @@ import {
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import { FILE_TOOLS, READ_FILE_TOOLS } from './turn-file-access'
-import { grantsToolSkill, type TurnSkillAccess } from './turn-skills'
+import type { TurnSkillAccess } from './turn-skills'
 
 export { computeDisallowedBuiltins }
 
@@ -115,12 +115,6 @@ export interface ApplyCapabilityPolicyInput {
    * without its memory, whoever it is working for.
    */
   keepFileTools?: boolean
-  /**
-   * Keep the skill tool in the pool even when the policy grants no skill: the
-   * turn has command-line tool skills it may load, and the per-call gate
-   * (turn-skills) admits only those.
-   */
-  keepSkillTool?: boolean
 }
 
 export interface AppliedCapabilityPolicy {
@@ -151,7 +145,7 @@ export function applyCapabilityPolicy(
   sdkOptions: Record<string, any>,
   input: ApplyCapabilityPolicyInput
 ): AppliedCapabilityPolicy {
-  const { policy, mode, mcpServers, dbMcpServers, alwaysKeep, keepFileTools, keepSkillTool } = input
+  const { policy, mode, mcpServers, dbMcpServers, alwaysKeep, keepFileTools } = input
 
   if (!isRestrictivePolicy(policy, mode)) {
     return { enforced: false, disallowedTools: [], mcpServers: mcpServers as Record<string, any> }
@@ -159,7 +153,6 @@ export function applyCapabilityPolicy(
 
   const disallowedTools = computeDisallowedBuiltins(policy, mode)
     .filter(name => !(keepFileTools && FILE_TOOLS.includes(name)))
-    .filter(name => !(keepSkillTool && name === SKILL_TOOL))
   const filtered = filterMcpServersByPolicy(mcpServers, dbMcpServers, policy, mode, alwaysKeep)
 
   // Added to what the session already withholds (the user's disabled tools, the
@@ -239,7 +232,7 @@ export function describeWithheld(input: WithheldInput): string[] {
     items.push('files outside this workspace')
   }
 
-  if (!allowsBuiltin(policy, SKILL_TOOL, mode) && !grantsToolSkill(skills)) {
+  if (!allowsBuiltin(policy, SKILL_TOOL, mode)) {
     items.push('skills')
   } else if (skills) {
     const usable = skills.skills.filter((skill) => skill.granted && !skill.refusal).map((skill) => skill.dirName)

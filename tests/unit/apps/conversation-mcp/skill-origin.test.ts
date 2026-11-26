@@ -31,6 +31,7 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   resolveCredentialsForSdk: async () => ({ displayModel: 'fixture', capabilities: {} }),
   buildUserSessionSdkOptions: async (options: Record<string, unknown>) => ({ mcpServers: options.mcpServers }),
   toEngineSystemPrompt: (prompt: string) => prompt,
+  orgTurnContext: () => '',
   getEngineCapabilities: () => ({ features: { permissionRules: true, hooks: true } }),
   createDelegatedModelEndpoint: () => undefined,
 }))

@@ -8,6 +8,8 @@ import { rawRpcMethod, type RpcResponse } from '../define'
 /** Read-only build defaults stay outside the persisted user configuration. */
 export interface ConfigReadMetadata {
   configEpoch?: number
+  /** Remote bootstrap capability; desktop reads its preload flag instead. */
+  orgSignIn?: boolean
   productDefaults?: {
     federation: {
       gatewayUrl: string | null

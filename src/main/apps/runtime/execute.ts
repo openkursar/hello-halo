@@ -58,6 +58,7 @@ import {
   buildUserSessionSdkOptions,
   toEngineSystemPrompt,
   waitForSessionCleanup,
+  orgTurnContext,
   type AgentExecution,
   type V2SessionLease,
 } from '../../services/agent'
@@ -778,6 +779,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     }
     let streamResult = await processStream(
       formatReferencesBlock(followupReferences, workDir)
+        + orgTurnContext(initialMessage)
         + (workspaceNotice.context && !opensWithSlashCommand(initialMessage) ? `${workspaceNotice.context}\n\n` : '') + initialMessage,
       turnContext
     )

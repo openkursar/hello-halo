@@ -1,15 +1,18 @@
 import { rpcMethod } from '../define'
-import type { EnterpriseIdentityState, EnterpriseLoginPollResult } from '../../types/enterprise-identity'
+import type { OrgSignInResult, OrgSignInState } from '../../types/enterprise-identity'
 
 /**
- * Company sign-in for command-line tools. The renderer drives the QR dialog;
- * nothing here ever carries a proof, ticket or credential.
+ * Organization sign-in. Nothing here carries a proof, ticket or credential.
+ * State changes are also pushed on the `enterprise-identity:changed` event.
  */
 export const enterpriseIdentityRpc = {
-  enterpriseIdentityState: rpcMethod<[], EnterpriseIdentityState>('enterprise-identity:state'),
-  enterpriseIdentityBegin: rpcMethod<[input: { methodId: string }], EnterpriseIdentityState>('enterprise-identity:begin'),
-  /** Waits a bounded time; repeat while the outcome is pending or scanned. */
-  enterpriseIdentityPoll: rpcMethod<[input: { flowId: string }], EnterpriseLoginPollResult>('enterprise-identity:poll'),
-  enterpriseIdentityCancel: rpcMethod<[input: { flowId: string }], EnterpriseIdentityState>('enterprise-identity:cancel'),
-  enterpriseIdentitySignOut: rpcMethod<[], EnterpriseIdentityState>('enterprise-identity:sign-out'),
+  /** Current state; in a configured build the first call starts loading the provider. */
+  enterpriseIdentityState: rpcMethod<[], OrgSignInState>('enterprise-identity:state'),
+  /** Opens the provider's page in an isolated window (desktop only) and resolves when that attempt ends. */
+  enterpriseIdentitySignIn: rpcMethod<[], OrgSignInResult>('enterprise-identity:sign-in'),
+  enterpriseIdentityRetry: rpcMethod<[], OrgSignInState>('enterprise-identity:retry'),
+  enterpriseIdentitySignOut: rpcMethod<[input: { scope: 'session' | 'device' }], OrgSignInState>('enterprise-identity:sign-out'),
 }
+
+/** Event channel carrying the new `OrgSignInState`. */
+export const ENTERPRISE_IDENTITY_CHANGED_EVENT = 'enterprise-identity:changed'

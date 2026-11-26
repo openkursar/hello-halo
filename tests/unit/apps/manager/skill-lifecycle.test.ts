@@ -367,7 +367,7 @@ describe('skill installation lifecycle', () => {
     manager.upgradeSpec(first, { ...firstSpec, version: '2', skill_files: { 'SKILL.md': 'Author version two' } })
     manager.updateSpec(first, { skill_content: 'Customized first instructions' })
     manager.updateSkillRecord(first, { spec: { ...store.getById(first)!.spec as SkillSpec, description: 'Current metadata' },
-      skill: { ...store.getById(first)!.userOverrides.skill!, owners: [{ id: 'person', name: 'Person' }] },
+      skill: { ...store.getById(first)!.userOverrides.skill!, owners: [{ kind: 'digital-human', id: 'person', name: 'Person' }] },
     })
     const replacement = { ...firstSpec, version: '3', skill_files: { 'SKILL.md': 'Explicit replacement', 'new.txt': 'new resource' } }
     manager.updateSpec(first, replacement)
@@ -414,7 +414,7 @@ describe('skill installation lifecycle', () => {
     expect(existsSync(path(managed))).toBe(true)
     expect(await manager.install('space', maintained())).toBe(managed)
     manager.updateSpec(managed, { description: 'Updated legacy metadata' })
-    manager.updateSkillRecord(managed, { skill: { ...before.userOverrides.skill!, owners: [{ id: 'person', name: 'Person' }] } })
+    manager.updateSkillRecord(managed, { skill: { ...before.userOverrides.skill!, owners: [{ kind: 'digital-human', id: 'person', name: 'Person' }] } })
     expect(store.getById(managed)).toMatchObject({ specId: 'report', status })
   })
 
@@ -675,8 +675,8 @@ describe('skill installation lifecycle', () => {
     const id = await manager.install('space', spec())
     const filePath = path(id)
     expect(() => manager.updateOverrides(id, { skill: { version: 1, filePath: '/untrusted' } })).toThrow('cannot be changed')
-    manager.updateSkillRecord(id, { skill: { version: 1, filePath, owners: [{ id: 'parent', name: 'Parent' }] }, status: 'paused' })
-    expect(store.getById(id)!.userOverrides.skill!.owners).toEqual([{ id: 'parent', name: 'Parent' }])
+    manager.updateSkillRecord(id, { skill: { version: 1, filePath, owners: [{ kind: 'digital-human', id: 'parent', name: 'Parent' }] }, status: 'paused' })
+    expect(store.getById(id)!.userOverrides.skill!.owners).toEqual([{ kind: 'digital-human', id: 'parent', name: 'Parent' }])
     expect(readFileSync(filePath, 'utf8')).toContain('Original')
     const rows = manager.listSkillRecords('space')
     expect(rows).toHaveLength(1)

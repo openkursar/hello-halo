@@ -167,9 +167,9 @@ export default defineConfig({
       use: { actionTimeout: 10000 }
     },
     {
-      // Needs a package with an enterprise identity provider and bound presets, plus the mock identity server; see the spec header.
-      name: 'enterprise-identity-packaged',
-      testMatch: '**/enterprise-identity-packaged.spec.ts',
+      name: 'org-sign-in',
+      testMatch: '**/org-sign-in.spec.ts',
+      timeout: 90000,
       use: { actionTimeout: 10000 }
     },
     {

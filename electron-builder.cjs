@@ -136,7 +136,39 @@ function resolveAsarUnpack(base) {
     'node_modules/@hello-halo/agent-sdk/dist/worker/entry.js*', 'out/main/worker/halo-setup.cjs'])]
 }
 
+function resolveCliSupportFiles() {
+  const { forbiddenPath, isSourceMapFile } = require('./scripts/lib/distribution-policy.cjs')
+  const files = product.content.cliTools?.supportFiles
+  if (files === undefined) return []
+  if (!Array.isArray(files) || files.length > 32) {
+    console.warn('[electron-builder] CLI support file list ignored', { field: 'cliTools.supportFiles' })
+    return []
+  }
+  const root = fs.realpathSync(ROOT)
+  return [...new Set(files.flatMap((entry, index) => {
+    const source = entry?.source
+    try {
+      if (typeof source !== 'string' || source.length > 512 || forbiddenPath(source)) throw new Error()
+      const segments = source.split('/')
+      let file = root
+      for (const [part, segment] of segments.entries()) {
+        if (!segment || /[\x00-\x1f<>:"|?*\\\[\]{}!]/.test(segment) || /[. ]$/.test(segment) ||
+            /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(segment)) throw new Error()
+        file = path.join(file, segment)
+        const stat = fs.lstatSync(file)
+        if (part < segments.length - 1 ? !stat.isDirectory() : !stat.isFile() || stat.size > 1024 * 1024) throw new Error()
+      }
+      if (path.relative(root, fs.realpathSync(file)).split(path.sep).join('/') !== source || isSourceMapFile(file)) throw new Error()
+      return [source]
+    } catch {
+      console.warn('[electron-builder] CLI support source ignored', { field: `cliTools.supportFiles[${index}].source` })
+      return []
+    }
+  }))]
+}
+
 const base = loadBaseConfig()
+const cliSupportFiles = resolveCliSupportFiles()
 const declaredResourceDirectories = product.content.trayIconDir ? [product.content.trayIconDir.replace(/^\.\//, '').replace(/\/$/, '')] : []
 
 // Staging copies the production dependency tree, so it runs only when a packager
@@ -145,7 +177,7 @@ let distributionStage
 function distributionDirectory() {
   if (!distributionStage) {
     const { prepareDistributionStaging } = require('./scripts/lib/distribution-staging.cjs')
-    const stage = prepareDistributionStaging(ROOT, resolveProviderFiles(), declaredResourceDirectories)
+    const stage = prepareDistributionStaging(ROOT, [...resolveProviderFiles(), ...cliSupportFiles], declaredResourceDirectories)
     process.once('exit', () => fs.rmSync(stage, { recursive: true, force: true }))
     distributionStage = stage
   }
@@ -161,6 +193,6 @@ module.exports = {
   ...(experimental ? { extraMetadata: { version: field('version') } } : {}),
   appId: field('appId'),
   publish: resolvePublish(),
-  files: [...(base.files ?? []), ...resolveProviderFiles(), ...declaredResourceDirectories.map(dir => `${dir}/**/*`)],
+  files: [...(base.files ?? []), ...resolveProviderFiles(), ...cliSupportFiles, ...declaredResourceDirectories.map(dir => `${dir}/**/*`)],
   afterAllArtifactBuild: createStagedArtifactsHook(product.content)
 }

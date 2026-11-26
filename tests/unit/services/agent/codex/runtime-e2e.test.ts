@@ -1,7 +1,7 @@
 import express from 'express'
 import type { Server } from 'http'
 import type { AddressInfo } from 'net'
-import { mkdirSync, mkdtempSync, rmSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
@@ -45,13 +45,28 @@ async function closeServer(server: Server): Promise<void> {
   await new Promise<void>(resolve => server.close(() => resolve()))
 }
 
-// Only the model endpoint is scripted; the bundled Codex process discovers and
-// executes the MCP tool through the production bridge and compatibility router.
-describe.skipIf(!enabled)('Codex native MCP routing', () => {
-  it.each(['responses', 'chat_completions'] as const)('calls a namespaced tool through a %s model endpoint', async apiType => {
+// Only the model endpoint is scripted; the selected Codex process discovers and runs the tools.
+describe.skipIf(!enabled)('Codex native tool routing', () => {
+  it.each(['responses', 'chat_completions'] as const)('calls MCP and uses a static CLI skill through a %s model endpoint', async apiType => {
+    const codexPath = process.env.HALO_ACCEPTANCE_CODEX_CLI
+    if (!codexPath || !path.isAbsolute(codexPath)) throw new Error('CODEX_E2E requires an absolute HALO_ACCEPTANCE_CODEX_CLI executable path')
     const directory = mkdtempSync(path.join(tmpdir(), 'halo-codex-native-'))
-    const codexHome = path.join(directory, 'codex')
-    mkdirSync(codexHome)
+    const home = path.join(directory, 'home')
+    const workDir = path.join(directory, 'work')
+    const name = 'cli-com-example-marker-0123456789ab'
+    const skillDir = path.join(home, '.agents', 'skills', name)
+    const view = path.join(directory, 'cli', 'views', 'fixture')
+    const binDir = path.join(view, 'bin')
+    mkdirSync(workDir)
+    mkdirSync(skillDir, { recursive: true })
+    mkdirSync(binDir, { recursive: true })
+    writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: ${name}\ndescription: Use the marker command.\n---\n\nRead $HALO_CLI_TOOLS_BIN/../TOOLS.md to find the command.\n`)
+    writeFileSync(path.join(view, 'TOOLS.md'), 'Use `halo-cli-e2e-marker`.\n')
+    if (process.platform === 'win32') {
+      writeFileSync(path.join(binDir, 'halo-cli-e2e-marker.cmd'), '@echo native-shell-42\r\n')
+    } else {
+      writeFileSync(path.join(binDir, 'halo-cli-e2e-marker'), '#!/bin/sh\nprintf "native-shell-42\\n"\n', { mode: 0o755 })
+    }
     const nativeRequests: any[] = []
     const modelRequests: any[] = []
     const calls: Array<{ name: string; args: Record<string, unknown> }> = []
@@ -72,17 +87,25 @@ describe.skipIf(!enabled)('Codex native MCP routing', () => {
     const endpoint = apiType === 'responses' ? '/responses' : '/chat/completions'
     upstreamApp.post(endpoint, (req, res) => {
       modelRequests.push(req.body)
-      const toolStep = modelRequests.length <= 2
-      const toolName = modelRequests.length === 1 ? 'spawn_agent' : 'exec_command'
+      const step = modelRequests.length
+      const toolStep = step <= 4
+      const toolName = step === 1 ? 'spawn_agent' : 'exec_command'
       const offered = req.body.tools.find((tool: any) => (tool.name ?? tool.function?.name)?.endsWith(toolName))
-      const name = offered?.name ?? offered?.function.name
-      const args = modelRequests.length === 1 ? { value: 'marker' } : { cmd: 'printf native-shell-%s $((6 * 7))', max_output_tokens: 100 }
+      const callName = offered?.name ?? offered?.function.name
+      const readSkill = process.platform === 'win32'
+        ? `Get-Content "$env:USERPROFILE/.agents/skills/${name}/SKILL.md"`
+        : `cat "$HOME/.agents/skills/${name}/SKILL.md"`
+      const readGuide = process.platform === 'win32'
+        ? 'Get-Content "$env:HALO_CLI_TOOLS_BIN/../TOOLS.md"'
+        : 'cat "$HALO_CLI_TOOLS_BIN/../TOOLS.md"'
+      const command = step === 2 ? readSkill : step === 3 ? readGuide : 'halo-cli-e2e-marker'
+      const args = step === 1 ? { value: 'marker' } : { cmd: command, login: false, max_output_tokens: 200 }
       const callId = `call_native_${modelRequests.length}`
       res.setHeader('Content-Type', 'text/event-stream')
       const send = (event: string, payload: unknown): void => { res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`) }
       if (apiType === 'responses') {
         const item = toolStep
-          ? { type: 'function_call', id: `fc_native_${modelRequests.length}`, call_id: callId, name, arguments: JSON.stringify(args), status: 'completed' }
+          ? { type: 'function_call', id: `fc_native_${modelRequests.length}`, call_id: callId, name: callName, arguments: JSON.stringify(args), status: 'completed' }
           : { type: 'message', id: 'msg_native', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Native call completed.', annotations: [] }] }
         const response = { id: `resp_${modelRequests.length}`, object: 'response', created_at: 1, model: req.body.model, status: 'completed', output: [item], usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 } }
         send('response.created', { type: 'response.created', response: { ...response, status: 'in_progress', output: [] } })
@@ -92,7 +115,7 @@ describe.skipIf(!enabled)('Codex native MCP routing', () => {
         send('response.completed', { type: 'response.completed', response })
       } else {
         const delta = toolStep
-          ? { role: 'assistant', tool_calls: [{ index: 0, id: callId, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }
+          ? { role: 'assistant', tool_calls: [{ index: 0, id: callId, type: 'function', function: { name: callName, arguments: JSON.stringify(args) } }] }
           : { role: 'assistant', content: 'Native call completed.' }
         const chunk = { id: 'chat_native', object: 'chat.completion.chunk', created: 1, model: req.body.model }
         res.write(`data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`)
@@ -113,15 +136,16 @@ describe.skipIf(!enabled)('Codex native MCP routing', () => {
     runtimeState.haloDir = directory
     runtimeState.routerUrl = baseUrl(router)
     const resolved = await resolveCodexOptions({
-      cwd: directory,
-      env: { ...process.env, HOME: directory },
+      cwd: workDir,
+      env: { ...process.env, HOME: home, USERPROFILE: home, PATH: `${process.env.PATH ?? ''}${path.delimiter}${binDir}`, HALO_CLI_TOOLS_BIN: binDir },
       apiCredentials: { provider: 'openai', baseUrl: `${baseUrl(upstream)}${endpoint}`, apiKey: 'local-test', model: 'gpt-5.1-codex-max', apiType },
       systemPrompt: { type: 'preset', preset: 'default', append: 'Halo host-context-marker-42' },
       permissionMode: 'bypassPermissions',
     })
-    resolved.env.CODEX_HOME = codexHome
     resolved.threadParams.config = { ...resolved.threadParams.config, mcp_servers: prepared.mcpServers }
-    const session = new Session({ ...resolved, mcpServers: { 'halo-team': {} }, mcpBridge: prepared.bridge }, 'native-session', {})
+    const session = new Session({ ...resolved, mcpServers: { 'halo-team': {} }, mcpBridge: prepared.bridge }, 'native-session', {}, {
+      path: codexPath, command: codexPath, argsPrefix: [], env: {}, kind: 'native',
+    })
     try {
       await (session as any).start()
       session.send('Call spawn_agent with value marker, then finish.')
@@ -142,8 +166,11 @@ describe.skipIf(!enabled)('Codex native MCP routing', () => {
       expect(calls, JSON.stringify(nativeRequests[0].tools.filter((tool: any) => tool.type === 'namespace'))).toEqual([{ name: 'spawn_agent', args: { value: 'marker' } }])
       expect(JSON.stringify(modelRequests[1])).toContain('native-tool-receipt-42')
       expect(JSON.stringify(modelRequests[1])).not.toContain('unsupported call')
-      expect(JSON.stringify(modelRequests[2])).toContain('native-shell-42')
-      expect(JSON.stringify(modelRequests[2])).not.toContain('unsupported call')
+      expect(JSON.stringify(modelRequests[0])).toContain(name)
+      expect(JSON.stringify(modelRequests[2])).toContain('HALO_CLI_TOOLS_BIN/../TOOLS.md')
+      expect(JSON.stringify(modelRequests[3])).toContain('Use `halo-cli-e2e-marker`.')
+      expect(JSON.stringify(modelRequests[4])).toContain('native-shell-42')
+      expect(JSON.stringify(modelRequests[4])).not.toContain('unsupported call')
     } finally {
       await session.close()
       await closeServer(router)

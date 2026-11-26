@@ -23,11 +23,13 @@ import { useLanguagePicker } from '../../hooks/useLanguagePicker'
 import { api } from '../../api'
 import { useAppStore } from '../../stores/app.store'
 import type { HaloConfig, ThemeMode } from '../../types'
+import { OrganizationSetupActions } from './OrganizationSetupActions'
 import { HaloLogo } from '../brand/HaloLogo'
 
 interface PreferencesStepProps {
   /** Invoked once preferences are persisted, hands off to LoginSelector. */
-  onContinue: () => void
+  onContinue: () => void | Promise<void>
+  organizationSetup?: { hasModel: boolean }
 }
 
 // Theme button option metadata, keyed for stable iteration order.
@@ -37,7 +39,7 @@ const THEME_OPTIONS: ReadonlyArray<{ value: ThemeMode; labelKey: string; Icon: t
   { value: 'system', labelKey: 'Follow System', Icon: Monitor }
 ]
 
-export function PreferencesStep({ onContinue }: PreferencesStepProps) {
+export function PreferencesStep({ onContinue, organizationSetup }: PreferencesStepProps) {
   const { t } = useTranslation()
   const { config, setConfig } = useAppStore()
 
@@ -77,7 +79,7 @@ export function PreferencesStep({ onContinue }: PreferencesStepProps) {
       console.error('[PreferencesStep] Failed to persist theme:', err)
     } finally {
       setIsSubmitting(false)
-      onContinue()
+      await onContinue()
     }
   }
 
@@ -166,7 +168,7 @@ export function PreferencesStep({ onContinue }: PreferencesStepProps) {
           </div>
         </div>
 
-        {/* Continue button */}
+        {organizationSetup ? <OrganizationSetupActions hasModel={organizationSetup.hasModel} onContinue={handleContinue} /> : <>
         <button
           type="button"
           onClick={handleContinue}
@@ -191,6 +193,7 @@ export function PreferencesStep({ onContinue }: PreferencesStepProps) {
             {t('Step {{current}} of {{total}}', { current: 1, total: 2 })}
           </span>
         </div>
+        </>}
       </div>
     </div>
   )

@@ -993,18 +993,26 @@ describe('a borrowed turn loads only the skills its owner allowed', () => {
     expect(decideDelegatedTool(conv, 'Read', { file_path: join(root, 'skills/deploy/reference.md') }).allow).toBe(false)
   })
 
-  it('lets a turn whose owner allowed no skill load its command-line tool skills, and nothing else', async () => {
-    const policy = { allowedTools: ['Bash'], allowedSkills: [] as string[] }
-    const tool: AvailableSkill = { ...skillAt('cli-tickets'), path: join(root, 'view', 'skills', 'cli-tickets') }
-    const access = turnSkillAccess(skills, policy, 'strict', {
-      allowedRules: ['TodoWrite', 'Bash'], disallowed: ['WebFetch'], hooked: ['Skill', ...FILE_TOOLS],
-    }, [tool])
-    beginDelegatedTurn(conv, { policy, mode: 'strict', skills: access })
+  it('does not let Bash permission substitute for a command-line skill grant', async () => {
+    const name = 'cli-com-example-tickets-0123456789ab'
+    skills.push(skillAt(name))
+    guestTurn({ allowedTools: ['Bash'], allowedSkills: [] })
 
-    expect(await hookSays('cli-tickets')).toBe('no objection')
+    expect(await hookSays(name)).toBe('deny')
+    expect(decideDelegatedTool(conv, 'Skill', { skill: name }).allow).toBe(false)
+    expect(decideDelegatedTool(conv, 'Bash', { command: 'tickets' }).allow).toBe(true)
+  })
+
+  it('lets a granted command-line skill load without giving it Bash or unrelated file access', async () => {
+    const name = 'cli-com-example-tickets-0123456789ab'
+    skills.push(skillAt(name))
+    guestTurn({ allowedTools: [], allowedSkills: [name] })
+
+    expect(await hookSays(name)).toBe('no objection')
     expect(await hookSays('weekly-report')).toBe('deny')
-    expect(decideDelegatedTool(conv, 'Skill', { skill: 'cli-tickets' }).allow).toBe(true)
-    expect(decideDelegatedTool(conv, 'Skill', { skill: 'weekly-report' }).allow).toBe(false)
+    expect(decideDelegatedTool(conv, 'Skill', { skill: name }).allow).toBe(true)
+    expect(decideDelegatedTool(conv, 'Bash', { command: 'tickets' }).allow).toBe(false)
+    expect(decideDelegatedTool(conv, 'Read', { file_path: join(root, 'cli', 'views', 'v', 'TOOLS.md') }).allow).toBe(false)
   })
 
   it('files a refused skill in the owner\'s record under its name', () => {

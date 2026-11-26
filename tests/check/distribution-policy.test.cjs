@@ -30,6 +30,26 @@ test('production path policy rejects developer sentinels but preserves runtime a
   for (const file of ['resources/git-bash/PortableGit.7z.exe', 'node_modules/@img/sharp-libvips-darwin-arm64/lib/libvips.dylib', 'node_modules/cloudflared/bin/cloudflared', 'node_modules/@hello-halo/agent-sdk/dist/native/build-info.json', 'out/renderer/assets/pdf.worker.mjs']) assert.equal(forbiddenPath(file), null, file)
 })
 
+test('electron-builder copies only declared CLI preset resources', async () => {
+  const { getFileMatchers, copyFiles } = require('app-builder-lib/out/fileMatcher')
+  const preset = require('../../package.json').build.extraResources.find(item => item.to === 'cli-preset')
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-preset-resources-'))
+  const resources = path.join(project, 'output', 'resources')
+  try {
+    const source = path.join(project, preset.from)
+    fs.mkdirSync(source, { recursive: true })
+    const files = ['example-fixture.hcli', 'catalog.json', 'trusted-keys.json', 'local.json']
+    for (const name of files) fs.writeFileSync(path.join(source, name), name)
+    const matchers = getFileMatchers({ extraResources: [preset] }, 'extraResources', resources, {
+      defaultSrc: project, globalOutDir: path.dirname(resources), macroExpander: value => value, customBuildOptions: {},
+    })
+    await copyFiles(matchers)
+    const target = path.join(resources, preset.to)
+    assert.deepEqual(fs.readdirSync(target).sort(), files.slice(0, -1).sort())
+    for (const name of files.slice(0, -1)) assert.equal(fs.readFileSync(path.join(target, name), 'utf8'), name)
+  } finally { fs.rmSync(project, { recursive: true, force: true }) }
+})
+
 test('application staging allowlists outputs, SDK dist and production dependencies', () => {
   const { prepareDistributionStaging } = require('../../scripts/lib/distribution-staging.cjs')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-stage-input-'))
@@ -53,7 +73,11 @@ test('application staging allowlists outputs, SDK dist and production dependenci
     put('out/renderer/index.html', '<html>renderer</html>')
     put('out/.e2e-browser-runtime-1/fixture.cjs', 'test')
     put('resources/builtin-skills/pdf/SKILL.md', 'PDF')
-    stage = prepareDistributionStaging(root)
+    put('resources/cli-support/loader.cjs', 'module.exports = 17')
+    put('resources/cli-support/not-declared.cjs', 'module.exports = 34')
+    stage = prepareDistributionStaging(root, ['resources/cli-support/loader.cjs'])
+    assert.equal(fs.readFileSync(path.join(stage, 'resources/cli-support/loader.cjs'), 'utf8'), 'module.exports = 17')
+    assert.ok(!fs.existsSync(path.join(stage, 'resources/cli-support/not-declared.cjs')))
     const stagedManifest = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'))
     assert.equal(require(path.join(stage, 'node_modules/runtime-fixture')), 42)
     assert.equal(JSON.parse(fs.readFileSync(path.join(stage, 'node_modules/runtime-fixture/lib/cjs/package.json'), 'utf8')).type, 'commonjs')
