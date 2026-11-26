@@ -1542,7 +1542,11 @@ export function initializeExtendedServices(): void {
       ? join(process.resourcesPath, 'cli-preset')
       : join(app.getAppPath(), 'resources', 'cli-preset'),
     credentialBindings: getToolCredentialBindings(),
-    supportFiles: supportFiles === undefined ? undefined : { productDir: dirname(getProductConfigPath()), files: supportFiles },
+    supportFiles: supportFiles === undefined ? undefined : {
+      // ASAR virtual inodes cannot establish identity across lstat and open.
+      productDir: app.isPackaged ? join(process.resourcesPath, 'app.asar.unpacked') : dirname(getProductConfigPath()),
+      files: supportFiles,
+    },
     prepareSessionSkills: cliSkillStartup.afterPrepare,
   })
   const start = performance.now()

@@ -187,7 +187,7 @@ function distributionDirectory() {
 module.exports = {
   ...base,
   get directories() { return { ...base.directories, app: distributionDirectory() } },
-  asarUnpack: resolveAsarUnpack(base),
+  asarUnpack: [...resolveAsarUnpack(base), ...cliSupportFiles],
   productName: field('name'),
   protocols: [{ name: field('name'), schemes: [product.content.deepLinkScheme || 'halo'] }],
   ...(experimental ? { extraMetadata: { version: field('version') } } : {}),
