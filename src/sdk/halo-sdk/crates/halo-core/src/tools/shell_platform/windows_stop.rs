@@ -248,7 +248,8 @@ fn stop_and_wait(
         if Instant::now() >= deadline {
             return None;
         }
-        stopped_by_request &= process.stop().is_ok_and(|requested| requested);
+        // A descendant that already exited is stopped; later scans still cover children it left.
+        stopped_by_request &= process.stop().is_ok();
     }
     while Instant::now() < deadline {
         if members

@@ -166,9 +166,10 @@ This discovery does not run at startup or when a command finishes normally.
 
 A shell without an identifiable MSYS root, a failed `ps` query, or a possible
 descendant with no usable Windows PID leaves the overall result unconfirmed. The SDK still
-stops native descendants it can identify. A member already observed to have
-exited before its termination request also leaves the result unconfirmed: seeing
-it gone is not evidence that the request stopped it. Tests therefore check actual
+stops native descendants it can identify. A descendant whose handle shows it
+already exited counts as stopped; the follow-up snapshot taken after held parents
+exit still has to account for any children it started. A shell that exited before
+its termination request leaves the result unconfirmed. Tests therefore check actual
 owned process exits and the independent session's work rather than requiring a
 positive receipt in every Windows environment.
 

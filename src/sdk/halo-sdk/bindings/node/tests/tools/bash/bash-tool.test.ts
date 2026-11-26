@@ -166,7 +166,10 @@ describe('Bash native facade', () => {
       const stopped = await first;
       expect(stopped.isError).toBe(true);
       if (process.platform !== 'win32') expect(stopped.content).not.toContain('could be confirmed stopped');
-      for (const pid of pids) expect(() => process.kill(pid, 0)).toThrowError(expect.objectContaining({ code: 'ESRCH' }));
+      // A killed process can stay a zombie until its new parent reaps it; only a running one would fail here.
+      await vi.waitFor(() => {
+        for (const pid of pids) expect(() => process.kill(pid, 0)).toThrowError(expect.objectContaining({ code: 'ESRCH' }));
+      }, { timeout: 2000 });
       await writeFile(join(cwd, 'neighbour.go'), 'go');
       expect((await second).isError).toBe(false);
       expect(await readFile(join(cwd, 'neighbour.done'), 'utf8')).toBe('done');
