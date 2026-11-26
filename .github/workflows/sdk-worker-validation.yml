@@ -52,7 +52,8 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then directory="$(cygpath -w "$directory")"; fi
           echo "$directory" >> "$GITHUB_PATH"
       - run: npm ci
-      - run: npm run build
+      - id: sdk_build
+        run: npm run build
       - run: npm test -- worker tools/mcp tools/bash tools/grep tools/read tools/file-access.test.ts tools/file-tools.test.ts utils/windows-process-tree.test.ts --maxWorkers=2 --minWorkers=1
       - run: node scripts/benchmark-workers.mjs --sessions=10 > worker-benchmark.json
       - uses: actions/upload-artifact@v7
@@ -60,4 +61,21 @@ jobs:
         with:
           name: worker-benchmark-${{ matrix.os }}-${{ matrix.node }}
           path: src/sdk/halo-sdk/worker-benchmark.json
+          retention-days: 14
+      - name: Test Windows shell process handling
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.sdk_build.outcome == 'success' }}
+        run: >-
+          cargo +1.90.0 test --locked -p halo-core --lib tools::shell_platform:: -- --test-threads=1
+      - name: Measure Windows command cancellation
+        id: windows_stop
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.sdk_build.outcome == 'success' }}
+        shell: pwsh
+        run: node validation/windows-stop.mjs --output "$env:RUNNER_TEMP/windows-stop.json" --concurrency 12
+      - name: Upload Windows cancellation measurements
+        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.windows_stop.outcome == 'success' || steps.windows_stop.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-stop-${{ matrix.os }}-node-${{ matrix.node }}
+          path: ${{ runner.temp }}/windows-stop.json
+          if-no-files-found: error
           retention-days: 14
