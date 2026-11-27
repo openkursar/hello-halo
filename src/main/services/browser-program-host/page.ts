@@ -6,22 +6,34 @@ import { isUrlAllowedByPolicy } from '../browser-policy.service'
 import { withBrowserFrames } from '../browser-host'
 import { acquireAdapterPage } from './browser'
 import type { HostGrant } from './fetch'
-import { fail, MAX_BYTES } from './protocol'
+import { fail, MAX_BYTES, redirectedAway } from './protocol'
 import { navigateForProgram } from './navigation'
 
 const invocationSchema = z.object({ initialUrl: z.string().url(), script: z.string().min(1).max(MAX_BYTES / 2) })
+const MAX_READ_RERUNS = 2
 const navigationSchema = z.object({ version: z.literal(1), url: z.string().url(), resume: z.boolean(), result: z.unknown().optional() }).strict()
 
-export function scopedPageUrl(value: string, patterns: string[]): string {
+/** An HTTP(S) URL the browser may open: only the product's browser policy limits where a page goes. */
+export function pageUrl(value: string): string {
   let url: URL
   try { url = new URL(value) } catch { return fail('INVALID_URL', 'Adapter navigation requires an absolute HTTP(S) URL.') }
-  const host = url.hostname.toLowerCase().replace(/\.$/, '')
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !patterns.some(pattern => pattern.startsWith('*.')
-    ? host === pattern.slice(2) || host.endsWith(`.${pattern.slice(2)}`) : host === pattern)) {
-    return fail('HOST_SCOPE_DENIED', 'Adapter navigation is outside its declared host scope.')
-  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return fail('INVALID_URL', 'Adapter navigation requires an HTTP(S) URL without credentials.')
   if (!isUrlAllowedByPolicy(url.href)) return fail('BROWSER_POLICY_BLOCKED', 'URL blocked by browser policy.')
   return url.href
+}
+
+/**
+ * A page URL on one of the Adapter's own sites, where its scripts can run.
+ * Anywhere else the site has sent the page away, in practice to a sign-in page.
+ */
+export function scopedPageUrl(value: string, patterns: string[]): string {
+  const href = pageUrl(value)
+  const host = new URL(href).hostname.toLowerCase().replace(/\.$/, '')
+  if (!patterns.some(pattern => pattern.startsWith('*.')
+    ? host === pattern.slice(2) || host.endsWith(`.${pattern.slice(2)}`) : host === pattern)) {
+    return redirectedAway(href)
+  }
+  return href
 }
 
 export function pageContinuation(result: any, grant: HostGrant): z.infer<typeof navigationSchema> | null {
@@ -33,7 +45,7 @@ export function pageContinuation(result: any, grant: HostGrant): z.infer<typeof 
   const parsed = navigationSchema.safeParse(result.__webcli_navigation)
   if (!parsed.success) return fail('HOST_INVALID_CONTINUATION', 'Invalid Adapter navigation continuation.')
   if (parsed.data.resume && grant.write) return fail('HOST_WRITE_REPLAY_DENIED', 'Write commands cannot be replayed after navigation.')
-  scopedPageUrl(parsed.data.url, parsed.data.resume ? grant.pageHosts! : grant.hosts)
+  pageUrl(parsed.data.url)
   return parsed.data
 }
 
@@ -42,7 +54,7 @@ export async function runPageAdapter(ctx: BrowserContext, grant: HostGrant, payl
   const parsed = invocationSchema.safeParse(payload)
   if (!parsed.success || !grant.pageHosts) return fail('HOST_INVALID_PAGE_REQUEST', 'Invalid page Adapter invocation.')
   const { script, initialUrl } = parsed.data
-  scopedPageUrl(initialUrl, grant.pageHosts)
+  pageUrl(initialUrl)
   signal.throwIfAborted()
   const viewId = await acquireAdapterPage(ctx, grant.name)
   const contents = ctx.getWebContents()
@@ -56,20 +68,14 @@ export async function runPageAdapter(ctx: BrowserContext, grant: HostGrant, payl
   let invoking = false
   let lastNavigation = Date.now()
   let completed = false
-  const guard = (event: Electron.Event, url: string) => {
-    try { scopedPageUrl(url, navigationHosts) } catch (error) {
-      event.preventDefault()
-      controller.abort(error)
-    }
-  }
-  const guardRedirect = (event: Electron.Event, url: string, _inPlace: boolean, isMainFrame: boolean) => {
-    if (isMainFrame) guard(event, url)
-  }
-  contents.on('will-navigate', guard)
-  contents.on('will-redirect', guardRedirect)
+  // A read may navigate its own page mid-run (an Adapter assigning location.href); it is run again on the new document.
+  let navigatedWhileReading = false
+  let reruns = 0
   const documentChanged = (_event: Electron.Event, _url: string, inPlace: boolean, isMainFrame: boolean) => {
     if (isMainFrame && !inPlace) lastNavigation = Date.now()
-    if (invoking && isMainFrame && !inPlace) controller.abort(Object.assign(new Error('Adapter document changed during execution; it was not retried.'), { code: 'HOST_DOCUMENT_CHANGED' }))
+    if (!invoking || !isMainFrame || inPlace) return
+    if (!grant.write && reruns < MAX_READ_RERUNS) navigatedWhileReading = true
+    else controller.abort(Object.assign(new Error('Adapter document changed during execution; it was not retried.'), { code: 'HOST_DOCUMENT_CHANGED' }))
   }
   contents.on('did-start-navigation', documentChanged)
   const assertPage = () => {
@@ -91,7 +97,7 @@ export async function runPageAdapter(ctx: BrowserContext, grant: HostGrant, payl
   }
   const navigate = async (url: string) => {
     controller.signal.throwIfAborted()
-    scopedPageUrl(url, navigationHosts)
+    pageUrl(url)
     executionPending = true
     await navigateForProgram(viewId, url, controller.signal)
     await waitUntilReady()
@@ -137,7 +143,7 @@ export async function runPageAdapter(ctx: BrowserContext, grant: HostGrant, payl
           }).catch(error => { controller.abort(error) })
         }
         contents.debugger.on('message', onBinding)
-        let response: { result: { value?: string }; exceptionDetails?: unknown }
+        let response: { result: { value?: string }; exceptionDetails?: unknown } | undefined
         try {
           await ctx.sendCDPCommand('Runtime.addBinding', { name: binding, executionContextId: world.executionContextId })
           await ctx.sendCDPCommand('Runtime.evaluate', { contextId: world.executionContextId, expression: `(() => {
@@ -156,11 +162,21 @@ export async function runPageAdapter(ctx: BrowserContext, grant: HostGrant, payl
             expression: script, contextId: world.executionContextId, awaitPromise: true, returnByValue: true,
           }, 35000)
           await queue
+        } catch (error) {
+          if (!navigatedWhileReading) throw error
         } finally {
           contents.debugger.removeListener('message', onBinding)
           if (!contents.isDestroyed()) await ctx.sendCDPCommand('Runtime.removeBinding', { name: binding }).catch(() => {})
         }
         invoking = false
+        if (!response) {
+          navigatedWhileReading = false
+          reruns++
+          executionPending = false
+          await waitUntilReady()
+          continue
+        }
+        navigatedWhileReading = false
         assertPage()
         if (response.exceptionDetails || typeof response.result.value !== 'string') return fail('ADAPTER_EXECUTION_FAILED', 'Page Adapter execution failed; it was not retried.')
         if (Buffer.byteLength(response.result.value) > MAX_BYTES / 2) return fail('HOST_PAYLOAD_TOO_LARGE', 'Adapter result exceeds the size limit.')
@@ -179,8 +195,6 @@ export async function runPageAdapter(ctx: BrowserContext, grant: HostGrant, payl
   } finally {
     signal.removeEventListener('abort', abort)
     if (!contents.isDestroyed()) {
-      contents.removeListener('will-navigate', guard)
-      contents.removeListener('will-redirect', guardRedirect)
       contents.removeListener('did-start-navigation', documentChanged)
       // Destroy only the Adapter-owned document when execution may still be pending.
       if (!completed && (executionPending || controller.signal.aborted)) browserViewManager.destroy(viewId)

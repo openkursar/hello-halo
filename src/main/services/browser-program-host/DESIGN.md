@@ -54,11 +54,28 @@ variables when it is created; a session that is reused keeps the ones it has.
   downloads and file inputs (`helpers.ts`), and page scripts on a page the host
   opens for the Adapter (`page.ts`). Adapter code runs in the program, or in an
   isolated world of the page, never in the main process.
-- A declared scope is a consistency check on the Adapter, not a security
-  boundary: whoever holds the token can already drive the browser. The
-  boundaries are the token, the conversation's browser context and the
-  browser policy (`isUrlAllowedByPolicy`). Writes need a confirmed scope;
-  redirects are never followed; responses are size-limited.
+- The host carries requests through, the way a page's own requests go; it
+  does not judge the business protocol. Whoever holds the token can already
+  drive the browser, so a declared scope is no security boundary and is not
+  enforced on where requests or pages go. The boundaries are the token, the
+  conversation's browser context and the browser policy
+  (`isUrlAllowedByPolicy`), checked for every request, redirect hop and
+  navigation.
+- Background requests go out with the program's own headers (only those the
+  network stack owns are dropped) and the browser's cookies; cookies the
+  program names that the browser does not hold are sent beside them.
+  Redirects are followed hop by hop as a browser would (303, and 301/302 after
+  POST, become GET; at most 10 hops), and the answer reports the final `url`
+  and `redirected`. Responses are size-limited and never return `Set-Cookie`.
+- Pages may go wherever the policy allows, including a site's sign-in page. A
+  page script runs only on one of the Adapter's own sites; when the site has
+  sent the page elsewhere the call fails with `HOST_REDIRECTED`, naming where
+  it went. A read whose page navigates while its script runs is run again on
+  the new document (at most twice); a write is never run again.
+- A write needs `confirmed`, which the program sets from its command
+  arguments (`__confirmed`). This keeps a mislabelled or careless write from
+  going out; it is not a person's approval, which the agent's own guidance
+  asks for before it sets the flag. A read cannot use a mutating method.
 
 ## One call at a time
 

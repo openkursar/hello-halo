@@ -5,7 +5,7 @@ import type { BrowserContext } from '../ai-browser'
 import { browserViewManager, getBrowserSession } from '../browser-view.service'
 import { withBrowserFrames } from '../browser-host'
 import { acquireAdapterPage } from './browser'
-import { scopedPageUrl } from './page'
+import { pageUrl, scopedPageUrl } from './page'
 import { fetchForAdapter, type HostGrant } from './fetch'
 import { fail, MAX_BYTES } from './protocol'
 import { sessionStorageValue } from './storage-cache'
@@ -20,11 +20,11 @@ export async function cookiesForAdapter(grant: HostGrant, payload: Record<string
     for (const value of domains) {
       if (typeof value !== 'string' || !/^\.?[a-z0-9.-]+$/i.test(value)) return fail('INVALID_ARGS', 'Invalid cookie domain.')
       const domain = value.replace(/^\./, '').toLowerCase()
-      scopedPageUrl(`https://${domain}/`, grant.hosts)
+      pageUrl(`https://${domain}/`)
       values.push(...await browser.cookies.get({ domain }))
     }
   } else {
-    const url = scopedPageUrl(payload.url || grant.initialUrl || '', grant.hosts)
+    const url = pageUrl(payload.url || grant.initialUrl || '')
     values.push(...await browser.cookies.get({ url }))
   }
   if (payload.names !== undefined && (!Array.isArray(payload.names) || payload.names.length > 32 || payload.names.some((name: unknown) => typeof name !== 'string'))) return fail('INVALID_ARGS', 'Invalid cookie names.')
@@ -90,7 +90,7 @@ export async function runAdapterHelper(ctx: BrowserContext, grant: HostGrant, ac
     for (const option of ['forceRefresh', 'cacheOnly']) {
       if (payload[option] !== undefined && typeof payload[option] !== 'boolean') return fail('INVALID_ARGS', 'Storage cache options must be booleans.')
     }
-    const url = scopedPageUrl(payload.origin || payload.storageScope || payload.url || grant.initialUrl, grant.pageHosts)
+    const url = pageUrl(payload.origin || payload.storageScope || payload.url || grant.initialUrl)
     const origin = new URL(url).origin
     return sessionStorageValue({ adapter: grant.name, origin, key: payload.key }, payload, signal, async () => {
       const visible = ctx.visibleViewStates().filter(page => {
@@ -119,7 +119,7 @@ export async function runAdapterHelper(ctx: BrowserContext, grant: HostGrant, ac
 
 async function runPageHelper(ctx: BrowserContext, grant: HostGrant, action: string, payload: Record<string, any>, signal: AbortSignal): Promise<unknown> {
   if (!grant.pageHosts || !grant.initialUrl) return fail('HOST_PAGE_UNAVAILABLE', 'The Adapter did not declare a page origin.')
-  const initial = scopedPageUrl(grant.initialUrl, grant.pageHosts)
+  const initial = pageUrl(grant.initialUrl)
   const viewId = await acquireAdapterPage(ctx, grant.name)
   const contents = ctx.getWebContents()
   if (!contents) return fail('HOST_PAGE_UNAVAILABLE', 'Adapter page is unavailable.')
@@ -129,12 +129,6 @@ async function runPageHelper(ctx: BrowserContext, grant: HostGrant, action: stri
   const abort = () => controller.abort(signal.reason)
   signal.addEventListener('abort', abort, { once: true })
   if (signal.aborted) abort()
-  const guard = (event: Electron.Event, url: string) => {
-    try { scopedPageUrl(url, grant.pageHosts!) } catch (error) { event.preventDefault(); controller.abort(error) }
-  }
-  const redirect = (event: Electron.Event, url: string, _inPlace: boolean, main: boolean) => { if (main) guard(event, url) }
-  contents.on('will-navigate', guard)
-  contents.on('will-redirect', redirect)
   const assertActive = () => {
     controller.signal.throwIfAborted()
     if (contents.isDestroyed() || !ctx.canReachView(viewId) || ctx.getWebContents() !== contents) return fail('HOST_PAGE_CHANGED', 'Adapter helper page changed.')
@@ -147,7 +141,7 @@ async function runPageHelper(ctx: BrowserContext, grant: HostGrant, action: stri
       if (action === 'storage_get') {
         if (typeof payload.key !== 'string' || !payload.key || payload.key.length > 1024) return fail('INVALID_ARGS', 'Storage requires a bounded key.')
         if (payload.area !== undefined && !['local', 'session'].includes(payload.area)) return fail('INVALID_ARGS', 'Invalid storage area.')
-        const storageUrl = scopedPageUrl(payload.origin || payload.storageScope || payload.url || initial, grant.pageHosts!)
+        const storageUrl = pageUrl(payload.origin || payload.storageScope || payload.url || initial)
         const origin = new URL(storageUrl).origin
         if (temporaryStoragePage) {
           // CDP requires an origin-bearing frame. Fulfill locally so reading persisted
@@ -182,7 +176,7 @@ async function runPageHelper(ctx: BrowserContext, grant: HostGrant, action: stri
       }
       let expression = payload.expression
       if (action === 'browser_fetch') {
-        const url = scopedPageUrl(payload.url, grant.hosts)
+        const url = pageUrl(payload.url)
         const options = payload.options || payload
         const method = String(options.method || 'GET').toUpperCase()
         if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return fail('HOST_UNSUPPORTED_METHOD', 'HTTP method is not supported.')
@@ -210,8 +204,6 @@ async function runPageHelper(ctx: BrowserContext, grant: HostGrant, action: stri
     }, 5000, { signal: controller.signal, deadline: Date.now() + 35000 })
   } finally {
     signal.removeEventListener('abort', abort)
-    contents.removeListener('will-navigate', guard)
-    contents.removeListener('will-redirect', redirect)
     controller.abort()
     if (storageInterceptor && !contents.isDestroyed()) contents.debugger.removeListener('message', storageInterceptor)
     if (!completed || temporaryStoragePage) browserViewManager.destroy(viewId)

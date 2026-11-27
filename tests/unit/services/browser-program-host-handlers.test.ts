@@ -8,14 +8,38 @@ import { fetchForAdapter } from '../../../src/main/services/browser-program-host
 import { pageContinuation, scopedPageUrl } from '../../../src/main/services/browser-program-host/page'
 import { navigateForProgram } from '../../../src/main/services/browser-program-host/navigation'
 
-const mocks = vi.hoisted(() => ({ states: new Map<string, any>(), fetch: vi.fn(), cookies: vi.fn(async () => []), navigate: vi.fn(async () => true), destroy: vi.fn(), allowed: true }))
+const mocks = vi.hoisted(() => ({ states: new Map<string, any>(), fetch: vi.fn(), cookies: vi.fn(async () => []), navigate: vi.fn(async () => true), destroy: vi.fn(), allowed: true,
+  // Each queued answer serves one request: { status, location?, headers?, body? }.
+  answers: [] as Array<{ status: number; location?: string; headers?: Record<string, string>; body?: string }>,
+  requests: [] as Array<{ method: string; url: string; useSessionCookies: boolean; headers: Record<string, string>; body: string }> }))
 const navigationContents = new EventEmitter() as EventEmitter & { isDestroyed: () => boolean; isLoadingMainFrame: () => boolean; stop: () => void }
 navigationContents.isDestroyed = () => false
 navigationContents.isLoadingMainFrame = () => false
 navigationContents.stop = vi.fn()
-vi.mock('electron', async () => ({ app: new (await import('node:events')).EventEmitter() }))
+vi.mock('electron', async () => {
+  const { EventEmitter } = await import('node:events')
+  return { app: new EventEmitter(), net: { request: (options: any) => {
+    const request = Object.assign(new EventEmitter(), { headers: {} as Record<string, string>, chunks: [] as Buffer[],
+      setHeader(name: string, value: string) { this.headers[name.toLowerCase()] = value },
+      write(chunk: Buffer) { this.chunks.push(Buffer.from(chunk)) },
+      abort: vi.fn(),
+      end(this: EventEmitter & { headers: Record<string, string>; chunks: Buffer[] }) {
+        mocks.requests.push({ method: options.method, url: options.url, useSessionCookies: options.useSessionCookies,
+          headers: this.headers, body: Buffer.concat(this.chunks).toString('utf8') })
+        const answer = mocks.answers.shift() ?? { status: 200, body: '{}' }
+        queueMicrotask(() => {
+          if (answer.location) { this.emit('redirect', answer.status, options.method, answer.location, answer.headers ?? {}); return }
+          const response = Object.assign(new EventEmitter(), { statusCode: answer.status, headers: answer.headers ?? {} })
+          this.emit('response', response)
+          if (answer.body) response.emit('data', Buffer.from(answer.body))
+          response.emit('end')
+        })
+      } })
+    return request
+  } } }
+})
 vi.mock('../../../src/main/foundation/config.service', () => ({ getHaloDir: () => globalThis.__HALO_TEST_DIR__ }))
-vi.mock('../../../src/main/services/browser-policy.service', () => ({ isUrlAllowedByPolicy: () => mocks.allowed }))
+vi.mock('../../../src/main/services/browser-policy.service', () => ({ isUrlAllowedByPolicy: (url: string) => mocks.allowed && !url.includes('blocked.') }))
 vi.mock('../../../src/main/services/browser-view.service', () => ({ browserViewManager: {
   getState: (id: string) => mocks.states.get(id), navigate: mocks.navigate, destroy: mocks.destroy,
   getWebContents: () => navigationContents,
@@ -34,7 +58,7 @@ function context() {
   } as any
 }
 const signal = () => new AbortController().signal
-beforeEach(() => { vi.clearAllMocks(); mocks.states.clear(); mocks.allowed = true; navigationContents.removeAllListeners(); navigationContents.isLoadingMainFrame = () => false })
+beforeEach(() => { vi.clearAllMocks(); mocks.answers.length = 0; mocks.requests.length = 0; mocks.states.clear(); mocks.allowed = true; navigationContents.removeAllListeners(); navigationContents.isLoadingMainFrame = () => false })
 
 describe('Browser program host handlers', () => {
   it('honors product policy for background requests and cookie access before reading the session', async () => {
@@ -43,7 +67,7 @@ describe('Browser program host handlers', () => {
     await expect(fetchForAdapter(grant, { url: 'https://example.com/' }, signal())).rejects.toMatchObject({ code: 'BROWSER_POLICY_BLOCKED' })
     await expect(runAdapterHelper(context(), grant, 'cookies_get', { domains: ['example.com'] }, signal()))
       .rejects.toMatchObject({ code: 'BROWSER_POLICY_BLOCKED' })
-    expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.requests).toHaveLength(0)
     expect(mocks.cookies).not.toHaveBeenCalled()
   })
 
@@ -169,74 +193,56 @@ describe('Browser program host handlers', () => {
     await expect(runBrowserCommand(context(), 'open', { url: 'file:///tmp/example' }, signal())).rejects.toMatchObject({ code: 'INVALID_URL' })
     await expect(runBrowserCommand(context(), 'upload', {}, signal())).rejects.toMatchObject({ code: 'HOST_UNSUPPORTED_COMMAND' })
   })
-  it('uses the shared login partition with bounded host grants and manual redirects', async () => {
-    const grant = { name: 'example.com', commandId: 'read', hosts: ['*.example.com'], write: false, confirmed: false }
-    mocks.fetch.mockResolvedValue(new Response('{"fixture":true}', { headers: { 'set-cookie': 'fixture-placeholder=1' } }))
-    const result: any = await fetchForAdapter(grant, { url: 'https://api.example.com/api' }, signal())
-    expect(result).toMatchObject({ ok: true, url: 'https://api.example.com/api', redirected: false, body: '{"fixture":true}' })
-    expect(result.headers).not.toHaveProperty('set-cookie')
-    expect(mocks.fetch.mock.calls[0][1]).toMatchObject({ credentials: 'include', redirect: 'manual' })
-    for (const request of [
-      { url: 'https://example.com.evil.example.org' },
-      { url: 'https://example.com', options: { headers: { Cookie: 'fixture-placeholder=1' } } },
-      { url: 'https://example.com', options: { method: 'DELETE' } },
-    ]) await expect(fetchForAdapter(grant, request, signal())).rejects.toThrow()
-    expect(mocks.fetch).toHaveBeenCalledTimes(1)
-  })
-  it('supports read POST APIs without weakening write confirmation or replaying requests', async () => {
-    const grant = { name: 'example.com', commandId: 'query', hosts: ['example.com'], write: false, confirmed: false }
-    mocks.fetch.mockResolvedValue(new Response('{}'))
-    await fetchForAdapter(grant, { url: 'https://example.com/query', options: { method: 'POST', body: '{}' } }, signal())
-    expect(mocks.fetch).toHaveBeenCalledTimes(1)
-    await expect(fetchForAdapter({ ...grant, write: true }, { url: 'https://example.com/write', options: { method: 'POST' } }, signal())).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' })
-    expect(mocks.fetch).toHaveBeenCalledTimes(1)
-  })
-  it('omits empty cookie hints but still rejects cookies outside the Halo session', async () => {
-    const grant = { name: 'example.com', commandId: 'query', hosts: ['example.com'], write: false, confirmed: false }
-    mocks.cookies.mockResolvedValue([])
-    mocks.fetch.mockImplementation(async () => new Response('{}'))
-    await fetchForAdapter(grant, { url: 'https://example.com/query', headers: { Cookie: '' } }, signal())
-    expect(mocks.fetch.mock.calls[0][1].headers.has('cookie')).toBe(false)
-    await expect(fetchForAdapter(grant, { url: 'https://example.com/query', headers: { Cookie: 'unowned=fixture' } }, signal()))
-      .rejects.toMatchObject({ code: 'HOST_HEADER_DENIED' })
-    await expect(fetchForAdapter(grant, { url: 'https://example.com/query', headers: { Cookie: '', Host: 'example.com' } }, signal()))
-      .rejects.toMatchObject({ code: 'HOST_HEADER_DENIED' })
-    expect(mocks.fetch).toHaveBeenCalledTimes(1)
-  })
-  it.each([false, true])('preserves privileged query method, headers and body (nested=%s)', async nested => {
+  it('sends the request as the program wrote it through the browser session and drops response credentials', async () => {
     const grant = { name: 'example.com', commandId: 'groups', hosts: ['example.com'], write: false, confirmed: false }
-    const options = { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://example.com',
-      Referer: 'https://example.com/', 'X-Requested-With': 'XMLHttpRequest' }, body: '{"type":0}' }
-    mocks.fetch.mockImplementation(async (_url, request) => new Response('{}', { status: request.method === 'POST' ? 200 : 405 }))
-    expect(await fetchForAdapter(grant, { url: 'https://example.com/query', ...(nested ? { options } : options) }, signal())).toMatchObject({ status: 200 })
-    const request = mocks.fetch.mock.calls[0][1]
-    expect(request.method).toBe('POST')
-    expect(request.body).toBe(options.body)
-    for (const [key, value] of Object.entries(options.headers)) expect(request.headers.get(key)).toBe(value)
-    expect(mocks.fetch).toHaveBeenCalledTimes(1)
+    mocks.answers.push({ status: 200, headers: { 'set-cookie': 'fixture-placeholder=1', 'content-type': 'application/json' }, body: '{"fixture":true}' })
+    const options = { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://other.example',
+      'X-Requested-With': 'XMLHttpRequest', Host: 'ignored.example', 'Content-Length': '1' }, body: '{"type":0}' }
+    const result: any = await fetchForAdapter(grant, { url: 'https://api.other.example/query', options }, signal())
+    expect(result).toMatchObject({ ok: true, status: 200, url: 'https://api.other.example/query', redirected: false, body: '{"fixture":true}' })
+    expect(result.headers).not.toHaveProperty('set-cookie')
+    expect(mocks.requests[0]).toMatchObject({ method: 'POST', url: 'https://api.other.example/query', useSessionCookies: true, body: '{"type":0}' })
+    expect(mocks.requests[0].headers).toMatchObject({ 'content-type': 'application/json', origin: 'https://other.example', 'x-requested-with': 'XMLHttpRequest' })
+    expect(mocks.requests[0].headers).not.toHaveProperty('host')
+    expect(mocks.requests[0].headers).not.toHaveProperty('content-length')
   })
-  it('applies cookie, origin and write restrictions to flat helper requests', async () => {
+  it('follows redirects like a browser and reports where the request ended', async () => {
     const grant = { name: 'example.com', commandId: 'read', hosts: ['example.com'], write: false, confirmed: false }
-    for (const fields of [{ headers: { Cookie: 'unowned=fixture' } }, { headers: { Origin: 'https://other.example' } }, { method: 'DELETE' }]) {
-      await expect(fetchForAdapter(grant, { url: 'https://example.com/', ...fields }, signal())).rejects.toThrow()
-    }
-    await expect(fetchForAdapter({ ...grant, write: true }, { url: 'https://example.com/', method: 'POST', body: '{}' }, signal()))
-      .rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' })
-    expect(mocks.fetch).not.toHaveBeenCalled()
+    mocks.answers.push({ status: 302, location: 'http://sso.example.org/login?service=x' }, { status: 200, body: '<html>sign in</html>' })
+    expect(await fetchForAdapter(grant, { url: 'http://example.com/api', options: { method: 'POST', body: '{}' } }, signal()))
+      .toMatchObject({ ok: true, status: 200, url: 'http://sso.example.org/login?service=x', redirected: true, body: '<html>sign in</html>' })
+    expect(mocks.requests.map(request => request.method)).toEqual(['POST', 'GET'])
+    expect(mocks.requests[1].body).toBe('')
+    mocks.answers.push(...Array.from({ length: 11 }, () => ({ status: 307, location: 'http://example.com/loop' })))
+    await expect(fetchForAdapter(grant, { url: 'http://example.com/loop' }, signal())).rejects.toMatchObject({ code: 'HOST_TOO_MANY_REDIRECTS' })
+    mocks.answers.length = 0
+    mocks.answers.push({ status: 302, location: 'http://blocked.example.net/' })
+    await expect(fetchForAdapter(grant, { url: 'http://example.com/' }, signal())).rejects.toMatchObject({ code: 'BROWSER_POLICY_BLOCKED' })
   })
-  it('retains actual response URLs and never turns a redirect into success', async () => {
-    const grant = { name: 'example.com', commandId: 'read', hosts: ['example.com'], write: false, confirmed: false }
-    const response = new Response('', { status: 302, headers: { location: 'https://example.org/' } })
-    Object.defineProperty(response, 'url', { value: 'https://example.com/redirect' })
-    mocks.fetch.mockResolvedValue(response)
-    expect(await fetchForAdapter(grant, { url: 'https://example.com/' }, signal())).toMatchObject({ ok: false, status: 302, url: 'https://example.com/redirect' })
+  it('keeps write confirmation and read-only methods', async () => {
+    const grant = { name: 'example.com', commandId: 'query', hosts: ['example.com'], write: false, confirmed: false }
+    await fetchForAdapter(grant, { url: 'https://example.com/query', options: { method: 'POST', body: '{}' } }, signal())
+    await expect(fetchForAdapter({ ...grant, write: true }, { url: 'https://example.com/write', options: { method: 'POST' } }, signal())).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' })
+    await expect(fetchForAdapter(grant, { url: 'https://example.com/', method: 'DELETE' }, signal())).rejects.toMatchObject({ code: 'HOST_UNSUPPORTED_METHOD' })
+    expect(mocks.requests).toHaveLength(1)
   })
-  it('scopes page navigation separately from helper hosts and never resumes writes', () => {
+  it('lets the browser supply its cookies and adds cookies the program names that it does not hold', async () => {
+    const grant = { name: 'example.com', commandId: 'query', hosts: ['example.com'], write: false, confirmed: false }
+    mocks.cookies.mockResolvedValue([{ name: 'SESSION', value: 'browser' }] as any)
+    await fetchForAdapter(grant, { url: 'https://example.com/a', headers: { Cookie: '' } }, signal())
+    await fetchForAdapter(grant, { url: 'https://example.com/b', headers: { Cookie: 'SESSION=browser' } }, signal())
+    await fetchForAdapter(grant, { url: 'https://example.com/c', headers: { Cookie: 'token=program' } }, signal())
+    expect(mocks.requests.map(request => [request.useSessionCookies, request.headers.cookie])).toEqual([
+      [true, undefined], [true, undefined], [false, 'SESSION=browser; token=program'],
+    ])
+  })
+  it('lets a page go anywhere the browser policy allows, runs Adapters only on their sites and never resumes writes', () => {
     const grant = { name: 'example.com', commandId: 'read', hosts: ['example.com', 'login.example.org'], pageHosts: ['example.com'], write: false, confirmed: true }
     const navigation = (url: string, resume: boolean) => ({ __webcli_navigation: { version: 1, url, resume } })
     expect(pageContinuation(navigation('https://example.com/path', true), grant)?.resume).toBe(true)
     expect(pageContinuation(navigation('https://login.example.org', false), grant)?.resume).toBe(false)
-    expect(() => pageContinuation(navigation('https://login.example.org', true), grant)).toThrow(/scope/)
+    expect(pageContinuation(navigation('https://login.example.org', true), grant)?.resume).toBe(true)
+    expect(() => scopedPageUrl('http://sso.example.org:8080/cas/login', ['example.com'])).toThrow(/sso\.example\.org:8080/)
     expect(() => pageContinuation(navigation('https://example.com', true), { ...grant, write: true })).toThrow(/replayed/)
     for (const url of ['https://example.com.evil.example.org', 'file:///tmp/fixture', 'https://user:placeholder@example.com']) {
       expect(() => scopedPageUrl(url, ['*.example.com'])).toThrow()

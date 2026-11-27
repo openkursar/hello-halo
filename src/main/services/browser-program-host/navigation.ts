@@ -41,7 +41,10 @@ export async function navigateForProgram(viewId: string, url: string, signal: Ab
       signal.throwIfAborted()
       const ok = await browserViewManager.navigate(viewId, url)
       signal.throwIfAborted()
-      if (!ok) return navigationFailed(viewId, failure)
+      // A page that sends itself elsewhere while loading (a script redirect to a sign-in page)
+      // cancels this load without an error; the newer navigation is followed instead.
+      const state = browserViewManager.getState(viewId)
+      if (!ok && (failure || !state || state.error || state.blockedByPolicy)) return navigationFailed(viewId, failure)
       // loadURL can settle on the preceding attachment document's finish event.
       // Keep failure evidence until the requested main-frame load actually stops.
       if (contents.isLoadingMainFrame()) await new Promise<void>(resolve => {
