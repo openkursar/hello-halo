@@ -1,6 +1,7 @@
 /**
  * QuotaPopover — expanded metered-quota detail for QuotaPill, shown while the
- * pointer or focus is on the ring or on this panel.
+ * pointer or focus is on the ring or on this panel. `QuotaDetails` is its body,
+ * reused where the ring is part of another indicator.
  *
  * Pure presentation over an AuthQuotaSnapshot: total / used / remaining, an
  * optional per-segment breakdown, a reset countdown, and an external "manage
@@ -30,6 +31,28 @@ function localized(value: LocalizedText | undefined, fallback = ''): string {
 const SEGMENT_SWATCHES = ['bg-primary', 'bg-primary/60', 'bg-primary/40', 'bg-primary/25']
 
 export function QuotaPopover({ snapshot, stale, sourceName }: QuotaPopoverProps) {
+  return (
+    // pb-2 instead of a margin: the gap stays part of the hover area, so the
+    // pointer can travel from the ring up to the panel without closing it.
+    <div className="absolute right-0 bottom-full pb-2 z-50">
+      <div className="w-[min(20rem,calc(100vw-2rem))] bg-card border border-border rounded-lg shadow-pop p-4">
+        {sourceName && (
+          <>
+            <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+              <Cloud className="w-4 h-4 shrink-0 text-muted-foreground" />
+              <span className="truncate">{sourceName}</span>
+            </div>
+            <div className="h-px bg-border my-3" />
+          </>
+        )}
+        <QuotaDetails snapshot={snapshot} stale={stale} />
+      </div>
+    </div>
+  )
+}
+
+/** The numbers of a quota snapshot, for any panel that shows them. */
+export function QuotaDetails({ snapshot, stale }: { snapshot: AuthQuotaSnapshot; stale: boolean }) {
   const { t } = useTranslation()
 
   const { remaining, total, used, nextResetTime, segments, detailsUrl, detailsLabel } = snapshot
@@ -52,80 +75,66 @@ export function QuotaPopover({ snapshot, stale, sourceName }: QuotaPopoverProps)
   }
 
   return (
-    // pb-2 instead of a margin: the gap stays part of the hover area, so the
-    // pointer can travel from the ring up to the panel without closing it.
-    <div className="absolute right-0 bottom-full pb-2 z-50">
-      <div className="w-[min(20rem,calc(100vw-2rem))] bg-card border border-border rounded-lg shadow-pop p-4">
-        {sourceName && (
-          <>
-            <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-              <Cloud className="w-4 h-4 shrink-0 text-muted-foreground" />
-              <span className="truncate">{sourceName}</span>
-            </div>
-            <div className="h-px bg-border my-3" />
-          </>
-        )}
-
-        {stale && (
-          <div className="flex items-center gap-1.5 mb-2 text-xs text-amber-600 dark:text-amber-500">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-            <span>{t('Data may be outdated')}</span>
-          </div>
-        )}
-
-        <div className="flex items-center justify-between text-sm py-1">
-          <span className="text-muted-foreground">{t('Total quota')}</span>
-          <span className="font-medium tabular-nums">{formatQuotaValue(total, snapshot)}</span>
+    <div>
+      {stale && (
+        <div className="flex items-center gap-1.5 mb-2 text-xs text-amber-600 dark:text-amber-500">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <span>{t('Data may be outdated')}</span>
         </div>
-        <div className="flex items-center justify-between text-sm py-1">
-          <span className="text-muted-foreground">{t('Used')}</span>
-          <span className="font-medium tabular-nums">{formatQuotaValue(used, snapshot)}</span>
-        </div>
+      )}
 
-        <div className="h-px bg-border my-2" />
-
-        <div className="flex items-baseline gap-2">
-          <span className="text-2xl font-bold tabular-nums">{formatQuotaValue(remaining, snapshot)}</span>
-          <span className="text-sm text-muted-foreground">{t('remaining')}</span>
-        </div>
-
-        {hasBar && (
-          <div className="h-2 rounded-full bg-secondary overflow-hidden mt-2">
-            <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${ratio * 100}%` }} />
-          </div>
-        )}
-
-        {segments && segments.length > 0 && (
-          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-3 text-xs text-muted-foreground">
-            {segments.map((seg, i) => (
-              <span key={i} className="flex items-center gap-1.5">
-                <span className={`w-2 h-2 rounded-[2px] ${SEGMENT_SWATCHES[i % SEGMENT_SWATCHES.length]}`} />
-                {localized(seg.label)} <span className="tabular-nums text-foreground">{formatQuotaValue(seg.value, snapshot)}</span>
-              </span>
-            ))}
-          </div>
-        )}
-
-        {typeof nextResetTime === 'number' && (
-          <div className="flex items-center gap-1.5 mt-3 px-2.5 py-1.5 rounded-sm bg-secondary border border-border text-[11px] text-muted-foreground">
-            <Clock className="w-3.5 h-3.5 shrink-0" />
-            <span>
-              {t('Time until reset:')} {formatCountdown(nextResetTime)}
-            </span>
-          </div>
-        )}
-
-        {detailsUrl && (
-          <button
-            type="button"
-            onClick={() => { void api.openExternal(detailsUrl) }}
-            className="w-full h-[34px] mt-3 flex items-center justify-center gap-1.5 rounded-sm border border-border bg-secondary text-accent-on-dark text-xs font-medium transition-colors ease-halo hover:bg-surface-hover hover:border-primary"
-          >
-            {localized(detailsLabel, t('Manage quota'))}
-            <ExternalLink className="w-3.5 h-3.5" />
-          </button>
-        )}
+      <div className="flex items-center justify-between text-sm py-1">
+        <span className="text-muted-foreground">{t('Total quota')}</span>
+        <span className="font-medium tabular-nums">{formatQuotaValue(total, snapshot)}</span>
       </div>
+      <div className="flex items-center justify-between text-sm py-1">
+        <span className="text-muted-foreground">{t('Used')}</span>
+        <span className="font-medium tabular-nums">{formatQuotaValue(used, snapshot)}</span>
+      </div>
+
+      <div className="h-px bg-border my-2" />
+
+      <div className="flex items-baseline gap-2">
+        <span className="text-2xl font-bold tabular-nums">{formatQuotaValue(remaining, snapshot)}</span>
+        <span className="text-sm text-muted-foreground">{t('remaining')}</span>
+      </div>
+
+      {hasBar && (
+        <div className="h-2 rounded-full bg-secondary overflow-hidden mt-2">
+          <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${ratio * 100}%` }} />
+        </div>
+      )}
+
+      {segments && segments.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-3 text-xs text-muted-foreground">
+          {segments.map((seg, i) => (
+            <span key={i} className="flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-[2px] ${SEGMENT_SWATCHES[i % SEGMENT_SWATCHES.length]}`} />
+              {localized(seg.label)} <span className="tabular-nums text-foreground">{formatQuotaValue(seg.value, snapshot)}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {typeof nextResetTime === 'number' && (
+        <div className="flex items-center gap-1.5 mt-3 px-2.5 py-1.5 rounded-sm bg-secondary border border-border text-[11px] text-muted-foreground">
+          <Clock className="w-3.5 h-3.5 shrink-0" />
+          <span>
+            {t('Time until reset:')} {formatCountdown(nextResetTime)}
+          </span>
+        </div>
+      )}
+
+      {detailsUrl && (
+        <button
+          type="button"
+          onClick={() => { void api.openExternal(detailsUrl) }}
+          className="w-full h-[34px] mt-3 flex items-center justify-center gap-1.5 rounded-sm border border-border bg-secondary text-accent-on-dark text-xs font-medium transition-colors ease-halo hover:bg-surface-hover hover:border-primary"
+        >
+          {localized(detailsLabel, t('Manage quota'))}
+          <ExternalLink className="w-3.5 h-3.5" />
+        </button>
+      )}
     </div>
   )
 }

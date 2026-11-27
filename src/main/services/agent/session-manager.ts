@@ -1421,6 +1421,13 @@ async function getOrCreateV2SessionInner(
       if (record && Object.keys(record).length > 0) sdkOptions.mcpServers = record
       else delete sdkOptions.mcpServers
     }
+    // Programs the session runs share its browser exactly when its tools do,
+    // so this follows the final server set.
+    if (sdkOptions.env) {
+      const { applyProgramHostEnvironment } = await import('../browser-program-host')
+      sdkOptions.env = { ...sdkOptions.env }
+      await applyProgramHostEnvironment(sdkOptions.env, sdkOptions.mcpServers)
+    }
     if (gates?.toolsetInstructions && creationToolsetMode) {
       sdkOptions.systemPrompt = appendToSystemPrompt(baseSystemPrompt, gates.toolsetInstructions(creationToolsetMode))
     }

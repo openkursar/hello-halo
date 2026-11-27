@@ -16,12 +16,51 @@ export function orgSignInCardView(state: OrgSignInState | null, readFailed: bool
           : state?.status === 'loading' || state?.status === 'restoring' ? 'pending' : null
   const offerRetry = available && (notice === 'read-failed' || (desktop &&
     (notice === 'withdrawal' || notice === 'temporary' || notice === 'issue-failed')))
+  // A capability missing while others work is not part of this sign-in; signing in again would not add it.
   const offerSignIn = available && !notice && (signedIn || state?.status === 'signed-out') &&
-    (nothingWorks || expired.length > 0 || state?.capabilities.some(c => c.status === 'missing'))
+    (nothingWorks || expired.length > 0)
   return {
     available, signedIn, working, expired, nothingWorks, notice, offerRetry, offerSignIn,
     status: notice === 'withdrawal' ? 'withdrawal-pending' : state?.status ?? 'unavailable',
     tools: state?.boundTools ?? [],
+  }
+}
+
+/**
+ * Where the sign-in appears among the AI model accounts: its own card once
+ * there is anything to show or manage, otherwise an option among the logins
+ * (desktop only, where signing in is possible).
+ */
+export function orgSettingsPlacement(state: OrgSignInState | null, readFailed: boolean, desktop: boolean, hasAccount: boolean): 'card' | 'option' | 'none' {
+  if (hasAccount || state?.withdrawalPending) return 'card'
+  if (!state) return readFailed ? 'card' : 'none'
+  switch (state.status) {
+    case 'active':
+    case 'restoring':
+    case 'unavailable':
+      return 'card'
+    case 'signed-out':
+      return desktop ? 'option' : 'none'
+    default:
+      return 'none'
+  }
+}
+
+/**
+ * Where the organization option goes among the logins shown: the place of the
+ * first login it stands for, or first when it stands for none.
+ */
+export function organizationOptionIndex<T extends { organizationSignIn?: true }>(all: T[], shown: T[]): number {
+  const replaced = all.findIndex(provider => provider.organizationSignIn)
+  return replaced < 0 ? 0 : shown.filter(provider => all.indexOf(provider) < replaced).length
+}
+
+/** "A, B and C" in the reader's language. */
+export function joinLabels(labels: string[], language: string): string {
+  try {
+    return new Intl.ListFormat(language, { style: 'long', type: 'conjunction' }).format(labels)
+  } catch {
+    return labels.join(', ')
   }
 }
 

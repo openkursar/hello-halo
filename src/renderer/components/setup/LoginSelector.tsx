@@ -12,10 +12,12 @@
  *
  * Entries flagged `setupHidden` in product.json are filtered out here so they
  * stay out of onboarding while remaining available in the in-app AI settings.
+ * A login whose account comes with the organization sign-in is offered as that
+ * sign-in instead, while it can still be started here.
  */
 
 import { useState, useEffect, useMemo } from 'react'
-import { Globe, ChevronDown, ChevronRight } from 'lucide-react'
+import { Building2, Globe, ChevronDown, ChevronRight } from 'lucide-react'
 import { useTranslation, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 import { useLanguagePicker } from '../../hooks/useLanguagePicker'
 import { api } from '../../api'
@@ -24,6 +26,9 @@ import { getApiKeyProviders, type BuiltinProvider } from '../../types'
 import { getProviderIcon } from '../icons/BrandIcons'
 import { ProviderIconTile } from '../icons/ProviderIconTile'
 import brandMarkAnimated from '../../assets/brand/halo-mark-animated.svg'
+import { isElectron, orgSignInOffered } from '../../api/transport'
+import { useOrgSignInStore } from '../../stores/org-sign-in.store'
+import { joinLabels } from '../org-sign-in/org-sign-in-view'
 
 // Re-export so existing renderer imports (`from './LoginSelector'`) continue
 // to work without churn. The canonical definition lives in shared/types.
@@ -50,6 +55,8 @@ interface LoginSelectorProps {
   onSelectCustom: (entry: AuthProviderConfig) => void
   /** Invoked when the user defers model configuration and enters Home directly */
   onSkip?: () => void
+  /** Invoked when the user chooses the organization sign-in */
+  onSelectOrganization?: () => void
 }
 
 /** Default fallback providers when the product.json fetch fails. */
@@ -68,15 +75,20 @@ const FALLBACK_PROVIDERS: AuthProviderConfig[] = [
 /** Number of provider-name chips previewed under the collapsed Custom API row. */
 const CUSTOM_CHIP_COUNT = 5
 
-export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom, onSkip }: LoginSelectorProps) {
+export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom, onSkip, onSelectOrganization }: LoginSelectorProps) {
   const { t } = useTranslation()
 
   // Language selector state
   const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false)
   const [currentLang, pickLanguage] = useLanguagePicker()
 
+  const organization = !!onSelectOrganization && isElectron() && orgSignInOffered()
+  const orgState = useOrgSignInStore(s => s.state)
+  const startOrgSignIn = useOrgSignInStore(s => s.start)
+  useEffect(() => { if (organization) startOrgSignIn() }, [organization, startOrgSignIn])
+
   // Providers state
-  const [providers, setProviders] = useState<AuthProviderConfig[]>([])
+  const [fetchedProviders, setProviders] = useState<AuthProviderConfig[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   // Fetch available providers on mount. `setupHidden` entries are dropped here so
@@ -122,8 +134,29 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
     await pickLanguage(lang)
   }
 
+  // The first login the organization sign-in stands for becomes that sign-in; the rest go.
+  const orgName = orgState?.name || t('Organization')
+  const orgLabels = orgState?.capabilities.map(capability => capability.label) ?? []
+  const offerOrganization = organization && orgState?.status === 'signed-out' && !orgState.withdrawalPending
+  const replaced = fetchedProviders.find(p => p.organizationSignIn)
+  const providers = fetchedProviders.flatMap(p => {
+    if (!p.organizationSignIn) return [p]
+    if (p !== replaced || !offerOrganization) return []
+    return [{
+      ...p, docs: undefined, preset: undefined,
+      displayName: orgName,
+      description: orgState?.signingIn ? t('Waiting for sign-in…') : orgLabels.length
+        ? t('One sign-in for {{list}}', { list: joinLabels(orgLabels, getCurrentLanguage()) })
+        : t('Sign in with your organization account'),
+    }]
+  })
+
   // Preset entries open the locked preset form; everything else is an OAuth provider.
   const handleProviderSelect = (provider: AuthProviderConfig) => {
+    if (provider.organizationSignIn) {
+      if (!orgState?.signingIn) onSelectOrganization?.()
+      return
+    }
     if (provider.preset) {
       onSelectPreset(provider)
       return
@@ -139,7 +172,7 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
 
   // Hero: full-width primary button with an always-on docs link ("no key yet?").
   const renderHero = (provider: AuthProviderConfig) => {
-    const Icon = getProviderIcon(provider.type, provider.icon)
+    const Icon = provider.organizationSignIn ? Building2 : getProviderIcon(provider.type, provider.icon)
     // Preset entries carry their docs under `preset.docs` (the same link the
     // API-key form shows); fall back to it so the hero still surfaces a guide.
     const docs = provider.docs ?? provider.preset?.docs
@@ -184,7 +217,9 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
           onClick={() => handleProviderSelect(provider)}
           className="w-full flex items-center gap-3 p-3 bg-card rounded-xl border border-border hover:border-primary/50 hover:bg-card/80 transition-all duration-200 group text-left"
         >
-          <ProviderIconTile provider={provider} />
+          {provider.organizationSignIn
+            ? <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-secondary"><Building2 size={20} className="text-muted-foreground" /></div>
+            : <ProviderIconTile provider={provider} />}
           <div className="flex-1 min-w-0">
             <div className="text-sm font-medium">{getLocalizedText(provider.displayName)}</div>
             <div className="text-xs text-muted-foreground mt-0.5">{getLocalizedText(provider.description)}</div>

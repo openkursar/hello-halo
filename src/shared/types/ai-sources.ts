@@ -276,8 +276,12 @@ export interface AISource {
   // ===== Basic Info (Required) =====
   /** Unique identifier, UUID format */
   id: string
-  /** This account is maintained from the server deployment environment. */
-  managedBy?: 'server-env'
+  /**
+   * Who maintains this account instead of the user: `server-env` — the server
+   * deployment environment; `organization` — it comes and goes with the
+   * organization sign-in, which presents it.
+   */
+  managedBy?: 'server-env' | 'organization'
   /** Display name, user-defined */
   name: string
   /** Provider ID (e.g., 'anthropic', 'deepseek', 'custom') */
@@ -998,6 +1002,12 @@ export interface AuthProviderConfig {
    * API-key form via `preset.docs`.
    */
   docs?: ProviderDocsLink
+  /**
+   * Set by the host from `enterpriseIdentity.modelAccounts`, never by
+   * product.json here: this account comes with the organization sign-in, which
+   * is offered in place of the provider's own login.
+   */
+  organizationSignIn?: true
 }
 
 // ============================================================================

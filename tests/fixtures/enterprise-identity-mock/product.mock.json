@@ -15,6 +15,16 @@
       "recommended": true,
       "builtin": true,
       "enabled": true
+    },
+    {
+      "type": "example-cloud",
+      "displayName": { "en": "Example Cloud" },
+      "description": { "en": "Models for members of Example Org" },
+      "icon": "cloud",
+      "iconBgColor": "#0ea5e9",
+      "recommended": false,
+      "enabled": true,
+      "path": "./model-account-provider.mjs"
     }
   ],
   "enterpriseIdentity": {
@@ -27,6 +37,9 @@
         "audience": "mail-example",
         "env": "EXAMPLE_ORG_MOCK_TOKEN"
       }
+    ],
+    "modelAccounts": [
+      { "aiSourceType": "example-cloud", "capability": "model", "audience": "example-cloud-model" }
     ]
   }
 }

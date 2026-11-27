@@ -18,6 +18,7 @@ import { Loader2 } from 'lucide-react'
 import { hasAnyAISource, type HaloConfig } from '../types'
 import { isElectron, orgSignInOffered } from '../api/transport'
 import { HaloLogo } from '../components/brand/HaloLogo'
+import { useOrgSignInStore } from '../stores/org-sign-in.store'
 
 // First step is `preferences` only on the very first launch (gated by
 // config.isFirstLaunch). Old users re-entering Setup (e.g., after clearing
@@ -73,6 +74,26 @@ export function SetupPage() {
     } catch (err) {
       console.error('[SetupPage] skip error:', err)
       setError(err instanceof Error ? err.message : t('Skip failed'))
+    }
+  }
+
+  // Signing in is how the person chose to start, whether or not a model came with it.
+  const handleSelectOrganization = async () => {
+    setError(null)
+    const result = await useOrgSignInStore.getState().signIn()
+    if (result === 'failed' || result === 'expired') {
+      setError(result === 'failed' ? t('Sign-in did not complete. Please try again.') : t('The sign-in page timed out. Please try again.'))
+      return
+    }
+    if (result !== 'succeeded' && typeof result !== 'object') return
+    try {
+      const latest = await api.getConfig({ snapshot: true })
+      if (!latest.success || !latest.data) throw new Error(latest.error || t('Failed to load config'))
+      setConfig(latest.data as HaloConfig)
+      if (hasAnyAISource((latest.data as HaloConfig).aiSources)) await enterApp()
+      else await handleSkipModelConfig()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('Failed to load config'))
     }
   }
 
@@ -212,6 +233,7 @@ export function SetupPage() {
           onSelectPreset={handleSelectPreset}
           onSelectCustom={handleSelectCustom}
           onSkip={handleSkipModelConfig}
+          onSelectOrganization={() => void handleSelectOrganization()}
         />
         {error && (
           <div role="alert" className="fixed bottom-8 left-4 right-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:max-w-md p-4 bg-destructive/10 border border-destructive/20 rounded-lg z-50 break-words">

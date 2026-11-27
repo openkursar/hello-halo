@@ -42,18 +42,53 @@ export interface OrgProviderSnapshot {
   capabilities: Record<string, OrgCapabilityState>
 }
 
-/** How one sign-in attempt ended. */
-export type OrgSignInOutcome = 'succeeded' | 'cancelled' | 'expired' | 'failed'
+/**
+ * How one sign-in attempt ended. `{ alternative }` means the person chose one
+ * of the alternatives Halo passed to `beginSignIn`; Halo runs that sign-in next.
+ */
+export type OrgSignInOutcome = 'succeeded' | 'cancelled' | 'expired' | 'failed' | { alternative: string }
+
+/** A sign-in Halo can run instead, for people without the organization identity. */
+export interface OrgSignInAlternative {
+  /** Answered back unchanged in `{ alternative }`. */
+  id: string
+  label: string
+  description?: string
+}
+
+export interface OrgSignInOptions {
+  /** Offer these beside the provider's own ways in; absent or empty offers none. */
+  alternatives?: OrgSignInAlternative[]
+}
 
 export interface OrgSignInStart {
   flowId: string
   /** https page, or http on a loopback address, that Halo opens in an isolated window. */
   url: string
+  /** Other https origins the page may take the window to, such as an identity provider's consent page. */
+  origins?: string[]
 }
 
 export interface OrgToolCredential {
   token: string
   /** Epoch ms; Halo asks again before then while the capability lasts. */
+  expiresAt: number
+}
+
+/**
+ * A cookie that signs the person in to the organization's web pages in Halo's
+ * built-in browser. Halo always sets it HttpOnly, so page scripts never read it.
+ */
+export interface OrgBrowserCookie {
+  /** A host, or a parent domain such as ".example.com" to cover every subdomain. */
+  domain: string
+  name: string
+  value: string
+  /** Defaults to "/". */
+  path?: string
+  /** Sent over HTTPS only. Defaults to false: intranet sites are often plain HTTP. */
+  secure?: boolean
+  /** Epoch ms. Halo removes the cookie then and asks again before. */
   expiresAt: number
 }
 
@@ -64,7 +99,7 @@ export interface EnterpriseIdentityProvider {
   snapshot(): OrgProviderSnapshot
   /** Fires whenever the snapshot may have changed. */
   onDidChange(listener: () => void): { dispose(): void }
-  beginSignIn(): Promise<OrgSignInStart>
+  beginSignIn(options?: OrgSignInOptions): Promise<OrgSignInStart>
   /**
    * The outcome of one attempt. May be called any time after `beginSignIn`,
    * also after the attempt ended, and always answers the same outcome.
@@ -87,4 +122,11 @@ export interface EnterpriseIdentityProvider {
    * checks the current sign-in itself each time it is used.
    */
   sessionEnvironment?(): Record<string, string>
+  /**
+   * Cookies that keep the person signed in to the organization's web pages in
+   * Halo's built-in browser while the sign-in lasts; [] when none apply now.
+   * Asked again before the earliest one expires and whenever the signed-in
+   * person or the ready capabilities change.
+   */
+  browserCookies?(): Promise<OrgBrowserCookie[]>
 }

@@ -1252,6 +1252,11 @@ class BrowserPageManager {
 // Singleton instance
 export const browserViewManager = new BrowserPageManager()
 
+/** The shared session every built-in browser page uses: its cookies, storage and network. */
+export function getBrowserSession(): Electron.Session {
+  return session.fromPartition('persist:browser')
+}
+
 let browserDataCleanup: Promise<void> | null = null
 
 /** Clears only the shared browser session; concurrent callers share completion or failure. */

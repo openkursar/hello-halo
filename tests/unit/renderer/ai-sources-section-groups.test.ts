@@ -14,6 +14,10 @@ vi.mock('../../../src/renderer/i18n', () => ({
   getCurrentLanguage: () => 'en',
 }))
 vi.mock('../../../src/renderer/api', () => ({ api: { authGetProviders: vi.fn(), isRemoteMode: () => false } }))
+vi.mock('../../../src/renderer/stores/org-sign-in.store', () => {
+  const store = () => ({ state: null, readFailed: false, lastResult: null, start: () => {}, signIn: vi.fn(), signOut: vi.fn(), retry: vi.fn() })
+  return { useOrgSignInStore: (select: (value: ReturnType<typeof store>) => unknown) => select(store()) }
+})
 vi.mock('../../../src/renderer/hooks/useOAuthLogin', () => ({ useOAuthLogin: () => ({ login: null, start: vi.fn(), cancel: vi.fn() }) }))
 vi.mock('../../../src/renderer/components/settings/ProviderSelector', () => ({ ProviderSelector: () => null }))
 vi.mock('../../../src/renderer/components/settings/OAuthAccountEditor', () => ({ OAuthAccountEditor: () => null }))

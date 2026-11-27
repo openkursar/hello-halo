@@ -12,8 +12,8 @@
  *   POST {url}/my/publications/{author}/{id}/unpublish
  *   GET  {url}/category-taxonomy.json                        ops-managed chips
  *   GET  {url}/discover-layout.json                          ops-managed page
- *   GET  {url}/clis.json                                     CLI tool catalog (account token)
- *   GET  {url}/clis/{id}/{version}/package.hcli              CLI package (path from the catalog)
+ *   GET  {url}/dist/clis.json                                CLI tool catalog (no account)
+ *   GET  {url}/dist/clis/{id}/{version}/bundles/{rev}.zip    CLI bundle (path from the catalog, no account)
  *
  * The catalog half is byte-identical to the static protocol, so it is delegated
  * to HaloAdapter rather than duplicated.
@@ -241,16 +241,16 @@ export class DhpV2Adapter implements RegistryAdapter {
 
   // ── CLI tool catalog ─────────────────────────────────────────────────────
 
-  async fetchCliCatalog(source: RegistrySource, auth: RegistryAuth, validator?: string): Promise<PageDocumentResult> {
-    const res = await fetchWithTimeout(`${baseUrl(source)}/clis.json`, {
+  // The catalog and bundles are the same for everyone, so they are read from
+  // the account-free distribution routes and no store token is ever sent.
+  async fetchCliCatalog(source: RegistrySource, validator?: string): Promise<PageDocumentResult> {
+    const res = await fetchWithTimeout(`${baseUrl(source)}/dist/clis.json`, {
       headers: {
         ...JSON_HEADERS,
-        Authorization: `Bearer ${auth.token}`,
         ...(validator ? { 'If-None-Match': validator } : {}),
       },
     })
     if (res.status === 404 || res.status === 501) return { status: 'absent' }
-    if (res.status === 401) throw new Error(STORE_NOT_SIGNED_IN)
     if (res.status === 304) return { status: 'unchanged' }
     if (!res.ok) throw new Error(`cli-catalog failed: ${res.status}`)
     return { status: 'ok', document: (await res.json()) as unknown, validator: res.headers.get('ETag') ?? undefined }
@@ -259,20 +259,17 @@ export class DhpV2Adapter implements RegistryAdapter {
   /**
    * `downloadUrl` comes from the catalog body, so it is treated as untrusted:
    * only a plain absolute path on this source is accepted. Joining it to the
-   * source URL keeps any gateway prefix and never sends the token to another
-   * origin.
+   * source URL keeps any gateway prefix and never reaches another origin.
    */
   async downloadCliPackage(
     source: RegistrySource,
     downloadUrl: string,
-    auth: RegistryAuth,
     maxBytes: number,
   ): Promise<Uint8Array> {
     if (!isSafeSourcePath(downloadUrl)) throw new Error('CLI package path is not a plain path on this source')
     const res = await fetchWithTimeout(`${baseUrl(source)}${downloadUrl}`, {
-      headers: { 'User-Agent': JSON_HEADERS['User-Agent'], Authorization: `Bearer ${auth.token}` },
+      headers: { 'User-Agent': JSON_HEADERS['User-Agent'] },
     })
-    if (res.status === 401) throw new Error(STORE_NOT_SIGNED_IN)
     if (res.status === 404) throw new Error('This CLI version is no longer available from the store')
     if (!res.ok) throw new Error(`cli-package download failed: ${res.status}`)
     const declared = Number(res.headers.get('Content-Length') ?? '')

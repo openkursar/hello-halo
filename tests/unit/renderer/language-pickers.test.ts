@@ -63,6 +63,11 @@ vi.mock('react-i18next', async () => {
     useTranslation: () => ({ t: i18next.t.bind(i18next), i18n: i18next }),
   }
 })
+// Without an organization sign-in in this build, its store is never started.
+vi.mock('../../../src/renderer/stores/org-sign-in.store', () => {
+  const store = { state: null, readFailed: false, lastResult: null, start: () => {}, signIn: async () => 'cancelled', signOut: async () => {}, retry: async () => {} }
+  return { useOrgSignInStore: Object.assign((select: (value: typeof store) => unknown) => select(store), { getState: () => store }) }
+})
 vi.mock('../../../src/renderer/api', () => ({
   api: {
     authGetProviders: async () => ({ success: true, data: [{ type: 'custom', displayName: 'Custom API', description: 'Use your own API Key', enabled: true }] }),

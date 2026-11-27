@@ -262,6 +262,25 @@ export interface EnterpriseIdentityProductConfig {
   /** Display name of the sign-in; string or `{ "en": …, "zh-CN": … }`. */
   name?: string | Record<string, string>
   toolCredentials?: EnterpriseToolCredentialConfig[]
+  modelAccounts?: EnterpriseModelAccountConfig[]
+}
+
+/** A model account that comes with the sign-in instead of the provider's own login. */
+export interface EnterpriseModelAccountConfig {
+  /** `authProviders[].type` whose account the sign-in provides. */
+  aiSourceType: string
+  /** Session capability that grants the account, e.g. "model". */
+  capability: string
+  /** Audience the provider issues the account credential for. */
+  audience: string
+  /**
+   * People without the organization identity may sign in to this account
+   * directly; the sign-in page offers it as another way in.
+   */
+  directSignIn?: {
+    label: string | Record<string, string>
+    description?: string | Record<string, string>
+  }
 }
 
 // ============================================
@@ -778,6 +797,13 @@ export function getStoreIdentityProvider(): string | undefined {
 export function getEnterpriseIdentityConfig(): EnterpriseIdentityProductConfig | undefined {
   const value = loadProductConfig().enterpriseIdentity
   return value && typeof value.provider === 'string' && value.provider ? value : undefined
+}
+
+/** Provider types whose accounts come with the organization sign-in; empty without one. */
+export function getOrganizationModelProviderTypes(): string[] {
+  const accounts = getEnterpriseIdentityConfig()?.modelAccounts
+  if (!Array.isArray(accounts)) return []
+  return [...new Set(accounts.flatMap(account => typeof account?.aiSourceType === 'string' && account.aiSourceType ? [account.aiSourceType] : []))]
 }
 
 /**

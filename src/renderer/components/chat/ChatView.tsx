@@ -46,6 +46,7 @@ import {
   getOnboardingPrompt,
 } from '../onboarding/onboardingData'
 import { api } from '../../api'
+import { orgSignInOffered } from '../../api/transport'
 import { useConversationDetail } from '../../hooks/useConversationDetail'
 import { useConversationEngineId } from '../../hooks/useConversationEngine'
 import { useVisibleConversation } from '../../hooks/useVisibleConversation'
@@ -540,8 +541,9 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   // the digital human's own, read-only).
   const sendControls = (
     <>
-      <OrgSignInStatus />
-      <QuotaPill sourceId={runsOnGroup ? undefined : currentSourceId} />
+      {orgSignInOffered()
+        ? <OrgSignInStatus quotaSourceId={runsOnGroup ? undefined : currentSourceId} />
+        : <QuotaPill sourceId={runsOnGroup ? undefined : currentSourceId} />}
       <ModelSelector />
     </>
   )

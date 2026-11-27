@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { terminalProbe, parseProbe } from '../fixtures/cli-tools-entries'
 import { writePackage } from '../../unit/services/cli-tools/helpers'
 import { join } from 'node:path'
@@ -26,8 +26,8 @@ function createOrgPresets(profile: string): string {
 }
 const capabilityLabels = ['Models', 'Internal systems', 'Mail']
 const indicator = (page: Page) => page.getByTestId('org-sign-in-status')
-const settingsCard = (page: Page) => page.getByTestId('enterprise-identity-section')
-const settingsStatus = (page: Page) => page.getByTestId('enterprise-identity-status')
+const settingsCard = (page: Page) => page.getByTestId('org-account-card')
+const signInOption = (page: Page) => page.getByTestId('org-sign-in-option')
 const rows = (list: Locator, status: string) => list.getByTestId('org-capability').and(list.locator(`[data-status="${status}"]`))
 const orgCase = (name: string) => ({ annotation: { type: 'acceptance', description: JSON.stringify({ caseId: `settings.organization-sign-in.${name}`, evidence: 'app-e2e', mode: 'none', variant: {} }) } })
 
@@ -64,6 +64,19 @@ function readState(page: Page) {
     if (!result.success || !result.data) throw new Error(result.error || 'Missing organization sign-in state')
     return result.data
   })
+}
+
+async function openCard(page: Page) {
+  const toggle = settingsCard(page).getByRole('button', { name: 'Example Org details' })
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+  return settingsCard(page)
+}
+
+async function signOutFromCard(page: Page) {
+  await (await openCard(page)).getByRole('button', { name: 'Sign out', exact: true }).click()
+  const dialog = page.getByRole('alertdialog')
+  await expect(dialog).toContainText('will stop working until you sign in again.')
+  await dialog.getByRole('button', { name: 'Sign out', exact: true }).click()
 }
 
 async function openLogin(app: ElectronApplication, open: () => Promise<void>) {
@@ -164,6 +177,8 @@ test.describe('configured organization', () => {
       if (entry === 'no-model') {
         await window.getByRole('button', { name: 'Skip organization sign-in' }).click()
         await expect(window.getByText('Select a method to start')).toBeVisible()
+        await expect(window.getByRole('button', { name: /^Example Org/ })).toContainText('One sign-in for Models, Internal systems, and Mail')
+        await expect(window.getByText('Example Cloud', { exact: true })).toHaveCount(0)
         await window.getByRole('button', { name: 'Skip for now' }).click()
         await expect(action).toBeVisible()
       } else {
@@ -176,7 +191,7 @@ test.describe('configured organization', () => {
     })
   })
 
-  test('signed-out capabilities are explained without blocking a chat turn', acceptance('settings.organization-sign-in.signed-out'), async ({ acceptanceApp, model, window }) => {
+  test('signed-out capabilities are explained without blocking a chat turn', acceptance('settings.organization-sign-in.signed-out'), async ({ acceptanceApp, model, window }, info) => {
     expect(await acceptanceApp.app.evaluate(({ app }) => app.isPackaged)).toBe(false)
     const message = 'Can I chat without signing in to Example Org?'
     const reply = 'Chat still works without organization sign-in.'
@@ -187,8 +202,11 @@ test.describe('configured organization', () => {
     await expect(window.locator('.message-assistant').last()).toContainText(reply)
     expect(model.exchanges.some(exchange => exchange.request.lastUserText.includes(message))).toBe(true)
     await navigateToSettings(window)
-    await expect(settingsStatus(window)).toHaveAttribute('data-status', 'signed-out')
-    await expect(rows(settingsCard(window), 'missing')).toHaveText(capabilityLabels.map(label => `${label}Not signed in`))
+    await expect(settingsCard(window)).toHaveCount(0)
+    await expect(signInOption(window)).toContainText('Example Org')
+    await expect(signInOption(window)).toContainText('One sign-in for Models, Internal systems, and Mail')
+    await expect(window.getByText('Example Cloud', { exact: true })).toHaveCount(0)
+    await screenshotSizes(window, 'settings-sign-in-option', signInOption(window), info)
   })
 
   test('sign-in closes only on resolution, one expiry leaves the rest connected, and sign-out clears access', orgCase('lifecycle'), async ({ acceptanceApp, window }, info) => {
@@ -202,8 +220,9 @@ test.describe('configured organization', () => {
     expect(await readState(window)).toMatchObject({ status: 'active', signingIn: false, account: { displayName: 'Example Member' } })
 
     await navigateToSettings(window)
-    await expect(settingsStatus(window)).toHaveAttribute('data-status', 'active')
-    await expect(rows(settingsCard(window), 'ready')).toHaveText(capabilityLabels.map(label => `${label}Connected`))
+    await expect(settingsCard(window)).toHaveAttribute('data-status', 'active')
+    await expect(signInOption(window)).toHaveCount(0)
+    await expect(rows(await openCard(window), 'ready')).toHaveText(capabilityLabels.map(label => `${label}Connected`))
 
     // With every capability ready, only the IPC entry point can start a redundant sign-in.
     const renewal = await openLogin(app, () => window.evaluate(() => {
@@ -246,15 +265,69 @@ test.describe('configured organization', () => {
     await window.keyboard.press('Escape')
 
     await navigateToSettings(window)
-    await expect(rows(settingsCard(window), 'expired')).toHaveText(['MailExpired, sign in again'])
-    await expect(settingsCard(window).getByTestId('enterprise-identity-sign-in')).toBeEnabled()
+    await expect(settingsCard(window)).toContainText('Mail needs signing in again')
+    await expect(rows(await openCard(window), 'expired')).toHaveText(['MailExpired, sign in again'])
+    await expect(settingsCard(window).getByTestId('org-account-sign-in')).toBeEnabled()
     await screenshotSizes(window, 'settings-card-mail-expired', settingsCard(window), info)
-    await settingsCard(window).getByRole('button', { name: 'Sign out', exact: true }).click()
-    await expect(settingsStatus(window)).toHaveAttribute('data-status', 'signed-out')
-    await expect(rows(settingsCard(window), 'missing')).toHaveCount(3)
+    await signOutFromCard(window)
+    await expect(settingsCard(window)).toHaveCount(0)
+    await expect(signInOption(window)).toBeVisible()
     expect(await readState(window)).toMatchObject({ status: 'signed-out', signingIn: false })
     await navigateToChat(window)
     await expect(indicator(window)).toHaveAttribute('data-tone', 'attention')
+  })
+})
+
+test.describe('model account that comes with the sign-in', () => {
+  test.use({ productConfigPath: mockProduct, electronEnvironment: mockEnvironment(true) })
+
+  test('is chosen in the organization card, shows its quota in the one composer indicator, and is named before sign-out', orgCase('model-account'), async ({ acceptanceApp }, info) => {
+    const configFile = join(acceptanceApp.profile, '.halo/config.json')
+    const readConfig = () => JSON.parse(readFileSync(configFile, 'utf8'))
+    const window = await acceptanceApp.restart(() => {
+      const config = readConfig()
+      const now = new Date().toISOString()
+      config.aiSources.sources.push({
+        id: 'org-account', name: 'Example Cloud', provider: 'example-cloud', authType: 'oauth', managedBy: 'organization',
+        accessToken: 'example-token', tokenExpires: Date.now() + 3_600_000, model: 'example-model',
+        availableModels: [{ id: 'example-model', name: 'Example model' }], user: { name: 'Example Member' }, createdAt: now, updatedAt: now,
+      })
+      writeFileSync(configFile, JSON.stringify(config, null, 2))
+    })
+    await navigateToChat(window)
+    await expect(indicator(window)).toHaveAttribute('data-tone', 'ok')
+    await navigateToSettings(window)
+    const card = settingsCard(window)
+    await expect(card).toHaveAttribute('data-ai-source-id', 'org-account')
+    await expect(card).toContainText('example-model')
+    await expect(window.locator('[data-ai-source-id="org-account"]')).toHaveCount(1)
+    await expect(window.getByText('Example Cloud', { exact: true })).toHaveCount(0)
+    await expect(signInOption(window)).toHaveCount(0)
+    await card.getByRole('button', { name: 'Use Example Org for new chats' }).click()
+    await expect.poll(() => readConfig().aiSources.currentId).toBe('org-account')
+    await screenshotSizes(window, 'settings-card-model-account', card, info, async () => { await openCard(window) })
+
+    await navigateToChat(window)
+    await expect(indicator(window)).toHaveAttribute('aria-label', /Remaining quota: 680 credits/)
+    await indicator(window).hover()
+    const popover = window.getByTestId('org-sign-in-popover')
+    await expect(rows(popover, 'ready')).toHaveText(capabilityLabels.map(label => `${label}Connected`))
+    await expect(popover.getByTestId('org-sign-in-quota')).toContainText('680')
+    await screenshotSizes(window, 'composer-popover-quota', popover, info, async () => {
+      await window.keyboard.press('Escape')
+      await window.mouse.move(0, 0)
+      await indicator(window).hover()
+    })
+    await window.keyboard.press('Escape')
+
+    await navigateToSettings(window)
+    await (await openCard(window)).getByRole('button', { name: 'Sign out', exact: true }).click()
+    const dialog = window.getByRole('alertdialog')
+    await expect(dialog).toContainText('Models, Internal systems, and Mail will stop working until you sign in again.')
+    await expect(dialog).toContainText('New messages that use example-model will fail.')
+    await screenshotSizes(window, 'sign-out-confirmation', dialog, info)
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    expect(await readState(window)).toMatchObject({ status: 'active' })
   })
 })
 
@@ -264,15 +337,15 @@ test.describe('organization tool launchers', () => {
   test('a bound preset launcher receives access only while signed in', orgCase('bound-tool'), async ({ acceptanceApp, window }) => {
     test.skip(process.platform === 'win32', 'The terminal probe uses a POSIX shell')
     await navigateToSettings(window)
-    await openLogin(acceptanceApp.app, () => settingsCard(window).getByTestId('enterprise-identity-sign-in').click())
+    await openLogin(acceptanceApp.app, () => signInOption(window).getByRole('button').click())
     expect((await control(acceptanceApp.profile, { action: 'confirm', method: 'phone' })).outcome).toBe('succeeded')
     await expect.poll(async () => (await readState(window)).boundTools[0]?.access).toBe('ready')
     const commands = [boundCommand, unboundCommand]
     const signedIn = parseProbe((await terminalProbe(window, commands)).text)
     expect(Object.keys(signedIn.bins).sort()).toEqual(commands.slice().sort())
     expect(signedIn.commands).toEqual({ [boundCommand]: 'credential-present', [unboundCommand]: 'credential-absent' })
-    await settingsCard(window).getByRole('button', { name: 'Sign out', exact: true }).click()
-    await expect(settingsStatus(window)).toHaveAttribute('data-status', 'signed-out')
+    await signOutFromCard(window)
+    await expect(settingsCard(window)).toHaveCount(0)
     const signedOut = parseProbe((await terminalProbe(window, commands)).text)
     expect(signedOut.bins).toEqual(signedIn.bins)
     expect(signedOut.commands).toEqual({ [boundCommand]: 'credential-absent', [unboundCommand]: 'credential-absent' })
@@ -282,18 +355,18 @@ test.describe('organization tool launchers', () => {
     test.skip(process.platform === 'win32' || process.getuid?.() === 0, 'POSIX directory permissions must deny writes to the test process')
     await navigateToSettings(window)
     const card = settingsCard(window)
-    await openLogin(acceptanceApp.app, () => card.getByTestId('enterprise-identity-sign-in').click())
+    await openLogin(acceptanceApp.app, () => signInOption(window).getByRole('button').click())
     expect((await control(acceptanceApp.profile, { action: 'confirm', method: 'phone' })).outcome).toBe('succeeded')
     await expect.poll(async () => (await readState(window)).boundTools[0]?.access).toBe('ready')
     const path = await acceptanceApp.app.evaluate(({ app }) => app.getPath('userData'))
     const slots = join(path, 'enterprise-identity')
     chmodSync(slots, 0o500)
     try {
-      await card.getByRole('button', { name: 'Sign out', exact: true }).click()
-      await expect(settingsStatus(window)).toHaveAttribute('data-status', 'withdrawal-pending')
+      await signOutFromCard(window)
+      await expect(card).toHaveAttribute('data-status', 'withdrawal-pending')
       await expect(card.getByText('Earlier access may still work until it expires.', { exact: true })).toBeVisible()
       await card.getByRole('button', { name: 'Tools that use this sign-in' }).click()
-      await expect(card.getByTestId('enterprise-identity-tool')).toHaveAttribute('data-access', 'maybe-still-valid')
+      await expect(card.getByTestId('org-account-tool')).toHaveAttribute('data-access', 'maybe-still-valid')
       await expect(card.getByText('No access', { exact: true })).toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()
       await screenshotSizes(window, 'settings-card-withdrawal-pending', card, info)
@@ -301,9 +374,9 @@ test.describe('organization tool launchers', () => {
       chmodSync(slots, 0o700)
     }
     await card.getByRole('button', { name: 'Retry', exact: true }).click()
-    await expect(settingsStatus(window)).toHaveAttribute('data-status', 'signed-out')
-    await expect(card.getByTestId('enterprise-identity-tool')).toHaveAttribute('data-access', 'none')
-    await expect(card.getByText('Earlier access may still work until it expires.', { exact: true })).toHaveCount(0)
+    await expect(card).toHaveCount(0)
+    await expect(signInOption(window)).toBeVisible()
+    expect(await readState(window)).toMatchObject({ status: 'signed-out', boundTools: [{ access: 'none' }] })
   })
 })
 
@@ -344,6 +417,7 @@ test.describe('no organization configured', () => {
     await expect(indicator(window)).toHaveCount(0)
     await navigateToSettings(window)
     await expect(settingsCard(window)).toHaveCount(0)
+    await expect(signInOption(window)).toHaveCount(0)
     expect(await acceptanceApp.app.evaluate(() => (globalThis as unknown as { orgIdentityRequests: number }).orgIdentityRequests)).toBe(0)
   })
 })

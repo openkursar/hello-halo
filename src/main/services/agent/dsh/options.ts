@@ -131,9 +131,11 @@ export async function resolveDshOptions(
 
   const { mcpServers, bridge } = await resolveMcpServers(sdkOptions.mcpServers)
   // The runtime builds its children's environment itself, so organization
-  // access reaches its commands only through the launch spec.
+  // access and the session's browser reach its commands only through the launch spec.
   const orgEnv: Record<string, string> = {}
   applyOrgSessionEnv(orgEnv)
+  const { applyProgramHostEnvironment } = await import('../../browser-program-host')
+  await applyProgramHostEnvironment(orgEnv, sdkOptions.mcpServers as Record<string, unknown> | undefined)
 
   try {
     const launch = buildDshLaunchSpec({

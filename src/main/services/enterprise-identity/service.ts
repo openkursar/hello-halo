@@ -3,11 +3,13 @@ import {
   ENTERPRISE_IDENTITY_CONTRACT_VERSION,
   type EnterpriseIdentityProvider,
   type OrgProviderSnapshot,
+  type OrgSignInAlternative,
 } from '../../../shared/interfaces/enterprise-identity-provider'
 import type { OrgCapabilityView, OrgSignInResult, OrgSignInState } from '../../../shared/types/enterprise-identity'
 import { Emitter, type IDisposable } from '../../platform/event'
 import type { LoginWindow, LoginWindowOptions } from '../login-window'
 import { credentialFileOf, withdrawCredential, writeCredential } from './credential-slot'
+import { OrgBrowserCookies, type BrowserCookieStore } from './browser-cookies'
 
 export interface EnterpriseToolBindingConfig {
   toolId: string
@@ -27,10 +29,14 @@ export interface ToolCredentialBinding {
 export interface EnterpriseIdentityServiceOptions {
   name?: string
   bindings: EnterpriseToolBindingConfig[]
+  /** Sign-ins offered instead of the organization's, such as a model account people can sign in to directly. */
+  alternatives?: OrgSignInAlternative[]
   credentialDir: string
   loadProvider: () => Promise<EnterpriseIdentityProvider | null>
   openWindow: (options: LoginWindowOptions) => LoginWindow
   prepareCredentials?: () => Promise<boolean>
+  /** Where the provider's browser cookies go, and where their names are recorded between runs. */
+  browserCookies?: { store: () => BrowserCookieStore; recordFile: string }
   now?: () => number
   signInTimeoutMs?: number
   refreshMarginMs?: number
@@ -111,6 +117,7 @@ export class EnterpriseIdentityService {
   private readonly now: () => number
   private readonly log: Pick<Console, 'error' | 'warn' | 'info'>
   private readonly changes = new Emitter<OrgSignInState>()
+  private readonly cookies?: OrgBrowserCookies
   readonly onDidChange = this.changes.event
   private state: OrgSignInState
   private providerLoad?: Promise<void>
@@ -144,6 +151,14 @@ export class EnterpriseIdentityService {
       this.audiences.set(audience, { capability, generation: 0, pending: false, issueFailures: 0 })
     }
     this.state = this.baseState('loading')
+    if (options.browserCookies) {
+      this.cookies = new OrgBrowserCookies({
+        ...options.browserCookies,
+        now: this.now,
+        log: this.log,
+        ...(options.refreshMarginMs !== undefined ? { refreshMarginMs: options.refreshMarginMs } : {}),
+      })
+    }
   }
 
   getState(): OrgSignInState {
@@ -259,7 +274,8 @@ export class EnterpriseIdentityService {
       return
     }
     try {
-      const { flowId, url } = await provider.beginSignIn()
+      const alternatives = this.options.alternatives ?? []
+      const { flowId, url, origins } = await provider.beginSignIn(alternatives.length ? { alternatives } : undefined)
       if (typeof flowId !== 'string' || !flowId) throw new Error('Missing sign-in flow ID')
       attempt.flowId = flowId
       if (this.attempt !== attempt) {
@@ -268,11 +284,18 @@ export class EnterpriseIdentityService {
       }
       attempt.window = this.options.openWindow({
         url,
+        origins: Array.isArray(origins) ? origins.filter(origin => typeof origin === 'string') : undefined,
         title: this.options.name,
         onEnd: outcome => this.finishSignIn(attempt, outcome, provider),
       })
       this.reconcile()
       const outcome = await provider.awaitSignIn(flowId)
+      if (typeof outcome === 'object' && outcome !== null) {
+        const chosen = alternatives.find(alternative => alternative.id === outcome.alternative)
+        if (!chosen) throw new Error('Unknown sign-in alternative')
+        this.finishSignIn(attempt, { alternative: chosen.id })
+        return
+      }
       switch (outcome) {
         case 'succeeded':
         case 'failed':
@@ -340,6 +363,7 @@ export class EnterpriseIdentityService {
     const prepared = await this.prepareCredentials()
     if (this.disposed) return this.state
     const withdrawn = this.withdrawAll()
+    await this.cookies?.withdraw()
     this.reconcile()
     if (!prepared || !withdrawn) {
       if (!this.provider) this.publish(this.baseState(this.state.status, this.state.unavailableReason))
@@ -372,6 +396,7 @@ export class EnterpriseIdentityService {
     this.providerChanges?.dispose()
     if (this.attempt) this.finishSignIn(this.attempt, 'cancelled', this.provider)
     this.withdrawAll()
+    this.cookies?.dispose()
     this.changes.dispose()
   }
 
@@ -410,6 +435,7 @@ export class EnterpriseIdentityService {
     this.log.error(`[EnterpriseIdentity] ${reason}`)
     this.armTimer(Infinity, this.now())
     this.withdrawAll()
+    void this.cookies?.withdraw()
     this.subject = undefined
     this.publish(this.baseState('unavailable', unavailableReason))
   }
@@ -437,6 +463,7 @@ export class EnterpriseIdentityService {
       return
     }
     if (this.signedOutLocally) {
+      this.cookies?.sync(provider, undefined, null)
       this.publish({
         ...this.baseState('signed-out'),
         capabilities: capabilities.map(({ expiresAt: _expiresAt, ...capability }) => ({ ...capability, status: 'missing' as const })),
@@ -478,6 +505,8 @@ export class EnterpriseIdentityService {
       if (!slot.pending && slot.refreshAt !== undefined) deadline = Math.min(deadline, slot.refreshAt)
     }
     this.armTimer(deadline, now)
+    const signedIn = this.credentialsReady && status === 'active' && !this.issuanceBlocked && ready.size > 0
+    this.cookies?.sync(provider, snapshot.subject, signedIn ? `${snapshot.subject}\u0000${[...ready.keys()].sort().join(',')}` : null, resetRetries)
     this.publish({
       ...this.baseState(status),
       ...(snapshot.account && status === 'active' ? { account: { displayName: snapshot.account.displayName } } : {}),

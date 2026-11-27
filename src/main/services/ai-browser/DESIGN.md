@@ -85,6 +85,10 @@ AI turn so the very first `active-view` event reaches the renderer.
 | App chat | `apps/runtime/app-chat.ts` | Scoped context from `apps/runtime/app-chat-browser.ts`: a native chat's has a live view under its conversationId; an IM, team or HTTP chat's is unattended |
 | Automation | `apps/runtime/execute.ts` | Scoped context; a desktop Run once has a live view under its run key, every other run is unattended |
 
+`browserContextOfServer(server)` returns the context a mounted AI Browser server
+acts on. `services/browser-program-host` uses it to lend the same browser to
+programs the session runs; see its DESIGN.md.
+
 ### Adding new session-level side effects
 
 When a new feature requires a one-time session setup (e.g. registering event

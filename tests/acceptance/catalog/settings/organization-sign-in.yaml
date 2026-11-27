@@ -12,13 +12,15 @@ promises:
   optional: Organization sign-in is not required to chat with an already configured model, and controls are absent when the build has no organization configured.
   window: The sign-in window stays open across unrelated capability changes. Closing it cancels the attempt without discarding existing access.
   capabilities: The composer and Settings reflect whether access is missing, connected or expired. Expiry affects only the relevant capability; signing out clears access.
+  one-place: In Settings the sign-in sits among the AI model accounts, offered as a login while signed out and shown as one card once signed in. A model account that comes with it is chosen and edited in that card, and a login it stands for is not offered separately.
+  one-indicator: The composer shows one account indicator that also carries the selected model's quota.
   tool-access: Only the bound command receives organization access, and it stops receiving it after sign-out.
   withdrawal: If earlier access could not be withdrawn, Halo warns that it may still work and offers Retry rather than claiming sign-out succeeded.
   restoration: Halo shows that it is checking existing access rather than asking me to sign in before the check finishes.
 scenarios:
   - id: settings.organization-sign-in.signed-out
     title: Chat with an existing model while signed out
-    verifies: [optional, capabilities]
+    verifies: [optional, capabilities, one-place]
     platforms: &desktop [darwin, win32, linux]
     profiles: &regression [regression]
     evidence: app-e2e
@@ -28,9 +30,9 @@ scenarios:
     preconditions:
       - Organization sign-in is configured and no access has been granted. A local scripted model is configured separately.
     steps:
-      - Open a conversation and send a message. Open the organization card in Settings.
+      - Open a conversation and send a message. Open the AI model settings.
     expected:
-      - The composer invites me to sign in, my chat gets a reply, and Settings identifies all three capabilities as not signed in.
+      - The composer invites me to sign in, my chat gets a reply, and the AI model logins offer the organization sign-in, naming all three capabilities.
   - id: settings.organization-sign-in.home
     title: Sign in directly from the launch home without changing my model
     verifies: [optional, window]
@@ -66,7 +68,7 @@ scenarios:
     expected: [Model setup stays available and skipping it does not select a model.]
   - id: settings.organization-sign-in.lifecycle
     title: Sign in, cancel a renewal, inspect one expiry, and sign out
-    verifies: [window, capabilities]
+    verifies: [window, capabilities, one-place]
     platforms: *desktop
     profiles: *regression
     evidence: app-e2e
@@ -78,11 +80,11 @@ scenarios:
     steps:
       - Open sign-in from the composer and confirm using the mock phone method.
       - Start another sign-in and expire only Mail while the window is open. Close the window without confirming.
-      - Check the composer and Settings before signing out.
+      - Check the composer and the organization card among the AI model accounts, then sign out from the card.
     expected:
-      - Confirmation closes the window and connects every capability.
+      - Confirmation closes the window and connects every capability, and the card replaces the login option.
       - A capability update leaves the sign-in window open. Closing it cancels that attempt without signing me out or changing the remaining access.
-      - The composer draws attention to expired Mail; Models and Internal systems remain connected. Signing out resets access.
+      - The composer and the card draw attention to expired Mail; Models and Internal systems remain connected. Signing out names what stops working, resets access and offers the login again.
   - id: settings.organization-sign-in.restore
     title: Wait for existing access to be restored
     verifies: [restoration]
@@ -137,3 +139,19 @@ scenarios:
       - Sign out while the credential directory is non-writable. Restore its permissions and select Retry.
     expected:
       - Settings warns that earlier access may still work, and confirms sign-out only after Retry completes.
+  - id: settings.organization-sign-in.model-account
+    title: Use the model account that came with the sign-in
+    verifies: [one-place, one-indicator]
+    platforms: *desktop
+    profiles: *regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: *engine
+    notes: The fixture places the account in the profile and its provider reports a fixed quota; obtaining a real account through the sign-in is outside this case.
+    preconditions:
+      - The build declares a model account that comes with the organization sign-in, existing access is restored, and that account is in the profile.
+    steps:
+      - Open the AI model settings and choose the account in the organization card. Hover the composer indicator. Start signing out from the card, then cancel.
+    expected:
+      - The account appears only inside the organization card and becomes the one used for new chats. The single composer indicator shows its quota with the capabilities. Signing out first warns that messages using that model will fail, and cancelling keeps me signed in.

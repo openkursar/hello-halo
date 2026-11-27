@@ -33,6 +33,8 @@ Open Halo's Organization sign-in in Settings. In the sign-in window, choose **Ph
 
 The example product binding is illustrative: the fixture does not install `example-org.mock-tool` or attach tokens to any real tool. The Models capability is mock sign-in state, not a model endpoint.
 
+The product also declares **Example Cloud** as a model account that comes with the sign-in, so Settings offers Example Org in its place. `model-account-provider.mjs` never logs in or contacts a server; it only reports a fixed quota for an account a test places in the profile.
+
 ## Exercise specific states
 
 Set these variables on the `npm run dev` command; restart Halo to apply them:

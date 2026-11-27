@@ -3,7 +3,7 @@
  * Data-driven navigation items for the settings page
  */
 
-import { Building2, Brain, Palette, Settings, Globe, Info, Bell, Store, Code, Heart, Network } from 'lucide-react'
+import { Brain, Palette, Settings, Globe, Info, Bell, Store, Code, Heart, Network } from 'lucide-react'
 import type { SettingsNavItem } from './types'
 
 /**
@@ -11,12 +11,6 @@ import type { SettingsNavItem } from './types'
  * Order determines display order in the navigation
  */
 export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
-  {
-    // Shown only in builds that provide an organization sign-in.
-    id: 'enterprise-identity',
-    labelKey: 'Organization sign-in',
-    icon: Building2
-  },
   {
     id: 'ai-model',
     // Same glyph as the chat header's ModelSelector (ai-config/ModelSelector.tsx)
@@ -79,15 +73,9 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
  * Get filtered navigation items based on mode
  * @param isRemoteMode - Whether running in remote/web mode
  * @param serverBackend - Whether the remote backend is a headless server
- * @param hiddenIds - Sections this build or state does not show
  */
-export function getFilteredNavItems(
-  isRemoteMode: boolean,
-  serverBackend = false,
-  hiddenIds: readonly string[] = []
-): SettingsNavItem[] {
-  return SETTINGS_NAV_ITEMS.filter(({ id, audience }) => {
-    if (hiddenIds.includes(id)) return false
+export function getFilteredNavItems(isRemoteMode: boolean, serverBackend = false): SettingsNavItem[] {
+  return SETTINGS_NAV_ITEMS.filter(({ audience }) => {
     if (audience === 'desktop') return !isRemoteMode
     if (audience === 'headless') return isRemoteMode && serverBackend
     if (audience === 'node') return !isRemoteMode || serverBackend

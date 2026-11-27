@@ -370,6 +370,30 @@
             "required": ["toolId", "capability", "audience", "env"],
             "additionalProperties": false
           }
+        },
+        "modelAccounts": {
+          "type": "array",
+          "description": "Model accounts that come with this sign-in. Halo offers the sign-in in place of each listed provider's own login and shows the account as part of the sign-in.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "aiSourceType": { "type": "string", "minLength": 1, "description": "authProviders[].type whose account this sign-in provides." },
+              "capability": { "type": "string", "minLength": 1, "description": "Session capability that grants the account, e.g. model." },
+              "audience": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "description": "Audience the provider issues the account credential for." },
+              "directSignIn": {
+                "type": "object",
+                "description": "Lets people without the organization identity sign in to this account directly. The sign-in page offers it as another way in.",
+                "properties": {
+                  "label": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "object", "additionalProperties": { "type": "string" } }] },
+                  "description": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "object", "additionalProperties": { "type": "string" } }] }
+                },
+                "required": ["label"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["aiSourceType", "capability", "audience"],
+            "additionalProperties": false
+          }
         }
       },
       "required": ["provider"],

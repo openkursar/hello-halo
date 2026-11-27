@@ -15,10 +15,12 @@
  */
 
 import { browserContext, createScopedBrowserContext } from './context'
-import { createAIBrowserMcpServer } from './sdk-mcp-server'
+import { browserContextOfServer, createAIBrowserMcpServer } from './sdk-mcp-server'
 
 // Re-export public API
 export { createAIBrowserMcpServer }
+// Which browser a mounted AI Browser server acts on, for capabilities that share it.
+export { browserContextOfServer }
 export { createScopedBrowserContext }
 export { getInteractiveBrowserContext, releaseInteractiveBrowserContext } from './context'
 // Every page a conversation holds, for a client that missed the live events.

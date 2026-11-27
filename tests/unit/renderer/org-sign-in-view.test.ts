@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { orgIndicatorView, orgSignInCardView } from '../../../src/renderer/components/org-sign-in/org-sign-in-view'
+import { joinLabels, orgIndicatorView, organizationOptionIndex, orgSettingsPlacement, orgSignInCardView } from '../../../src/renderer/components/org-sign-in/org-sign-in-view'
 import type { OrgSignInState } from '../../../src/shared/types/enterprise-identity'
 
 const base: OrgSignInState = {
@@ -70,6 +70,7 @@ describe('orgIndicatorView', () => {
   it('stays quiet when some capabilities were simply never obtained', () => {
     const caps = [base.capabilities[0], { id: 'mail', label: 'Mail', status: 'missing' as const }]
     expect(orgIndicatorView({ ...base, capabilities: caps }, true).tone).toBe('ok')
+    expect(orgSignInCardView({ ...base, capabilities: caps }, false, true).offerSignIn).toBe(false)
   })
 
   it('treats all expired like signed out', () => {
@@ -81,5 +82,49 @@ describe('orgIndicatorView', () => {
 
   it('stays muted when the component is unavailable', () => {
     expect(orgIndicatorView({ ...base, status: 'unavailable' }, true).tone).toBe('muted')
+  })
+})
+
+describe('the sign-in among the AI model accounts', () => {
+  const signedOut: OrgSignInState = { ...base, status: 'signed-out', capabilities: base.capabilities.map(c => ({ ...c, status: 'missing' as const })) }
+
+  it('is a login option while signed out on the desktop, and absent from a remote client', () => {
+    expect(orgSettingsPlacement(signedOut, false, true, false)).toBe('option')
+    expect(orgSettingsPlacement(signedOut, false, false, false)).toBe('none')
+  })
+
+  it('is a card once there is anything to show or manage', () => {
+    expect(orgSettingsPlacement(base, false, true, false)).toBe('card')
+    expect(orgSettingsPlacement({ ...base, status: 'restoring' }, false, true, false)).toBe('card')
+    expect(orgSettingsPlacement({ ...base, status: 'unavailable', unavailableReason: 'temporary' }, false, true, false)).toBe('card')
+    expect(orgSettingsPlacement({ ...signedOut, withdrawalPending: true }, false, true, false)).toBe('card')
+    expect(orgSettingsPlacement(null, true, true, false)).toBe('card')
+  })
+
+  it('keeps the model account it brought inside the card, whatever the sign-in state', () => {
+    expect(orgSettingsPlacement(signedOut, false, true, true)).toBe('card')
+    expect(orgSettingsPlacement(null, false, true, true)).toBe('card')
+  })
+
+  it('shows nothing before the first state arrives, so nothing jumps into place', () => {
+    expect(orgSettingsPlacement(null, false, true, false)).toBe('none')
+    expect(orgSettingsPlacement({ ...base, status: 'loading' }, false, true, false)).toBe('none')
+  })
+
+  it('takes the place of the login it stands for', () => {
+    type Login = { type: string; organizationSignIn?: true }
+    const a: Login = { type: 'a' }
+    const cloud: Login = { type: 'cloud', organizationSignIn: true }
+    const b: Login = { type: 'b' }
+    const all = [a, cloud, b]
+    const shown = [a, b]
+    expect(organizationOptionIndex(all, shown)).toBe(1)
+    expect(organizationOptionIndex([cloud, a], [a])).toBe(0)
+    expect(organizationOptionIndex([a, b], [a, b])).toBe(0)
+  })
+
+  it('lists capabilities the way the reader speaks', () => {
+    expect(joinLabels(['Models', 'Internal systems', 'Mail'], 'en')).toBe('Models, Internal systems, and Mail')
+    expect(joinLabels(['模型', '内网系统', '邮件'], 'zh-CN')).toBe('模型、内网系统和邮件')
   })
 })

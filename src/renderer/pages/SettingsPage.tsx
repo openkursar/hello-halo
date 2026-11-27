@@ -27,8 +27,7 @@ import {
   AboutSection,
   MessageChannelsSection,
   RegistrySection,
-  RecommendSection,
-  EnterpriseIdentitySection
+  RecommendSection
 } from '../components/settings'
 
 export function SettingsPage() {
@@ -51,10 +50,6 @@ export function SettingsPage() {
     if (!isRemoteMode) scrollToSection(focusSection)
     useAppStore.getState().clearSettingsFocus()
   }, [settingsFocus, focusSection, isRemoteMode])
-
-  // The company sign-in section exists only in builds that provide one.
-  const [identityAvailable, setIdentityAvailable] = useState(false)
-  const hiddenSections = identityAvailable ? [] : ['enterprise-identity']
 
   // Handle navigation click
   const handleNavClick = useCallback((sectionId: string) => {
@@ -79,7 +74,6 @@ export function SettingsPage() {
             serverBackend={serverBackend}
             activeSection={activeSection}
             onSectionChange={handleNavClick}
-            hiddenIds={hiddenSections}
           />
         )}
 
@@ -92,16 +86,12 @@ export function SettingsPage() {
               serverBackend={serverBackend}
               activeSection={activeSection}
               onSectionChange={handleNavClick}
-              hiddenIds={hiddenSections}
             />
           )}
 
           {/* Scrollable Content */}
           <div className="p-6">
             <div className="max-w-2xl mx-auto space-y-6">
-              {/* Organization sign-in - renders nothing in builds without one */}
-              <EnterpriseIdentitySection onAvailabilityChange={setIdentityAvailable} />
-
               {/* AI Sources Section (v2) */}
               <section id="ai-model" className="bg-card rounded-xl border border-border-faint p-6">
                 <h2 className="text-lg font-medium mb-4">{t('AI Model')}</h2>

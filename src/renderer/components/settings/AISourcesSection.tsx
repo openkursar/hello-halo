@@ -24,6 +24,11 @@ import { useGroupEditRequest } from '../../stores/ai-group-ui.store'
 import type { AIGroupChange } from '../../../shared/rpc/contracts/ai-groups.contract'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
 import { CLI_DELEGATED_PROVIDER_ID } from '../../../shared/constants/claude-models'
+import { isElectron, orgSignInOffered } from '../../api/transport'
+import { useOrgSignInStore } from '../../stores/org-sign-in.store'
+import { OrgAccountCard, ORG_CARD_ID } from '../org-sign-in/OrgAccountCard'
+import { OrgSignInOption } from '../org-sign-in/OrgSignInOption'
+import { organizationOptionIndex, orgSettingsPlacement } from '../org-sign-in/org-sign-in-view'
 
 const SubagentModelsManager = lazy(() => import('../subagent-models/SubagentModelsManager'))
 
@@ -168,6 +173,16 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   const loginProviderRef = useRef<string | null>(null)
   const loginErrorRef = useRef<string | null>(null)
   const { showConfirm, DialogComponent } = useConfirmDialog()
+  const organization = orgSignInOffered()
+  const orgState = useOrgSignInStore(s => s.state)
+  const orgReadFailed = useOrgSignInStore(s => s.readFailed)
+  const startOrgSignIn = useOrgSignInStore(s => s.start)
+  const orgAccount = organization ? aiSources.sources.find(source => source.managedBy === 'organization') : undefined
+  const orgPlacement = organization ? orgSettingsPlacement(orgState, orgReadFailed, isElectron(), !!orgAccount) : 'none'
+  const orgCardId = orgAccount?.id ?? ORG_CARD_ID
+  const listedSources = orgAccount ? aiSources.sources.filter(source => source !== orgAccount) : aiSources.sources
+
+  useEffect(() => { if (organization) startOrgSignIn() }, [organization, startOrgSignIn])
 
   useEffect(() => {
     mountedRef.current = true
@@ -574,15 +589,49 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   ) : null
 
   const availablePresetProviders = oauthProviders.filter(provider => provider.preset && (providerEditor?.preset?.type === provider.type || !aiSources.sources.some(source => source.isPreset === true && source.apiUrl === provider.preset!.baseUrl)))
-  const availableOAuthProviders = oauthProviders.filter(provider => !provider.preset && (provider.type !== CLI_DELEGATED_PROVIDER_ID || !api.isRemoteMode() && !aiSources.sources.some(source => source.provider === provider.type)))
+  const loginProviders = oauthProviders.filter(provider => !provider.preset)
+  const availableOAuthProviders = loginProviders.filter(provider => !provider.organizationSignIn && (provider.type !== CLI_DELEGATED_PROVIDER_ID || !api.isRemoteMode() && !aiSources.sources.some(source => source.provider === provider.type)))
+  const loginRows = availableOAuthProviders.map(provider => (
+    <AISourceInlinePanel
+      key={provider.type}
+      id={provider.type}
+      title={getLocalizedText(provider.displayName)}
+      description={provider.type !== CLI_DELEGATED_PROVIDER_ID && aiSources.sources.some(source => source.provider === provider.type) ? t('Add another account') : getLocalizedText(provider.description)}
+      icon={<ProviderIconTile provider={provider} size="sm" />}
+      open={loginPanel?.provider === provider.type}
+      busy={saving || !!loginPanel && !loginPanel.error}
+      onOpen={provider.type === CLI_DELEGATED_PROVIDER_ID
+        ? () => { if (!operationRef.current) setDelegatedLoginOpen(true) }
+        : () => startLogin(provider.type)}
+    >
+      {loginPanel?.provider === provider.type ? loginContent : null}
+    </AISourceInlinePanel>
+  ))
+  if (orgPlacement === 'option') {
+    loginRows.splice(organizationOptionIndex(loginProviders, availableOAuthProviders), 0, <OrgSignInOption key="organization-sign-in" busy={saving} />)
+  }
 
   return (
     <>
       <div ref={sectionRef} className="space-y-4">
         {error && renderError(error)}
-        {aiSources.sources.length > 0 || groups.length > 0 ? (
+        {aiSources.sources.length > 0 || groups.length > 0 || orgPlacement === 'card' ? (
           <div className="space-y-2">
-            {aiSources.sources.map(source => <AISourceCard
+            {orgPlacement === 'card' && <OrgAccountCard
+              account={orgAccount}
+              chosen={!!orgAccount && !chosenGroupId && orgAccount.id === aiSources.currentId}
+              expanded={expandedSourceId === orgCardId}
+              busy={saving}
+              editor={orgAccount && providerEditor?.sourceId === orgAccount.id ? providerContent : undefined}
+              onToggle={() => {
+                if (operationRef.current) return
+                prepareView({ kind: 'source', id: orgCardId }, 'anchor', true)
+                setExpandedSourceId(current => current === orgCardId ? null : orgCardId)
+              }}
+              onChoose={() => { if (orgAccount) void handleSwitchSource(orgAccount.id) }}
+              onEdit={() => { if (orgAccount) openEditor({ kind: 'provider', sourceId: orgAccount.id }) }}
+            />}
+            {listedSources.map(source => <AISourceCard
               key={source.id}
               source={source}
               chosen={!chosenGroupId && source.id === aiSources.currentId}
@@ -657,7 +706,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           )}
         </div>
 
-        {(availablePresetProviders.length > 0 || availableOAuthProviders.length > 0) && (
+        {(availablePresetProviders.length > 0 || loginRows.length > 0) && (
           <div className="space-y-4 border-t border-border pt-4">
             {availablePresetProviders.length > 0 && (
               <div>
@@ -680,26 +729,11 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                 </div>
               </div>
             )}
-            {availableOAuthProviders.length > 0 && (
+            {loginRows.length > 0 && (
               <div>
                 <h4 className="mb-3 text-sm font-medium text-muted-foreground">{t('OAuth Login')}</h4>
                 <div className="space-y-2">
-                  {availableOAuthProviders.map(provider => (
-                    <AISourceInlinePanel
-                      key={provider.type}
-                      id={provider.type}
-                      title={getLocalizedText(provider.displayName)}
-                      description={provider.type !== CLI_DELEGATED_PROVIDER_ID && aiSources.sources.some(source => source.provider === provider.type) ? t('Add another account') : getLocalizedText(provider.description)}
-                      icon={<ProviderIconTile provider={provider} size="sm" />}
-                      open={loginPanel?.provider === provider.type}
-                      busy={saving || !!loginPanel && !loginPanel.error}
-                      onOpen={provider.type === CLI_DELEGATED_PROVIDER_ID
-                        ? () => { if (!operationRef.current) setDelegatedLoginOpen(true) }
-                        : () => startLogin(provider.type)}
-                    >
-                      {loginPanel?.provider === provider.type ? loginContent : null}
-                    </AISourceInlinePanel>
-                  ))}
+                  {loginRows}
                 </div>
               </div>
             )}

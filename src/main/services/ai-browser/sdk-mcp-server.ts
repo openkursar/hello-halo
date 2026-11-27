@@ -70,11 +70,23 @@ export function createAIBrowserMcpServer(scopedContext?: BrowserContext, workDir
     ctx.workDir = workDir
   }
   const tools = buildAllTools(ctx)
-  return createSdkMcpServer({
+  const server = createSdkMcpServer({
     name: 'ai-browser',
     version: '1.0.0',
     description: AI_BROWSER_DESCRIPTION,
     instructions: AI_BROWSER_INSTRUCTIONS,
     tools
   })
+  serverContexts.set(server, ctx)
+  return server
+}
+
+const serverContexts = new WeakMap<object, BrowserContext>()
+
+/**
+ * The browser a mounted AI Browser server acts on, or undefined for any other
+ * value. Lets a session's other capabilities follow the same browser as its tools.
+ */
+export function browserContextOfServer(server: unknown): BrowserContext | undefined {
+  return typeof server === 'object' && server !== null ? serverContexts.get(server) : undefined
 }

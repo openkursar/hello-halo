@@ -9,6 +9,11 @@ vi.mock('react', async original => ({
   useEffect: (effect: () => void | (() => void), deps: unknown[]) => env.runner.effect(effect, deps),
   useLayoutEffect: () => {},
 }))
+// Without an organization sign-in in this build, its store is never started.
+vi.mock('../../../src/renderer/stores/org-sign-in.store', () => {
+  const store = { state: null, readFailed: false, lastResult: null, start: () => {}, signIn: async () => 'cancelled', signOut: async () => {}, retry: async () => {} }
+  return { useOrgSignInStore: Object.assign((select: (value: typeof store) => unknown) => select(store), { getState: () => store }) }
+})
 vi.mock('../../../src/renderer/api', () => ({ api: env.api }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }), getCurrentLanguage: () => 'en' }))
 vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: () => env.app }))
@@ -416,8 +421,9 @@ describe('first-run setup OAuth ownership', () => {
     env.app.config.isFirstLaunch = true
     const runner = new ComponentRunner()
     const render = () => runner.render(SetupPage)
-    expect(render()!.type).toBe(PreferencesStep)
-    render()!.props.onContinue()
+    const preferences = () => nodes(render()).find(node => node.type === PreferencesStep)
+    expect(preferences()).toBeDefined()
+    preferences().props.onContinue()
     expect(nodes(render()).some(node => node.type === LoginSelector)).toBe(true)
   })
 

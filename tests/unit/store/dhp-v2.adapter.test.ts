@@ -307,45 +307,46 @@ describe('DhpV2Adapter — CLI tool catalog', () => {
     expect((await adapter.serverFeatures(source('a', 'http://a.test')))?.cliTools).toBe(false)
   })
 
-  it('reads the catalog with the account token and treats absence as no catalog', async () => {
+  it('reads the catalog from the account-free route without a token and treats absence as no catalog', async () => {
     const adapter = new DhpV2Adapter()
-    fetchMock.mockResolvedValueOnce(reply(200, { schema: 'halo.cli.catalog/1', tools: [] }, { ETag: '"abc"' }))
-    expect(await adapter.fetchCliCatalog(SRC, { token: 'tok' }))
-      .toEqual({ status: 'ok', document: { schema: 'halo.cli.catalog/1', tools: [] }, validator: '"abc"' })
-    expect(fetchMock.mock.calls[0][0]).toBe('http://reg.test/clis.json')
+    fetchMock.mockResolvedValueOnce(reply(200, { schema: 'halo.cli.catalog/2', tools: [] }, { ETag: '"abc"' }))
+    expect(await adapter.fetchCliCatalog(SRC))
+      .toEqual({ status: 'ok', document: { schema: 'halo.cli.catalog/2', tools: [] }, validator: '"abc"' })
+    expect(fetchMock.mock.calls[0][0]).toBe('http://reg.test/dist/clis.json')
     const headers = fetchMock.mock.calls[0][1]?.headers as Record<string, string>
-    expect(headers.Authorization).toBe('Bearer tok')
+    expect(headers.Authorization).toBeUndefined()
     expect(headers['If-None-Match']).toBeUndefined()
 
     fetchMock.mockResolvedValueOnce(reply(404))
-    expect(await adapter.fetchCliCatalog(SRC, { token: 'tok' })).toEqual({ status: 'absent' })
+    expect(await adapter.fetchCliCatalog(SRC)).toEqual({ status: 'absent' })
   })
 
   it('revalidates with the previous ETag and reports an unchanged catalog without a body', async () => {
     const adapter = new DhpV2Adapter()
     fetchMock.mockResolvedValueOnce(reply(304))
-    expect(await adapter.fetchCliCatalog(SRC, { token: 'tok' }, '"abc"')).toEqual({ status: 'unchanged' })
+    expect(await adapter.fetchCliCatalog(SRC, '"abc"')).toEqual({ status: 'unchanged' })
     expect((fetchMock.mock.calls[0][1]?.headers as Record<string, string>)['If-None-Match']).toBe('"abc"')
   })
 
-  it('surfaces a rejected token as the signed-out sentinel and other faults as errors', async () => {
+  it('reports server faults as errors, never as a signed-out state', async () => {
     const adapter = new DhpV2Adapter()
     fetchMock.mockResolvedValueOnce(reply(401))
-    await expect(adapter.fetchCliCatalog(SRC, { token: 'stale' })).rejects.toThrow(STORE_NOT_SIGNED_IN)
+    await expect(adapter.fetchCliCatalog(SRC)).rejects.toThrow('cli-catalog failed: 401')
     fetchMock.mockResolvedValueOnce(reply(503))
-    await expect(adapter.fetchCliCatalog(SRC, { token: 'tok' })).rejects.toThrow('cli-catalog failed: 503')
+    await expect(adapter.fetchCliCatalog(SRC)).rejects.toThrow('cli-catalog failed: 503')
   })
 
   it('downloads a package path on the same source, keeping a gateway prefix', async () => {
     const adapter = new DhpV2Adapter()
     const gateway = source('gw', 'https://gw.test/store/')
     fetchMock.mockResolvedValueOnce(binary(200, new Uint8Array([1, 2, 3]), { 'Content-Length': '3' }))
-    const bytes = await adapter.downloadCliPackage(gateway, '/clis/com.example.tool/1.0.0/package.hcli', { token: 'tok' }, 10)
+    const bytes = await adapter.downloadCliPackage(gateway, '/dist/clis/com.example.tool/1.0.0/bundles/1.zip', 10)
     expect(Array.from(bytes)).toEqual([1, 2, 3])
-    expect(fetchMock.mock.calls[0][0]).toBe('https://gw.test/store/clis/com.example.tool/1.0.0/package.hcli')
+    expect(fetchMock.mock.calls[0][0]).toBe('https://gw.test/store/dist/clis/com.example.tool/1.0.0/bundles/1.zip')
+    expect((fetchMock.mock.calls[0][1]?.headers as Record<string, string>).Authorization).toBeUndefined()
   })
 
-  it('refuses a catalog path that could send the token elsewhere', async () => {
+  it('refuses a catalog path that leaves the source', async () => {
     const adapter = new DhpV2Adapter()
     for (const bad of [
       'https://evil.test/x.hcli',
@@ -356,7 +357,7 @@ describe('DhpV2Adapter — CLI tool catalog', () => {
       '/clis\\a',
       '/clis/a?x=1',
     ]) {
-      await expect(adapter.downloadCliPackage(SRC, bad, { token: 'tok' }, 10)).rejects.toThrow('not a plain path')
+      await expect(adapter.downloadCliPackage(SRC, bad, 10)).rejects.toThrow('not a plain path')
     }
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -364,16 +365,16 @@ describe('DhpV2Adapter — CLI tool catalog', () => {
   it('refuses a body larger than the limit, declared or actual', async () => {
     const adapter = new DhpV2Adapter()
     fetchMock.mockResolvedValueOnce(binary(200, new Uint8Array(4), { 'Content-Length': '400' }))
-    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', { token: 'tok' }, 10)).rejects.toThrow('larger than allowed')
+    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', 10)).rejects.toThrow('larger than allowed')
     fetchMock.mockResolvedValueOnce(binary(200, new Uint8Array(11)))
-    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', { token: 'tok' }, 10)).rejects.toThrow('larger than allowed')
+    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', 10)).rejects.toThrow('larger than allowed')
   })
 
-  it('reports a withdrawn package and a rejected token distinctly', async () => {
+  it('reports a withdrawn package distinctly from other faults', async () => {
     const adapter = new DhpV2Adapter()
     fetchMock.mockResolvedValueOnce(binary(404, new Uint8Array()))
-    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', { token: 'tok' }, 10)).rejects.toThrow('no longer available')
+    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', 10)).rejects.toThrow('no longer available')
     fetchMock.mockResolvedValueOnce(binary(401, new Uint8Array()))
-    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', { token: 'tok' }, 10)).rejects.toThrow(STORE_NOT_SIGNED_IN)
+    await expect(adapter.downloadCliPackage(SRC, '/clis/a/1.0.0/package.hcli', 10)).rejects.toThrow('cli-package download failed: 401')
   })
 })

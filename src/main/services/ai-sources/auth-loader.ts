@@ -19,7 +19,7 @@ import { pathToFileURL } from 'url'
 import { existsSync } from 'fs'
 import type { AISourceProvider, OAuthAISourceProvider } from '../../../shared/interfaces'
 import { type AuthProviderConfig, type AISourceType } from '../../../shared/types'
-import { loadProductConfig, getProductConfigPath } from '../../foundation/product-config'
+import { loadProductConfig, getProductConfigPath, getOrganizationModelProviderTypes } from '../../foundation/product-config'
 
 // AuthProviderConfig is defined in src/shared/types/ai-sources.ts so the main
 // loader and the renderer setup UI share one source of truth. Re-exported here
@@ -175,7 +175,10 @@ export function loadAuthProviders(): LoadedProvider[] {
  */
 export function getEnabledAuthProviderConfigs(): AuthProviderConfig[] {
   const config = loadProductConfig()
-  return config.authProviders.filter(p => p.enabled && isPlatformSupported(p))
+  const organization = new Set(getOrganizationModelProviderTypes())
+  return config.authProviders
+    .filter(p => p.enabled && isPlatformSupported(p))
+    .map(p => organization.has(p.type) ? { ...p, organizationSignIn: true as const } : p)
 }
 
 /** A provider without a `platforms` list runs everywhere. */

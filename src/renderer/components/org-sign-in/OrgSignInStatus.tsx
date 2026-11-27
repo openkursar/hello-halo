@@ -1,24 +1,35 @@
 /**
  * OrgSignInStatus — the organization sign-in indicator beside the composer's
- * send controls. Independent of the selected model. A build without
- * organization sign-in mounts nothing and makes no request; otherwise it stays,
- * and cannot be dismissed, because it is the place to sign in from while chatting.
+ * send controls. It also carries the selected model's quota ring, so the
+ * composer shows one account indicator, not two. A build without organization
+ * sign-in mounts nothing and makes no request (the composer shows QuotaPill);
+ * otherwise it stays, and cannot be dismissed, because it is the place to sign
+ * in from while chatting.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Building2, CircleAlert, Loader2 } from 'lucide-react'
+import { AlertTriangle, Building2, CircleAlert, Loader2 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { isElectron, orgSignInOffered } from '../../api/transport'
 import { useOrgSignInStore } from '../../stores/org-sign-in.store'
+import { QuotaRing, useComposerQuota } from '../ai-config/QuotaPill'
+import { QuotaDetails } from '../ai-config/QuotaPopover'
 import { orgIndicatorView } from './org-sign-in-view'
 import { OrgCapabilityList } from './OrgCapabilityList'
 import { OrgSignInNotice } from './OrgSignInNotice'
 
-export function OrgSignInStatus({ invitation = false }: { invitation?: boolean }) {
-  return orgSignInOffered() ? <OrgSignInIndicator invitation={invitation} /> : null
+interface OrgSignInStatusProps {
+  /** The invitation above an empty conversation instead of the indicator. */
+  invitation?: boolean
+  /** Source whose quota the indicator shows. */
+  quotaSourceId?: string
 }
 
-function OrgSignInIndicator({ invitation }: { invitation: boolean }) {
+export function OrgSignInStatus({ invitation = false, quotaSourceId }: OrgSignInStatusProps) {
+  return orgSignInOffered() ? <OrgSignInIndicator invitation={invitation} quotaSourceId={quotaSourceId} /> : null
+}
+
+function OrgSignInIndicator({ invitation, quotaSourceId }: { invitation: boolean; quotaSourceId?: string }) {
   const { t } = useTranslation()
   const state = useOrgSignInStore(s => s.state)
   const readFailed = useOrgSignInStore(s => s.readFailed)
@@ -33,6 +44,7 @@ function OrgSignInIndicator({ invitation }: { invitation: boolean }) {
   const anchor = useRef<HTMLDivElement | null>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const desktop = isElectron()
+  const quota = useComposerQuota(invitation ? undefined : quotaSourceId)
 
   useEffect(() => { start() }, [start])
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
@@ -58,6 +70,7 @@ function OrgSignInIndicator({ invitation }: { invitation: boolean }) {
     } else {
       setNarrowBox(null)
     }
+    if (!open) quota.opened()
     setOpen(true)
   }
   const hide = () => {
@@ -76,13 +89,14 @@ function OrgSignInIndicator({ invitation }: { invitation: boolean }) {
     ? (nothingWorks
         ? t('Not signed in to {{name}}', { name })
         : t('{{name}}: {{capability}} needs signing in again', { name, capability: view.expired.map(c => c.label).join(', ') }))
-    : view.tone === 'pending' ? t('Checking {{name}} sign-in', { name }) : name
+    : view.tone === 'pending' ? t('Checking {{name}} sign-in', { name })
+      : quota.snapshot ? `${name}. ${quota.label}` : name
 
   const icon = state?.signingIn || view.tone === 'pending'
     ? <Loader2 className="w-4 h-4 animate-spin text-faint-foreground" />
     : view.tone === 'attention'
       ? <CircleAlert className="w-4 h-4 text-halo-warning" />
-      : <Building2 className={`w-4 h-4 ${view.tone === 'muted' ? 'text-faint-foreground' : 'text-muted-foreground'}`} />
+      : <QuotaRing ratio={quota.ratio} low={quota.low} filled={quota.hasBar} />
 
   const canAct = desktop && !state?.signingIn
   const resultNote = lastResult === 'failed'
@@ -112,6 +126,7 @@ function OrgSignInIndicator({ invitation }: { invitation: boolean }) {
         className="relative flex h-8 w-6 items-center justify-center rounded-sm transition-colors ease-halo hover:bg-secondary"
       >
         {icon}
+        {quota.stale && view.tone !== 'attention' && <AlertTriangle aria-hidden="true" className="absolute right-0.5 top-0.5 w-2.5 h-2.5 text-amber-500" />}
       </button>
 
       {open && placePanel(narrowBox, (
@@ -158,6 +173,11 @@ function OrgSignInIndicator({ invitation }: { invitation: boolean }) {
               ) : (
                 <p className="text-xs text-muted-foreground">{t('Sign in from the Halo desktop app.')}</p>
               )
+            )}
+            {quota.snapshot && (
+              <div className="border-t border-border-faint pt-3" data-testid="org-sign-in-quota">
+                <QuotaDetails snapshot={quota.snapshot} stale={quota.stale} />
+              </div>
             )}
           </div>
         </div>

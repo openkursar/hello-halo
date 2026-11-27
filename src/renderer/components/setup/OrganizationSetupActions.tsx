@@ -14,7 +14,9 @@ export function OrganizationSetupActions({ onContinue, hasModel }: { onContinue:
   const run = async (login: boolean) => {
     setBusy(true)
     try {
-      if (!login || await signIn() === 'succeeded') await onContinue()
+      if (!login) { await onContinue(); return }
+      const result = await signIn()
+      if (result === 'succeeded' || typeof result === 'object') await onContinue()
     } finally { setBusy(false) }
   }
   const primary = 'w-full rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-60'

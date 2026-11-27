@@ -3,15 +3,18 @@ import { app, powerMonitor } from 'electron'
 import { promises as fsp } from 'fs'
 import { dirname, join } from 'path'
 import { pathToFileURL } from 'url'
-import type { EnterpriseIdentityProvider } from '../../../shared/interfaces/enterprise-identity-provider'
+import type { EnterpriseIdentityProvider, OrgSignInAlternative } from '../../../shared/interfaces/enterprise-identity-provider'
 import { resolveLocalizedText } from '../../../shared/types/ai-sources'
 import type { OrgSignInResult, OrgSignInState } from '../../../shared/types/enterprise-identity'
-import { getEnterpriseIdentityConfig, getProductConfigPath } from '../../foundation/product-config'
+import { getEnterpriseIdentityConfig, getProductConfigPath, type EnterpriseModelAccountConfig } from '../../foundation/product-config'
 import { openLoginWindow } from '../login-window'
 import { EnterpriseIdentityService, toolCredentialBindings, type ToolCredentialBinding } from './service'
+import type { BrowserCookieStore } from './browser-cookies'
 
 export interface EnterpriseIdentityHostOptions {
   credentialDir: string
+  /** The built-in browser's cookies and a file outside `credentialDir` naming what was written there. */
+  browserCookies?: { store: () => BrowserCookieStore; recordFile: string }
   onDidChange: (state: OrgSignInState) => void
 }
 
@@ -70,17 +73,34 @@ async function loadProvider(modulePath: string): Promise<EnterpriseIdentityProvi
   return (mod[getter] as () => EnterpriseIdentityProvider)()
 }
 
+function directSignInAlternatives(accounts: EnterpriseModelAccountConfig[] | undefined, locale: string): OrgSignInAlternative[] {
+  if (!Array.isArray(accounts)) return []
+  const seen = new Set<string>()
+  return accounts.flatMap(account => {
+    const id = account?.aiSourceType
+    const direct = account?.directSignIn
+    if (typeof id !== 'string' || !id || seen.has(id) || !direct?.label) return []
+    seen.add(id)
+    const label = resolveLocalizedText(direct.label, locale)
+    const description = direct.description ? resolveLocalizedText(direct.description, locale) : ''
+    return label ? [{ id, label, ...(description ? { description } : {}) }] : []
+  })
+}
+
 function getService(): EnterpriseIdentityService | undefined {
   if (service) return service
   const config = getEnterpriseIdentityConfig()
   if (!config || !hostOptions) return undefined
   const identityCredentialDir = hostOptions.credentialDir
+  const locale = app.getLocale()
   const identity = new EnterpriseIdentityService({
-    name: config.name ? resolveLocalizedText(config.name, app.getLocale()) : undefined,
+    name: config.name ? resolveLocalizedText(config.name, locale) : undefined,
     bindings: config.toolCredentials ?? [],
+    alternatives: directSignInAlternatives(config.modelAccounts, locale),
     credentialDir: identityCredentialDir,
     loadProvider: () => loadProvider(config.provider),
     openWindow: openLoginWindow,
+    ...(hostOptions.browserCookies ? { browserCookies: hostOptions.browserCookies } : {}),
     prepareCredentials: () => {
       const cleanup = leftovers ?? clearLeftoverCredentials(identityCredentialDir)
       leftovers = undefined

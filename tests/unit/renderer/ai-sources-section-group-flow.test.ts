@@ -28,6 +28,11 @@ vi.mock('../../../src/renderer/i18n', () => ({
   useTranslation: () => ({ t: (text: string, values?: Record<string, unknown>) => text.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values?.[name] ?? '')) }),
   getCurrentLanguage: () => 'en',
 }))
+// Without an organization sign-in in this build, its store is never started.
+vi.mock('../../../src/renderer/stores/org-sign-in.store', () => {
+  const store = { state: null, readFailed: false, lastResult: null, start: () => {}, signIn: async () => 'cancelled', signOut: async () => {}, retry: async () => {} }
+  return { useOrgSignInStore: Object.assign((select: (value: typeof store) => unknown) => select(store), { getState: () => store }) }
+})
 vi.mock('../../../src/renderer/api', () => ({ api: env.api }))
 vi.mock('../../../src/renderer/hooks/useOAuthLogin', () => ({ useOAuthLogin: () => ({ login: null, start: vi.fn(), cancel: vi.fn() }) }))
 vi.mock('../../../src/renderer/components/settings/ProviderSelector', () => ({ ProviderSelector: () => null }))

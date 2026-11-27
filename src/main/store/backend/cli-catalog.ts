@@ -23,7 +23,6 @@
 
 import { getPrimaryRegistry } from '../registry.service'
 import { getAdapter } from '../adapters'
-import { getStoreIdentityToken } from './identity'
 import {
   BUNDLE_MAX_BYTES,
   applyCatalogStatus,
@@ -31,14 +30,13 @@ import {
   readCliToolState,
 } from '../../services/cli-tools'
 import type { BundleReference, CatalogToolStatus, CliToolState } from '../../services/cli-tools'
-import { STORE_NOT_SIGNED_IN } from '../../../shared/store/store-types'
 import type {
   CliCatalog,
   CliCatalogTool,
   CliCatalogVersion,
   RegistrySource,
 } from '../../../shared/store/store-types'
-import type { RegistryAdapter, RegistryAuth } from '../adapters/types'
+import type { RegistryAdapter } from '../adapters/types'
 
 export const CLI_CATALOG_SCHEMA = 'halo.cli.catalog/2'
 
@@ -82,12 +80,6 @@ function primaryEndpoint<M extends 'fetchCliCatalog' | 'downloadCliPackage'>(
   const adapter = getAdapter(source)
   const call = adapter[method]
   return call ? { source, call: call.bind(adapter) as NonNullable<RegistryAdapter[M]> } : null
-}
-
-async function requireAuth(): Promise<RegistryAuth> {
-  const token = await getStoreIdentityToken()
-  if (!token) throw new Error(STORE_NOT_SIGNED_IN)
-  return { token }
 }
 
 function currentPlatform(): string {
@@ -208,7 +200,7 @@ async function readCatalog(): Promise<CatalogToolRecord[] | null> {
   if (!endpoint) return null
   const key = `${endpoint.source.id} ${endpoint.source.url}`
   const validator = cached?.source === key ? cached.validator : undefined
-  const result = await endpoint.call(endpoint.source, await requireAuth(), validator)
+  const result = await endpoint.call(endpoint.source, validator)
   if (result.status === 'absent') {
     cached = null
     return null
@@ -288,6 +280,6 @@ export async function downloadAndInstall(entry: CatalogVersionRecord): Promise<v
   const endpoint = primaryEndpoint('downloadCliPackage')
   if (!endpoint) throw new Error('This store does not offer CLI tools')
   const { url, ...ref } = entry.bundle
-  const bytes = await endpoint.call(endpoint.source, url, await requireAuth(), Math.min(ref.size, BUNDLE_MAX_BYTES))
+  const bytes = await endpoint.call(endpoint.source, url, Math.min(ref.size, BUNDLE_MAX_BYTES))
   await installCatalogBundle(bytes, ref)
 }

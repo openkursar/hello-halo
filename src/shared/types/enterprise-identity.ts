@@ -51,7 +51,8 @@ export interface OrgSignInState {
   unavailableReason?: 'incompatible' | 'temporary'
 }
 
-export type OrgSignInResult = 'succeeded' | 'cancelled' | 'expired' | 'failed' | 'busy'
+/** `{ alternative }`: the person chose to sign in to that model account directly instead. */
+export type OrgSignInResult = 'succeeded' | 'cancelled' | 'expired' | 'failed' | 'busy' | { alternative: string }
 
 /** Ready, expired or missing capability counts, for compact displays. */
 export function summarizeOrgSignIn(state: OrgSignInState): { ready: number; attention: number } {

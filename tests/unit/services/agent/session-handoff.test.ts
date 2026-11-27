@@ -193,6 +193,7 @@ vi.mock('../../../../src/main/services/memory-consolidation', () => ({ requestCo
 vi.mock('../../../../src/main/platform/task-state', () => ({ getTaskStateService: () => null }))
 vi.mock('../../../../src/main/services/ai-browser', () => ({
   AI_BROWSER_SYSTEM_PROMPT: '', createAIBrowserMcpServer: vi.fn(), createScopedBrowserContext: vi.fn(),
+  browserContextOfServer: () => undefined,
 }))
 vi.mock('../../../../src/main/services/ai-terminal', () => ({
   AI_TERMINAL_SYSTEM_PROMPT: '', isTerminalAvailable: () => false, createTerminalMcpServer: vi.fn(), getGlobalTerminalContext: vi.fn(),

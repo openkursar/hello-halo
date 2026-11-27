@@ -409,6 +409,11 @@ export class BrowserContext implements BrowserContextInterface {
     liveContexts.add(this)
   }
 
+  /** Whether this context was released or destroyed and refuses further calls. */
+  get isReleased(): boolean {
+    return this.released
+  }
+
   /** Whether this context is scoped (automation) vs the global singleton (interactive). */
   get isScoped(): boolean {
     return this._isScoped

@@ -67,6 +67,7 @@ import { closeAllV2Sessions, initializeSdkRuntime, closeSdkRuntime, requestSessi
 import { initCliTools } from '../services/cli-tools'
 import { createCliToolSkillStartup } from './cli-tool-skills'
 import { getToolCredentialBindings, initEnterpriseIdentity, shutdownEnterpriseIdentity } from '../services/enterprise-identity'
+import { getBrowserSession } from '../services/browser-view.service'
 import { ENTERPRISE_IDENTITY_CHANGED_EVENT } from '../../shared/rpc/contracts/enterprise-identity.contract'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
@@ -1526,6 +1527,10 @@ export function initializeExtendedServices(): void {
   void initializeSdkRuntime().catch(error => console.error('[Bootstrap] SDK worker prewarm failed:', error))
   initEnterpriseIdentity({
     credentialDir: join(app.getPath('userData'), 'enterprise-identity'),
+    browserCookies: {
+      store: () => getBrowserSession().cookies,
+      recordFile: join(app.getPath('userData'), 'enterprise-identity-browser-cookies.json'),
+    },
     onDidChange: state => {
       sendToRenderer(ENTERPRISE_IDENTITY_CHANGED_EVENT, state)
       broadcastToAll(ENTERPRISE_IDENTITY_CHANGED_EVENT, { ...state })

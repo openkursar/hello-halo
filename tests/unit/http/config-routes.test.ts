@@ -46,7 +46,7 @@ describe('GET /api/config', () => {
 
     await routes.get('get /api/config')!({}, res)
 
-    expect(res.json).toHaveBeenCalledWith(response)
+    expect(res.json).toHaveBeenCalledWith({ ...response, orgSignIn: false })
     expect(setConfig).not.toHaveBeenCalled()
   })
 })

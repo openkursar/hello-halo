@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPairSync, sign } from 'crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { STORE_NOT_SIGNED_IN } from '../../../src/shared/store/store-types'
 import type { RegistrySource } from '../../../src/shared/store/store-types'
 import { buildBundle, makeTempDir, removeTree, writePackage, type BundleSpec, type Files } from '../services/cli-tools/helpers'
 
@@ -155,15 +154,15 @@ describe('cli catalog: listing', () => {
     const fetchCliCatalog = vi.fn(async () => ({ status: 'absent' }))
     const { catalog } = await load({ fetchCliCatalog })
     expect(await catalog.fetchCliCatalog()).toEqual({ tools: [] })
-    expect(fetchCliCatalog).toHaveBeenCalledWith(PRIMARY, { token: 'tok' }, undefined)
+    expect(fetchCliCatalog).toHaveBeenCalledWith(PRIMARY, undefined)
   })
 
-  it('reports a missing sign-in rather than an empty catalog', async () => {
-    const fetchCliCatalog = vi.fn()
+  it('reads the catalog without a store sign-in', async () => {
+    const fetchCliCatalog = vi.fn(async () => ({ status: 'absent' }))
     const { catalog, identity } = await load({ fetchCliCatalog })
     identity.mockResolvedValue(null)
-    await expect(catalog.fetchCliCatalog()).rejects.toThrow(STORE_NOT_SIGNED_IN)
-    expect(fetchCliCatalog).not.toHaveBeenCalled()
+    expect(await catalog.fetchCliCatalog()).toEqual({ tools: [] })
+    expect(fetchCliCatalog).toHaveBeenCalledWith(PRIMARY, undefined)
   })
 
   it('maps versions for the renderer without download paths or digests', async () => {
@@ -206,7 +205,7 @@ describe('cli catalog: install and revocation', () => {
     expect(downloadCliPackage).not.toHaveBeenCalled()
 
     const view = await catalog.installCliTool({ id: ID, version: '1.0.0' })
-    expect(downloadCliPackage).toHaveBeenCalledWith(PRIMARY, `/clis/${ID}/1.0.0/bundles/1.zip`, { token: 'tok' }, shipped.ref.size)
+    expect(downloadCliPackage).toHaveBeenCalledWith(PRIMARY, `/clis/${ID}/1.0.0/bundles/1.zip`, shipped.ref.size)
     expect(view.installed).toEqual({ current: '1.0.0', versions: ['1.0.0'], revoked: false })
     const record = (await host.readCliToolState())!.tools[ID].versions['1.0.0']
     expect(record).toMatchObject({ source: 'catalog', bundle: { revision: 1, sha256: shipped.ref.sha256 }, skill: { files: 2 } })
@@ -269,11 +268,11 @@ describe('cli catalog: install and revocation', () => {
     const quiet = await load(null)
     await expect(quiet.sync.requestCliCatalogSync('startup')).resolves.toBeNull()
 
-    const fetchCliCatalog = vi.fn()
+    const fetchCliCatalog = vi.fn(async () => ({ status: 'absent' }))
     const signedOut = await load({ fetchCliCatalog })
     signedOut.identity.mockResolvedValue(null)
-    await expect(signedOut.sync.requestCliCatalogSync('startup')).resolves.toBeNull()
-    expect(fetchCliCatalog).not.toHaveBeenCalled()
+    await signedOut.sync.requestCliCatalogSync('startup')
+    expect(fetchCliCatalog).toHaveBeenCalledTimes(1)
     expect(console.warn).not.toHaveBeenCalled()
 
     const failing = await load({ fetchCliCatalog: vi.fn(async () => { throw new Error('cli-catalog failed: 503') }) })
@@ -407,7 +406,7 @@ describe('cli catalog: revalidation', () => {
 
     expect((await catalog.fetchCliCatalog()).tools.map(t => t.id)).toEqual([ID])
     expect((await catalog.fetchCliCatalog()).tools.map(t => t.id)).toEqual([ID])
-    expect(fetchCliCatalog.mock.calls.map(call => call[2])).toEqual([undefined, '"v1"'])
+    expect(fetchCliCatalog.mock.calls.map(call => call[1])).toEqual([undefined, '"v1"'])
   })
 })
 

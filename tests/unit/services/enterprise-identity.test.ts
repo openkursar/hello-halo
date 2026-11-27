@@ -527,6 +527,31 @@ describe('organization sign-in lifetime', () => {
     expect(window.close).toHaveBeenCalledOnce()
   })
 
+  it('offers configured alternatives, passes extra origins and returns only a known choice', async () => {
+    const alternatives = [{ id: 'model-direct', label: 'Model account', description: 'Trial models' }]
+    provider.beginSignIn.mockResolvedValueOnce({ flowId: 'flow', url: 'https://login.example/', origins: ['https://consent.example', 42] } as never)
+    const service = newService({ alternatives })
+    const result = service.signIn()
+    await flush()
+    expect(provider.beginSignIn).toHaveBeenCalledWith({ alternatives })
+    expect(windowOptions!.origins).toEqual(['https://consent.example'])
+    provider.terminal.resolve({ alternative: 'model-direct' })
+    expect(await result).toEqual({ alternative: 'model-direct' })
+    expect(window.close).toHaveBeenCalledOnce()
+    expect(provider.cancelSignIn).not.toHaveBeenCalled()
+    expect(service.getState().status).toBe('signed-out')
+  })
+
+  it('treats a choice that was not offered as a failed sign-in', async () => {
+    const service = newService()
+    const result = service.signIn()
+    await flush()
+    expect(provider.beginSignIn).toHaveBeenCalledWith(undefined)
+    provider.terminal.resolve({ alternative: 'model-direct' })
+    expect(await result).toBe('failed')
+    expect(provider.cancelSignIn.mock.calls).toEqual([['flow']])
+  })
+
   it('prunes local expiry on resume before a deduplicated verification that may fail', async () => {
     let now = Date.now()
     const recheck = deferred<void>()
@@ -546,5 +571,43 @@ describe('organization sign-in lifetime', () => {
     expect(provider.verify).toHaveBeenCalledOnce()
     expect(provider.signOut).not.toHaveBeenCalled()
     expect(service.getState().status).toBe('active')
+  })
+})
+
+describe('organization sign-in in the built-in browser', () => {
+  // Cookie records are written with fs promises, which only real timers let finish.
+  beforeEach(() => { vi.useRealTimers() })
+  const ioFlush = async () => { for (let i = 0; i < 60; i++) await new Promise(resolve => setImmediate(resolve)) }
+  function cookieStore() {
+    const jar = new Map<string, string>()
+    return {
+      jar,
+      get: vi.fn(async () => []),
+      set: vi.fn(async (details: any) => { jar.set(details.name, details.value) }),
+      remove: vi.fn(async (_url: string, name: string) => { jar.delete(name) }),
+    }
+  }
+
+  it('writes the provider\'s cookies while signed in and removes them on sign-out', async () => {
+    const store = cookieStore()
+    const browserCookies = vi.fn(async () => [{ domain: '.example.com', name: 'TICKET', value: 'ticket-a', expiresAt: Date.now() + 3600_000 }])
+    Object.assign(provider, { browserCookies })
+    const service = newService({ browserCookies: { store: () => store, recordFile: join(dir, 'browser-cookies.json') } })
+    provider.current = active()
+    service.getState()
+    await vi.waitFor(() => expect(store.jar.get('TICKET')).toBe('ticket-a'))
+    expect(store.set).toHaveBeenCalledWith(expect.objectContaining({ httpOnly: true, domain: '.example.com' }))
+    await service.signOut('session')
+    await vi.waitFor(() => expect(store.jar.has('TICKET')).toBe(false))
+  })
+
+  it('costs nothing when the provider offers no browser cookies', async () => {
+    const store = cookieStore()
+    const service = newService({ browserCookies: { store: () => store, recordFile: join(dir, 'browser-cookies.json') } })
+    provider.current = active()
+    service.getState()
+    await ioFlush()
+    expect(store.set).not.toHaveBeenCalled()
+    expect(existsSync(join(dir, 'browser-cookies.json'))).toBe(false)
   })
 })
