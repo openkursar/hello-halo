@@ -263,7 +263,7 @@ export interface ModelRefreshSummary {
   failedSourceIds: string[]
 }
 
-/** Payload of `ai-sources:catalog-changed`: sources whose stored model list changed. */
+/** Payload of `ai-sources:catalog-changed`: sources or groups whose saved listing changed (added, removed, edited, models, selection). */
 export interface ModelCatalogChangedEvent {
   sourceIds: string[]
 }

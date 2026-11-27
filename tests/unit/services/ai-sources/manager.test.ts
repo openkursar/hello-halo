@@ -1530,34 +1530,27 @@ describe('refreshSourceConfig — token freshness and degraded catalogs', () => 
     expect(saved.modelOverrides).toEqual({ edited: { maxOutputTokens: 2048 } })
   })
 
-  it('announces a changed catalog and stays silent, without writing, when nothing changed', async () => {
+  it('saves a changed catalog and skips the write when nothing changed', async () => {
     seedCatalogSource()
     const mgr = new AISourceManager()
     registerProvider(mgr, { refreshConfig: vi.fn().mockResolvedValue({
       success: true, data: { 'catalog-prov': { availableModels: ['fetched'], modelNames: { fetched: 'Fetched' } } }
     }) })
-    const changes: string[][] = []
-    mgr.onModelCatalogChanged(event => changes.push(event.sourceIds))
 
     await mgr.refreshSourceConfig('o1')
-    expect(changes).toEqual([['o1']])
     expect(saveConfig).toHaveBeenCalledTimes(1)
 
     await mgr.refreshSourceConfig('o1')
-    expect(changes).toEqual([['o1']])
     expect(saveConfig).toHaveBeenCalledTimes(1)
   })
 
-  it('does not announce a fallback catalog that kept the stored list', async () => {
+  it('does not save a fallback catalog that kept the stored list', async () => {
     seedCatalogSource()
     const mgr = new AISourceManager()
     registerProvider(mgr, { refreshConfig: vi.fn().mockResolvedValue({
       success: true, data: { 'catalog-prov': { availableModels: ['hardcoded'], degraded: true } }
     }) })
-    const changed = vi.fn()
-    mgr.onModelCatalogChanged(changed)
     await mgr.refreshSourceConfig('o1')
-    expect(changed).not.toHaveBeenCalled()
     expect(saveConfig).not.toHaveBeenCalled()
   })
 

@@ -43,7 +43,6 @@ import {
   type OAuthCompleteResult,
   type ModelOption,
   type ModelRefreshSummary,
-  type ModelCatalogChangedEvent,
   type ProviderId,
   type AuthQuotaSnapshot,
   DEFAULT_MODEL
@@ -69,7 +68,6 @@ import { MASK_SENTINEL } from '../../foundation/config-encryption'
 import { normalizeApiUrl, resetGroupSource, type RequestCredentials } from '../../openai-compat-router'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
-import { Emitter, type Event } from '../../platform/event'
 import { CatalogSchedule } from './catalog-schedule'
 import {
   catalogModel,
@@ -194,9 +192,6 @@ class AISourceManager {
   private tokenRefreshes = new Map<string, { source: AISource; model: string; promise: Promise<ProviderResult<void>> }>()
   private catalogRefreshes = new Map<string, ManagedCatalogRefresh>()
   private readonly catalogSchedule = new CatalogSchedule()
-  private readonly catalogChanged = new Emitter<ModelCatalogChangedEvent>()
-  /** Fires after a refresh stored a different model list for a source. */
-  readonly onModelCatalogChanged: Event<ModelCatalogChangedEvent> = this.catalogChanged.event
   /** Keyed by source and model; see resolveRequestCredentials. */
   private requestCredentials = new Map<string, { sourceId: string; credentials: RequestCredentials | null; checkedAt: number }>()
   /** What a group's member was last asked with, kept for the same minute as `requestCredentials`. */
@@ -1457,7 +1452,7 @@ class AISourceManager {
   /**
    * Refresh the catalogs that are due (see CatalogSchedule). Nearly free when
    * none is, so any sign the user may be about to look at models can call it.
-   * Changes reach every client through onModelCatalogChanged. Never rejects.
+   * Saved changes reach every client through watchListedSources. Never rejects.
    */
   async refreshStaleCatalogs(reason: string): Promise<void> {
     try {
@@ -1609,7 +1604,6 @@ class AISourceManager {
     } as any)
 
     console.log(`[AISourceManager] Catalog ${degraded ? 'reconstructed offline' : 'refreshed'} for ${source.id} (${source.provider}): ${models.length} models, changed`)
-    this.catalogChanged.fire({ sourceIds: [sourceId] })
     return { success: true, data: { degraded } }
   }
 

@@ -10,6 +10,7 @@ export { SubagentModelError, getSubagentModelConfigurationSnapshot, type Subagen
 // Manager
 export { getAISourceManager, AISourceManager } from './manager'
 export { watchCatalogSignals, type CatalogSignal } from './catalog-signals'
+export { watchListedSources } from './listed-sources'
 
 // Load-balancing groups
 export { GroupError, listGroups, getGroup, createGroup, updateGroup, deleteGroup, selectGroup } from './groups'

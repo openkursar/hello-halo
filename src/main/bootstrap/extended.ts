@@ -55,7 +55,7 @@ import {
   isNativeConversationBusy,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
-import { getAISourceManager, startGroupRouting, watchCatalogSignals } from '../services/ai-sources'
+import { getAISourceManager, startGroupRouting, watchCatalogSignals, watchListedSources } from '../services/ai-sources'
 import { setRequestCredentialResolver } from '../openai-compat-router'
 import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '../services/memory-consolidation'
 import { markExtendedServicesReady } from './state'
@@ -168,14 +168,15 @@ function emitOfficeStatus(teamId: string, kind: TeamOfficeStatusKind, versionMis
 
 function startModelCatalogFreshness(): void {
   const manager = getAISourceManager()
-  const changes = manager.onModelCatalogChanged(event => {
+  // The channel keeps its original name so installed mobile clients still refresh.
+  const stopListing = watchListedSources(event => {
     sendToRenderer('ai-sources:catalog-changed', event)
     broadcastToAll('ai-sources:catalog-changed', { ...event })
   })
   const stopSignals = watchCatalogSignals(signal => void manager.refreshStaleCatalogs(signal))
   stopModelCatalogFreshness = () => {
     stopSignals()
-    changes.dispose()
+    stopListing()
   }
   void manager.refreshStaleCatalogs('startup')
 }
