@@ -50,7 +50,6 @@ export class RemoteSession implements WorkerSession {
     readonly threadId: number,
     private readonly peer: RpcPeer,
     private readonly dispose: () => Promise<void>,
-    private readonly onFailure: (error: Error) => void,
   ) {
     const self = this;
     this.query = {
@@ -193,7 +192,6 @@ export class RemoteSession implements WorkerSession {
     void this.closing.then(() => this.notifyExit(), error => {
       getLogger('Worker').error('Session close failed', { scope: this.scope, error: String(error) });
       this.notifyExit(error);
-      this.onFailure(error);
     });
   }
 

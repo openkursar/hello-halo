@@ -20,6 +20,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
 sha2 = "0.10"
 regex = "1"
+regex-syntax = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 base64 = "0.22"
 hex = "0.4"

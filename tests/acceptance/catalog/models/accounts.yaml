@@ -316,13 +316,13 @@ scenarios:
       - en: A local provider supports the selected wire protocol.
         zh: 本地模型服务支持所选协议。
     steps:
-      - en: Add a local OpenAI-compatible account through Settings, fetch models, choose a model and test the connection.
-        zh: 在设置中添加本地 OpenAI 兼容账户，获取模型、选择模型并测试连接。
-      - en: Save the account, restart the application and send a message through the normal conversation UI.
-        zh: 保存账户、重启应用，再通过正常对话界面发送消息。
+      - en: Add a local OpenAI-compatible account through Settings, paste an endpoint with stray whitespace at the edges, fetch models, choose a model and test the connection.
+        zh: 在设置中添加本地 OpenAI 兼容账户，粘贴首尾带多余空白的端点，获取模型、选择模型并测试连接。
+      - en: Paste the same address again, save the account, restart the application and send a message through the normal conversation UI.
+        zh: 再次粘贴同一地址，保存账户并重启应用，然后通过正常对话界面发送消息。
     expected:
-      - en: Connection testing and the restarted conversation send the saved model and valid authentication to the saved local endpoint.
-        zh: 连接测试和重启后的对话均向保存的本地端点发送已选模型及正确认证。
+      - en: Model discovery and connection testing work despite the stray whitespace. The account saves the address without that whitespace, and the restarted conversation sends the saved model and valid authentication to that endpoint.
+        zh: 多余空白不影响获取模型或连接测试。账户保存的地址不带这些空白，重启后的对话向该端点发送已选模型及正确认证。
       - en: The assistant response appears in the conversation and is present in the real stored history.
         zh: 助手回复出现在对话中，并保存到真实历史记录。
     requirements:

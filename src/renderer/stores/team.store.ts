@@ -6,6 +6,7 @@ const conversationGenerations = new Map<string, number>()
 import { createContext, useContext, useMemo } from 'react'
 import { create } from 'zustand'
 import { api } from '../api'
+import { usePeopleViewStore } from './people-view.store'
 import { useTeamViewPrefsStore } from './team-view-prefs.store'
 import { useNotificationStore } from './notification.store'
 import { requestUpdateCheck } from '../services/request-update-check'
@@ -375,10 +376,16 @@ export const useTeamStore = create<TeamState>((set, get) => ({
 
   fetchTeams: async (spaceId) => {
     set({ isLoadingList: true, error: null })
+    const selectedTeam = usePeopleViewStore.getState().team
     try {
       const res = await api.teamList(spaceId)
       if (res.success && Array.isArray(res.data)) {
-        set({ teams: res.data as TeamListItem[] })
+        const teams = res.data as TeamListItem[]
+        set({ teams })
+        const prefs = usePeopleViewStore.getState()
+        if (!spaceId && selectedTeam && prefs.team === selectedTeam && !teams.some(team => team.id === selectedTeam)) {
+          prefs.setFilters({ team: '' })
+        }
       } else {
         set({ error: (res.error as string) || i18n.t('Couldn\u2019t load your teams. Please try again.') })
       }
@@ -648,11 +655,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     try {
       const res = await api.teamDissolve(teamId)
       if (res.success) {
-        set(s => ({
-          teams: s.teams.filter(t => t.id !== teamId),
-          currentTeamId: s.currentTeamId === teamId ? null : s.currentTeamId,
-          detail: s.currentTeamId === teamId ? null : s.detail,
-        }))
+        get().applyTeamUpdated({ teamId, removed: true })
         return true
       }
       return false
@@ -666,11 +669,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     try {
       const res = await api.teamLeaveOffice(teamId)
       if (res.success) {
-        set(s => ({
-          teams: s.teams.filter(t => t.id !== teamId),
-          currentTeamId: s.currentTeamId === teamId ? null : s.currentTeamId,
-          detail: s.currentTeamId === teamId ? null : s.detail,
-        }))
+        get().applyTeamUpdated({ teamId, removed: true })
         return true
       }
       return false
@@ -899,6 +898,8 @@ export const useTeamStore = create<TeamState>((set, get) => ({
           duration: 6000,
         })
       }
+      const prefs = usePeopleViewStore.getState()
+      if (prefs.team === teamId) prefs.setFilters({ team: '' })
       set(s => ({
         teams: s.teams.filter(t => t.id !== teamId),
         currentTeamId: s.currentTeamId === teamId ? null : s.currentTeamId,

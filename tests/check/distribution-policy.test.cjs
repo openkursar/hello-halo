@@ -136,6 +136,15 @@ test('missing unpacked entries fail unless explicitly pruned for the target', as
   assert.equal(isPrunedNativeEntry('resources/dsh-runtime/node_modules/node-pty/src/conpty.h', 'darwin-arm64'), true)
   assert.equal(isPrunedNativeEntry('resources/dsh-runtime/node_modules/node-pty/lib/index.js', 'darwin-arm64'), false)
   assert.equal(isPrunedNativeEntry('node_modules/@hello-halo/agent-sdk/dist/native/halo-sdk.darwin-arm64.node', 'darwin-arm64'), false)
+  const host = `${process.platform}-${process.arch}`
+  const crossTarget = ['darwin-arm64', 'darwin-x64'].find(target => target !== host)
+  assert.equal(isPrunedNativeEntry('node_modules/node-pty/build/Release/spawn-helper', crossTarget), true)
+  assert.equal(isPrunedNativeEntry('node_modules/node-pty/build/Release/spawn-helper', host), false)
+  assert.equal(isPrunedNativeEntry('node_modules/node-pty/lib/index.js', crossTarget), false)
+  const conpty = (arch) => `node_modules/node-pty/third_party/conpty/1.23.251008001/win10-${arch}/OpenConsole.exe`
+  assert.equal(isPrunedNativeEntry(conpty('arm64'), 'win32-x64'), true)
+  assert.equal(isPrunedNativeEntry(conpty('x64'), 'win32-x64'), false)
+  assert.equal(isPrunedNativeEntry(conpty('arm64'), 'darwin-arm64'), false)
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-unpacked-sentinel-'))
   try {
     const source = path.join(root, 'source')

@@ -42,6 +42,20 @@ look past the end of a page through non-message metadata, within the existing by
 budget, but stop before the next visible message. A page ending before a response's
 last block does not inherit that response's usage.
 
+Local commands (`/help`, a `/compact` with nothing to reduce, host local commands)
+add no conversation record, but their events carry the session ID. When one is
+consumed while live history is empty and no journal file exists, the writer first
+appends one `empty_history` record: session metadata and a UUID, without a message
+or tool-context prefix, so readers that predate it skip it. A journal whose only
+conversation evidence is this record restores as an empty history, including under
+strict resume, with the tool-context format a new session adopts;
+`readSessionToolContextMode` reports `deferred`. Any later user, assistant,
+checkpoint or compaction-boundary record, readable or not, or an unparseable line
+ends that status, and a missing journal or one without the record is still refused.
+Like any saved session it is listed, can be forked, and is chosen by `continue`
+when it is the newest. Sessions without input, with history or without persistence
+write nothing; a failed write is logged and marks the journal incomplete.
+
 ## Compaction checkpoints
 
 Main-session results are recorded once per batch. The public stream emits one

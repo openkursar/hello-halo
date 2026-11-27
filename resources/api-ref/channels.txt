@@ -98,11 +98,12 @@ GET    /api/im-channels/status                                     Get connectio
 
 GET    /api/im-sessions                                            List every chat thread a digital human has, its own and IM ones
      curl -s "$HALO_API_URL/api/im-sessions" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
-     # out: {success:true,data:[{appId,channel,source:"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,proactive,instanceId,pushLinks?:[{appId,autoSync}]}]}
+     # out: {success:true,data:[{appId,channel,source:"native"|"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,title?,proactive,instanceId,pushLinks?:[{appId,autoSync}]}]}
      # note: Optional ?appId= narrows it to one digital human. This is the only listing of its threads — there is no sessions/list beside sessions/create.
-     # note: source says what a thread is: "local" = a named thread the user created in Halo, "im" = a real chat with a person on an IM platform, "http" = created through this API.
-     # note: Reading or writing one thread needs a conversationId, which is not a field here — build it from four fields of the record: app-chat:<appId>:<channel>:<chatType>:<chatId>.
-     # note: Only "local" and "http" threads accept a message from this API. An "im" thread is refused on send — this API must not put words into a real conversation with a person.
+     # note: source says what a thread is: "native" = the digital human's main thread with the user in Halo (chatId "default"), "local" = a named thread the user created in Halo, "im" = a real chat with a person on an IM platform, "http" = created through this API.
+     # note: title (main and "local" threads only) is the name the thread took from the user's first message, empty until one names it; customName, when set, is the user's own name for it and wins.
+     # note: Reading or writing one thread needs a conversationId, which is not a field here — build it from four fields of the record: app-chat:<appId>:<channel>:<chatType>:<chatId>. The "native" main thread is the exception: its conversationId is app-chat:<appId>, or leave conversationId out.
+     # note: The main thread, "local" and "http" threads accept a message from this API. An "im" thread is refused on send — this API must not put words into a real conversation with a person.
 
 GET    /api/im-sessions/linked                                     List the IM chats a digital human pushes to through another digital human's bot
      curl -s "$HALO_API_URL/api/im-sessions/linked?appId=<appId — a uuid from GET /api/apps>" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000

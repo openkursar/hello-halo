@@ -12,6 +12,7 @@
  */
 
 import { api } from '../api'
+import { knownAppChatSessions, latestHaloChatId } from '../stores/app-chat-sessions'
 import { useAppStore } from '../stores/app.store'
 import { useChatStore } from '../stores/chat.store'
 import { useSpaceStore } from '../stores/space.store'
@@ -99,12 +100,10 @@ export function openSkillInComposer(skill: { spaceId: string | null; name: strin
  * or null when the backend refused or the call failed (logged here, so every
  * caller reports a failure the same way).
  *
- * The single place the renderer creates a digital-human session: the input's
- * recipient picker, its "@" mention path, the resource rail's chat action, and
- * every "Chat"/"talk to it now" button all mean the same thing and must not
- * each evolve their own request — including not silently reopening whatever
- * conversation happened to be most recent, which reads as "nothing happened"
- * when the user expected a new one.
+ * The single place the renderer creates a digital-human session: a digital
+ * human's "new conversation" action, and every entry point that continues one
+ * (see {@link continueDigitalHumanConversation}) when it has none, all mean the
+ * same thing and must not each evolve their own request.
  */
 export async function startDigitalHumanConversation(appId: string): Promise<string | null> {
   try {
@@ -120,18 +119,48 @@ export async function startDigitalHumanConversation(appId: string): Promise<stri
 const openingChats = new Map<string, Promise<boolean>>()
 
 /**
- * "Talk to this digital human now": start a fresh conversation and open it on
- * the main board. Repeat calls for the same digital human while one is still
- * being created share it, so a double-click doesn't leave an extra empty
- * session behind.
+ * Its most recent Halo chat, from the records the conversation lists already
+ * hold; null when it has none, `unknown` when they could not be read.
+ */
+async function latestDigitalHumanConversation(appId: string): Promise<string | null | 'unknown'> {
+  const sessions = await knownAppChatSessions()
+  return sessions ? latestHaloChatId(sessions, appId) : 'unknown'
+}
+
+/**
+ * The conversation to talk to a digital human in: its most recent Halo chat, or
+ * a new one when it has none. Every way of turning to a digital human — Chat,
+ * the input's recipient picker, an "@" mention — continues it; only an explicit
+ * "new conversation" starts another.
+ */
+export async function continueDigitalHumanConversation(appId: string): Promise<string | null> {
+  const latest = await latestDigitalHumanConversation(appId)
+  if (latest === 'unknown') {
+    // Deliberate: starting one is what these entry points did before they continued the latest.
+    console.warn('[ConversationNavigation] Could not read existing conversations; starting a new one', { appId })
+  }
+  return (latest === 'unknown' ? null : latest) ?? await startDigitalHumanConversation(appId)
+}
+
+/**
+ * "Chat" with a digital human: open its most recent conversation on the main
+ * board, or start one when it has none. `newConversation` always starts one.
+ * Repeat calls for the same digital human while one is still being opened
+ * share it, so a double-click doesn't leave an extra empty session behind.
  *
  * Returns false when no conversation could be created.
  */
-export function openDigitalHumanChat(appId: string, appSpaceId: string): Promise<boolean> {
+export function openDigitalHumanChat(
+  appId: string,
+  appSpaceId: string,
+  { newConversation = false }: { newConversation?: boolean } = {}
+): Promise<boolean> {
   const pending = openingChats.get(appId)
   if (pending) return pending
   const opening = (async () => {
-    const conversationId = await startDigitalHumanConversation(appId)
+    const conversationId = newConversation
+      ? await startDigitalHumanConversation(appId)
+      : await continueDigitalHumanConversation(appId)
     if (!conversationId) return false
     navigateToAppChat(appSpaceId, appId, conversationId)
     return true

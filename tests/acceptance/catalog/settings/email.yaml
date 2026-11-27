@@ -1,0 +1,95 @@
+version: 1
+id: settings.email
+module: settings
+title:
+  en: Configure and test an email connection
+  zh: 配置并测试邮件连接
+story:
+  en: I can paste my email setup details and check the connection before relying on it to send messages.
+  zh: 我能粘贴邮件配置并先检查连接，再用它发送消息。
+basis: observed
+references:
+  - src/renderer/components/settings/MessageChannelsSection.tsx
+  - src/main/services/notify-channels/email.ts
+  - tests/e2e/specs/acceptance-email-settings.spec.ts
+promises:
+  pasted-details:
+    en: The SMTP host, username and default recipient discard surrounding spaces and invisible formatting without changing what is inside each value.
+    zh: SMTP 主机、用户名和默认收件人会去除两端的空白和不可见格式字符，不改动值内部的内容。
+  password:
+    en: A single-line password with spaces or invisible characters is kept as entered, with a prompt that explains this without blocking the test. A multiline paste is rejected instead of silently joining the lines. Saved password text is not returned to Settings, and changing a different field keeps the password.
+    zh: 单行密码包含空白或不可见字符时会原样保留，界面会提示但不阻止测试。粘贴多行密码时会拒绝，不会静默合并各行。设置页不会读回已保存的密码明文，修改其他字段不会改动密码。
+  connection:
+    en: Test uses the latest edits immediately, reports the connection result in the Email card and does not send a message.
+    zh: 点击测试时立即使用最新编辑内容，在邮件卡片中显示连接结果，不发送邮件。
+  save-before-test:
+    en: If edits cannot be saved, Halo explains why it did not test the connection and keeps the draft available for retry. It does not test the older settings instead.
+    zh: 编辑内容无法保存时，Halo 说明未测试连接的原因并保留草稿以便重试，不会改用旧设置测试。
+scenarios:
+  - id: settings.email.paste-and-test
+    title:
+      en: Paste email settings, correct a rejected password and test again immediately
+      zh: 粘贴邮件配置，修正认证失败的密码后立即重试
+    verifies:
+      - pasted-details
+      - password
+      - connection
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: In an isolated desktop profile, Email points to an owned loopback SMTP server with generated credentials and synthetic addresses.
+        zh: 在隔离的桌面配置中，邮件渠道指向自有的回环 SMTP 服务，使用生成的凭据和测试地址。
+    steps:
+      - en: Open Settings, choose Message Channels and expand Email. Paste a host, username and recipient with mixed spaces and invisible characters at the edges and inside, then paste the actual fixture values with padding at their edges.
+        zh: 打开设置，选择消息渠道并展开邮件。先粘贴两端及内部混有空白和不可见字符的主机、用户名与收件人，再分别粘贴两端带有填充字符的实际测试值。
+      - en: Paste the fixture password with extra spaces and invisible characters, then click Test. Replace it with the exact password and click Test again immediately.
+        zh: 粘贴带有额外空白和不可见字符的测试密码并点击测试。换成正确密码后立即再次点击测试。
+      - en: Reopen Settings, change only the recipient and test again without re-entering the password.
+        zh: 重新打开设置，只改收件人，不重新输入密码，再次测试。
+    expected:
+      - en: Only the padding is removed from the non-password fields. The password paste remains unchanged and an explanatory prompt appears; SMTP refuses it with 535.
+        zh: 非密码字段只去除两端的填充字符。粘贴的密码保持原样并出现说明提示；SMTP 返回 535 拒绝认证。
+      - en: The immediate retry with the corrected password succeeds. The saved password is not read back as plaintext; changing the recipient still leaves the stored credential usable. The test makes no SMTP delivery attempt.
+        zh: 改正密码后的即时重试成功。已保存的密码不会以明文读回；修改收件人后原凭据仍可用。测试不会尝试投递邮件。
+    notes:
+      en: This exercises the desktop UI, real IPC, and production SMTP verification against a fixture on a random local port. It inserts text into the real Chromium inputs without using the operating system clipboard. It does not verify native clipboard integration, remote Settings, provider TLS or real email delivery.
+      zh: 本例通过桌面界面、真实 IPC 和生产 SMTP 校验连接到使用随机本地端口的测试服务。用 Chromium 实际输入框一次性插入文本，不使用操作系统剪贴板。不验证原生剪贴板集成、远程设置、提供商 TLS 或实际邮件投递。
+  - id: settings.email.save-before-test
+    title:
+      en: Keep the edit and skip the connection test when saving fails
+      zh: 保存失败时保留编辑内容并跳过连接测试
+    verifies:
+      - save-before-test
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: An isolated desktop profile has SMTP settings for an owned loopback server, with extra padding saved in its host and username. A filesystem obstacle prevents configuration writes without making the saved settings unreadable.
+        zh: 隔离的桌面配置使用自有回环 SMTP 服务，已保存的主机名和用户名两端有多余空白。文件系统阻碍配置写入，但不影响已保存设置的读取。
+    steps:
+      - en: Open the Email card, change the default recipient and click Test.
+        zh: 打开邮件卡片，修改默认收件人并点击测试。
+      - en: Remove the write obstacle and click Test again without re-entering the recipient.
+        zh: 解除写入阻碍，不重新输入收件人，直接再次点击测试。
+    expected:
+      - en: The card shows a save failure and keeps the edited recipient. The old recipient remains saved and the SMTP server gets no test request.
+        zh: 卡片显示保存失败并保留编辑后的收件人。已保存的收件人不变，SMTP 服务不会收到测试请求。
+      - en: On retry the edited recipient is saved, the connection test succeeds and no mail is sent.
+        zh: 重试后保存编辑过的收件人，连接测试成功且不发送邮件。

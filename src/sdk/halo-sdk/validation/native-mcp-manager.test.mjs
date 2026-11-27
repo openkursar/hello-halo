@@ -102,3 +102,31 @@ test('native stdio connection cancellation wins over a same-stack spawn error', 
     transport.close(); await rejected; assert.equal(transport.connected, false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('failed stdio servers do not prevent healthy MCP tools from executing', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'native-mcp-isolation-'));
+  const healthy = await endpoint(root, 'healthy');
+  const manager = new McpConnectionManager();
+  const broken = String.raw`const readline = require('node:readline');
+    readline.createInterface({ input: process.stdin }).once('line', line => {
+      const request = JSON.parse(line);
+      require('node:fs').closeSync(0);
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id,
+        result: { protocolVersion: '2024-11-05', capabilities: { tools: {} },
+          serverInfo: { name: 'broken-fixture', version: '1' } } }) + '\n');
+      setTimeout(() => process.exit(0), 1000);
+    });`;
+  try {
+    manager.addServer('healthy', healthy.config);
+    manager.addServer('broken', { command: process.execPath, args: ['-e', broken] });
+    manager.addServer('missing', { command: join(root, 'missing-command') });
+    await manager.connectAll();
+    assert.equal(manager.getStatus('healthy').state, 'connected');
+    assert.equal(manager.getStatus('broken').state, 'disconnected');
+    assert.equal(manager.getStatus('missing').state, 'disconnected');
+    const tools = manager.getBridgedTools();
+    assert.equal(tools.length, 1);
+    assert.deepEqual(await tools[0].execute({ value: 'after-failure' }, context()), { content: 'recorded', isError: false });
+    assert.deepEqual(healthy.effects, [{ name: 'write/value', arguments: { value: 'after-failure' } }]);
+  } finally { manager.disconnectAll(); await manager.whenSettled(); await healthy.close(); await rm(root, { recursive: true, force: true }); }
+});

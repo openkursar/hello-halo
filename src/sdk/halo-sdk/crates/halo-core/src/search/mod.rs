@@ -193,6 +193,30 @@ fn real(path: &Path) -> PathBuf {
 fn cancelled() -> Error {
     Error::template("cancelled", TextId::ToolsCodeSearchCancelled, &[])
 }
+fn search_environment(options: &Value, windows: bool) -> Value {
+    let mut environment = serde_json::Map::new();
+    let supplied = options.get("nativeProcessEnv").and_then(Value::as_object);
+    for name in ["PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR"] {
+        if windows && name == "SystemRoot" {
+            continue;
+        }
+        let content = match supplied {
+            Some(values) if windows => values
+                .iter()
+                .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+                .filter_map(|(key, value)| value.as_str().map(|content| (key, content)))
+                // Node uses the first lexicographically sorted Windows key when spellings collide.
+                .min_by_key(|(key, _)| *key)
+                .map(|(_, content)| content.to_owned()),
+            _ => crate::core::conventions::process_value(options, name),
+        };
+        if let Some(content) = content {
+            environment.insert(name.to_owned(), Value::String(content));
+        }
+    }
+    Value::Object(environment)
+}
+
 fn settings(mut value: Value) -> Result<Settings> {
     if value["backend"] != "zvec-grep" {
         return Err(Error::template(
@@ -243,21 +267,7 @@ fn settings(mut value: Value) -> Result<Settings> {
     };
     let idle_ms = timeout("idleTimeoutMs", 30000.0)?;
     let timeout_ms = timeout("timeoutMs", 300000.0)?;
-    let mut environment = json!({});
-    for name in [
-        "PATH",
-        "SystemRoot",
-        "SYSTEMROOT",
-        "WINDIR",
-        "COMSPEC",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
-    ] {
-        if let Some(content) = crate::core::conventions::process_value(&value, name) {
-            environment[name] = json!(content);
-        }
-    }
+    let environment = search_environment(&value, cfg!(windows));
     if let Some(object) = value.as_object_mut() {
         object.remove("nativeProcessEnv");
     }
@@ -686,6 +696,69 @@ async fn call(worker: &mut Worker, method: &str, args: Value) -> Result<Value> {
         .await?;
     Ok(read_message(worker, Some(id)).await?["result"].clone())
 }
+#[cfg(windows)]
+fn normal_windows_name(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    if name.ends_with([' ', '.'])
+        || name.contains(|ch: char| ch.is_control() || ['<', '>', '"', '|', '?', '*', '/', ':', '\\'].contains(&ch))
+    {
+        return false;
+    }
+    let stem = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        && !stem.strip_prefix("COM").or_else(|| stem.strip_prefix("LPT"))
+            .is_some_and(|number| matches!(number, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
+}
+
+fn node_visible_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::{os::windows::ffi::OsStrExt, path::{Component, Prefix}};
+        if let Some(Component::Prefix(prefix)) = path.components().next() {
+            let normal_root = match prefix.kind() {
+                Prefix::VerbatimDisk(drive) => Some(PathBuf::from(format!("{}:\\", drive as char))),
+                Prefix::VerbatimUNC(server, share) if normal_windows_name(server) && normal_windows_name(share) => {
+                    let mut root = std::ffi::OsString::from(r"\\");
+                    root.push(server);
+                    root.push(r"\");
+                    root.push(share);
+                    root.push(r"\");
+                    Some(root.into())
+                }
+                _ => None,
+            };
+            if let Some(mut normal) = normal_root {
+                let mut can_remove_verbatim = true;
+                for component in path.components().skip(1) {
+                    match component {
+                        Component::RootDir => {}
+                        Component::Normal(name) if normal_windows_name(name) => normal.push(name),
+                        _ => { can_remove_verbatim = false; break; }
+                    }
+                }
+                if can_remove_verbatim && normal.as_os_str().encode_wide().count() < 260 {
+                    return normal;
+                }
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
+fn node_script_path(path: &Path, field: &str) -> Result<PathBuf> {
+    let visible = node_visible_path(path);
+    #[cfg(windows)]
+    if let Some(std::path::Component::Prefix(prefix)) = visible.components().next() {
+        if prefix.kind().is_verbatim() {
+            return Err(Error::new("configuration", format!(
+                "Code search cannot load the Windows script for {field}: its path cannot be represented as a standard path under 260 UTF-16 code units. Configure a shorter, standard Windows path."
+            )));
+        }
+    }
+    let _ = field;
+    Ok(visible)
+}
+
 async fn execute(
     entry: &Entry,
     slot: &mut Option<Worker>,
@@ -714,7 +787,9 @@ async fn execute(
         let index = cache.join("workspaces").join(index_name);
         tokio::fs::create_dir_all(&index).await?;
         let owned_error_token=uuid::Uuid::new_v4().to_string();
-        let mut config = json!({"root":entry.root,"cachePath":cache,"indexPath":index,"modulePath":module,"workerPath":settings["workerPath"],"supervisorPath":settings["supervisorPath"],"adapterSource":include_str!("adapter.cjs"),"ownedErrorToken":owned_error_token});
+        let node_script = |key: &str| settings[key].as_str().map(|path| node_script_path(Path::new(path), key)).transpose();
+        // Node's module loader may misread a verbatim Windows path as a UNC root.
+        let mut config = json!({"root":node_visible_path(&entry.root),"cachePath":node_visible_path(&cache),"indexPath":node_visible_path(&index),"modulePath":node_script_path(Path::new(module), "modulePath")?,"workerPath":node_script("workerPath")?,"supervisorPath":node_script("supervisorPath")?,"adapterSource":include_str!("adapter.cjs"),"ownedErrorToken":owned_error_token});
         let legacy = settings["workerPath"].is_string();
         if settings["supervisorPath"].is_string() && !legacy {
             let bridge_dir = cache.join("bridges");
@@ -725,14 +800,15 @@ async fn execute(
                 "{}.cjs",
                 hex::encode(Sha256::digest(source.as_bytes()))
             ));
+            let script = node_script_path(&file, "generated adapter")?;
             tokio::fs::write(&file, source).await?;
-            config["workerPath"] = json!(file);
+            config["workerPath"] = json!(script);
         }
         let mut command = Command::new(settings["nodePath"].as_str().unwrap());
         command
             .args(["-e", include_str!("supervisor.cjs")])
             .arg(config.to_string())
-            .current_dir(Path::new(module).parent().unwrap())
+            .current_dir(node_visible_path(Path::new(module).parent().unwrap()))
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -744,8 +820,8 @@ async fn execute(
             false,
         ));
         command
-            .env("HOME", cache.join("home"))
-            .env("USERPROFILE", cache.join("home"));
+            .env("HOME", node_visible_path(&cache.join("home")))
+            .env("USERPROFILE", node_visible_path(&cache.join("home")));
         if settings["runAsNode"] == true {
             command.env("ELECTRON_RUN_AS_NODE", "1");
         }
@@ -799,7 +875,7 @@ async fn execute(
         read_message(worker, None).await?;
         tracing::info!(pid = worker.owned_process.id(), "Search worker started");
         if !legacy {
-            call(worker,"open",json!({"root":index,"home":cache.join("home"),"modelCacheDir":cache.join("models"),"embedding":"local/potion-code-16m-v2","device":"cpu","embeddingConcurrency":1})).await?;
+            call(worker,"open",json!({"root":node_visible_path(&index),"home":node_visible_path(&cache.join("home")),"modelCacheDir":node_visible_path(&cache.join("models")),"embedding":"local/potion-code-16m-v2","device":"cpu","embeddingConcurrency":1})).await?;
         }
     }
     let worker = slot.as_mut().unwrap();
@@ -815,7 +891,7 @@ async fn execute(
     }
     let refreshed = !worker.indexed || refresh;
     if refreshed {
-        call(worker,"index",json!({"rootPaths":[{"absolutePath":entry.root,"recursive":true,"follow":false}],"resetPaths":true,"follow":false,"hidden":false,"noIgnore":false,"maxFileSizeBytes":1048576})).await?;
+        call(worker,"index",json!({"rootPaths":[{"absolutePath":node_visible_path(&entry.root),"recursive":true,"follow":false}],"resetPaths":true,"follow":false,"hidden":false,"noIgnore":false,"maxFileSizeBytes":1048576})).await?;
         worker.indexed = true;
     }
     let result = call(
@@ -905,7 +981,7 @@ async fn verify(mut result: Value, root: &Path, denied: &[PathBuf], limit: usize
                 &[],
             ));
         }
-        hit["path"] = json!(actual.unwrap());
+        hit["path"] = json!(node_visible_path(&actual.unwrap()));
     }
     Ok(result)
 }

@@ -51,6 +51,13 @@ test('the independently frozen v19 columns match the current table layout apart 
     assert.doesNotMatch(oldIndex, /UNIQUE/)
     assert.match(newIndex, /UNIQUE/)
     assert.match(newIndex, /WHERE coordinator_conversation_id IS NOT NULL/)
+    const nativeIndex = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'idx_epochs_native_recency'").pluck().get() as string
+    assert.match(nativeIndex, /COALESCE\(last_activity_at, started_at\) DESC/)
+    const plan = db.prepare(`EXPLAIN QUERY PLAN SELECT id FROM team_epochs INDEXED BY idx_epochs_native_recency
+      WHERE team_id = ? AND ((lifecycle = 'conversation' AND chat_key GLOB 'native:*') OR (lifecycle = 'run' AND first_human_turn_at IS NOT NULL))
+      ORDER BY COALESCE(last_activity_at, started_at) DESC, id DESC LIMIT 50`).all('main-team') as { detail: string }[]
+    assert.ok(plan.some(row => row.detail.includes('idx_epochs_native_recency')), JSON.stringify(plan))
+    assert.ok(plan.every(row => !row.detail.includes('USE TEMP B-TREE')))
   } finally { historical.close(); current.closeAll() }
 })
 

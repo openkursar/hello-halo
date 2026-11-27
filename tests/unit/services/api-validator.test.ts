@@ -57,6 +57,11 @@ describe('normalizeApiUrl — openai', () => {
       .toBe('https://api.example.com/v4/chat/completions')
   })
 
+  it('removes copied whitespace inside and around an endpoint', () => {
+    expect(normalizeApiUrl('\u200B https://api.example.com/ v1 /\u00A0', 'openai'))
+      .toBe('https://api.example.com/v1/chat/completions')
+  })
+
   it('returns a full /chat/completions URL as-is', () => {
     const full = 'https://api.example.com/v1/chat/completions'
     expect(normalizeApiUrl(full, 'openai')).toBe(full)

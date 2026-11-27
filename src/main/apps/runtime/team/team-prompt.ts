@@ -6,6 +6,7 @@
 import type { CollabMode, EscalationRouting } from '../../../../shared/apps/team-types'
 import { TEAM_LEAD_ADDRESS, teamMemberAddress } from '../../../../shared/apps/team-types'
 import type { TeamFolderPaths } from './team-folder'
+import { teamTaskContextLine } from '../team-task-context'
 
 export interface TeamPromptRosterEntry {
   appId: string
@@ -47,6 +48,7 @@ export interface TeamPromptRosterEntry {
  */
 export interface TeamPromptContext {
   teamName: string
+  taskTitle?: string
   goal: string
   temporaryCollaboration?: boolean
   collabMode: CollabMode
@@ -88,6 +90,7 @@ export function buildTeamEntry(ctx: TeamPromptContext, reportToUserAvailable = t
     '',
     `Here you are known as ${ctx.selfIsLead ? TEAM_LEAD_ADDRESS : ctx.selfMemberName}; your role is ${ctx.selfRole || 'member'}${ctx.selfIsLead ? ' (team lead)' : ''}.`,
     '',
+    teamTaskContextLine(ctx.taskTitle),
     // The owner's own words about this member's part in this team. It layers on
     // top of the digital human's persona and applies ONLY inside team turns.
     ...(ctx.selfDuty && ctx.selfDuty.trim()

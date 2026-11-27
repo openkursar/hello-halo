@@ -28,6 +28,11 @@ function makeCtx(cwd: string): ToolContext {
   };
 }
 
+function instructionBody(content: string): string {
+  expect(content).toMatch(/^Base directory for this skill: [^\n]+\n/);
+  return content.slice(content.indexOf('\n') + 1);
+}
+
 let tmpDir: string;
 let commandsDir: string;
 
@@ -89,7 +94,7 @@ describe('SkillTool — disk skills', () => {
     );
     const result = await SkillTool.execute({ skill: 'my-skill' }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Do something useful.');
+    expect(instructionBody(result.content)).toBe('Do something useful.');
   });
 
   it('strips YAML frontmatter from disk skill', async () => {
@@ -97,7 +102,7 @@ describe('SkillTool — disk skills', () => {
     await fs.writeFile(path.join(commandsDir, 'fm-skill.md'), content);
     const result = await SkillTool.execute({ skill: 'fm-skill' }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Actual prompt content.');
+    expect(instructionBody(result.content)).toBe('Actual prompt content.');
   });
 
   it('replaces $ARGUMENTS in disk skill', async () => {
@@ -110,14 +115,14 @@ describe('SkillTool — disk skills', () => {
       makeCtx(tmpDir),
     );
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Run this: npm test');
+    expect(instructionBody(result.content)).toBe('Run this: npm test');
   });
 
   it('disk skill with no $ARGUMENTS is returned as-is', async () => {
     await fs.writeFile(path.join(commandsDir, 'plain.md'), 'A plain prompt.\n');
     const result = await SkillTool.execute({ skill: 'plain', args: 'ignored' }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('A plain prompt.');
+    expect(instructionBody(result.content)).toBe('A plain prompt.');
   });
 
   it('returns error when skill file expands to empty content', async () => {
@@ -135,7 +140,7 @@ describe('SkillTool — disk skills', () => {
       makeCtx(tmpDir),
     );
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Content.');
+    expect(instructionBody(result.content)).toBe('Content.');
   });
 });
 
@@ -200,7 +205,7 @@ describe('SkillTool — skills/ directory search', () => {
     await fs.writeFile(path.join(skillsDir, 'analyze.md'), 'Analyze this code.\n');
     const result = await SkillTool.execute({ skill: 'analyze' }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Analyze this code.');
+    expect(instructionBody(result.content)).toBe('Analyze this code.');
   });
 
   it('lists flat skills from .claude/skills/ in list mode', async () => {
@@ -215,7 +220,7 @@ describe('SkillTool — skills/ directory search', () => {
     await fs.writeFile(path.join(skillsDir, 'dupe.md'), 'From skills.\n');
     const result = await SkillTool.execute({ skill: 'dupe' }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('From commands.');
+    expect(instructionBody(result.content)).toBe('From commands.');
   });
 
   it('deduplicates: same skill name only appears once in list', async () => {
@@ -241,7 +246,7 @@ describe('SkillTool — directory format (<name>/SKILL.md)', () => {
     await fs.writeFile(path.join(skillDir, 'SKILL.md'), 'Run my tool.\n');
     const result = await SkillTool.execute({ skill: 'my-tool' }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Run my tool.');
+    expect(instructionBody(result.content)).toBe('Run my tool.');
   });
 
   it('finds skill in <name>/SKILL.md inside skills/', async () => {
@@ -251,7 +256,7 @@ describe('SkillTool — directory format (<name>/SKILL.md)', () => {
     await fs.writeFile(path.join(skillDir, 'SKILL.md'), 'Helper content.\n');
     const result = await SkillTool.execute({ skill: 'helper' }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Helper content.');
+    expect(instructionBody(result.content)).toBe('Helper content.');
   });
 
   it('lists directory-format skill in list mode', async () => {
@@ -271,7 +276,7 @@ describe('SkillTool — directory format (<name>/SKILL.md)', () => {
     await fs.writeFile(path.join(skillDir, 'SKILL.md'), 'Dir loses.\n');
     const result = await SkillTool.execute({ skill: 'dual' }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Flat wins.');
+    expect(instructionBody(result.content)).toBe('Flat wins.');
   });
 
   it('directory-format skill supports $ARGUMENTS substitution', async () => {
@@ -281,7 +286,7 @@ describe('SkillTool — directory format (<name>/SKILL.md)', () => {
     await fs.writeFile(path.join(skillDir, 'SKILL.md'), 'Hello, $ARGUMENTS!\n');
     const result = await SkillTool.execute({ skill: 'greet', args: 'World' }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Hello, World!');
+    expect(instructionBody(result.content)).toBe('Hello, World!');
   });
 });
 
@@ -321,7 +326,7 @@ describe('SkillTool — CLAUDE_CONFIG_DIR global skills', () => {
       makeCtxWithConfig(tmpDir, configDir),
     );
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Global content.');
+    expect(instructionBody(result.content)).toBe('Global content.');
   });
 
   it('finds directory-format skill in CLAUDE_CONFIG_DIR/skills/<name>/SKILL.md', async () => {
@@ -333,7 +338,7 @@ describe('SkillTool — CLAUDE_CONFIG_DIR global skills', () => {
       makeCtxWithConfig(tmpDir, configDir),
     );
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Global SDK skill.');
+    expect(instructionBody(result.content)).toBe('Global SDK skill.');
   });
 
   it('local skill in commands/ overrides global skill with same name', async () => {
@@ -344,7 +349,7 @@ describe('SkillTool — CLAUDE_CONFIG_DIR global skills', () => {
       makeCtxWithConfig(tmpDir, configDir),
     );
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Local version.');
+    expect(instructionBody(result.content)).toBe('Local version.');
   });
 
   it('lists global skills alongside local skills', async () => {
@@ -375,7 +380,7 @@ describe('SkillTool — $ARGUMENTS_SUFFIX in disk skills', () => {
       makeCtx(tmpDir),
     );
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Review code: for performance.');
+    expect(instructionBody(result.content)).toBe('Review code: for performance.');
   });
 
   it('replaces $ARGUMENTS_SUFFIX with empty string when no args', async () => {
@@ -385,7 +390,7 @@ describe('SkillTool — $ARGUMENTS_SUFFIX in disk skills', () => {
     );
     const result = await SkillTool.execute({ skill: 'suffix-skill' }, makeCtx(tmpDir));
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Review code.');
+    expect(instructionBody(result.content)).toBe('Review code.');
   });
 
   it('handles both $ARGUMENTS and $ARGUMENTS_SUFFIX together', async () => {
@@ -398,7 +403,7 @@ describe('SkillTool — $ARGUMENTS_SUFFIX in disk skills', () => {
       makeCtx(tmpDir),
     );
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Task: refactor: refactor');
+    expect(instructionBody(result.content)).toBe('Task: refactor: refactor');
   });
 
   it('$ARGUMENTS_SUFFIX is empty when args is whitespace-only', async () => {
@@ -411,6 +416,6 @@ describe('SkillTool — $ARGUMENTS_SUFFIX in disk skills', () => {
       makeCtx(tmpDir),
     );
     expect(result.isError).toBe(false);
-    expect(result.content).toBe('Do it.');
+    expect(instructionBody(result.content)).toBe('Do it.');
   });
 });

@@ -3,6 +3,74 @@
     "text": "The file changed after your last Read. This includes changes made through Bash. Nothing was written. Call Read again, then retry.",
     "slots": []
   },
+  "tools.file.undecodable": {
+    "text": "This file starts with a UTF-16 byte order mark but is not valid UTF-16 text, so Edit cannot keep its other bytes. Nothing was written. Use Write to replace the whole file; its original bytes are saved first.",
+    "slots": []
+  },
+  "tools.file.original_not_saved": {
+    "text": "This file is not valid UTF-8 or UTF-16 text, and a copy of its original bytes could not be saved first, so nothing was written. Write to a new file instead, or change this one with a program that handles its actual encoding.",
+    "slots": []
+  },
+  "tools.file.write_original_saved": {
+    "text": " The previous file was not valid UTF-8 or UTF-16 text; its exact bytes are saved at {path}.",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.file.edit_original_saved": {
+    "text": " Bytes outside the replaced text are unchanged; the file's exact previous bytes are saved at {path}.",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.file.partial_write": {
+    "text": "{error}. Restoring the previous content also failed ({restore}), so the file may now be partially written. Inspect it before retrying.",
+    "slots": [
+      "error",
+      "restore"
+    ]
+  },
+  "tools.file.partial_new_file": {
+    "text": "{error}. A partially written file may remain at this path; inspect or remove it before retrying.",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.file.replaced_during_write": {
+    "text": "Another program replaced or removed the file at this path during the write, so the path does not hold the written content. Read the file before retrying.",
+    "slots": []
+  },
+  "tools.file.edit_no_change": {
+    "text": "The replacement equals the matched text once the file's line endings are applied, so the file would not change. Nothing was written.",
+    "slots": []
+  },
+  "tools.file.read_undecodable": {
+    "text": "[This file is not valid UTF-8 or UTF-16 text; bytes that cannot be decoded are shown as U+FFFD (�). Edit replaces only the text it matches, and Edit and Write save a copy of the original bytes first.]",
+    "slots": []
+  },
+  "tools.file.read_incomplete_end": {
+    "text": "[The final UTF-8 character is incomplete and is not shown.]",
+    "slots": []
+  },
+  "tools.file.read_encoding": {
+    "text": "[Decoded from {encoding}; Edit and Write keep this encoding. Shell text tools such as grep and sed see its encoded bytes, not this text.]",
+    "slots": [
+      "encoding"
+    ]
+  },
+  "tools.file.kept_encoding": {
+    "text": " The file keeps its {encoding} encoding.",
+    "slots": [
+      "encoding"
+    ]
+  },
+  "tools.file.utf16_range": {
+    "text": "This {encoding} file exceeds the {limit} byte limit for decoded reads. Convert a copy to UTF-8 with a program, then read that copy in ranges.",
+    "slots": [
+      "encoding",
+      "limit"
+    ]
+  },
   "tools.file.queued_change": {
     "text": "The file changed while this write was waiting. Nothing was written by this call. Check the current file before retrying.",
     "slots": []

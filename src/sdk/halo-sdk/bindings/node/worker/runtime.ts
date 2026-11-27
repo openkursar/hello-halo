@@ -58,6 +58,8 @@ interface Resident {
   session?: RemoteSession;
   closing: boolean;
   cleanup?: Promise<void>;
+  closeUnconfirmed?: boolean;
+  retirement?: Promise<void>;
   codeSearch?: CodeSearchService;
 }
 interface Slot {
@@ -69,7 +71,8 @@ interface Slot {
   resolveReady(): void;
   rejectReady(error: Error): void;
   residents: Map<string, Resident>;
-  locks: Map<string, { scope: string; release(): void }>;
+  unconfirmedCloses: number;
+  locks: Map<string, { scope: string; transcript?: boolean; release(): void }>;
   children: Map<string, { pid: number; context?: ProcessTreeContext }>;
   nativeChildren: number;
   active: number;
@@ -164,17 +167,20 @@ export class WorkerRuntime {
     catch (error) { lifetime.abort(); resident.callbacks.clear(); throw error; }
     slot.residents.set(scope, resident);
     slot.worker.ref();
-    const onAbort = () => { lifetime.abort(); void this.dispose(slot, scope).catch(error => this.fail(slot, error)); };
+    const onAbort = () => { lifetime.abort(); void this.dispose(slot, scope).catch(() => {}); };
     controls.signal?.addEventListener('abort', onAbort, { once: true });
+    let mode: SessionToolContextMode;
     try {
       await slot.ready;
       if (resident.closing || this.closed || controls.signal?.aborted) throw aborted();
-      return await slot.peer.request<SessionToolContextMode>(scope, 'readSessionToolContextMode', payload,
+      mode = await slot.peer.request<SessionToolContextMode>(scope, 'readSessionToolContextMode', payload,
         { signal: lifetime.signal, timeoutMs: this.config.sessionStartupTimeoutMs });
-    } finally {
-      controls.signal?.removeEventListener('abort', onAbort);
-      await this.dispose(slot, scope).catch(error => this.fail(slot, error));
-    }
+    } catch (error) {
+      await this.dispose(slot, scope).catch(() => {});
+      throw error;
+    } finally { controls.signal?.removeEventListener('abort', onAbort); }
+    await this.dispose(slot, scope);
+    return mode;
   }
 
   /** One-shot queries execute the SDK's original query implementation inside a worker. */
@@ -206,7 +212,7 @@ export class WorkerRuntime {
     slot.worker.ref();
     const onAbort = () => {
       if (resident.session) resident.session.close();
-      else void this.dispose(slot, scope).catch(error => this.fail(slot, error));
+      else void this.dispose(slot, scope).catch(() => {});
     };
     options.abortController?.signal.addEventListener('abort', onAbort, { once: true });
     try {
@@ -220,11 +226,11 @@ export class WorkerRuntime {
         async () => {
           options.abortController?.signal.removeEventListener('abort', onAbort);
           await this.dispose(slot, scope);
-        }, error => this.fail(slot, error));
+        });
       return resident.session;
     } catch (error) {
       options.abortController?.signal.removeEventListener('abort', onAbort);
-      await this.dispose(slot, scope).catch(failure => this.fail(slot, failure));
+      await this.dispose(slot, scope).catch(() => {});
       throw error;
     }
   }
@@ -232,7 +238,10 @@ export class WorkerRuntime {
   private available(): Slot[] { return [...this.slots].filter(slot => slot.state === 'ready' || slot.state === 'starting'); }
 
   private select(group?: string): Slot {
-    const slots = this.available();
+    const slots = this.available().filter(slot => slot.unconfirmedCloses === 0);
+    if (!slots.length && this.slots.size >= this.config.maxWorkers) {
+      throw new Error('No worker is available for a new session while session cleanup is unconfirmed');
+    }
     const weight = (slot: Slot) => Math.max(slot.active, [...slot.residents.values()].filter(item => !item.session || item.session.hasPendingInput()).length)
       + slot.collaborators + slot.residents.size / 8;
     const preferred = group ? slots.filter(slot => [...slot.residents.values()].some(item => item.group === group)) : [];
@@ -269,7 +278,7 @@ export class WorkerRuntime {
     const exited = new Promise<void>(resolve => { resolveExit = resolve; });
     const slot: Slot = {
       id: randomUUID(), worker, peer, state: 'starting', ready, resolveReady, rejectReady,
-      residents: new Map(), locks: new Map(), children: new Map(), nativeChildren: 0, active: 0, collaborators: 0,
+      residents: new Map(), unconfirmedCloses: 0, locks: new Map(), children: new Map(), nativeChildren: 0, active: 0, collaborators: 0,
       lastHeartbeat: Date.now(), idleSince: Date.now(), exited,
       startupTimer: setTimeout(() => this.fail(slot, new Error('Worker initialization timed out')), this.config.startupTimeoutMs),
     };
@@ -277,6 +286,7 @@ export class WorkerRuntime {
     peer.onRequest = async (method, value, scope, signal) => {
       const resident = slot.residents.get(scope);
       if (!resident) throw new Error('Worker session callback has no owner');
+      if (resident.closeUnconfirmed) throw aborted();
       if (method === 'callback') return resident.callbacks.call(value.id, value.args, signal);
       if (method === 'lock' || method === 'lease') {
         const owner = `${slot.id}:${scope}`;
@@ -299,7 +309,7 @@ export class WorkerRuntime {
             releases.push(await (method === 'lock' ? fileLocks : transcriptLocks).acquire(key, slot.id, controller.signal));
             if (controller.signal.aborted) throw aborted();
           }
-          slot.locks.set(lockId, { scope, release: releaseAll });
+          slot.locks.set(lockId, { scope, release: releaseAll, transcript: method === 'lease' });
           return lockId;
         } catch (error) { releaseAll(); slot.locks.delete(lockId); throw error; }
         finally { signal.removeEventListener('abort', cancel); }
@@ -318,7 +328,12 @@ export class WorkerRuntime {
         slot.nativeChildren = value.nativeChildren ?? slot.nativeChildren;
       } else if (event === 'stream') slot.residents.get(value.scope)?.session?.acceptBatch(value);
       else if (event === 'consumed' || event === 'withdrawn') slot.residents.get(value.scope)?.session?.receipt(value.id, event === 'withdrawn');
-      else if (event === 'unlock') { slot.locks.get(value.lockId)?.release(); slot.locks.delete(value.lockId); }
+      else if (event === 'unlock') {
+        const lock = slot.locks.get(value.lockId);
+        // Transcript ownership spans the final process drain, not just the last journal write.
+        if (lock?.transcript && slot.residents.get(lock.scope)?.closing) return;
+        lock?.release(); slot.locks.delete(value.lockId);
+      }
       else if (event === 'child') slot.children.set(value.id, { pid: value.pid, context: value.context });
       else if (event === 'childExit') slot.children.delete(value.id);
       else if (event === 'nativeChildren') slot.nativeChildren = value.count;
@@ -358,27 +373,59 @@ export class WorkerRuntime {
     if (!resident) return Promise.resolve();
     if (resident.cleanup) return resident.cleanup;
     resident.closing = true;
-    resident.cleanup = (async () => {
-      try {
-        if (slot.state === 'failed') await slot.exited;
-        else {
-          await slot.ready;
-          slot.peer.cancelScope(scope);
-          await slot.peer.request(`close:${scope}`, 'close', { scope }, { timeoutMs: this.config.closeTimeoutMs });
-        }
-        for (const [id, lock] of slot.locks) {
-          if (lock.scope === scope) { lock.release(); slot.locks.delete(id); }
-        }
-      } finally {
-        resident.lifetime.abort(); resident.callbacks.clear();
-        try { await resident.codeSearch?.dispose(); }
-        finally {
-          slot.residents.delete(scope);
-          if (!slot.residents.size) { slot.idleSince = Date.now(); slot.worker.unref(); }
-        }
-      }
-    })();
+    resident.cleanup = new Promise<void>((resolve, reject) => {
+      const unconfirmed = (error: Error) => {
+        reject(error);
+        if (resident.closeUnconfirmed) return;
+        resident.closeUnconfirmed = true;
+        slot.unconfirmedCloses++;
+        slot.peer.cancelScope(scope);
+        getLogger('Worker').warn('Session close unconfirmed', { scope, threadId: slot.worker.threadId });
+        this.retireIfStranded(slot);
+      };
+      resident.retirement = this.finishClose(slot, scope, resident, unconfirmed);
+      void resident.retirement.then(resolve, reject);
+    });
     return resident.cleanup;
+  }
+
+  private async finishClose(slot: Slot, scope: string, resident: Resident, unconfirmed: (error: Error) => void): Promise<void> {
+    if (slot.state === 'failed') await slot.exited;
+    else {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await slot.ready;
+        slot.peer.cancelScope(scope);
+        // Expire the caller's wait, not the close request: its reply still owns the lease.
+        timer = setTimeout(() => unconfirmed(new Error('Worker session close timed out; cleanup remains unconfirmed')), this.config.closeTimeoutMs);
+        await slot.peer.request(`close:${scope}`, 'close', { scope });
+      } catch (error) {
+        clearTimeout(timer);
+        if (resident.closeUnconfirmed && slot.state === 'ready') {
+          getLogger('Worker').warn('Worker returned a close error after the session deadline', { scope, threadId: slot.worker.threadId });
+        }
+        unconfirmed(error instanceof Error ? error : new Error(String(error)));
+        await slot.exited;
+      } finally { clearTimeout(timer); }
+    }
+    for (const [id, lock] of slot.locks) {
+      if (lock.scope === scope) { lock.release(); slot.locks.delete(id); }
+    }
+    resident.lifetime.abort(); resident.callbacks.clear();
+    try { await resident.codeSearch?.dispose(); }
+    finally {
+      slot.residents.delete(scope);
+      if (resident.closeUnconfirmed) slot.unconfirmedCloses--;
+      if (!slot.residents.size) { slot.idleSince = Date.now(); slot.worker.unref(); }
+      else this.retireIfStranded(slot);
+    }
+  }
+
+  private retireIfStranded(slot: Slot): void {
+    if (slot.state !== 'ready' || !slot.unconfirmedCloses || slot.unconfirmedCloses !== slot.residents.size) return;
+    slot.state = 'closing';
+    getLogger('Worker').warn('Retiring worker with only unconfirmed session closes', { threadId: slot.worker.threadId, sessions: slot.residents.size });
+    void slot.worker.terminate().catch(error => getLogger('Worker').error('Worker termination failed', { error }));
   }
 
   private fail(slot: Slot, error: Error): void {
@@ -445,7 +492,8 @@ export class WorkerRuntime {
       await Promise.all(slots.map(async slot => {
         await Promise.all([...slot.residents].map(async ([scope, resident]) => {
           resident.session?.close();
-          await this.dispose(slot, scope).catch(error => this.fail(slot, error));
+          void this.dispose(slot, scope).catch(() => {});
+          await resident.retirement?.catch(error => this.fail(slot, error));
         }));
         if (slot.state !== 'failed') slot.state = 'closing';
         await slot.worker.terminate();

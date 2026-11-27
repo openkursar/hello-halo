@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Locator, Page } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
@@ -15,7 +15,7 @@ import {
   listManagedSpaces, openManagedConversation, openManagedPerson, openWorkspaceMenu, readManagedPerson,
   seedManagedConversation, seedManagedSpace, workspaceCard, type ManagedSpace,
 } from '../fixtures/acceptance-management'
-import { openDigitalHumanConversation } from '../fixtures/helpers'
+import { openDigitalHumanConversation, setTheme } from '../fixtures/helpers'
 import {
   openAutomation, readAutomationActivity, readAutomationRuns, readAutomationState, startAutomation, waitForAutomationResult,
 } from '../fixtures/acceptance-automation'
@@ -87,6 +87,16 @@ function continuityScript(model: AcceptanceModel) {
       const system = contentText(request.body.system) || request.messages.filter(message => ['system', 'developer'].includes(message.role)).map(message => contentText(message.content)).join('\n')
       if (!system.includes('Help with the isolated task. Report independent work through report_to_user.')) errors.push(`The continuity message reached a non-person context: ${request.sequence}`)
       chats.push({ input, request })
+      if (/^(Continuity|Resume) tool receipt /.test(input)) {
+        const id = input.split(' ').at(-1)!
+        if (!request.toolResults.some(result => result.id === id)) {
+          const turnStart = request.messages.findLastIndex(message => message.role === 'user' && contentText(message.content).includes(input))
+          return replyWithModelTool({ ...request, messages: request.messages.slice(Math.max(0, turnStart)) }, 'echo_acceptance', { value: input }, id, errors)
+        }
+        if (!request.toolResults.some(result => result.id === id && !result.error && result.text.includes(`Service receipt: ${input}`))) {
+          errors.push(`No successful connection receipt for ${input}`)
+        }
+      }
       return { text: `Retained native reply: ${input}`, ...(input.startsWith('Holding chat ') ? { hold: gate.promise } : {}) }
     }
     if (request.toolResults.some(result => result.id === 'move-decision-ask')) return { text: 'Waiting for the original decision.' }
@@ -162,7 +172,7 @@ for (const activeChat of [false, true]) {
           const connection = await page.evaluate(input => (globalThis as unknown as { halo: HaloAPI }).halo.appInstall({ spaceId: input.spaceId, spec: {
             spec_version: '1.0', version: '1.0.0', type: 'mcp', name: input.name, author: 'Acceptance', description: 'An isolated continuity connection.',
             mcp_server: { transport: 'streamable-http', command: input.url },
-          } }), { spaceId: space.id, name: connectionName, url: moveMcp.url })
+          } }), { spaceId: space.id, name: connectionName, url: space.id === origin.id ? moveMcp.origin.url : moveMcp.target.url })
           expect(connection.success).toBe(true)
           if (space.id === target.id) destinationConnectionId = (connection.data as { appId: string }).appId
         }
@@ -172,7 +182,16 @@ for (const activeChat of [false, true]) {
       const source = appRoot(origin, person.id)
       const fact = `Remember synthetic continuity ${randomUUID()}`
       seedMoveMemory(source, fact)
-      const desktop = await createMoveChat(page, person, source, `Continuity desktop ${randomUUID()}`)
+      const desktop = await createMoveChat(page, person, source, `Continuity ${activeChat ? 'tool receipt' : 'desktop'} ${randomUUID()}`)
+      const legacyConnectionText = 'Connections changed. This conversation will continue with the accounts currently available in this workspace.'
+      const desktopTranscript = `chat-${desktop.conversationId.slice(`app-chat:${person.id}:`.length).replace(/:/g, '-')}.jsonl`
+      if (activeChat) {
+        expect(moveMcp.origin.calls).toEqual([{ value: desktop.first, failed: false }])
+        appendFileSync(join(source, 'runs', desktopTranscript), JSON.stringify({
+          type: 'user', timestamp: new Date().toISOString(), _source: 'environment-notice', _isTrigger: true,
+          message: { role: 'user', content: legacyConnectionText },
+        }) + '\n')
+      }
       const instanceId = await connectMoveIm(page, person.id, wecom)
       const firstIm = `Continuity IM ${randomUUID()}`
       const imId = await sendMoveIm(page, person.id, wecom, firstIm)
@@ -239,9 +258,27 @@ for (const activeChat of [false, true]) {
         script.gate.release()
         await page.setViewportSize({ width: 1280, height: 900 })
         await deleteWorkspace(page, origin)
-        const desktopResume = `Resume desktop after deletion ${randomUUID()}`
+        const desktopResume = `Resume ${activeChat ? 'tool receipt' : 'desktop after deletion'} ${randomUUID()}`
         await resumeDesktop(page, person, target, desktop, desktopResume)
         assertNativeContext(script, desktopResume, desktop.first, desktop.reply)
+        if (activeChat) {
+          expect(moveMcp.origin.calls).toEqual([{ value: desktop.first, failed: false }])
+          expect(moveMcp.target.calls).toEqual([{ value: desktopResume, failed: false }])
+          const transcript = readFileSync(join(appRoot(target, person.id), 'runs', desktopTranscript), 'utf8')
+          expect(transcript.match(/"_source":"environment-notice"/g)).toHaveLength(1)
+          const history = await readMoveTranscript(page, person.id, target.id, desktop.conversationId)
+          expect(history.some(message => message.source === 'environment-notice')).toBe(false)
+          for (const width of [1280, 390]) {
+            await page.setViewportSize({ width, height: 900 })
+            for (const theme of ['dark', 'light'] as const) {
+              await setTheme(page, theme)
+              await expect(page.getByText(legacyConnectionText, { exact: true })).toHaveCount(0)
+              await expect(page.locator('.message-assistant [data-message-content]').last()).toHaveText(`Retained native reply: ${desktopResume}`)
+              await info.attach(`continued-chat-${width}-${theme}`, { body: await page.screenshot({ animations: 'disabled' }), contentType: 'image/png' })
+            }
+          }
+          await page.setViewportSize({ width: 1280, height: 900 })
+        }
         const imResume = `Resume IM after deletion ${randomUUID()}`
         await sendMoveIm(page, person.id, wecom, imResume)
         assertNativeContext(script, imResume, firstIm, `Retained native reply: ${firstIm}`)

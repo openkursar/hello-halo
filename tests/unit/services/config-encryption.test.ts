@@ -19,6 +19,7 @@ import {
   decryptConfigFields,
   applyFailedDecodeGuard,
   maskConfigFields,
+  maskDesktopConfigFields,
   maskOAuthFields,
   unmaskSentinels,
   configHasUnmigratedCredentials,
@@ -72,9 +73,94 @@ function makeConfig(overrides: Record<string, unknown> = {}): Record<string, unk
   }
 }
 
+function makeSmtpConfig(password: string) {
+  return { notificationChannels: { email: { smtp: { host: 'smtp.example.test', password } } } }
+}
+
 describe('config-encryption', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  describe('SMTP password', () => {
+    it('reads legacy plaintext in enterprise mode and encrypts it on the next write', () => {
+      setProfile(true)
+      const password = 'fixture-smtp-password'
+      const config = makeSmtpConfig(password)
+
+      expect(configHasUnmigratedCredentials(config)).toBe(true)
+      expect(decryptConfigFields(config)).toEqual([])
+      expect(config.notificationChannels.email.smtp.password).toBe(password)
+
+      encryptConfigFields(config)
+      expect(config.notificationChannels.email.smtp.password).toMatch(/^gmcred:v2:/)
+      expect(config.notificationChannels.email.smtp.host).toBe('smtp.example.test')
+      expect(configHasUnmigratedCredentials(config)).toBe(false)
+
+      expect(decryptConfigFields(config)).toEqual([])
+      expect(config).toEqual(makeSmtpConfig(password))
+    })
+
+    it('does not encrypt the password in the open-source build but masks it on both transports', () => {
+      setProfile(false)
+      const config = makeSmtpConfig('fixture-smtp-password')
+      encryptConfigFields(config)
+
+      expect(maskConfigFields(config)).toEqual(makeSmtpConfig(MASK_SENTINEL))
+      expect(maskDesktopConfigFields(config)).toEqual(makeSmtpConfig(MASK_SENTINEL))
+      expect(config).toEqual(makeSmtpConfig('fixture-smtp-password'))
+    })
+
+    it('restores the currently stored password, not an earlier value from the client', () => {
+      const incoming = maskConfigFields(makeSmtpConfig('old-fixture-password'))
+      const existing = makeSmtpConfig('new-fixture-password')
+
+      unmaskSentinels(incoming, existing)
+      expect(incoming).toEqual(existing)
+    })
+
+    it.each([
+      {},
+      makeSmtpConfig(MASK_SENTINEL),
+      { notificationChannels: { email: { password: 'fixture-flat-password' } } },
+    ])('does not save a sentinel without a matching SMTP password (%j)', existing => {
+      const incoming = makeSmtpConfig(MASK_SENTINEL)
+      unmaskSentinels(incoming, existing)
+      expect(incoming).toEqual(makeSmtpConfig(''))
+    })
+
+    it.each(['new-fixture-password', ''])('passes an explicit password change through to the writer (%j)', password => {
+      const incoming = makeSmtpConfig(password)
+      unmaskSentinels(incoming, makeSmtpConfig('old-fixture-password'))
+      expect(incoming).toEqual(makeSmtpConfig(password))
+    })
+
+    it('preserves undecodable SMTP ciphertext until the user re-enters the password', () => {
+      setProfile(true)
+      const ciphertext = 'gmcred:v2:invalid-fixture'
+      const config = makeSmtpConfig(ciphertext)
+      const failures = decryptConfigFields(config)
+
+      expect(config.notificationChannels.email.smtp.password).toBe('')
+      expect(failures).toEqual([{
+        path: 'notificationChannels.email.smtp.password',
+        label: 'Email password',
+        ciphertext,
+        reason: 'v2-key-mismatch',
+        recoverable: 'user',
+      }])
+      const failed = new Map(failures.map(failure => [failure.path, failure.ciphertext]))
+      const toWrite = structuredClone(config)
+      encryptConfigFields(toWrite)
+      applyFailedDecodeGuard(toWrite, failed)
+      expect(toWrite.notificationChannels.email.smtp.password).toBe(ciphertext)
+
+      const repaired = makeSmtpConfig('reentered-fixture-password')
+      encryptConfigFields(repaired)
+      applyFailedDecodeGuard(repaired, failed)
+      expect(decryptConfigFields(repaired)).toEqual([])
+      expect(repaired).toEqual(makeSmtpConfig('reentered-fixture-password'))
+    })
   })
 
   // --------------------------------------------------------------------------

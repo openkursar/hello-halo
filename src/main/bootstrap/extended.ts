@@ -44,7 +44,7 @@ import { cleanupTerminalHandlers } from '../ipc/terminal'
 import { initializeSearchHandlers, cleanupSearchHandlers } from '../ipc/search'
 import { registerPerfHandlers } from '../ipc/perf'
 import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-bash'
-import { cleanupAllCaches, destroySpaceCache } from '../services/artifact-cache.service'
+import { cleanupAllCaches } from '../services/artifact-cache.service'
 import { flushSpaceActivity } from '../services/space.service'
 import { onConversationDeleted, isConversationGone, deleteEphemeralConversations } from '../services/conversation.service'
 import { disposeSearchContext } from '../services/web-search'
@@ -57,7 +57,7 @@ import {
   isNativeConversationBusy,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
-import { getAISourceManager, startGroupRouting, watchCatalogSignals } from '../services/ai-sources'
+import { getAISourceManager, startGroupRouting, watchCatalogSignals, watchListedSources } from '../services/ai-sources'
 import { setRequestCredentialResolver } from '../openai-compat-router'
 import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '../services/memory-consolidation'
 import { markExtendedServicesReady } from './state'
@@ -80,7 +80,7 @@ import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { combinedDisposable } from '../platform/event'
 import { initMemory } from '../platform/memory'
 import { initAppManager, shutdownAppManager, getAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, deliverRunCollaborationSource, releaseTeamEpochSessions, getAppRuntime, beginWorkspaceRecovery, setWorkspaceInitialization, removeWorkspacePreservingPeople } from '../apps/runtime'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, deliverRunCollaborationSource, releaseTeamEpochSessions, getAppRuntime, beginWorkspaceRecovery, setWorkspaceInitialization } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService, collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
@@ -98,7 +98,7 @@ import { bindConversationLifecycle } from '../services/agent'
 import { disposeJoinedOfficeWork, createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, releaseTeamMailOnTurnStart, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir, deliverOwnedCollaborationSource, observeOwnedCollaborationSources, createConversationWorkHost } from '../apps/runtime/team'
 import { readTeamMemberMessages, isAppChatConversationGenerating, sendAppChatMessage } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
-import { createSpace, deleteSpace, getSpace, getSpaceDir } from '../services/space.service'
+import { getSpace, getSpaceDir } from '../services/space.service'
 import { retainSpaceWatcher, releaseSpaceWatcher } from '../services/watcher-host.service'
 import { getDetailConversations, onDetailConversationsChanged } from '../services/conversation-detail'
 import { listArtifacts } from '../services/artifact.service'
@@ -181,14 +181,15 @@ function emitOfficeStatus(teamId: string, kind: TeamOfficeStatusKind, versionMis
 
 function startModelCatalogFreshness(): void {
   const manager = getAISourceManager()
-  const changes = manager.onModelCatalogChanged(event => {
+  // The channel keeps its original name so installed mobile clients still refresh.
+  const stopListing = watchListedSources(event => {
     sendToRenderer('ai-sources:catalog-changed', event)
     broadcastToAll('ai-sources:catalog-changed', { ...event })
   })
   const stopSignals = watchCatalogSignals(signal => void manager.refreshStaleCatalogs(signal))
   stopModelCatalogFreshness = () => {
     stopSignals()
-    changes.dispose()
+    stopListing()
   }
   void manager.refreshStaleCatalogs('startup')
 }
@@ -1279,16 +1280,6 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
         // top-level space per member. That space was already validated to
         // exist when the team was created (see createTeam's spaceExists check).
         createMemberSpace: ({ owningSpaceId }) => owningSpaceId,
-        // Fire-and-forget on dissolve orphan cleanup: deleteSpace is async but
-        // the service contract is sync (best-effort); errors are logged inside.
-        deleteMemberSpace: (spaceId) => {
-          void removeWorkspacePreservingPeople(spaceId, async () => {
-            await destroySpaceCache(spaceId)
-            return deleteSpace(spaceId)
-          }).then(removed => {
-            if (!removed) console.warn('[Bootstrap] Team member space deletion did not finish', { spaceId })
-          }).catch((error) => console.warn('[Bootstrap] Team member space delete failed:', error))
-        },
         // Resolve a space to the directory its agent works in, so relative
         // artifact refs (e.g. "brief.md") open the file the member published.
         resolveWorkDir: (spaceId) => getSpaceDir(spaceId) || null,

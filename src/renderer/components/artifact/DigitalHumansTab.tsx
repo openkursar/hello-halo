@@ -8,10 +8,11 @@
  * Row interaction:
  * - Row click → the app's detail overview page (the detail page is the
  *   observation surface; chat lives on the main conversation board).
- * - Hover reveals a "Chat" pill → starts a new conversation with this digital
- *   human on the main board, mirroring what the input's own selector does.
- *   A team lead is listed with its mark but has no pill: its work arrives
- *   through the team, and the selector does not offer it either.
+ * - Hover reveals a "Chat" pill → continues this digital human's latest
+ *   conversation on the main board (starting one when it has none), like every
+ *   other "Chat" button. A team lead is listed with its mark but has no pill:
+ *   its work arrives through the team, and the input's selector does not offer
+ *   it either.
  */
 
 import { useEffect, useMemo } from 'react'
@@ -25,7 +26,7 @@ import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { automationStatusLabel, deriveAutomationStatus, personRuntimeStatus } from '../../utils/automation-status'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { SpaceResourceRow } from './SpaceResourceRow'
-import { navigateToAppChat, startDigitalHumanConversation } from '../../utils/conversation-navigation'
+import { openDigitalHumanChat } from '../../utils/conversation-navigation'
 import { useSpaceDigitalHumans } from '../../hooks/useSpaceDigitalHumans'
 import { useTeamStore } from '../../stores/team.store'
 import { coordinatorIds } from '../../utils/people-model'
@@ -56,14 +57,10 @@ export function DigitalHumansTab({ onItemsChange }: DigitalHumansTabProps) {
     useAppStore.getState().navigate('apps')
   }
 
-  // Starts a fresh session rather than reopening the app's existing one:
-  // acting on a digital human from a browsing surface means "talk to it now",
-  // and resuming a past conversation is the left list's job.
-  const handleOpenChat = async (appId: string, appSpaceId: string) => {
+  const handleOpenChat = (appId: string, appSpaceId: string) => {
     trackHome('home.rail.item.click', { tab: 'digital-humans', action: 'chat', appId })
     markEntry('home_rail_dh')
-    const conversationId = await startDigitalHumanConversation(appId)
-    if (conversationId) navigateToAppChat(appSpaceId, appId, conversationId)
+    return openDigitalHumanChat(appId, appSpaceId)
   }
 
   if (digitalHumans.length === 0) {

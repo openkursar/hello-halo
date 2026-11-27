@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from 'react'
-import { Check, ChevronRight, Search } from 'lucide-react'
+import { ChevronRight, Search } from 'lucide-react'
 import { getSourceAccountName, type AISource, type ModelOption } from '../../../shared/types/ai-sources'
 import { useTranslation } from '../../i18n'
 
@@ -90,16 +90,10 @@ export function ModelChoice({ label, name, checked, disabled, note, onChange, ki
   disabled?: boolean
   note?: string
   onChange: (checked: boolean) => void
-  kind: 'checkbox' | 'radio' | 'action'
+  kind: 'checkbox' | 'radio'
   nested?: boolean
 }) {
   const rowClass = `flex min-h-11 items-center gap-2.5 py-1.5 pr-3 text-sm focus-within:bg-secondary sm:min-h-9 ${nested ? 'pl-9' : 'pl-3'} ${disabled ? 'opacity-60' : 'cursor-pointer hover:bg-secondary'}`
-  if (kind === 'action') return (
-    <button type="button" aria-pressed={checked} disabled={disabled} onClick={() => onChange(true)} className={`${rowClass} w-full text-left`}>
-      <span className="min-w-0 flex-1 truncate text-foreground" title={label}>{label}</span>
-      {checked && <Check size={15} aria-hidden className="shrink-0 text-primary" />}
-    </button>
-  )
   return (
     <label className={rowClass}>
       <input type={kind} name={name} aria-label={label} checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} className="h-4 w-4 shrink-0 border-border accent-primary" />

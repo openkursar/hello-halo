@@ -137,6 +137,9 @@ impl Journal {
     pub async fn flush(&self) -> Result<()> {
         self.inner.lock().await.flush().await
     }
+    pub async fn record_empty_history(&self) {
+        self.inner.lock().await.record_empty_history().await
+    }
     pub async fn set_tool_context_mode(&self) {
         self.inner.lock().await.tool_context_mode = true;
     }
@@ -152,6 +155,8 @@ struct JournalState {
     enabled: bool,
     tool_context_mode: bool,
     write_failed: bool,
+    /// The journal file is known to hold this session's records.
+    established: bool,
 }
 
 async fn probe_git_branch(cwd: &str, options: &Value) -> Option<String> {
@@ -190,8 +195,13 @@ async fn probe_git_branch(cwd: &str, options: &Value) -> Option<String> {
     match tokio::time::timeout(std::time::Duration::from_secs(2), operation).await {
         Ok(Ok(branch)) => branch,
         outcome => {
+            let pid = process.id();
             process.abort_now();
-            let _ = process.wait().await;
+            match tokio::time::timeout(std::time::Duration::from_millis(250), process.wait()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => tracing::warn!(?pid, error=%error, "Git branch probe exit could not be observed after termination"),
+                Err(_) => tracing::warn!(?pid, "Git branch probe exit remained unconfirmed after termination"),
+            }
             match outcome {
                 Ok(Err(error)) => tracing::warn!(error=%error,"Git branch probe could not finish"),
                 Err(_) => tracing::warn!("Git branch probe exceeded its deadline"),
@@ -216,6 +226,7 @@ impl JournalState {
             branch,
             tool_context_mode: false,
             write_failed: false,
+            established: false,
         })
     }
 
@@ -281,6 +292,11 @@ impl JournalState {
     }
 
     async fn write(&mut self, entry: &Value) -> Result<()> {
+        let tool_context_mode = self.tool_context_mode;
+        self.write_record(entry, tool_context_mode).await
+    }
+
+    async fn write_record(&mut self, entry: &Value, tool_context_mode: bool) -> Result<()> {
         if !self.enabled {
             return Ok(());
         }
@@ -293,7 +309,7 @@ impl JournalState {
                     "Invalid tool context journal metadata",
                 ));
             }
-            let mut stored = if has_context || self.tool_context_mode {
+            let mut stored = if has_context || tool_context_mode {
                 json!({"toolContextVersion":2,"toolContextRecord":has_context})
             } else {
                 json!({})
@@ -310,11 +326,29 @@ impl JournalState {
             Ok(())
         }
         .await;
-        if let Err(error) = &result {
-            self.write_failed = true;
-            tracing::warn!(session_id=%self.session_id, entry_type=%entry["type"], code=%error.code, "Failed to append entry; transcript may be incomplete on resume");
+        match &result {
+            Ok(()) => self.established = true,
+            Err(error) => {
+                self.write_failed = true;
+                tracing::warn!(session_id=%self.session_id, entry_type=%entry["type"], code=%error.code, "Failed to append entry; transcript may be incomplete on resume");
+            }
         }
         result
+    }
+
+    /// Gives a session whose history is still empty a journal, so resuming its published ID
+    /// finds one. Written without the tool-context prefix so readers that predate it skip it.
+    pub async fn record_empty_history(&mut self) {
+        if !self.enabled || self.established {
+            return;
+        }
+        if fs::metadata(&self.path).await.is_ok_and(|metadata| metadata.is_file()) {
+            self.established = true;
+            return;
+        }
+        let mut entry = json!({"type":"empty_history","uuid":uuid::Uuid::new_v4().to_string(),"parentUuid":self.parent});
+        self.metadata(&mut entry);
+        let _ = self.write_record(&entry, false).await;
     }
 
     pub async fn flush(&mut self) -> Result<()> {
@@ -338,6 +372,8 @@ pub struct ReadReport {
     pub anchor_found: bool,
     pub tool_context: bool,
     pub tool_context_damaged: bool,
+    /// The journal records an empty history, followed by no conversation record or damage.
+    pub empty_history: bool,
 }
 
 pub async fn read_report(path: &Path, anchor: Option<&str>) -> Result<ReadReport> {
@@ -389,6 +425,7 @@ pub async fn read_report_with_harness(
     let mut records = VecDeque::<Record>::new();
     let (mut bytes, mut damaged, mut anchor_found) = (0usize, 0usize, anchor.is_none());
     let mut tool_context_damaged = false;
+    let mut empty_history = false;
     loop {
         let mut line = Vec::new();
         let mut bounded = (&mut reader).take(MAX_LINE_BYTES + 1);
@@ -441,6 +478,12 @@ pub async fn read_report_with_harness(
                 break;
             }
             continue;
+        }
+        match entry["type"].as_str().unwrap_or("") {
+            "empty_history" => empty_history = true,
+            "user" | "assistant" | "compact_checkpoint" => empty_history = false,
+            "system" if entry["subtype"] == "compact_boundary" => empty_history = false,
+            _ => {}
         }
         if entry["type"] == "compact_checkpoint" {
             let new_format = entry["checkpointVersion"].as_f64() != Some(1.0);
@@ -601,6 +644,7 @@ pub async fn read_report_with_harness(
             "History restored with bounded or incomplete records"
         );
     }
+    let empty_history = empty_history && messages.is_empty() && damaged == 0;
     Ok(ReadReport {
         messages,
         damaged,
@@ -608,6 +652,7 @@ pub async fn read_report_with_harness(
         anchor_found,
         tool_context,
         tool_context_damaged,
+        empty_history,
     })
 }
 
@@ -723,10 +768,11 @@ pub async fn read_session_tool_context_mode(session_id: &str, options: Value) ->
     if !report.anchor_found || report.damaged > 0 || report.tool_context_damaged {
         return Err(resume_error("incomplete"));
     }
-    if report.messages.is_empty() {
+    if report.messages.is_empty() && !report.empty_history {
         return Err(resume_error("unreadable"));
     }
-    Ok(if report.tool_context {
+    // An empty recorded history holds no legacy records; resuming it adopts discovery like a new session.
+    Ok(if report.tool_context || report.empty_history {
         "deferred"
     } else {
         "full"

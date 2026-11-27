@@ -202,12 +202,6 @@ function validateEnvironmentStorage(environment: ExecutionEnvironment, recovery?
 
 function recoverExecutionEnvironment(previous: ExecutionEnvironment, recovery: EnvironmentRecovery): ExecutionEnvironment {
   const environment = resolveExecutionEnvironment(recovery.app, recovery.manager, recovery.app.spaceId, recovery.mode, recovery.storageOnly)
-  const previousBindings = previous.mcpBindings ?? {}
-  const currentBindings = environment.mcpBindings ?? {}
-  if (previous.pendingConnectionNotice || [...new Set([...Object.keys(previousBindings), ...Object.keys(currentBindings)])]
-    .some(specId => previousBindings[specId] !== currentBindings[specId])) {
-    environment.pendingConnectionNotice = true
-  }
   const workspace = previous.pendingWorkspaceNotice ?? (previous.spacePath !== environment.spacePath ? { kind: 'missing' as const } : undefined)
   if (workspace) environment.pendingWorkspaceNotice = workspace
   recovery.onRecovered?.(environment)

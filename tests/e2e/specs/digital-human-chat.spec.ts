@@ -422,19 +422,28 @@ test.describe('digital-human conversation on the chat page', () => {
     })
   }
 
-  test('is usable at phone width: its conversations are in the history sheet, and @ starts a new one', { annotation: { type: 'acceptance', description: "{\"caseId\":\"conversations.read.person-narrow\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
+  test('is usable at phone width: its conversations are in the history sheet, a second one starts from there, and @ addresses the person', { annotation: { type: 'acceptance', description: "{\"caseId\":\"conversations.read.person-narrow\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
     test.setTimeout(90000)
     const session = await launch({ width: 390, height: 844 })
     try {
       const { window, seeded } = session
       const composer = window.locator('textarea')
       await composer.waitFor({ timeout: 20000 })
+      const history = window.getByTitle('Conversation history', { exact: true })
+      const sheetCount = window.locator('p:visible').filter({ hasText: /^\d+ conversations?$/ })
+      const localChats = () => window.evaluate(async appId => {
+        const response = await (globalThis.window as unknown as { halo: HaloAPI }).halo.imSessionsList(appId)
+        if (!response.success) throw new Error(response.error)
+        return (response.data as Array<{ source: string }>).filter(record => record.source === 'local').length
+      }, seeded.appId)
 
       // The history sheet lists the digital human's conversation beside the space's own.
-      await window.getByTitle('Conversation history', { exact: true }).click()
-      const row = window.getByText(seeded.turns[2].reply.slice(0, 20)).first()
+      await history.click()
+      const rowText = seededRow(session)
+      const row = window.getByText(rowText).first()
       await expect(row).toBeVisible({ timeout: 10000 })
       await expect(window.getByText(seeded.name).first()).toBeVisible()
+      const listed = Number((await sheetCount.textContent())?.match(/\d+/)?.[0])
       await row.click()
 
       // It opens on the same chat page, showing the transcript, with its own composer.
@@ -442,10 +451,32 @@ test.describe('digital-human conversation on the chat page', () => {
       await expect(composer).toHaveAttribute('placeholder', new RegExp(seeded.name))
       expect(await window.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0)
 
-      // "@" in the composer starts a new conversation with a digital human.
+      // The person's row in the sheet starts another conversation with them, as the sidebar's + does.
+      // The open transcript shows the same text, so the row is looked up inside the sheet.
+      await history.click()
+      const sheet = sheetCount.locator('xpath=ancestor::div[.//*[@data-virtuoso-scroller]][1]')
+      await sheet.getByText(rowText).locator('xpath=ancestor::div[.//button[@title="More"]][1]').getByTitle('More', { exact: true }).click()
+      await window.getByRole('button', { name: `New conversation with ${seeded.name}`, exact: true }).click()
+      await expect(sheetCount).toHaveCount(0)
+      await expect(window.getByText(seeded.turns[2].reply)).toHaveCount(0, { timeout: 10000 })
+      await expect(composer).toHaveAttribute('placeholder', new RegExp(seeded.name))
+      await expect.poll(localChats, { timeout: 10000 }).toBe(1)
+
+      // Both conversations are listed.
+      await history.click()
+      await expect(sheetCount).toHaveText(`${listed + 1} conversations`)
+      await expect(sheet.getByText(rowText)).toBeVisible()
+      await window.keyboard.press('Escape')
+      await expect(sheetCount).toHaveCount(0)
+
+      // "@" in the composer turns to a digital human, continuing its latest conversation: the new one.
       await composer.fill('@')
-      await window.getByText(seeded.name).first().click()
-      await expect(composer).toHaveAttribute('placeholder', new RegExp(seeded.name), { timeout: 10000 })
+      await window.getByRole('button', { name: seeded.name, exact: true }).and(window.locator(':not([title])')).click()
+      await expect(composer).toHaveValue('')
+      await settle(window, 400)
+      await expect(composer).toHaveAttribute('placeholder', new RegExp(seeded.name))
+      await expect(window.getByText(seeded.turns[2].reply)).toHaveCount(0)
+      expect(await localChats()).toBe(1)
       await composer.fill('hello from a phone')
       await expect(composer).toHaveValue('hello from a phone')
       const box = await composer.boundingBox()

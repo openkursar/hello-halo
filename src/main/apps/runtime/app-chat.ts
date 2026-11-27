@@ -63,7 +63,7 @@ import { closeSessionAndWait, captureToolsetExecutionOptions, openAgentExecution
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
-import { ENVIRONMENT_NOTICE_TEXT } from '../../../shared/transcript'
+import { titleFromFirstMessage } from '../../../shared/conversation-title'
 import { prepareWorkspaceNotice } from './workspace-notice'
 import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
@@ -490,7 +490,7 @@ async function buildSessionMemoryPreamble(
 function registerExternalChatSession(
   conversationId: string,
   appId: string,
-  opts?: { displayName?: string; lastSender?: string; lastMessage?: string }
+  opts?: { displayName?: string; lastSender?: string; lastMessage?: string; ownerTitle?: () => string | undefined }
 ): void {
   const target = resolveSessionRegistryTarget(conversationId, appId)
   if (!target) return
@@ -503,6 +503,7 @@ function registerExternalChatSession(
     displayName: opts?.displayName,
     lastSender: opts?.lastSender,
     lastMessage: opts?.lastMessage,
+    ownerTitle: opts?.ownerTitle,
   })
 
   emitSessionUpdated(appId, target, { lastMessage: opts?.lastMessage, lastSender: opts?.lastSender })
@@ -773,10 +774,14 @@ async function runAppChatTurn(
   // Keeps the conversation list's summary of this session current (IM sessions
   // are kept by dispatch-inbound). A message of cards alone is named by the
   // same rule as in a space conversation; one that names nothing keeps the last.
+  // Only the owner's own words can title the chat, and only while it has no title.
   registerExternalChatSession(conversationId, app.id, {
     displayName: senderIdentity?.name,
     lastSender: senderIdentity?.name,
     lastMessage: request.recorded?.content ?? (messageSummaryText(message, request.references) || undefined),
+    ownerTitle: isPersonRequest(request)
+      ? () => titleFromFirstMessage(request.recorded?.content ?? message, request.references) ?? undefined
+      : undefined,
   })
 
   const memory = getAppMemoryService()
@@ -906,7 +911,8 @@ async function runAppChatTurn(
     // Auto-name a native "New session" from the person's first message (parity
     // with the space chat). A teammate-driven turn's input is a relayed
     // envelope, never the user's words.
-    getActiveTeamRuntime()?.maybeAutoNameConversation(teamContext.teamId, teamContext.epochId, fromHuman, message)
+    const savedTitle = getActiveTeamRuntime()?.maybeAutoNameConversation(teamContext.teamId, teamContext.epochId, fromHuman, message)
+    if (savedTitle && teamPromptCtx?.taskTitle !== undefined) teamPromptCtx.taskTitle = savedTitle
   }
   // Source chats share one tool contract; a guest needs an explicit collaboration grant.
   const teamToolset = !teamContext && !origin && (imSession || parseNativeChatKey(conversationId)?.appId === appId)
@@ -914,9 +920,9 @@ async function runAppChatTurn(
     ? getToolset(TEAM_MCP_SERVER_NAME)
     : undefined
   // ── 4. Build MCP servers ─────────────────────────────
-  const connectionChange = validateEnvironmentConnections(environment, app, manager, 'chat')
-  const announceConnectionChange = connectionChange.changed || environment.pendingConnectionNotice === true
-  if (connectionChange.changed) activityStore.replaceSessionEnvironment(conversationId, appId, { ...environment, pendingConnectionNotice: true })
+  if (validateEnvironmentConnections(environment, app, manager, 'chat').changed) {
+    activityStore.replaceSessionEnvironment(conversationId, appId, environment)
+  }
   const disabledMcpIds = new Set(
     (app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled === false).map(dependency => dependency.id)
   )
@@ -1020,7 +1026,7 @@ async function runAppChatTurn(
     // question asked while serving a request from outside persists that
     // request's origin, so the turn its answer resumes serves it too (see
     // resumeFromEscalation).
-    ...(teamContext ? { teamContext: { ...teamContext, origin: relayedOrigin } } : {}),
+    ...(teamContext ? { teamContext: { ...teamContext, origin: relayedOrigin }, taskTitle: teamPromptCtx?.taskTitle } : {}),
   }
 
   // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
@@ -1133,6 +1139,7 @@ async function runAppChatTurn(
           kind: 'member', requestId: teamRequestId,
           member: {
             appId: app.id, teamId: teamContext.teamId, epochId: teamContext.epochId, forwardDepth: teamContext.forwardDepth,
+            taskTitle: teamPromptCtx.taskTitle,
             collabMode: teamPromptCtx.collabMode, selfIsLead: teamPromptCtx.selfIsLead, teamFolder: teamPromptCtx.teamFolder,
             disposable: disposableMember, servesGuest: permCtx?.isOwner === false,
           },
@@ -1358,14 +1365,6 @@ async function runAppChatTurn(
   // the queue of messages awaiting an answer, so a session rebuild underneath it
   // never orphans a caller.
   const sink = getAppChatSink({ appId, conversationId, runId: chatRunId, spacePath, spaceId })
-  if (announceConnectionChange) {
-    const notice = sink.writeUserMessage(ENVIRONMENT_NOTICE_TEXT, undefined, undefined, { source: 'environment-notice' })
-    if (sink.getRecordedInputIds([notice])[0]) {
-      delete environment.pendingConnectionNotice
-      activityStore.replaceSessionEnvironment(conversationId, appId, environment)
-      sink.announceLiveInputs([notice], false)
-    }
-  }
   const workspaceNotice = prepareWorkspaceNotice(environment, text => {
     const notice = sink.writeUserMessage(text, undefined, undefined, { source: 'workspace-notice' })
     if (!sink.getRecordedInputIds([notice])[0]) return false

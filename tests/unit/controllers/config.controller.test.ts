@@ -8,7 +8,7 @@ const { fetchModelsFromApiMock } = vi.hoisted(() => ({
 
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(),
-  saveConfig: vi.fn(),
+  saveConfig: vi.fn(patch => patch),
   recordAgentEngineChoice: vi.fn(),
   isConfigUnreadable: vi.fn(() => false),
   getConfigReadFailureCount: vi.fn(() => 0),
@@ -17,11 +17,6 @@ vi.mock('../../../src/main/foundation/config.service', () => ({
 
 vi.mock('../../../src/main/foundation/product-config', () => ({
   getProductFederationGatewayUrl: vi.fn(),
-}))
-
-vi.mock('../../../src/main/foundation/config-encryption', () => ({
-  maskConfigFields: vi.fn(),
-  unmaskSentinels: vi.fn()
 }))
 
 vi.mock('../../../src/main/services/api-validator.service', () => ({
@@ -45,7 +40,7 @@ import {
 } from '../../../src/main/foundation/config.service'
 
 import { getProductFederationGatewayUrl } from '../../../src/main/foundation/product-config'
-import { maskConfigFields } from '../../../src/main/foundation/config-encryption'
+import { MASK_SENTINEL } from '../../../src/main/foundation/config-encryption'
 
 describe('read-only build defaults', () => {
   it.each([
@@ -56,7 +51,6 @@ describe('read-only build defaults', () => {
   ])('returns normalized build metadata for %s without merging it into user settings', (productUrl, expected) => {
     const user = { federation: { gatewayUrl: 'https://custom.example.test/' } }
     vi.mocked(getConfig).mockReturnValue(user as any)
-    vi.mocked(maskConfigFields).mockReturnValueOnce(user)
     vi.mocked(getProductFederationGatewayUrl).mockReturnValueOnce(productUrl ?? undefined)
     vi.mocked(saveConfig).mockClear()
 
@@ -67,6 +61,26 @@ describe('read-only build defaults', () => {
     })
     expect(user).toEqual({ federation: { gatewayUrl: 'https://custom.example.test/' } })
     expect(saveConfig).not.toHaveBeenCalled()
+  })
+})
+
+describe('SMTP password in HTTP config responses', () => {
+  it('masks reads and save acknowledgements for both unchanged and replaced passwords', () => {
+    const configWithPassword = (password: string) => ({
+      notificationChannels: { email: { smtp: { host: 'smtp.example.test', password } } },
+    })
+    const stored = configWithPassword('fixture-smtp-password')
+    vi.mocked(getConfig).mockReturnValue(stored as unknown as ReturnType<typeof getConfig>)
+
+    const masked = configWithPassword(MASK_SENTINEL)
+    expect(readConfig()).toMatchObject({ success: true, data: masked })
+    expect(setConfig(configWithPassword(MASK_SENTINEL))).toEqual({ success: true, data: masked })
+    expect(saveConfig).toHaveBeenLastCalledWith(stored)
+
+    const replacement = 'fixture-replacement-password'
+    expect(setConfig(configWithPassword(replacement))).toEqual({ success: true, data: masked })
+    expect(saveConfig).toHaveBeenLastCalledWith(configWithPassword(replacement))
+    expect(stored.notificationChannels.email.smtp.password).toBe('fixture-smtp-password')
   })
 })
 

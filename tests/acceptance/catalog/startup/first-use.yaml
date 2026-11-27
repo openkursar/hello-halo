@@ -41,13 +41,13 @@ scenarios:
       - en: A fresh, never-launched disposable profile has no AI account and has not deferred setup or completed the optional tour.
         zh: 从未启动过的全新隔离资料没有 AI 账户，也未选择稍后配置或完成可选游览。
     steps:
-      - en: Choose preferences, open Custom API, enter a local test key, actively choose the provider, replace its URL with a loopback endpoint, test the connection and save to enter the workspace.
-        zh: 选择偏好，打开自定义 API，输入本地测试密钥、主动选择供应商并将地址设为本机端点，测试连接后保存进入空间。
+      - en: Choose preferences, open Custom API, enter a local test key, actively choose the provider, and paste a loopback endpoint with stray whitespace at the edges. Test the connection, paste the address again and save to enter the workspace.
+        zh: 选择偏好，打开自定义 API，输入本地测试密钥、主动选择供应商，再粘贴首尾带多余空白的本机端点。测试连接后再次粘贴地址，保存并进入空间。
       - en: Complete a real chat through that account, restart, then inspect the selected account and saved exchange.
         zh: 通过该账户完成真实对话，重启后检查当前账户和保存的问答。
     expected:
-      - en: The configured account supplies the real connection check and chat; restart returns to the workspace with the same selected account, valid credential and saved messages rather than forcing setup again.
-        zh: 已配置账户实际承载连接检查和对话；重启直接进入空间，保留当前账户、有效凭据和保存消息，不重新强制配置。
+      - en: The connection check works with the pasted address and the account saves it without stray whitespace. The account supplies the chat; restart returns to the workspace with the same selected account, valid credential and saved messages rather than forcing setup again.
+        zh: 粘贴的地址可以通过连接测试，账户保存的地址不带多余空白。该账户承载对话；重启直接进入空间，保留当前账户、有效凭据和保存消息，不重新强制配置。
     notes:
       en: The first account is created through the real setup UI. Only the model endpoint is substituted locally, with the Halo engine explicitly requested and fallback rejected. This does not verify OAuth, external account services or another engine. An offered Windows Git Bash installation is explicitly skipped through its UI without downloading.
       zh: 首个账户通过真实首次设置界面创建，仅用本地端点替代模型服务；明确请求 Halo 引擎并拒绝降级，不据此证明 OAuth、外部账户服务或其他引擎。若 Windows 提供 Git Bash 安装引导，通过界面明确跳过，不下载。

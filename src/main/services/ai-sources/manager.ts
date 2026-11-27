@@ -43,7 +43,6 @@ import {
   type OAuthCompleteResult,
   type ModelOption,
   type ModelRefreshSummary,
-  type ModelCatalogChangedEvent,
   type ProviderId,
   type AuthQuotaSnapshot,
   DEFAULT_MODEL
@@ -69,7 +68,6 @@ import { MASK_SENTINEL } from '../../foundation/config-encryption'
 import { normalizeApiUrl, resetGroupSource, type RequestCredentials } from '../../openai-compat-router'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
-import { Emitter, type Event } from '../../platform/event'
 import { CatalogSchedule } from './catalog-schedule'
 import {
   catalogModel,
@@ -80,6 +78,7 @@ import {
 } from './catalog-models'
 import { selectGroup } from './groups'
 import type { ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
+import { trimPastedValue } from '../../../shared/pasted-value'
 
 /**
  * Extended OAuth provider interface for token management
@@ -194,9 +193,6 @@ class AISourceManager {
   private tokenRefreshes = new Map<string, { source: AISource; model: string; promise: Promise<ProviderResult<void>> }>()
   private catalogRefreshes = new Map<string, ManagedCatalogRefresh>()
   private readonly catalogSchedule = new CatalogSchedule()
-  private readonly catalogChanged = new Emitter<ModelCatalogChangedEvent>()
-  /** Fires after a refresh stored a different model list for a source. */
-  readonly onModelCatalogChanged: Event<ModelCatalogChangedEvent> = this.catalogChanged.event
   /** Keyed by source and model; see resolveRequestCredentials. */
   private requestCredentials = new Map<string, { sourceId: string; credentials: RequestCredentials | null; checkedAt: number }>()
   /** What a group's member was last asked with, kept for the same minute as `requestCredentials`. */
@@ -378,41 +374,7 @@ class AISourceManager {
       return result
     }
 
-    // API Key: build config directly
-    const isAnthropic = isAnthropicProvider(source.provider)
-    const isAnthropicPassthrough = source.apiType === 'anthropic_passthrough'
-
-    // Normalize URL: ensure protocol prefix, then apply wire-format normalization.
-    // Native Anthropic skips normalization because the Claude SDK appends
-    // /v1/messages itself; the passthrough and OpenAI paths route through the
-    // router which POSTs backendUrl verbatim, so the full endpoint must be
-    // composed here.
-    let normalizedUrl = source.apiUrl
-    if (normalizedUrl && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalizedUrl)) {
-      normalizedUrl = `http://${normalizedUrl}`
-    }
-    if (!isAnthropic) {
-      normalizedUrl = normalizeApiUrl(
-        normalizedUrl,
-        isAnthropicPassthrough ? 'anthropic_passthrough' : 'openai'
-      )
-    }
-
-    // Build backend config
-    const config: BackendRequestConfig = {
-      url: normalizedUrl,
-      key: source.apiKey!,
-      model: source.model
-    }
-
-    // Set API type only if explicitly configured on the source.
-    // When not set, request-handler infers from URL suffix (/chat/completions or /responses).
-    // TODO: Add apiType selector in ProviderSelector UI for explicit control.
-    if (!isAnthropic && source.apiType) {
-      config.apiType = source.apiType
-    }
-
-    this.stampVisionCapability(source, config)
+    const config = this.buildApiKeyBackendConfig(source, source.model)
 
     console.log('[AISourceManager] getBackendConfig result:', {
       url: config.url,
@@ -548,33 +510,25 @@ class AISourceManager {
       return result
     }
 
-    // API Key: build config directly. See getBackendConfig() for the rationale
-    // behind the wire-format normalization branching.
+    return this.buildApiKeyBackendConfig(source, modelId || source.model)
+  }
+
+  private buildApiKeyBackendConfig(source: AISource, model: string): BackendRequestConfig {
     const isAnthropic = isAnthropicProvider(source.provider)
-    const isAnthropicPassthrough = source.apiType === 'anthropic_passthrough'
-    let normalizedUrl = source.apiUrl
-    if (normalizedUrl && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalizedUrl)) {
-      normalizedUrl = `http://${normalizedUrl}`
+    let url = trimPastedValue(source.apiUrl)
+    if (url && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url)) {
+      url = `http://${url}`
     }
+    // The native Anthropic SDK appends /v1/messages; routed APIs need the full endpoint.
     if (!isAnthropic) {
-      normalizedUrl = normalizeApiUrl(
-        normalizedUrl,
-        isAnthropicPassthrough ? 'anthropic_passthrough' : 'openai'
-      )
+      url = normalizeApiUrl(url, source.apiType === 'anthropic_passthrough' ? 'anthropic_passthrough' : 'openai')
     }
 
-    const config: BackendRequestConfig = {
-      url: normalizedUrl,
-      key: source.apiKey!,
-      model: modelId || source.model
-    }
-
+    const config: BackendRequestConfig = { url, key: source.apiKey!, model }
     if (!isAnthropic && source.apiType) {
       config.apiType = source.apiType
     }
-
     this.stampVisionCapability(source, config)
-
     return config
   }
 
@@ -1457,7 +1411,7 @@ class AISourceManager {
   /**
    * Refresh the catalogs that are due (see CatalogSchedule). Nearly free when
    * none is, so any sign the user may be about to look at models can call it.
-   * Changes reach every client through onModelCatalogChanged. Never rejects.
+   * Saved changes reach every client through watchListedSources. Never rejects.
    */
   async refreshStaleCatalogs(reason: string): Promise<void> {
     try {
@@ -1609,7 +1563,6 @@ class AISourceManager {
     } as any)
 
     console.log(`[AISourceManager] Catalog ${degraded ? 'reconstructed offline' : 'refreshed'} for ${source.id} (${source.provider}): ${models.length} models, changed`)
-    this.catalogChanged.fire({ sourceIds: [sourceId] })
     return { success: true, data: { degraded } }
   }
 

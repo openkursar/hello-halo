@@ -576,6 +576,106 @@ async fn strict_resume_refuses_history_without_readable_messages() {
     assert_eq!(error.details.unwrap()["reason"], "unreadable");
 }
 
+fn empty_history(session: &str) -> Value {
+    json!({"type":"empty_history","uuid":"empty-history","parentUuid":null,"sessionId":session,
+        "isSidechain":false,"userType":"external","cwd":"/fixture/project","version":"1.0.0"})
+}
+
+#[tokio::test]
+async fn strict_resume_restores_a_recorded_empty_history_and_what_follows_it() {
+    let directory = Directory::new();
+    write_records(&directory.0, "commands", &[empty_history("commands")]);
+    assert!(load_resume(&directory.0, "commands", true)
+        .await
+        .unwrap()
+        .is_empty());
+    write_records(
+        &directory.0,
+        "continued",
+        &[
+            empty_history("continued"),
+            json!({"type":"user","message":{"role":"user","content":"after commands"}}),
+            json!({"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"answered"}]}}),
+        ],
+    );
+    assert_eq!(
+        load_resume(&directory.0, "continued", true).await.unwrap(),
+        vec![
+            json!({"role":"user","content":"after commands"}),
+            json!({"role":"assistant","content":[{"type":"text","text":"answered"}]}),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_recorded_empty_history_does_not_cover_records_that_follow_it() {
+    let directory = Directory::new();
+    write_records(
+        &directory.0,
+        "unreadable",
+        &[
+            empty_history("unreadable"),
+            json!({"type":"user","message":{"role":"user","content":5}}),
+        ],
+    );
+    let error = load_resume(&directory.0, "unreadable", true)
+        .await
+        .unwrap_err();
+    assert_eq!(error.details.unwrap()["reason"], "unreadable");
+    let damaged = write_transcript(
+        &directory.0,
+        "damaged",
+        &format!("{}\n{{\"type\":\"user\",\"mess\n", empty_history("damaged")),
+    );
+    assert!(!super::read_report(&damaged, None).await.unwrap().empty_history);
+    let error = load_resume(&directory.0, "damaged", true)
+        .await
+        .unwrap_err();
+    assert_eq!(error.details.unwrap()["reason"], "incomplete");
+    let mut marked = empty_history("marked");
+    marked["toolContextVersion"] = json!(2);
+    marked["toolContextRecord"] = json!(false);
+    write_records(&directory.0, "marked", &[marked]);
+    for strict in [true, false] {
+        let error = load_resume(&directory.0, "marked", strict)
+            .await
+            .unwrap_err();
+        assert_eq!(error.details.unwrap()["reason"], "incomplete");
+    }
+}
+
+#[tokio::test]
+async fn context_inspection_reports_a_recorded_empty_history_in_the_format_a_new_session_adopts() {
+    let directory = Directory::new();
+    let options = options(&directory.0);
+    write_records(&directory.0, "commands", &[empty_history("commands")]);
+    assert_eq!(
+        super::read_session_tool_context_mode("commands", options.clone())
+            .await
+            .unwrap(),
+        "deferred"
+    );
+    write_records(
+        &directory.0,
+        "legacy",
+        &[
+            empty_history("legacy"),
+            json!({"type":"user","message":{"role":"user","content":"legacy"}}),
+        ],
+    );
+    assert_eq!(
+        super::read_session_tool_context_mode("legacy", options.clone())
+            .await
+            .unwrap(),
+        "full"
+    );
+    write_records(&directory.0, "unreadable", &[json!({"type":"queue-operation"})]);
+    let error = super::read_session_tool_context_mode("unreadable", options)
+        .await
+        .unwrap_err();
+    assert_eq!(error.details.unwrap()["reason"], "unreadable");
+}
+
 #[tokio::test]
 async fn strict_resume_refuses_damaged_records() {
     let directory = Directory::new();
@@ -759,6 +859,28 @@ async fn only_persisted_sessions_probe_git_and_store_the_observed_branch() {
     )
     .unwrap();
     assert_eq!(entry["gitBranch"], "fixture-branch");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn timed_out_git_probe_returns_no_branch_and_reaps_the_child() {
+    use std::{os::unix::fs::PermissionsExt, time::Duration};
+    let directory = Directory::new();
+    let executable = directory.0.join("git");
+    let pid_file = directory.0.join("probe.pid");
+    std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$PROBE_PID\"\nexec /bin/sleep 30\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let options = json!({"nativeProcessEnv":{"PATH":directory.0,"PROBE_PID":pid_file}});
+    let branch = tokio::time::timeout(
+        Duration::from_secs(5),
+        super::probe_git_branch(directory.0.to_str().unwrap(), &options),
+    )
+    .await
+    .expect("a timed out probe must not block session preparation");
+    assert_eq!(branch, None);
+    let pid: i32 = std::fs::read_to_string(pid_file).unwrap().trim().parse().unwrap();
+    assert_ne!(unsafe { libc::kill(pid, 0) }, 0);
+    assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
 }
 
 #[tokio::test]

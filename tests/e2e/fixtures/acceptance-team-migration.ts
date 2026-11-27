@@ -7,9 +7,9 @@ import Database from 'better-sqlite3'
 
 export const teamTables = ['teams', 'team_members', 'team_edges', 'blackboard_tasks', 'blackboard_findings', 'team_epochs', 'team_triggers', 'team_checks', 'team_activity', 'team_tool_audit'] as const
 export const legacyTeamVersion = 19
-export const currentTeamVersion = 25
+export const currentTeamVersion = 28
 /** Columns appended by migrations after the frozen checkpoint; rows that predate them hold NULL. */
-export const columnsAddedSinceFrozen: Partial<Record<typeof teamTables[number], readonly string[]>> = { teams: ['saved_team_id'] }
+export const columnsAddedSinceFrozen: Partial<Record<typeof teamTables[number], readonly string[]>> = { teams: ['saved_team_id'], team_epochs: ['first_human_turn_at', 'task_ended_by'] }
 const schema = readFileSync(new URL('./data/app-team-v19.sql', import.meta.url), 'utf8')
 const dataBytes = readFileSync(new URL('./data/app-team-v19.json', import.meta.url))
 export const teamHistory = JSON.parse(dataBytes.toString('utf8')) as {
@@ -151,5 +151,6 @@ export function prepareLegacyTeam(profile: string, child: Pick<ChildProcess, 'ex
 export function expectedTeamRows(old: TeamMigrationState['tables']) {
   const result = structuredClone(old)
   result.teams = result.teams.map(team => ({ ...team, saved_team_id: null, ...(team.id === teamHistory.duplicates[0].id ? { coordinator_conversation_id: null } : {}) }))
+  result.team_epochs = result.team_epochs.map(epoch => ({ ...epoch, first_human_turn_at: null, task_ended_by: null }))
   return result
 }

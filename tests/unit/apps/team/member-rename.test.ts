@@ -67,7 +67,7 @@ describe('renaming a member', () => {
       store,
       appManager: { getApp: () => null } as never,
       getRuntime: () => null,
-      spaces: { spaceExists: () => true, createMemberSpace: () => 's', deleteMemberSpace: () => {} },
+      spaces: { spaceExists: () => true, createMemberSpace: () => 's' },
       listArtifacts: async () => [],
       proposeMembersFromGoal: async () => [],
       onMemberRenamed,

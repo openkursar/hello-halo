@@ -127,7 +127,20 @@ describe('getBackendConfig — API key path', () => {
     expect(bc!.model).toBe('gpt-4o')
   })
 
-  it('skips URL normalization for native anthropic (SDK appends /v1/messages)', () => {
+  it.each([
+    { provider: 'openai', apiType: undefined, url: 'https://api.example.com/v4/chat/completions' },
+    { provider: 'anthropic', apiType: undefined, url: 'https://api.example.com/v4/' },
+    { provider: 'custom', apiType: 'anthropic_passthrough', url: 'https://api.example.com/v4/v1/messages' },
+  ] as const)('trims $provider endpoints before composing both backend descriptors', ({ provider, apiType, url }) => {
+    const source = apiKeySource({ provider, apiType, apiUrl: '\u200B https://api.example.com/v4/\u00A0\uFEFF' })
+    seed({ currentId: source.id, sources: [source] })
+    const manager = new AISourceManager()
+
+    expect(manager.getBackendConfig()).toMatchObject({ url, key: source.apiKey, model: source.model })
+    expect(manager.getBackendConfigForSource(source.id, 'pinned-model')).toMatchObject({ url, key: source.apiKey, model: 'pinned-model' })
+  })
+
+  it('skips wire-format URL normalization for native anthropic (SDK appends /v1/messages)', () => {
     seed({
       currentId: 's1',
       sources: [apiKeySource({ provider: 'anthropic', apiUrl: 'https://api.anthropic.com/', model: 'claude-opus-4-6' })]
@@ -1530,34 +1543,27 @@ describe('refreshSourceConfig — token freshness and degraded catalogs', () => 
     expect(saved.modelOverrides).toEqual({ edited: { maxOutputTokens: 2048 } })
   })
 
-  it('announces a changed catalog and stays silent, without writing, when nothing changed', async () => {
+  it('saves a changed catalog and skips the write when nothing changed', async () => {
     seedCatalogSource()
     const mgr = new AISourceManager()
     registerProvider(mgr, { refreshConfig: vi.fn().mockResolvedValue({
       success: true, data: { 'catalog-prov': { availableModels: ['fetched'], modelNames: { fetched: 'Fetched' } } }
     }) })
-    const changes: string[][] = []
-    mgr.onModelCatalogChanged(event => changes.push(event.sourceIds))
 
     await mgr.refreshSourceConfig('o1')
-    expect(changes).toEqual([['o1']])
     expect(saveConfig).toHaveBeenCalledTimes(1)
 
     await mgr.refreshSourceConfig('o1')
-    expect(changes).toEqual([['o1']])
     expect(saveConfig).toHaveBeenCalledTimes(1)
   })
 
-  it('does not announce a fallback catalog that kept the stored list', async () => {
+  it('does not save a fallback catalog that kept the stored list', async () => {
     seedCatalogSource()
     const mgr = new AISourceManager()
     registerProvider(mgr, { refreshConfig: vi.fn().mockResolvedValue({
       success: true, data: { 'catalog-prov': { availableModels: ['hardcoded'], degraded: true } }
     }) })
-    const changed = vi.fn()
-    mgr.onModelCatalogChanged(changed)
     await mgr.refreshSourceConfig('o1')
-    expect(changed).not.toHaveBeenCalled()
     expect(saveConfig).not.toHaveBeenCalled()
   })
 

@@ -68,7 +68,6 @@ function build(busSend: (input: SendInputSeen) => unknown) {
     spaces: {
       spaceExists: () => true,
       createMemberSpace: () => 'm',
-      deleteMemberSpace: () => {},
     } as never,
     listArtifacts: vi.fn(async () => []),
     proposeMembersFromGoal: vi.fn(async () => []),

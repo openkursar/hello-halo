@@ -109,6 +109,7 @@ pub async fn run(session: Arc<NativeSession>) -> Result<()> {
         .cloned()
         .unwrap_or_default();
     let imported_history = !messages.is_empty();
+    let mut resumed_empty_history = false;
     if messages.is_empty() {
         if let Some(resume) = options["resume"].as_str() {
             match read_report_with_harness(
@@ -125,9 +126,13 @@ pub async fn run(session: Arc<NativeSession>) -> Result<()> {
                     {
                         return Err(resume_error("incomplete"));
                     }
-                    if report.messages.is_empty() && options["strictResume"] == true {
+                    if report.messages.is_empty()
+                        && options["strictResume"] == true
+                        && !report.empty_history
+                    {
                         return Err(resume_error("unreadable"));
                     }
+                    resumed_empty_history = report.empty_history;
                     let (repaired, changes) =
                         super::messages::repair_with_harness(&report.messages, &resolved_harness);
                     if options["strictResume"] == true
@@ -150,7 +155,9 @@ pub async fn run(session: Arc<NativeSession>) -> Result<()> {
         .shift_remove("nativeCheckpoint");
     let mut journal = Journal::new(&session.session_id, &options).await?;
     *session.transcript.lock().unwrap() = Some(journal.clone());
+    // A recorded empty history holds no legacy records, so it adopts discovery like a new session.
     let legacy = options["resume"].is_string()
+        && !resumed_empty_history
         && !messages
             .iter()
             .any(|message| message.get("toolContext").is_some());
@@ -309,6 +316,8 @@ pub async fn run(session: Arc<NativeSession>) -> Result<()> {
                 };
                 let no_result = match input {
                     InputOutcome::Local {markdown,is_error} => {
+                        // These events publish the session ID; resuming it must find a journal even when history is empty.
+                        if messages.is_empty() { journal.record_empty_history().await; }
                         let current = if options["nativeQuery"] == true { options.clone() } else { session.controls.options(&options) };
                         for event in command_runtime::local_events(&session,&current,&tools,&markdown,is_error,&execution,start) {
                             if cancellation.is_cancelled() && event["subtype"] == "init" { continue; }

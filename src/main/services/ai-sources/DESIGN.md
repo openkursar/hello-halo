@@ -2,6 +2,10 @@
 
 `index.ts` is the public service surface. Source credentials and catalogs belong to `AISourceManager`; load-balancing group writes belong to `groups.ts`.
 
+## Client refresh
+
+Every window and remote client keeps its own copy of the saved sources. `listed-sources.ts` follows the foundation's successful-save subscription and emits `ai-sources:catalog-changed` with the affected source/group ids whenever what clients list changes, whoever wrote it (a login from another client, a catalog refresh, a deletion). Credential renewals change only tokens and timestamps and stay silent. The channel name predates the wider meaning and is kept for installed mobile clients.
+
 ## Subagent model assignments
 
 `subagent-models.ts` owns targeted assignment writes under `aiSources.subagentModels`. It stores logical source/model or group references only, never credentials or provider connection data. Generic client config saves preserve this managed field.

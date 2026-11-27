@@ -321,6 +321,17 @@ describe('report routing (§5.3)', () => {
     expect(onReported).toHaveBeenCalledTimes(3)
   })
 
+  it('does not claim a task record when the escalation could not be persisted', async () => {
+    const { store } = makeStore()
+    store.insertEntry.mockImplementation(() => { throw new Error('write failed') })
+    const handler = getReportHandler({
+      appId: 'app-lead', appName: 'Lead', runId: 'chat', sessionKey: 'session', teamContext: TRIGGER, taskTitle: 'Review',
+    }, store)
+    const reply = await handler({ type: 'escalation', message: 'Approve?' })
+    expect(reply.content[0].text).not.toContain('Recorded under')
+    expect(postActivity).not.toHaveBeenCalled()
+  })
+
   it('a failed report write never satisfies the run completion signal', async () => {
     const { store } = makeStore()
     const onReported = vi.fn()

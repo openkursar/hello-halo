@@ -42,6 +42,42 @@
       "path"
     ]
   },
+  "tools.glob.no_readable_matches": {
+    "text": "No files matched in the readable directories.",
+    "slots": []
+  },
+  "tools.glob.partial": {
+    "text": "Incomplete search. Directories not fully read: {count}. First paths:\n{paths}",
+    "slots": ["count", "paths"]
+  },
+  "tools.grep.more_errors": {
+    "text": "\n+{count} more diagnostic lines.",
+    "slots": ["count"]
+  },
+  "tools.grep.combined_filters": {
+    "text": "A positive glob replaces the type filter. Use type with a narrower path, use an exclusion glob beginning with !, or combine the restrictions in one glob.",
+    "slots": []
+  },
+  "tools.grep.single_file_filter": {
+    "text": "File type filtering requires a directory. Remove type to search this file, or set path to its directory.",
+    "slots": []
+  },
+  "tools.grep.partial": {
+    "text": "Incomplete search: ripgrep returned matches but could not search all paths (exit code 2). {error}",
+    "slots": ["error"]
+  },
+  "tools.grep.file_excluded": {
+    "text": "The glob excluded the specified file; its contents were not searched.",
+    "slots": []
+  },
+  "tools.grep.empty_line": {
+    "text": "The matching line is empty.",
+    "slots": []
+  },
+  "tools.grep.empty_output": {
+    "text": "Ripgrep reported a match but returned no output.",
+    "slots": []
+  },
   "tools.glob.truncated": {
     "text": "\n... and {omitted} more files (showing first 250 of {total}, sorted by most recent modification). Narrow the pattern or search a subdirectory to see the rest.\n",
     "slots": [

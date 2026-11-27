@@ -80,6 +80,7 @@ export function openMemberWork(request: ExecutionWorkRequest, source: SourceOf<'
   const binding = bindTeamToolSession(key, {
     teamId: member.teamId,
     epochId: member.epochId,
+    taskTitle: member.taskTitle,
     callerAppId: member.appId,
     collabMode: member.collabMode,
     selfIsLead: member.selfIsLead,

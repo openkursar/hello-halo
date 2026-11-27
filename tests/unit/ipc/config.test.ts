@@ -18,7 +18,7 @@ vi.mock('../../../src/main/controllers/config.controller', async (importOriginal
 
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(),
-  saveConfig: vi.fn(),
+  saveConfig: vi.fn(patch => patch),
   recordAgentEngineChoice: vi.fn(),
   isConfigUnreadable: vi.fn(() => false),
   getConfigReadFailureCount: vi.fn(() => 0),
@@ -35,12 +35,6 @@ vi.mock('../../../src/main/services/ai-sources', () => ({
 
 vi.mock('../../../src/main/foundation/secure-storage.service', () => ({
   decryptString: vi.fn(value => value)
-}))
-
-vi.mock('../../../src/main/foundation/config-encryption', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../../src/main/foundation/config-encryption')>(),
-  maskConfigFields: vi.fn(value => value),
-  unmaskSentinels: vi.fn()
 }))
 
 vi.mock('../../../src/main/services/api-validator.service', () => ({
@@ -68,6 +62,7 @@ vi.mock('../../../src/main/ipc/rpc', () => ({
 }))
 
 import { registerConfigHandlers } from '../../../src/main/ipc/config'
+import { MASK_SENTINEL } from '../../../src/main/foundation/config-encryption'
 import {
   getConfig,
   getConfigReadFailureCount,
@@ -105,6 +100,30 @@ describe('config IPC model fetching', () => {
     registerConfigHandlers()
     const handlers = registerRawRpcHandlersMock.mock.calls[0][1]
     await expect(handlers.refreshAISourcesConfig()).resolves.toEqual({ success: true, data: config, modelRefresh })
+  })
+
+  it('masks the SMTP password on desktop config reads, saves, and model refreshes', async () => {
+    const config = {
+      api: { apiKey: 'fixture-legacy-api-key' },
+      aiSources: { version: 2, currentId: 'a', sources: [{ id: 'a', apiKey: 'fixture-source-api-key' }] },
+      notificationChannels: { email: { smtp: { host: 'smtp.example.test', password: 'fixture-smtp-password' } } },
+    }
+    vi.mocked(getConfig).mockReturnValue(config as unknown as ReturnType<typeof getConfig>)
+    vi.mocked(saveConfig).mockReturnValueOnce(config as unknown as ReturnType<typeof getConfig>)
+    vi.mocked(getAISourceManager).mockReturnValue({ refreshAllConfigs: vi.fn().mockResolvedValue({}) } as unknown as ReturnType<typeof getAISourceManager>)
+    registerConfigHandlers()
+    const handlers = registerRawRpcHandlersMock.mock.calls[0][1]
+
+    const read = await handlers.getConfig()
+    const save = await handlers.setConfig({ notificationChannels: structuredClone(read.data.notificationChannels) })
+    const refresh = await handlers.refreshAISourcesConfig()
+    const masked = structuredClone(config)
+    masked.notificationChannels.email.smtp.password = MASK_SENTINEL
+    for (const result of [read, save, refresh]) {
+      expect(result).toMatchObject({ success: true, data: masked })
+    }
+    expect(saveConfig).toHaveBeenLastCalledWith({ notificationChannels: config.notificationChannels })
+    expect(config.notificationChannels.email.smtp.password).toBe('fixture-smtp-password')
   })
 
   it('never returns managed tokens on config reads or atomic source updates', async () => {

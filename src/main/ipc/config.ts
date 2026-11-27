@@ -5,7 +5,7 @@
 import { getConfig, getCredentialDecodeFailures } from '../foundation/config.service'
 import { getAISourceManager } from '../services/ai-sources'
 import { decryptString } from '../foundation/secure-storage.service'
-import { maskOAuthFields } from '../foundation/config-encryption'
+import { maskDesktopConfigFields, maskOAuthFields } from '../foundation/config-encryption'
 import { validateApiConnection } from '../services/api-validator.service'
 import {
   getConfigReadMetadata,
@@ -44,7 +44,7 @@ export function registerConfigHandlers(): void {
         console.log('[Settings] config:get - Loaded, aiSources v2, currentId:', config.aiSources?.currentId || 'none')
         return {
           success: true,
-          data: maskOAuthFields(config as unknown as Record<string, unknown>),
+          data: maskDesktopConfigFields(config as unknown as Record<string, unknown>),
           ...getConfigReadMetadata(),
         }
       } catch (error: unknown) {
@@ -116,7 +116,7 @@ export function registerConfigHandlers(): void {
           })
         }
 
-        return { success: true, data: maskOAuthFields(config as unknown as Record<string, unknown>) }
+        return { success: true, data: maskDesktopConfigFields(config as unknown as Record<string, unknown>) }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] config:set - Failed:', err.message)
@@ -164,7 +164,7 @@ export function registerConfigHandlers(): void {
         const modelRefresh = await manager.refreshAllConfigs()
         const config = getConfig()
         console.log('[Settings] config:refresh-ai-sources - Completed:', modelRefresh)
-        return { success: true, data: maskOAuthFields(config as unknown as Record<string, unknown>), modelRefresh }
+        return { success: true, data: maskDesktopConfigFields(config as unknown as Record<string, unknown>), modelRefresh }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] config:refresh-ai-sources - Failed:', err.message)

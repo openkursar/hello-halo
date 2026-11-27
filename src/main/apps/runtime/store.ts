@@ -956,15 +956,12 @@ export class ActivityStore {
     automationEnvironment: ExecutionEnvironment,
     notice?: { kind: WorkspaceNoticeKind; fromSpacePath: string },
   ): number {
-    const connection = `CASE WHEN json_extract(environment_json, '$.pendingConnectionNotice') = 1
-      OR COALESCE(json_extract(environment_json, '$.mcpBindings'), '{}') != json_extract(@environment, '$.mcpBindings')
-      THEN json_set(@environment, '$.pendingConnectionNotice', json('true')) ELSE @environment END`
     const replacement = `CASE
       WHEN @noticeFrom IS NOT NULL AND json_extract(environment_json, '$.spacePath') = @noticeFrom
-        THEN json_set(${connection}, '$.pendingWorkspaceNotice', json_object('kind', @noticeKind))
+        THEN json_set(@environment, '$.pendingWorkspaceNotice', json_object('kind', @noticeKind))
       WHEN json_extract(environment_json, '$.pendingWorkspaceNotice') IS NOT NULL
-        THEN json_set(${connection}, '$.pendingWorkspaceNotice', json_extract(environment_json, '$.pendingWorkspaceNotice'))
-      ELSE ${connection} END`
+        THEN json_set(@environment, '$.pendingWorkspaceNotice', json_extract(environment_json, '$.pendingWorkspaceNotice'))
+      ELSE @environment END`
     const noticeFrom = notice?.fromSpacePath ?? null
     const noticeKind = notice?.kind ?? null
     return this.db.transaction(() =>

@@ -10,7 +10,7 @@ import type { InstalledApp } from '../../../src/shared/apps/app-types'
 import type { ImChannelInstanceConfig, ImSessionRecord } from '../../../src/shared/types/im-channel'
 import { parseAppChatKey, buildImSessionKey } from '../../../src/shared/apps/im-keys'
 import { test as base, expect, sendAcceptanceMessage } from './acceptance-app'
-import { openManagedPerson, readManagedPerson, workspaceCard, type ManagedSpace } from './acceptance-management'
+import { openManagedPerson, openNewPersonConversation, readManagedPerson, workspaceCard, type ManagedSpace } from './acceptance-management'
 import { waitForHomePage } from './helpers'
 import { startAcceptanceWecom, type AcceptanceWecom } from './acceptance-wecom'
 import { startAcceptanceMcp } from './acceptance-mcp'
@@ -19,10 +19,16 @@ export { acceptance } from './acceptance-app'
 export { expect } from '@playwright/test'
 export const MOVE_OWNER = 'acceptance-move-owner'
 
-export const test = base.extend<{ wecom: AcceptanceWecom; moveMcp: Awaited<ReturnType<typeof startAcceptanceMcp>> }>({
+type MoveMcp = Awaited<ReturnType<typeof startAcceptanceMcp>>
+
+export const test = base.extend<{ wecom: AcceptanceWecom; moveMcp: { origin: MoveMcp; target: MoveMcp } }>({
   moveMcp: async ({}, use) => {
-    const service = await startAcceptanceMcp()
-    try { await use(service) } finally { await service.close() }
+    const origin = await startAcceptanceMcp()
+    let target: MoveMcp | undefined
+    try {
+      target = await startAcceptanceMcp()
+      await use({ origin, target })
+    } finally { await Promise.all([origin.close(), target?.close()]) }
   },
   wecom: async ({}, use, info) => {
     const wecom = await startAcceptanceWecom()
@@ -122,8 +128,7 @@ export async function openMoveChat(page: Page, person: InstalledApp) {
     return ((result.data ?? []) as ImSessionRecord[]).filter(record => record.channel === 'local')
   }
   const previous = new Set((await sessions()).map(record => record.chatId))
-  await openManagedPerson(page, person.spec.name)
-  await page.getByTitle('Opens the conversation with this digital human in the workspace chat', { exact: true }).click()
+  await openNewPersonConversation(page, { id: person.id, name: person.spec.name })
   await expect(page.getByPlaceholder(`Chat with ${person.spec.name}...`, { exact: true })).toBeVisible()
   await expect(page.getByTitle(/^Current workspace: .* — click to switch$/)).toHaveAttribute('title', `Current workspace: ${home.id === 'halo-temp' ? 'Halo Workspace' : home.name} — click to switch`)
   await expect.poll(async () => (await sessions()).filter(record => !previous.has(record.chatId)).length).toBe(1)

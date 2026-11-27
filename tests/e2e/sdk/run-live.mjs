@@ -80,7 +80,7 @@ async function command(name, executable, args, cwd) {
 }
 
 try {
-  record.appSource = await copySources(project, snapshot, ['node_modules', 'out', 'dist', 'resources', 'src/sdk', 'halo-local', 'halo-webank', 'tests/e2e/results', 'tests/e2e/report', 'tests/perf/results'])
+  record.appSource = await copySources(project, snapshot, ['node_modules', 'out', 'dist', 'resources', 'src/sdk', 'halo-local', 'tests/e2e/results', 'tests/e2e/report', 'tests/perf/results'])
   record.sdkSource = await copySources(sdk, sdkSnapshot, ['node_modules', 'dist', 'validation/results', 'swe-bench-eval'])
   await fs.mkdir(join(snapshot, 'node_modules/@hello-halo'), { recursive: true })
   for (const entry of await fs.readdir(join(project, 'node_modules'))) {

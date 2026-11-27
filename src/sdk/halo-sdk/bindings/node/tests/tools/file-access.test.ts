@@ -74,22 +74,49 @@ describe('snapshot-checked writes', () => {
     expect(await fs.readFile(filePath, 'utf-8')).toBe('updated');
   });
 
-  it('rejects changed bytes even when only ctime reveals the change', async () => {
+  it('rejects changed bytes on the write handle even when all metadata matches', async () => {
     const filePath = path.join(tmpDir, 'changed.txt');
+    const original = Buffer.alloc(128 * 1024 + 1, 0x61);
+    const external = Buffer.from(original);
+    external[external.length - 1] = 0x62;
+    await fs.writeFile(filePath, external);
+    const snapshot = await readFileSnapshot(filePath);
+    // Construct a stale view with the current stat, without relying on timestamp precision.
+    await expect(writeFileSnapshot(filePath, Buffer.from('updated'), { ...snapshot, bytes: original }))
+      .rejects.toThrow('no longer matches its recorded read');
+    expect((await fs.readFile(filePath)).equals(external)).toBe(true);
+  });
+
+  it('rejects a same-size change made after opening the write handle', async () => {
+    const filePath = path.join(tmpDir, 'changed-after-open.txt');
     await fs.writeFile(filePath, 'original');
-    const stamp = new Date('2024-01-01T00:00:00.000Z');
-    await fs.utimes(filePath, stamp, stamp);
     const snapshot = await readFileSnapshot(filePath);
     const open = fs.open;
     vi.spyOn(fs, 'open').mockImplementationOnce(async (...args) => {
       const handle = await open(...args);
       await fs.writeFile(filePath, 'external');
-      await fs.utimes(filePath, stamp, stamp);
+      snapshot.stat = await handle.stat();
       return handle;
     });
     await expect(writeFileSnapshot(filePath, Buffer.from('updated'), snapshot))
       .rejects.toThrow('no longer matches its recorded read');
-    expect(await fs.readFile(filePath, 'utf-8')).toBe('external');
+    expect(await fs.readFile(filePath, 'utf8')).toBe('external');
+  });
+
+  it('does not read the write handle when the expected length has already changed', async () => {
+    const filePath = path.join(tmpDir, 'changed-length.txt');
+    await fs.writeFile(filePath, 'short');
+    const snapshot = await readFileSnapshot(filePath);
+    await fs.writeFile(filePath, 'longer');
+    const open = fs.open;
+    vi.spyOn(fs, 'open').mockImplementationOnce(async (...args) => {
+      const handle = await open(...args);
+      vi.spyOn(handle, 'read').mockRejectedValue(new Error('Unexpected read of a rejected snapshot'));
+      return handle;
+    });
+    await expect(writeFileSnapshot(filePath, Buffer.from('updated'), snapshot))
+      .rejects.toThrow('no longer matches its recorded read');
+    expect(await fs.readFile(filePath, 'utf8')).toBe('longer');
   });
 
   it('refuses a read snapshot if the file changes while bytes are being read', async () => {

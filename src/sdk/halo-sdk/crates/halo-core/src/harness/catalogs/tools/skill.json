@@ -88,6 +88,10 @@
     "text": "Invalid skill source",
     "slots": []
   },
+  "tools.skill.resource_base": {
+    "text": "Base directory for this skill: {directory}. Resolve the skill's relative file references (scripts, references, assets) from this directory.",
+    "slots": ["directory"]
+  },
   "tools.skill.empty": {
     "text": "Skill '{name}' expanded to empty content.",
     "slots": [

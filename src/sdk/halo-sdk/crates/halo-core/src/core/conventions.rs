@@ -73,6 +73,35 @@ mod tests {
         assert!(!actual.contains_key("UNDEFINED"));
         assert_eq!(actual.get("KEPT").map(String::as_str), Some("base"));
     }
+
+    #[test]
+    fn a_relative_temporary_directory_is_resolved_against_the_host_process() {
+        let env = json!({"TMPDIR": "relative-tmp", "TMP": "relative-tmp", "TEMP": "relative-tmp"});
+        let options = json!({"nativeProcessEnv": env, "nativeProcessCwd": "/host/cwd"});
+        assert_eq!(temp_dir(&options), Path::new("/host/cwd").join("relative-tmp"));
+        let absolute = std::env::temp_dir();
+        assert_eq!(temp_dir(&json!({"nativeTempDirectory": absolute})), absolute);
+    }
+
+    #[test]
+    fn windows_environment_overrides_and_removals_ignore_key_case() {
+        let base = json!({"Path":"system", "home":"original", "REMOVE":"old"});
+        let first = json!({"PATH":"tools;system", "HOME":"override"});
+        let mut last = json!({"path":"final;tools;system"});
+        last["remove"] = crate::js::undefined();
+        let actual = merged_environment(&base, &[&first, &last], true);
+        assert_eq!(actual.len(), 2);
+        assert_eq!(actual["PATH"], "final;tools;system");
+        assert_eq!(actual["HOME"], "override");
+    }
+
+    #[test]
+    fn posix_environment_retains_distinct_key_case() {
+        let base = json!({"Path":"unrelated", "PATH":"system"});
+        let actual = merged_environment(&base, &[&json!({"PATH":"override"})], false);
+        assert_eq!(actual["PATH"], "override");
+        assert_eq!(actual["Path"], "unrelated");
+    }
 }
 
 pub fn home(options: &Value) -> String {
@@ -85,7 +114,19 @@ pub fn home(options: &Value) -> String {
         .or_else(|| options["nativeHomeDirectory"].as_str().map(str::to_owned))
         .unwrap_or_default()
 }
+/// A relative temporary directory is resolved against the host process, never a session or shell directory.
 pub fn temp_dir(options: &Value) -> std::path::PathBuf {
+    let directory = configured_temp_dir(options);
+    if directory.is_absolute() {
+        return directory;
+    }
+    options["nativeProcessCwd"]
+        .as_str()
+        .map(|cwd| Path::new(cwd).join(&directory))
+        .or_else(|| std::path::absolute(&directory).ok())
+        .unwrap_or(directory)
+}
+fn configured_temp_dir(options: &Value) -> std::path::PathBuf {
     if let Some(directory) = options["nativeTempDirectory"].as_str() { return directory.into(); }
     if options["nativeProcessEnv"].is_object() {
         let names: &[&str] = if cfg!(windows) { &["TEMP", "TMP"] } else { &["TMPDIR", "TMP", "TEMP"] };

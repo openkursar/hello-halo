@@ -6,6 +6,8 @@
  * instead of a placeholder: what the user sees is what is used.
  */
 
+import { trimPastedValue } from '../../../shared/pasted-value'
+
 const SSL_PORT = 465
 const STARTTLS_PORT = 587
 
@@ -15,7 +17,7 @@ export function defaultSmtpPort(secure: boolean): number {
 
 /** A usable port, or null for empty, 0, non-integer and out-of-range input. */
 export function parseSmtpPort(value: unknown): number | null {
-  const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : ''
+  const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? trimPastedValue(value) : ''
   if (!/^\d+$/.test(text)) return null
   const port = Number(text)
   return port >= 1 && port <= 65535 ? port : null

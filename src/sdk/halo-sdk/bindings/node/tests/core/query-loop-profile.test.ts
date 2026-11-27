@@ -98,7 +98,7 @@ describe('request model and prompt profile', () => {
       for (const request of requests) {
         const prompt = promptText(request);
         expect(prompt.includes("Put your fullest effort into solving the user's task")).toBe(ultraEffort === true);
-        expect(prompt.includes("Fulfill the user's request efficiently")).toBe(ultraEffort !== true);
+        expect(prompt.includes('Avoid repetitive attempts or scope expansion.')).toBe(ultraEffort !== true);
         expect(prompt).toContain('# Communicating');
         expect(prompt.match(/Caller instructions\./g)).toHaveLength(1);
         expect(request.maxTokens).toBe(512);

@@ -26,6 +26,12 @@
       "omitted"
     ]
   },
+  "tools.shell.capture_omitted": {
+    "text": "\n... [{omitted} characters of output omitted here] ...\n",
+    "slots": [
+      "omitted"
+    ]
+  },
   "tools.shell.output_truncated": {
     "text": "[Saved output reached the {byte_limit}-byte file limit. This file contains only the beginning of the output; later output was not saved here.]",
     "slots": [
@@ -93,6 +99,19 @@
       "output"
     ]
   },
+  "tools.shell.timed_out_unconfirmed": {
+    "text": "Command reached its {timeout}ms deadline, but not every process it started could be confirmed stopped. Their later output is unavailable and they may still be changing files; check the command's effects before running it again.\n{output}",
+    "slots": [
+      "timeout",
+      "output"
+    ]
+  },
+  "tools.shell.stopped_unconfirmed": {
+    "text": "Command was stopped, but not every process it started could be confirmed stopped. Their later output is unavailable and they may still be changing files; check the command's effects before running it again.\n{output}",
+    "slots": [
+      "output"
+    ]
+  },
   "tools.shell.recovery": {
     "text": "Inspect any saved command output. If repeating the command is safe, filter its output or redirect it to a file.",
     "slots": []
@@ -108,6 +127,20 @@
     "text": "Command exited with code 127\n{error}",
     "slots": [
       "error"
+    ]
+  },
+  "tools.shell.not_started": {
+    "text": "Command not started: the shell ended with code {code} before reaching it, so no part of the command ran.\n{output}",
+    "slots": [
+      "code",
+      "output"
+    ]
+  },
+  "tools.shell.unconfirmed": {
+    "text": "Command result unconfirmed: its start could not be verified, so whether it ran is unknown (shell exit code {code}). Check its effects before running it again.\n{output}",
+    "slots": [
+      "code",
+      "output"
     ]
   },
   "tools.shell.registry_closed": {
@@ -132,6 +165,24 @@
     "text": "Timed out after {timeout}ms",
     "slots": [
       "timeout"
+    ]
+  },
+  "tools.shell.task_not_started": {
+    "text": "Not started: the shell ended with code {code} before reaching the command, so no part of it ran",
+    "slots": [
+      "code"
+    ]
+  },
+  "tools.shell.task_unconfirmed": {
+    "text": "Unconfirmed: its start could not be verified, so whether the command ran is unknown (shell exit code {code}); check its effects before running it again",
+    "slots": [
+      "code"
+    ]
+  },
+  "tools.shell.task_termination_unconfirmed": {
+    "text": "{reason}; processes it started could not all be confirmed stopped, so later output is not captured and they may still be changing files",
+    "slots": [
+      "reason"
     ]
   },
   "tools.shell.output_persistence_failed": {
@@ -234,6 +285,10 @@
     "text": "agent-sdk: current directory is unavailable; retaining previous directory state",
     "slots": []
   },
+  "tools.shell.wrapper_start_unrecorded": {
+    "text": "agent-sdk: the command start could not be recorded; command not started",
+    "slots": []
+  },
   "tools.shell.services_required": {
     "text": "Background execution requires session-owned task services",
     "slots": []
@@ -270,6 +325,58 @@
       "budget",
       "reason"
     ]
+  },
+  "tools.shell.invalid_utf8_output_omitted": {
+    "text": "[Some command output was omitted to fit the {budget}.]",
+    "slots": ["budget"]
+  },
+  "tools.shell.invalid_utf8": {
+    "text": "Some output was not valid UTF-8; the text preview cannot preserve those bytes.",
+    "slots": []
+  },
+  "tools.shell.withheld_utf8": {
+    "text": "The preview omitted {bytes} bytes received at the end of output streams because capture ended inside a multibyte character.",
+    "slots": ["bytes"]
+  },
+  "tools.shell.invalid_utf8_saved": {
+    "text": "UTF-8 decoding was lossy; raw bytes (combined stdout and stderr): {path}.",
+    "slots": ["path"]
+  },
+  "tools.shell.encoding_saved": {
+    "text": "{issue} The exact captured bytes of stdout and stderr, combined, are in {path}.",
+    "slots": ["issue", "path"]
+  },
+  "tools.shell.encoding_prefix": {
+    "text": "{issue} Only a captured prefix of stdout and stderr, combined, is available as raw bytes at {path}.",
+    "slots": ["issue", "path"]
+  },
+  "tools.shell.encoding_no_save": {
+    "text": "{issue} A complete raw copy could not be saved: {reason}.",
+    "slots": ["issue", "reason"]
+  },
+  "tools.shell.task_output_live": {
+    "text": "[Output is still being captured. This preview represents {shown_bytes} bytes received so far.]",
+    "slots": ["shown_bytes"]
+  },
+  "tools.shell.task_output_capture_ended": {
+    "text": "[Capture ended before all output streams closed normally. This preview represents {shown_bytes} captured bytes.]",
+    "slots": ["shown_bytes"]
+  },
+  "tools.shell.task_output_save_unconfirmed": {
+    "text": "[Saving the raw output failed. This preview may include bytes not recoverable from the output file.]",
+    "slots": []
+  },
+  "tools.shell.task_preview_expired": {
+    "text": "[The decoded preview is no longer retained. The raw output file may still be available at {path}.]",
+    "slots": ["path"]
+  },
+  "tools.shell.task_output_preview_cut": {
+    "text": "[The preview represents {shown_bytes} of {received_bytes} captured bytes; additional captured output is available at {path}.]",
+    "slots": ["shown_bytes", "received_bytes", "path"]
+  },
+  "tools.shell.task_output_file_limit": {
+    "text": "[The preview represents {shown_bytes} captured bytes. The saved file is also incomplete: {path}. Saving stopped at the {byte_limit}-byte file limit.]",
+    "slots": ["shown_bytes", "path", "byte_limit"]
   },
   "tools.shell.task_output_more": {
     "text": "[Showing the first {shown_bytes} bytes of saved output. Additional captured output is available at {path}.]",

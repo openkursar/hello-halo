@@ -10,8 +10,9 @@ class Contents extends EventEmitter {
   id = 1
   destroyed = false
   debugger = Object.assign(new EventEmitter(), {
-    isAttached: () => true,
+    isAttached: vi.fn(() => true),
     attach: vi.fn(),
+    detach: vi.fn(),
     sendCommand: vi.fn((_method: string, _params: unknown, _session?: string): Promise<unknown> => Promise.resolve({ identifier: 'script' })),
   })
   isDestroyed = () => this.destroyed
@@ -209,6 +210,33 @@ it('never reads the native debugger getter after WebContents destruction', async
   await contents.start()
   expect(() => contents.close()).not.toThrow()
   expect(debuggerApi.listenerCount('message')).toBe(0)
+})
+
+it('detaches the retained debugger when the page is destroyed', async () => {
+  const contents = page()
+  await contents.start()
+  contents.close()
+  expect(contents.debugger.detach).toHaveBeenCalledOnce()
+  expect(console.warn).not.toHaveBeenCalled()
+})
+
+it('leaves a debugger that is no longer attached alone at destruction', async () => {
+  const contents = page()
+  await contents.start()
+  contents.debugger.isAttached.mockReturnValue(false)
+  contents.close()
+  expect(contents.debugger.detach).not.toHaveBeenCalled()
+})
+
+it('reports a failed debugger release once without interrupting destruction', async () => {
+  const contents = page()
+  await contents.start()
+  contents.debugger.detach.mockImplementation(() => { throw new Error('Release refused for https://example.invalid/private') })
+  expect(() => contents.close()).not.toThrow()
+  expect(retainsBrowserDebugger(contents as unknown as WebContents)).toBe(false)
+  expect(console.warn).toHaveBeenCalledOnce()
+  expect(vi.mocked(console.warn).mock.calls[0][0]).toContain('Debugger release failed')
+  expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain('private')
 })
 
 it('keeps the page script self-contained after production bundling', async () => {

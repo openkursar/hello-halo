@@ -247,7 +247,10 @@ records, recorded results that cannot be paired, duplicate calls). The error
 carries `code: 'RESUME_HISTORY_UNAVAILABLE'` and `reason: 'missing' |
 'unreadable' | 'incomplete'`, also across the worker boundary
 (`isResumeHistoryError`). A call with no recorded result and history left out
-by the size bounds are not treated as losses.
+by the size bounds are not treated as losses. A session that has only run local
+commands, such as `/help`, has an empty recorded history: strict resume restores
+it as empty rather than reporting it missing. Like any saved session, it is listed,
+can be forked and can be chosen by `continue`.
 
 ## Design Principles
 
@@ -455,13 +458,13 @@ context only.
 
 ## Workflows and Prompt Profiles
 
-`ultraEffort` changes two preset instructions: task investment and response to
-failed attempts. The normal mode uses the token budget efficiently within the
-requested scope. UltraEffort encourages fullest effort, different approaches and
-method combinations, and useful parallel collaboration with no more than four
-active agents in total, including the source agent. The agent-count wording is
-guidance, not a runtime admission limit. Identity and all other instructions,
-including communication, are shared by both modes.
+`ultraEffort` adds a fullest-effort instruction and changes the response to failed
+attempts. In the normal mode, a failed attempt leads to a correction without
+repetitive retries or scope expansion. UltraEffort encourages fullest effort,
+different approaches and method combinations, and useful parallel collaboration
+with no more than four active agents in total, including the source agent. The
+agent-count wording is guidance, not a runtime admission limit. Identity and all
+other instructions, including communication and design, are shared by both modes.
 
 ```ts
 const session = await createSession({
@@ -638,8 +641,9 @@ modes. Existing histories without a discovery baseline retain full declarations;
 start a new session to adopt discovery. Hosts needing to select interface behavior
 before resuming can use `readSessionToolContextMode(sessionId, { cwd, env,
 resumeSessionAt })`, exported by both public SDK entries. It returns `deferred`
-for the recorded client-context format and `full` for legacy history; missing or
-damaged records raise the ordinary resume error. Worker hosts should use
+for the recorded client-context format and `full` for legacy history; a session
+that has only run local commands has no legacy history and reports `deferred`.
+Missing or damaged records raise the ordinary resume error. Worker hosts should use
 `runtime.readSessionToolContextMode(sessionId, options, { signal, group })`,
 which borrows the existing pool without creating a session or connecting tools.
 The standalone helper validates bounded history on the calling thread. Call

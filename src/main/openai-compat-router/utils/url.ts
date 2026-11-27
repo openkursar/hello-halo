@@ -4,6 +4,8 @@
  * URL helpers for API endpoint handling and normalization.
  */
 
+import { trimPastedValue } from '../../../shared/pasted-value'
+
 /**
  * Extract base URL (protocol + host) from endpoint URL
  */
@@ -61,8 +63,7 @@ export function normalizeApiUrl(
   apiUrl: string,
   provider: 'anthropic' | 'anthropic_passthrough' | 'openai'
 ): string {
-  const trimSlash = (s: string) => s.replace(/\s/g, '').replace(/\/+$/, '')
-  let normalized = trimSlash(apiUrl)
+  let normalized = trimPastedValue(apiUrl).replace(/\s/g, '').replace(/\/+$/, '')
 
   if (provider === 'anthropic') {
     // Anthropic: just trim trailing slashes

@@ -19,6 +19,10 @@ function isPrunedNativeEntry(relative, target) {
   if (canvas) return canvas[1] !== selected.canvas
   const pty = /^(?:resources\/dsh-runtime\/)?node_modules\/node-pty\/prebuilds\/(darwin-arm64|darwin-x64|win32-arm64|win32-x64|linux-arm64|linux-x64)\//.exec(relative)
   if (pty) return pty[1] !== selected.pty || relative.endsWith('.pdb')
+  // Host-built binaries that afterPack drops from packages for another platform or chip.
+  if (/^node_modules\/node-pty\/(?:build|bin)\//.test(relative)) return target !== `${process.platform}-${process.arch}`
+  const conpty = /^node_modules\/node-pty\/third_party\/conpty\/[^/]+\/win10-(x64|arm64)\//.exec(relative)
+  if (conpty) return target.startsWith('win32-') && target !== `win32-${conpty[1]}`
   const sqlite = /^node_modules\/better-sqlite3\/prebuilds\/(darwin-arm64|darwin-x64|win32-x64|win32-arm64|linux-x64|linux-arm64|linuxmusl-arm64|linuxmusl-x64)\.node$/.exec(relative)
   if (sqlite) return sqlite[1] !== target
   if (/^node_modules\/cloudflared\/bin\/(?:cloudflared|cloudflared\.exe|cloudflared-darwin-x64|cloudflared-linux-x64)\.version$/.test(relative)) return true

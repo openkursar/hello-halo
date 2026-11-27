@@ -73,6 +73,13 @@ const MAC_BUILD_PATHS = [
   /^tests\/check\/(mac-local-signing|halo-sdk-build)\.test\.cjs$/
 ]
 
+/** The commit hook's scanner and installer, also node:test. */
+const COMMIT_CHECK_PATHS = [
+  /^scripts\/commit-check\//,
+  /^scripts\/postinstall\.mjs$/,
+  /^tests\/check\/disclosure\.test\.mjs$/
+]
+
 /**
  * Unit tests that do not pass on a clean checkout, and so cannot be part of any
  * gate: a check that is always red is a check people learn to ignore. Recorded
@@ -172,6 +179,11 @@ const checks = [
     name: 'local macOS build',
     argv: ['node', '--test', 'tests/check/mac-local-signing.test.cjs', 'tests/check/halo-sdk-build.test.cjs'],
     when: touched(MAC_BUILD_PATHS)
+  },
+  {
+    name: 'commit disclosure check',
+    argv: ['node', '--test', 'tests/check/disclosure.test.mjs'],
+    when: touched(COMMIT_CHECK_PATHS)
   }
 ]
 

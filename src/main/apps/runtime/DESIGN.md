@@ -856,6 +856,18 @@ default; extra sessions are keyed `app-chat:{appId}:local:direct:{uuid}`.
   (`getAllSessions` / `setCustomName`); only create / fork / delete need
   dedicated lifecycle (`createNativeChatSession` / `forkNativeChatSession` /
   `deleteNativeChatSession` in `app-chat.ts`).
+- A default or local session is titled once, by the owner's first message that
+  names something (`isPersonRequest`), under the space-conversation rule
+  (`shared/conversation-title`), worked out only at that moment. Messages from
+  other conversations or teammates and later messages change only
+  `lastMessage`; `customName` still wins; clearing the chat drops the title.
+  `title` is `''` while untitled and absent only until a message is registered
+  after creation or clearing, so a record from before titles were kept (absent,
+  with a preview, count kept or not) takes the preview it was listed under on
+  its next message. A digital human's "Chat" in the renderer reopens the most
+  recently active of these, read from the records the conversation lists
+  already hold; when no read of them has succeeded it starts a new one, as Chat
+  did before; only "new conversation" always creates one.
 
 **Session fork ("continue in client")**: forking an IM/other session into a
 local one copies the source JSONL transcript (immediate history) and records
@@ -2214,10 +2226,10 @@ persists that repair. A missing user-selected project directory still produces t
 change-folder error; stored history remains readable independently of that cwd.
 Connection identity and availability remain distinct: pausing an instance does
 not change its identity, while replacement, removal or authorization changes update
-the binding to currently authorized instances. A durable environment notice is
-recorded before continuing with changed accounts. Independent runs still enforce
-declared connection prerequisites. Deletion-related relocation and missing-workspace
-recovery also retain a per-conversation workspace notice. It is written as a system
+the binding to currently authorized instances without adding a conversation
+notice. Older connection notices do not appear in the transcript. Independent
+runs still enforce declared connection prerequisites. Deletion-related relocation
+and missing-workspace recovery retain a per-conversation workspace notice. It is written as a system
 record in the timeline, not an IM reply, and supplied with the next model input.
 Recording and engine acceptance are separate checkpoints: failed preparation keeps
 the model context pending without rewriting the timeline notice; a slash command

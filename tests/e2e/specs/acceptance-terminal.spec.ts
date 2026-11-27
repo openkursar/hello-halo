@@ -13,24 +13,34 @@ test.setTimeout(90000)
 test('a command receives the launch environment and a workspace path containing spaces', acceptance('terminal.environment.user-vars'), async ({ acceptanceApp, commandEnvironment, model, window }) => {
   const space = await commandWorkspace(window, acceptanceApp.profile, 'Quoted workspace')
   const file = join(space.workingDir, 'command-environment.json')
-  const command = commandScript(acceptanceApp.profile, 'report-environment', `const fs=require('node:fs');const value={cwd:process.cwd(),marker:process.env[${JSON.stringify(commandEnvironment.name)}]};fs.writeFileSync('command-environment.json',JSON.stringify(value));process.stdout.write(JSON.stringify(value));`)
+  const multiline = 'first line\nPATH=/usr/bin:/bin\nSNAPSHOT_NOT_A_KEY=fixture\nUnicode: λ\n'
+  const command = commandScript(acceptanceApp.profile, 'report-environment', `const fs=require('node:fs');const value={cwd:process.cwd(),marker:process.env[${JSON.stringify(commandEnvironment.name)}],multiline:process.env.ACCEPTANCE_MULTILINE,path:process.env.PATH,unexpected:process.env.SNAPSHOT_NOT_A_KEY??null};fs.writeFileSync('command-environment.json',JSON.stringify(value));process.stdout.write(JSON.stringify(value));`)
+  let environmentResults: string[] = []
   model.respond(request => {
-    const result = request.toolResults.find(result => result.id === 'environment-command')
-    if (!result) return { tools: [modelTool(request, 'Bash', { command, run_in_background: false }, 'environment-command')] }
-    const observed = JSON.parse(result.text)
-    expect(realpathSync(observed.cwd)).toBe(realpathSync(space.workingDir))
-    expect(observed.marker).toBe(commandEnvironment.value)
-    return { text: `The command received the workspace and marker: ${observed.marker}` }
+    const first = request.toolResults.find(result => result.id === 'environment-command')
+    if (!first) return { tools: [modelTool(request, 'Bash', { command: `export ACCEPTANCE_MULTILINE=${shellQuote(multiline)}\n${command}`, run_in_background: false }, 'environment-command')] }
+    const next = request.toolResults.find(result => result.id === 'retained-environment-command')
+    if (!next) return { tools: [modelTool(request, 'Bash', { command, run_in_background: false }, 'retained-environment-command')] }
+    environmentResults = [first.text, next.text]
+    return { text: `The command received the workspace and marker: ${commandEnvironment.value}` }
   })
   await openCommandWorkspace(window, space)
   const turn = await sendAcceptanceMessage(window, 'Inspect the selected workspace and the non-secret launch marker.')
   expect(turn.spaceId).toBe(space.id)
   await expect(window.locator('.message-assistant').last()).toContainText(commandEnvironment.value)
   await waitForAcceptanceIdle(window, turn.conversationId)
-  const stored = JSON.parse(readFileSync(file, 'utf8'))
-  expect(realpathSync(stored.cwd)).toBe(realpathSync(space.workingDir))
-  expect(stored.marker).toBe(commandEnvironment.value)
-  expect((await commandThoughts(window, turn.spaceId, turn.conversationId))[0].toolResult?.isError).toBe(false)
+  expect(environmentResults).toHaveLength(2)
+  const [initial, observed] = environmentResults.map(text => JSON.parse(text))
+  expect(initial.path.length).toBeGreaterThan(0)
+  expect(realpathSync(observed.cwd)).toBe(realpathSync(space.workingDir))
+  expect(observed.marker).toBe(commandEnvironment.value)
+  expect(observed.path).toBe(initial.path)
+  expect(observed.multiline).toBe(multiline)
+  expect(observed.unexpected).toBeNull()
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(observed)
+  const thoughts = await commandThoughts(window, turn.spaceId, turn.conversationId)
+  expect(thoughts).toHaveLength(2)
+  expect(thoughts.every(thought => thought.toolResult?.isError === false)).toBe(true)
 })
 
 test('commands in two workspaces write only to their selected project', acceptance('terminal.commands.workspace-isolation'), async ({ acceptanceApp, model, window }) => {

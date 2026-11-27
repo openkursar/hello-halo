@@ -153,6 +153,44 @@ for Windows process-tree cleanup. The Worker runtime's process tests remain
 required separately. Differential reports must distinguish the preserved grace
 behavior from environment-exit guarantees absent in an older implementation.
 
+For native Windows Bash shutdown, run the following from the SDK directory on
+Windows with Git Bash, after `npm run build`:
+
+```sh
+cargo +1.90.0 test -p halo-core --lib --locked tools::shell_platform:: -- --test-threads=1
+npm test -- bindings/node/tests/tools/bash bindings/node/tests/worker/runtime.test.ts
+```
+
+The direct shell fixture waits until both the native child and an unrelated
+command are running, cancels only the first session, checks the stopped processes,
+and verifies the other command's file write. On Windows, an incomplete MSYS
+observation can legitimately produce an unconfirmed receipt; the actual process
+exits and the neighbour's write are mandatory in either case. Because filtering
+`npm test` selects only Vitest, the Windows worker jobs also run the shell-platform
+Rust tests explicitly. This exercises the native Windows process handles without
+adding the unrelated Rust suites to the worker matrix. Only a completed Windows
+run establishes that coverage; cross-linking does not exercise Windows APIs or
+measure their latency.
+
+To measure stop latency on Windows with the built SDK, run:
+
+```sh
+node validation/windows-stop.mjs --output windows-stop.json --concurrency 12
+```
+
+The Windows worker matrix saves a separate JSON report for each Node version.
+It exercises a sleeper, a native parent and child, and a loop that launches short-lived
+processes, both individually and under concurrent cancellation. The reported stop
+latency ends at the SDK receipt. The process check follows it and covers registered
+fixture members, not an unseen launcher or every process on the machine. A separate
+SDK session must still be able to write its file after the cancellations.
+
+The confirmation rate uses valid stop receipts as its denominator; missing samples
+are listed separately. An unconfirmed receipt is a measurement, not by itself a test
+failure. A measured contradiction (such as an observed survivor after a confirmed
+stop) and a broken measurement are reported separately. Compare timing only across
+comparable runners and workloads.
+
 ## Harness, cache and performance
 
 Use scripted providers or a local protocol-valid model endpoint with the real

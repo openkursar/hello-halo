@@ -13,6 +13,7 @@
  *   HALO_TEST_API_FORMAT - API format: 'anthropic' or 'openai' (default: auto-detect)
  */
 
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -137,6 +138,21 @@ function resolveEndpoint(apiUrl, apiFormat) {
   return base.endsWith('/chat/completions') ? base : `${base}/v1/chat/completions`
 }
 
+let opencodeSessionId
+
+function getProviderHeaders(endpoint) {
+  const url = new URL(endpoint)
+  if (url.origin !== 'https://opencode.ai' || !/^\/(?:inference|zen)\/go\//.test(url.pathname)) {
+    return {}
+  }
+
+  opencodeSessionId ??= randomUUID()
+  return {
+    'User-Agent': 'halo-i18n/1.0',
+    'x-opencode-session': opencodeSessionId
+  }
+}
+
 // Call LLM API for translation (supports both Anthropic and OpenAI formats)
 async function translateBatch(texts, targetLocale) {
   const apiKey = process.env.HALO_TEST_API_KEY
@@ -199,6 +215,7 @@ ${JSON.stringify(texts, null, 2)}
 `
 
   const endpoint = resolveEndpoint(apiUrl, apiFormat)
+  const providerHeaders = getProviderHeaders(endpoint)
 
   let response
   if (apiFormat === 'anthropic') {
@@ -206,6 +223,7 @@ ${JSON.stringify(texts, null, 2)}
     response = await fetch(endpoint, {
       method: 'POST',
       headers: {
+        ...providerHeaders,
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01'
@@ -221,6 +239,7 @@ ${JSON.stringify(texts, null, 2)}
     response = await fetch(endpoint, {
       method: 'POST',
       headers: {
+        ...providerHeaders,
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },

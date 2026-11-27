@@ -31,6 +31,7 @@ import {
   isAnthropicProvider
 } from '../../types'
 import { resolveLocalizedText } from '../../../shared/types'
+import { trimPastedValue } from '../../../shared/pasted-value'
 import { formatModelFetchError } from '../../utils/model-fetch-error'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
@@ -322,14 +323,14 @@ export function ProviderSelector({
 
   // Fetch models from API
   const handleFetchModels = async () => {
-    if (!apiKey || !apiUrl) {
+    const requestUrl = trimPastedValue(apiUrl)
+    if (!apiKey || !requestUrl) {
       setValidationResult({ valid: false, message: t('Please enter API Key and URL first') })
       return
     }
 
     const token = fetchGate.current.begin()
     const requestKey = apiKey
-    const requestUrl = apiUrl
     setIsFetchingModels(true)
     setValidationResult(null)
 
@@ -407,7 +408,7 @@ export function ProviderSelector({
       // builtin-provider defaults — identical to pre-preset behavior.
       const isPresetSource = Boolean(editingSource?.isPreset || presetProvider)
       const presetCfg = presetProvider?.preset
-      const resolvedApiUrl = apiUrl
+      const resolvedApiUrl = (isPresetSource ? apiUrl : trimPastedValue(apiUrl))
         || presetCfg?.baseUrl
         || currentProvider?.apiUrl
         || 'https://api.openai.com'
@@ -491,7 +492,7 @@ export function ProviderSelector({
     try {
       const validationResponse = await api.validateApi(
         apiKey,
-        apiUrl,
+        trimPastedValue(apiUrl),
         (isAnthropicProvider(selectedProvider) || currentProvider?.apiType === 'anthropic_passthrough') ? 'anthropic' : 'openai',
         finalModel
       )

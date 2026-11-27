@@ -14,9 +14,15 @@ const log: NativeCollaborationCallback = (error, _name, input) => {
   return '{"ok":true}';
 };
 
+const searchEnvironmentNames = ['PATH', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR'];
+
 export function createCodeSearchService(options: CodeSearchOptions): CodeSearchService {
-  const nativeProcessEnv = Object.fromEntries(['PATH', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR']
-    .filter(name => process.env[name] !== undefined).map(name => [name, process.env[name]]));
+  // Windows Worker threads expose a case-sensitive copy of the process environment.
+  const names = process.platform === 'win32'
+    ? Object.keys(process.env).filter(name => /^[A-Za-z]+$/.test(name) && searchEnvironmentNames.includes(name.toUpperCase()))
+    : searchEnvironmentNames;
+  const nativeProcessEnv = Object.fromEntries(names.filter(name => process.env[name] !== undefined)
+    .map(name => [name, process.env[name]]));
   let handle;
   try { handle = new (loadBinding().NativeCodeSearchService)(stringifyNativeValue({ ...options, nativeProcessEnv }), log); }
   catch (error) { throw nativeError(error); }

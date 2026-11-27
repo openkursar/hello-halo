@@ -159,7 +159,7 @@ pub(super) async fn task(
         let entry = &output["entry"];
         let preview = &output["preview"];
         let mut result = preview["output"].as_str().unwrap_or("").to_owned();
-        if preview["truncated"] == true {
+        if preview["truncated"] == true && preview["noticesIncluded"] != true {
             let shown = result.len();
             let path = entry["outputFile"].as_str().unwrap_or("");
             let notice = if entry["outputTruncated"] == true {

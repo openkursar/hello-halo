@@ -60,8 +60,24 @@ export function hashFileContent(content: string | Buffer): string {
 }
 
 function sameFileVersion(a: Stats, b: Stats): boolean {
-  return a.dev === b.dev && a.ino === b.ino && a.size === b.size &&
-    a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+  return sameContentVersion(a, b) && a.ctimeMs === b.ctimeMs;
+}
+
+function sameContentVersion(a: Stats, b: Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+}
+
+async function matchesBytes(handle: fs.FileHandle, expected: Buffer): Promise<boolean> {
+  const buffer = Buffer.allocUnsafe(Math.min(expected.length + 1, 64 * 1024));
+  let offset = 0;
+  while (offset < expected.length) {
+    const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, expected.length - offset), offset);
+    if (bytesRead === 0 || !buffer.subarray(0, bytesRead).equals(expected.subarray(offset, offset + bytesRead))) {
+      return false;
+    }
+    offset += bytesRead;
+  }
+  return (await handle.read(buffer, 0, 1, offset)).bytesRead === 0;
 }
 
 async function statCurrentPath(filePath: string): Promise<Stats> {
@@ -105,23 +121,16 @@ export async function writeFileSnapshot(
     if (expected) {
       const current = await handle.stat();
       const atPath = await statCurrentPath(filePath);
-      if (!sameFileVersion(current, atPath)) {
+      if (!current.isFile() || !sameFileVersion(current, atPath) ||
+          !sameContentVersion(expected.stat, current) || expected.bytes.length !== current.size) {
         throw new Error(FILE_CHANGED_MESSAGE);
       }
-      if (!sameFileVersion(expected.stat, current)) {
-        // OverlayFS copy-up on r+ can change ctime without changing the file.
-        // Revalidate bytes through this handle without accepting inode replacement.
-        const previous = expected.stat;
-        if (previous.dev !== current.dev || previous.ino !== current.ino ||
-            previous.size !== current.size || previous.mtimeMs !== current.mtimeMs) {
-          throw new Error(FILE_CHANGED_MESSAGE);
-        }
-        const content = await readBounded(handle, MAX_FILE_BYTES);
-        const after = await handle.stat();
-        if (!content.equals(expected.bytes) || !sameFileVersion(current, after) ||
-            !sameFileVersion(after, await statCurrentPath(filePath))) {
-          throw new Error(FILE_CHANGED_MESSAGE);
-        }
+      assertFileSize(current.size);
+      // An unchanged ctime does not prove content equality; copy-up can also change only ctime.
+      if (!await matchesBytes(handle, expected.bytes)) throw new Error(FILE_CHANGED_MESSAGE);
+      const after = await handle.stat();
+      if (!sameFileVersion(current, after) || !sameFileVersion(after, await statCurrentPath(filePath))) {
+        throw new Error(FILE_CHANGED_MESSAGE);
       }
     }
     // Opening with r+ preserves permissions, hard links, and extended attributes.

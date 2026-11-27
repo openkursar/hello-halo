@@ -2,8 +2,8 @@
  * Title of the conversation on screen, for the page header.
  *
  * A regular conversation has its own title. A digital human's conversation is
- * named after the digital human, plus the session's own name when the user gave
- * it one (its default session has none).
+ * named after the digital human, plus the conversation's own name once it has
+ * one: the user's, else the title its first message gave it.
  */
 
 import { useChatStore, selectActiveConversationId, conversationKind, digitalHumanAppId } from '../stores/chat.store'
@@ -28,6 +28,7 @@ export function useActiveConversationTitle(): string | undefined {
 
   if (!isDigitalHuman || !appId) return regularTitle
   const name = app ? resolveSpecI18n(app.spec, getCurrentLanguage()).name || appId : appId
-  const sessionName = rows.find(row => row.id === conversationId)?.customName
+  const row = rows.find(candidate => candidate.id === conversationId)
+  const sessionName = row?.customName || row?.title
   return sessionName ? `${name} · ${sessionName}` : name
 }

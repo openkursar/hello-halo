@@ -1,5 +1,9 @@
-use serde_json::Value;
-use std::collections::HashSet;
+#[cfg(any(windows, test))]
+mod windows_ancestry;
+#[cfg(windows)]
+mod windows_stop;
+#[cfg(windows)]
+pub(super) use windows_stop::{terminate_windows_shell, WINDOWS_STOP_BUDGET};
 
 pub(super) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
@@ -71,72 +75,52 @@ pub(super) fn null_redirect(command: &str) -> String {
     output
 }
 
-pub(super) fn owned_windows_processes(
-    root: u32,
-    native: &[Value],
-    posix: &str,
-    current_pid: u32,
-) -> Vec<u32> {
-    let mut native_ids = vec![root];
-    let mut owned: HashSet<_> = [root].into_iter().collect();
-    let mut posix_ids = HashSet::new();
-    let rows: Vec<_> = posix
-        .split('\n')
-        .filter_map(|line| {
-            let cells: Vec<_> = crate::js::trim_start_js(line)
-                .split(crate::js::is_whitespace)
-                .filter(|cell| !cell.is_empty())
-                .take(4)
-                .collect();
-            if cells.len() != 4 {
-                return None;
-            }
-            Some((
-                cells[0].parse::<u32>().ok()?,
-                cells[1].parse::<u32>().ok()?,
-                cells[2].parse::<u32>().ok()?,
-                cells[3].parse::<u32>().ok()?,
-            ))
-        })
-        .collect();
-    loop {
-        let mut changed = false;
-        for row in native {
-            if let (Some(pid), Some(parent)) = (
-                crate::js::safe_integer(&row["pid"]),
-                crate::js::safe_integer(&row["parent"]),
-            ) {
-                if pid >= 0
-                    && pid <= u32::MAX as i64
-                    && parent >= 0
-                    && parent <= u32::MAX as i64
-                    && owned.contains(&(parent as u32))
-                    && owned.insert(pid as u32)
-                {
-                    native_ids.push(pid as u32);
-                    changed = true;
-                }
-            }
-        }
-        for (pid, parent, _, native) in &rows {
-            if owned.contains(native) || posix_ids.contains(parent) {
-                if owned.insert(*native) {
-                    native_ids.push(*native);
-                    changed = true;
-                }
-                if posix_ids.insert(*pid) {
-                    changed = true;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
+#[cfg(any(windows, test))]
+fn windows_ps_executable(shell: &std::path::Path) -> Option<std::path::PathBuf> {
+    let name = shell.file_name()?.to_str()?;
+    if !["bash.exe", "sh.exe"].iter().any(|candidate| name.eq_ignore_ascii_case(candidate)) {
+        return None;
     }
-    native_ids
+    let directory = std::path::absolute(shell.parent()?).ok()?;
+    [directory.join("ps.exe"), directory.join("../usr/bin/ps.exe")]
         .into_iter()
-        .filter(|pid| *pid > 0 && *pid != current_pid)
-        .collect()
+        .find(|candidate| candidate.is_file())
+}
+
+#[cfg(windows)]
+async fn capture_process_table(
+    executable: &std::path::Path,
+    deadline: std::time::Duration,
+) -> std::io::Result<Vec<u8>> {
+    use std::{io, process::Stdio};
+    use tokio::io::AsyncReadExt;
+
+    const OUTPUT_LIMIT: u64 = 4 * 1024 * 1024;
+    let mut child = tokio::process::Command::new(executable)
+        .arg("-e")
+        .creation_flags(0x08000000)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let stdout = child.stdout.take().expect("process table capture has stdout");
+    let operation = async {
+        let mut output = Vec::new();
+        stdout.take(OUTPUT_LIMIT + 1).read_to_end(&mut output).await?;
+        if output.len() as u64 > OUTPUT_LIMIT {
+            return Err(io::Error::other("process table output exceeded its capture limit"));
+        }
+        let status = child.wait().await?;
+        if !status.success() {
+            return Err(io::Error::other(status.to_string()));
+        }
+        Ok(output)
+    };
+    match tokio::time::timeout(deadline, operation).await {
+        Ok(result) => result,
+        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "process table capture timed out")),
+    }
 }
 
 #[cfg(test)]
@@ -186,8 +170,25 @@ mod tests {
     }
 
     #[test]
-    fn windows_paths_redirections_and_process_ancestry_match_fixtures() {
-        let fixture: Value =
+    fn windows_ps_is_found_beside_supported_shells_or_in_git_usr_bin() {
+        let root = std::env::temp_dir().join(format!("halo-shell-ps-{}", uuid::Uuid::new_v4()));
+        let bin = root.join("bin");
+        let usr_bin = root.join("usr/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&usr_bin).unwrap();
+        assert!(windows_ps_executable(&bin.join("bash.exe")).is_none());
+        std::fs::write(usr_bin.join("ps.exe"), "fixture").unwrap();
+        let ps = windows_ps_executable(&bin.join("BaSh.ExE")).unwrap();
+        assert_eq!(ps.canonicalize().unwrap(), usr_bin.join("ps.exe").canonicalize().unwrap());
+        std::fs::write(bin.join("ps.exe"), "fixture").unwrap();
+        assert_eq!(windows_ps_executable(&bin.join("sh.exe")), Some(bin.join("ps.exe")));
+        assert!(windows_ps_executable(&bin.join("node.exe")).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn windows_paths_redirections_and_quotes_match_fixtures() {
+        let fixture: serde_json::Value =
             serde_json::from_str(include_str!("fixtures/shell-platform.json")).unwrap();
         for case in fixture["windowsToPosix"].as_array().unwrap() {
             assert_eq!(
@@ -211,17 +212,6 @@ mod tests {
             assert_eq!(
                 quote(case["input"].as_str().unwrap()),
                 case["expected"].as_str().unwrap()
-            );
-        }
-        for case in fixture["ancestry"].as_array().unwrap() {
-            assert_eq!(
-                serde_json::json!(owned_windows_processes(
-                    case["root"].as_u64().unwrap() as u32,
-                    case["native"].as_array().unwrap(),
-                    case["posix"].as_str().unwrap(),
-                    case["self"].as_u64().unwrap() as u32
-                )),
-                case["expected"]
             );
         }
     }

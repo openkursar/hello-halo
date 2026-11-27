@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpTransport, SSETransport, StdioTransport } from '../../../native/mcp-transports.js';
@@ -101,6 +102,29 @@ describe('MCP transport cancellation', () => {
     transport.close();
     await rejected;
     await disconnected;
+  });
+
+  it.skipIf(process.platform !== 'win32')('starts a bare batch command from the configured PATH', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'mcp shim 测试 '));
+    const shim = `mcp-fixture-${randomUUID()}`;
+    const script = join(root, 'fixture.cjs');
+    await writeFile(join(root, `${shim}.cmd`), '@echo off\r\n"%MCP_FIXTURE_NODE%" "%MCP_FIXTURE_SCRIPT%" "%~1"\r\n');
+    await writeFile(script, `require('node:readline').createInterface({input: process.stdin}).on('line', line => {
+      const { id } = JSON.parse(line);
+      console.log(JSON.stringify({ jsonrpc: '2.0', id, result: process.argv[2] }));
+    });`);
+    const transport = new StdioTransport({ command: shim, args: ['one & two'], env: {
+      Path: `"${root}"`, PathExt: '.BAT;.CMD', MCP_FIXTURE_NODE: process.execPath, MCP_FIXTURE_SCRIPT: script,
+    } });
+    try {
+      await transport.connect();
+      expect(await transport.send({ jsonrpc: '2.0', id: 1, method: 'fixture' })).toEqual({
+        jsonrpc: '2.0', id: 1, result: 'one & two',
+      });
+    } finally {
+      transport.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 });
+    }
   });
 
   it('handles the late OS error of a spawn cancelled before its spawn event', async () => {

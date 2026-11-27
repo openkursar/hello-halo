@@ -973,6 +973,41 @@ describe('the conversation list names a message of cards alone', () => {
       sessionRegistry.current = null
     }
   })
+
+  it('and offers that name as the chat\'s title, by the space conversation rule', async () => {
+    const register = vi.fn()
+    sessionRegistry.current = { register, getPushableSessions: () => [] }
+    keptMemberContext()
+    try {
+      await sendAppChatMessage({
+        appId: app.id,
+        spaceId: 'space-1',
+        message: '  Read   https://example.org/workspace/notes  ',
+      }).catch(() => {})
+      expect(register.mock.calls[0]?.[5].ownerTitle?.()).toBe('Read example.org › notes')
+    } finally {
+      sessionRegistry.current = null
+    }
+  })
+
+  it('but offers no title for a message another conversation delivered', async () => {
+    const register = vi.fn()
+    sessionRegistry.current = { register, getPushableSessions: () => [], getPendingResume: () => undefined }
+    keptMemberContext()
+    try {
+      await sendAppChatMessage({
+        appId: app.id,
+        spaceId: 'space-1',
+        conversationId: buildLocalSessionKey(app.id, 'fresh-chat'),
+        message: 'Framed delivery for the model',
+        recorded: { content: 'Please summarise the plan', provenance: { source: 'cross-conversation', metadata: { fromConversationId: 'peer' } } },
+      }).catch(() => {})
+      expect(register.mock.calls[0]?.[5]).toMatchObject({ lastMessage: 'Please summarise the plan' })
+      expect(register.mock.calls[0]?.[5].ownerTitle).toBeUndefined()
+    } finally {
+      sessionRegistry.current = null
+    }
+  })
 })
 
 

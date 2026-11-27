@@ -23,7 +23,23 @@ promises:
     en: Unusual creation inputs produce a response without crashing the host or creating duplicate
       member names.
     zh: 异常创建输入能得到响应，不使主机崩溃，也不产生重名成员。
+  dissolution:
+    en: Dissolving a team keeps all spaces and all people except unshared digital humans created for the team that still work in its owning space.
+    zh: 解散团队保留所有空间和数字人，仅删除仍在团队所属空间工作、未被其他团队使用的团队自建数字人。
 scenarios:
+  - id: teams.cluster.dissolve
+    title: Keep a moved member, its neighbor and their workspace when dissolving a team
+    verifies: [dissolution]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Move one of two team-created people into a workspace with an independent person. Confirm dissolution in team settings and restart the app.
+    expected:
+      - The original and destination workspaces, the moved and independent people and their saved files remain. The unshared team-created people still in the original workspace are gone.
   - id: teams.cluster.create-team
     title:
       en: A confirmed team appears with an assigned lead

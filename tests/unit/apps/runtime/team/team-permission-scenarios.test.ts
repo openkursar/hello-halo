@@ -1638,6 +1638,31 @@ describe('a question asked in a held-back turn', () => {
 // ============================================
 
 describe('the owner and the owner\u2019s own digital humans', () => {
+  it.each([
+    { kind: 'named native task', chatKey: 'native:named', initialTitle: 'Review revisions', title: 'Review revisions' },
+    { kind: 'auto-named native task', chatKey: 'native:fresh', initialTitle: undefined, title: 'Check the revisions.' },
+    { kind: 'untitled member chat', chatKey: `direct:${LEAD}`, initialTitle: undefined, title: '' },
+  ])('names the $kind in its first-turn prompt and all three coordination receipts', async ({ chatKey, initialTitle, title }) => {
+    const task = runtime.ensureConversationEpoch(TEAM_ID, chatKey, initialTitle)
+    runtime.ensureConversationEpoch(TEAM_ID, 'native:unrelated', 'Unrelated work')
+    const receipts: string[] = []
+    duringNextTurnOf(LEAD, async turn => {
+      receipts.push(await callTool(turn.teamTools, 'team_send', { to: 'tester', message: 'Review the revisions.' }))
+      receipts.push(await callTool(turn.teamTools, 'team_schedule', { to: 'lead', every: '15m', instruction: 'Check for revisions.' }))
+      receipts.push(await callTool(turn.report, 'report_to_user', { type: 'escalation', message: 'Approve the revisions?' }))
+    })
+    await fromTheOwner(LEAD, 'Check\nthe revisions.', task.id)
+
+    expect(store.getEpochById(task.id)?.workItem?.title).toBe(title || null)
+    const prompt = promptOf(turnsOf(LEAD)[0])
+    expect(prompt).toContain(title ? `Current team task: "${title}".` : 'You are working in an untitled team task.')
+    expect(prompt).not.toContain('Unrelated work')
+    const landing = title ? `Recorded under task "${title}".` : 'Recorded under this task.'
+    expect(receipts).toHaveLength(3)
+    for (const receipt of receipts) expect(receipt).toContain(landing)
+    expect(h.entries.find(entry => entry.type === 'escalation')?.content.teamContext).toMatchObject({ teamId: TEAM_ID, epochId: task.id })
+  })
+
   it('the owner\u2019s own message has the owner\u2019s reach, right after a teammate\u2019s held-back turn on the same conversation', async () => {
     saveDelegatedPolicy(DEV, READ_ONLY)
     await fromAnotherMachine(DEV, 'Draft the solution design for the import job.')

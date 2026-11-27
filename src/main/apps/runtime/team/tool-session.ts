@@ -42,7 +42,7 @@ export function bindTeamToolSession(conversationId: string, context: TeamMcpCont
     return current.context
   }
   const privateContext = (current: TeamMcpContext, work: { team: { id: string; leadAppId: string | null }; epochId: string }): TeamMcpContext => ({
-    ...current, teamId: work.team.id, epochId: work.epochId,
+    ...current, teamId: work.team.id, epochId: work.epochId, taskTitle: undefined,
     callerAppId: spaceCoordinatorAppId(conversationId), collabMode: 'free', selfIsLead: true,
     requestId: privateRequest(current), privateAssistants: undefined,
   })

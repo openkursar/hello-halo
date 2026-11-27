@@ -20,6 +20,7 @@
 import { createSdkMcpServer } from '../agent/resolved-sdk'
 import { markMcpServerSettings } from '../agent'
 import type { EmailChannelConfig } from '../../../shared/types/notification-channels'
+import { normalizeEmailChannelConfig } from '../../../shared/email-channel-config'
 import { getServiceDefaults } from '../../foundation/product-config'
 import { ImapClient } from './imap-client'
 import { SmtpClient } from './smtp-client'
@@ -56,9 +57,8 @@ type SdkMcpServer = ReturnType<typeof createSdkMcpServer>
  *
  * Exists only for configs created before `serviceDefaults.email` was seeded
  * into config.json: those never carry a CalDAV URL, and without it the
- * calendar tools below stay unregistered. Everything else — including the
- * SMTP endpoint — comes from the user's config verbatim, so what the settings
- * "Test" button verifies is exactly what these tools use.
+ * calendar tools below stay unregistered. The endpoint and credentials use
+ * the same normalization as the Settings connection test.
  */
 function resolveAdvancedDefaults(userConfig: EmailChannelConfig): EmailChannelConfig {
   const defaults = getServiceDefaults()?.email
@@ -87,7 +87,7 @@ export function createEmailMcpServer(
   rawConfig: EmailChannelConfig,
   opts: { refuseAttachment?: (filePath: string) => string | null } = {}
 ): SdkMcpServer {
-  const config = resolveAdvancedDefaults(rawConfig)
+  const config = normalizeEmailChannelConfig(resolveAdvancedDefaults(rawConfig))
   const userEmail = config.smtp.user
 
   // Create protocol clients

@@ -6,7 +6,7 @@ import type { Page } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
 import { parseAppChatKey } from '../../../src/shared/apps/im-keys'
 import { test, expect, acceptance, sendAcceptanceMessage, readAcceptanceErrors } from '../fixtures/acceptance-app'
-import { openManagedPerson, openManagedPersonSettings, readManagedPerson } from '../fixtures/acceptance-management'
+import { openManagedPersonSettings, openNewPersonConversation, readManagedPerson } from '../fixtures/acceptance-management'
 import { navigateToChat, openDigitalHumanConversation } from '../fixtures/helpers'
 import { contentText, type ModelRequest } from '../fixtures/acceptance-model'
 
@@ -30,11 +30,6 @@ async function readInstructions(page: Page, appId: string): Promise<string> {
   const { spec } = await readManagedPerson(page, appId)
   if (spec.type !== 'automation') throw new Error('The settings reload fixture must remain an automation digital human')
   return spec.system_prompt
-}
-
-async function openNewChat(page: Page, name: string) {
-  await openManagedPerson(page, name)
-  await page.getByTitle('Opens the conversation with this digital human in the workspace chat', { exact: true }).click()
 }
 
 async function assertHistory(page: Page, appId: string, target: { spaceId: string; conversationId: string }, questions: string[]) {
@@ -224,7 +219,7 @@ for (const engine of ['halo', 'anthropic'] as const) {
           return target
         }
         try {
-          await openNewChat(page, name)
+          await openNewPersonConversation(page, { id: appId, name })
           const initialTurn = await send(questions[0])
           const originalChat = { spaceId: initialTurn.spaceId, conversationId: initialTurn.conversationId }
           assertRequest(questions[0], original, [])
@@ -251,7 +246,7 @@ for (const engine of ['halo', 'anthropic'] as const) {
             assertRequest(questions[1], updated, history)
             history.push(questions[1])
             await assertHistory(page, appId, originalChat, history)
-            await openNewChat(page, name)
+            await openNewPersonConversation(page, { id: appId, name })
             const freshChat = await send(questions[2])
             expect(freshChat.conversationId).not.toBe(originalChat.conversationId)
             assertRequest(questions[2], updated, [])

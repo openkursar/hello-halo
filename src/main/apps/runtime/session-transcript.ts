@@ -518,6 +518,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
 
     // ── User events ──
     if (event.type === 'user') {
+      if (event._source === 'environment-notice') continue
       const content = event.message?.content
       const toolResults = extractToolResults(content, options.imagesDir)
 
@@ -871,7 +872,6 @@ const TRANSCRIPT_SOURCES: ReadonlySet<string> = new Set<TranscriptSource>([
   'cross-conversation-notice',
   'team-message',
   'continuity-notice',
-  'environment-notice',
   'workspace-notice',
 ])
 

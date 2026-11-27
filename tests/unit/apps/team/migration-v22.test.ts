@@ -19,8 +19,21 @@ const addedTables = [
   'collaboration_recipient_fences', 'collaboration_recipient_epochs',
 ]
 
+/** Columns later migrations append to the legacy tables; rows that predate them must hold NULL there. */
+const columnsAddedLater: Record<string, readonly string[]> = { team_epochs: ['first_human_turn_at', 'task_ended_by'] }
+
 function snapshot(db: Database.Database, tables: string[]) {
   return Object.fromEntries(tables.map(table => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]))
+}
+
+function legacySnapshot(db: Database.Database) {
+  return Object.fromEntries(Object.entries(snapshot(db, legacyTables)).map(([table, rows]) => [table, rows.map(row => withoutAddedColumns(table, row as Record<string, unknown>))]))
+}
+
+function withoutAddedColumns(table: string, row: Record<string, unknown>) {
+  const added = columnsAddedLater[table] ?? []
+  for (const column of added) expect(row[column] ?? null).toBeNull()
+  return Object.fromEntries(Object.entries(row).filter(([column]) => !added.includes(column)))
 }
 
 function populatedLegacyDatabase() {
@@ -101,13 +114,13 @@ const execution: ParticipantExecution = {
 describe('temporary participant migrations on populated v21 storage', () => {
   it('upgrades to v25 without changing any legacy row or field and reruns as a no-op', () => {
     const { manager, db } = populatedLegacyDatabase()
-    const before = snapshot(db, legacyTables)
+    const before = legacySnapshot(db)
     expect(Object.values(before).every(rows => rows.length > 0)).toBe(true)
 
     manager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
 
-    expect(db.prepare('SELECT version FROM _migrations WHERE namespace = ?').get(MIGRATION_NAMESPACE)).toEqual({ version: 25 })
-    expect(snapshot(db, legacyTables)).toEqual(before)
+    expect(db.prepare('SELECT version FROM _migrations WHERE namespace = ?').get(MIGRATION_NAMESPACE)).toEqual({ version: 28 })
+    expect(legacySnapshot(db)).toEqual(before)
     for (const table of addedTables) expect(db.prepare(`SELECT * FROM ${table}`).all()).toEqual([])
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1)
     expect(db.pragma('foreign_key_check')).toEqual([])
@@ -123,13 +136,13 @@ describe('temporary participant migrations on populated v21 storage', () => {
 
   it('keeps new participants independent and cascades only the deleted work or team scope', () => {
     const { manager, db } = populatedLegacyDatabase()
-    const before = snapshot(db, legacyTables)
+    const before = legacySnapshot(db)
     manager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
     const store = new TeamStore(db)
     store.participants.insert(participant('active-helper', 'standing', 'standing-work'), execution)
     store.participants.insert(participant('history-helper', 'standing', 'standing-history'), execution)
     store.participants.insert(participant('source-helper', 'source', 'source-work'), execution)
-    expect(snapshot(db, legacyTables)).toEqual(before)
+    expect(legacySnapshot(db)).toEqual(before)
     expect(store.listMembersByTeam('standing').map(member => member.memberName)).toContain('coordinator')
     expect(store.listMembersByAppId('active-helper')).toEqual([])
     expect(store.listDirectoryMemberships().some(member => member.appId === 'active-helper')).toBe(false)
@@ -158,7 +171,7 @@ describe('temporary participant migrations on populated v21 storage', () => {
     expect(db.prepare('SELECT * FROM team_participants').all()).toEqual([sourceParticipant])
     expect(store.participants.getExecution('source', 'source-work', 'source-helper')).toEqual(execution)
     expect(db.prepare('SELECT * FROM teams WHERE id = ?').get('source')).toEqual({ ...before.teams[1] as object, saved_team_id: null })
-    expect(db.prepare('SELECT * FROM team_epochs WHERE id = ?').get('source-work')).toEqual(before.team_epochs[2])
+    expect(withoutAddedColumns('team_epochs', db.prepare('SELECT * FROM team_epochs WHERE id = ?').get('source-work') as Record<string, unknown>)).toEqual(before.team_epochs[2])
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1)
     expect(db.pragma('foreign_key_check')).toEqual([])
     expect(db.pragma('integrity_check')).toEqual([{ integrity_check: 'ok' }])

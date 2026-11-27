@@ -62,6 +62,11 @@ function setup(beforeStep?: (step: number) => Promise<void>, invoke = true, skil
   return { options, provider, wrapped, requests, loads };
 }
 
+function instructionBody(content: string): string {
+  expect(content).toMatch(/^Base directory for this skill: [^\n]+\n/);
+  return content.slice(content.indexOf('\n') + 1);
+}
+
 async function drain(stream: AsyncIterable<unknown>) {
   for await (const event of stream) {
     if (event && typeof event === 'object' && 'type' in event && event.type === 'result') break;
@@ -95,7 +100,7 @@ describe.each(['query', 'session'] as const)('explicit skill catalogs through %s
     expect(JSON.stringify(fixture.requests[0].messages)).toContain('Explicit foreign workflow');
     expect(JSON.stringify(fixture.requests[0].messages)).not.toContain('Project approval procedure');
     expect(fixture.loads).toHaveLength(1);
-    expect(fixture.loads[0].result.content).toBe('FOREIGN_COMMIT_BODY');
+    expect(instructionBody(fixture.loads[0].result.content)).toBe('FOREIGN_COMMIT_BODY');
     expect(fixture.loads[0].context.skillCatalog).toEqual(skillCatalog);
   });
 
@@ -135,7 +140,7 @@ describe.each(['query', 'session'] as const)('explicit skill catalogs through %s
       if (step === 0) await writeFile(skillCatalog[0].source.path, 'UPDATED_FOREIGN_BODY');
     });
     await run({ ...fixture.options, skillCatalog });
-    expect(fixture.loads[0].result.content).toBe('UPDATED_FOREIGN_BODY');
+    expect(instructionBody(fixture.loads[0].result.content)).toBe('UPDATED_FOREIGN_BODY');
   });
 
   it('fails when the explicit source disappears without falling back to local or bundled instructions', async () => {
@@ -159,7 +164,7 @@ describe.each(['query', 'session'] as const)('explicit skill catalogs through %s
       skillCatalog.push({ name: 'injected', description: 'Injected workflow', source: { kind: 'file', path: skillFile } });
     });
     await run({ ...fixture.options, skillCatalog });
-    expect(fixture.loads[0].result.content).toBe('FOREIGN_COMMIT_BODY');
+    expect(instructionBody(fixture.loads[0].result.content)).toBe('FOREIGN_COMMIT_BODY');
     expect(fixture.loads[0].context.skillCatalog).toEqual(original);
     expect(JSON.stringify(fixture.requests)).not.toContain('Mutated metadata');
     expect(JSON.stringify(fixture.requests)).not.toContain('Injected workflow');
@@ -187,7 +192,7 @@ describe('advertised skill source snapshots', () => {
       await session.send('Load it again.');
       await drain(session.stream());
       expect(fixture.loads).toHaveLength(2);
-      expect(fixture.loads[0].result.content).toBe('PROJECT_COMMIT_BODY');
+      expect(instructionBody(fixture.loads[0].result.content)).toBe('PROJECT_COMMIT_BODY');
       expect(fixture.loads[1].result.isError).toBe(true);
       expect(fixture.loads[1].context.skillCatalog).toBe(fixture.loads[0].context.skillCatalog);
       expect(fixture.loads[1].context.skillCatalog?.[0]).toBe(fixture.loads[0].context.skillCatalog?.[0]);
@@ -201,7 +206,7 @@ describe('advertised skill source snapshots', () => {
   it('reads updated instructions at the pinned path instead of caching their body', async () => {
     const fixture = setup(async step => { if (step === 0) await writeFile(skillFile, 'UPDATED_PROJECT_COMMIT_BODY'); });
     await drain(query({ prompt: 'Load the project workflow.', options: fixture.options }));
-    expect(fixture.loads[0].result.content).toBe('UPDATED_PROJECT_COMMIT_BODY');
+    expect(instructionBody(fixture.loads[0].result.content)).toBe('UPDATED_PROJECT_COMMIT_BODY');
     expect(JSON.stringify(fixture.loads[0].context.skillCatalog)).not.toContain('UPDATED_PROJECT_COMMIT_BODY');
   });
 

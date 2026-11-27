@@ -2,11 +2,10 @@
  * Field-level encryption and masking for sensitive HaloConfig values.
  *
  * Two independent responsibilities:
- *   1. At-rest encryption — controlled by `credentialAtRestSafe`. When the
- *      flag is off (open-source default) every function is identity/no-op.
- *   2. Output masking — always active regardless of the flag. Replaces
- *      sensitive values with a sentinel before they leave the process
- *      boundary (IPC / HTTP).
+ *   1. At-rest encryption — new writes are encrypted when `credentialAtRestSafe`
+ *      is on. Reads accept both plaintext and supported encrypted formats.
+ *   2. Output masking — always active regardless of that flag. Replaces
+ *      sensitive values with a sentinel according to the IPC or HTTP contract.
  *
  * The sensitive-field roster is explicit rather than heuristic so that
  * every masked/encrypted field is auditable at code-review time.
@@ -39,6 +38,8 @@ const CIPHERTEXT_PREFIX = 'gmcred:'
 // index-based key could restore one source's ciphertext into another's slot.
 
 const SENSITIVE_KEY_PATTERN = /key|token|secret|password|credential/i
+const LEGACY_EMAIL_PASSWORD_PATH = 'notificationChannels.email.password'
+const SMTP_PASSWORD_PATH = 'notificationChannels.email.smtp.password'
 
 type Visitor = (parent: Record<string, unknown>, key: string, path: string, label: string) => void
 
@@ -111,7 +112,9 @@ function visitSensitiveFields(config: Record<string, unknown>, fn: Visitor): voi
   // Notification channels
   const nc = config.notificationChannels as Record<string, Record<string, unknown>> | undefined
   if (nc) {
-    if (nc.email && typeof (nc.email as Record<string, unknown>).password === 'string') fn(nc.email as Record<string, unknown>, 'password', 'notificationChannels.email.password', 'Email password')
+    const smtp = nc.email?.smtp as Record<string, unknown> | undefined
+    if (typeof smtp?.password === 'string') fn(smtp, 'password', SMTP_PASSWORD_PATH, 'Email password')
+    if (typeof nc.email?.password === 'string') fn(nc.email, 'password', LEGACY_EMAIL_PASSWORD_PATH, 'Email password')
     if (nc.wecom && typeof (nc.wecom as Record<string, unknown>).secret === 'string') fn(nc.wecom as Record<string, unknown>, 'secret', 'notificationChannels.wecom.secret', 'WeCom secret')
     if (nc.dingtalk) {
       const dt = nc.dingtalk as Record<string, unknown>
@@ -270,14 +273,7 @@ export function configHasUnmigratedCredentials(config: Record<string, unknown>):
  * {@link MASK_SENTINEL}. Safe to hand to IPC / HTTP callers.
  */
 export function maskConfigFields(config: Record<string, unknown>): Record<string, unknown> {
-  const clone = JSON.parse(JSON.stringify(config)) as Record<string, unknown>
-
-  // Mask credential fields
-  visitSensitiveFields(clone, (parent, key) => {
-    if (typeof parent[key] === 'string' && parent[key]) {
-      parent[key] = MASK_SENTINEL
-    }
-  })
+  const clone = maskSelectedFields(config)
 
   // Also mask remoteAccess.password (not in visitSensitiveFields encryption
   // roster, but must not leak via API).
@@ -289,15 +285,33 @@ export function maskConfigFields(config: Record<string, unknown>): Record<string
   return clone
 }
 
-/** Hide managed tokens on desktop without changing the existing API-key editor contract. */
-export function maskOAuthFields(config: Record<string, unknown>): Record<string, unknown> {
+function isOAuthField(path: string, key: string): boolean {
+  return path.startsWith('aiSources.sources[') && (key === 'accessToken' || key === 'refreshToken')
+}
+
+function maskSelectedFields(
+  config: Record<string, unknown>,
+  shouldMask?: (path: string, key: string) => boolean,
+): Record<string, unknown> {
   const clone = JSON.parse(JSON.stringify(config)) as Record<string, unknown>
   visitSensitiveFields(clone, (parent, key, path) => {
-    if (path.startsWith('aiSources.sources[') && (key === 'accessToken' || key === 'refreshToken') && parent[key]) {
+    if (typeof parent[key] === 'string' && parent[key] && (!shouldMask || shouldMask(path, key))) {
       parent[key] = MASK_SENTINEL
     }
   })
   return clone
+}
+
+/** Hide managed tokens on desktop without changing the existing API-key editor contract. */
+export function maskOAuthFields(config: Record<string, unknown>): Record<string, unknown> {
+  return maskSelectedFields(config, isOAuthField)
+}
+
+/** Mask SMTP passwords and managed tokens in desktop config responses; API keys stay editable. */
+export function maskDesktopConfigFields(config: Record<string, unknown>): Record<string, unknown> {
+  return maskSelectedFields(config, (path, key) => (
+    path === SMTP_PASSWORD_PATH || path === LEGACY_EMAIL_PASSWORD_PATH || isOAuthField(path, key)
+  ))
 }
 
 /**
@@ -358,8 +372,9 @@ export function unmaskSentinels(
   // Notification channels
   const iNc = incoming.notificationChannels as Record<string, Record<string, unknown>> | undefined
   const eNc = existing.notificationChannels as Record<string, Record<string, unknown>> | undefined
+  restore(iNc?.email?.smtp, eNc?.email?.smtp, 'password')
+  restore(iNc?.email, eNc?.email, 'password')
   if (iNc && eNc) {
-    restore(iNc.email, eNc.email, 'password')
     restore(iNc.wecom, eNc.wecom, 'secret')
     restore(iNc.dingtalk, eNc.dingtalk, 'appKey')
     restore(iNc.dingtalk, eNc.dingtalk, 'appSecret')

@@ -123,6 +123,7 @@ scenarios:
     expected:
       - The preview counts two ongoing items that will stop, separately describes decisions and sessions moving, and keeps long names and actions readable without horizontal overflow.
       - Cancellation leaves both active items running. Confirmation stops both, moves the pending decision and preserves conversation history.
+      - The same conversation uses the destination connection without adding a generic connection-change notice. A historical notice from an older version is not shown; regular messages and replies stay visible.
   - id: people.settings.legacy-move-repair
     title:
       en: Repair a legacy partial move automatically after upgrade

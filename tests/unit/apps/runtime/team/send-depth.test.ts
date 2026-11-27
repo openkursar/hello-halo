@@ -20,7 +20,7 @@ import { TEAM_TOOL_NAMES } from '../../../../../src/shared/apps/team-types'
 
 type ToolReply = { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
 
-function callSend(ctxOverrides: Partial<TeamMcpContext>): {
+function callSend(ctxOverrides: Partial<TeamMcpContext>, result = { messageId: 'm1', delivery: 'delivered', remoteTarget: false }): {
   sends: SendInput[]
   call: () => Promise<ToolReply>
 } {
@@ -30,7 +30,7 @@ function callSend(ctxOverrides: Partial<TeamMcpContext>): {
     assertCanContact: () => {},
     send: async (input: SendInput) => {
       sends.push(input)
-      return { messageId: 'm1' }
+      return result
     },
   } as unknown as MessageBus
 
@@ -49,6 +49,19 @@ function callSend(ctxOverrides: Partial<TeamMcpContext>): {
   const server = createTeamMcpServer(ctx)
   return { sends, call: async () => (await server.instance.callTool(TEAM_TOOL_NAMES.send, { to: 'researcher', message: 'go' })) as ToolReply }
 }
+
+describe('team_send destination', () => {
+  it.each([
+    ['delivered', false, 'Message delivered', true], ['queued', false, 'Message queued', true],
+    ['mid_turn', false, 'while they were working', true], ['delivered', true, 'Message accepted', true],
+    ['undelivered', true, 'NOT delivered', false],
+  ] as const)('keeps the %s receipt and qualifies only accepted messages (remote=%s)', async (delivery, remoteTarget, status, accepted) => {
+    const { call } = callSend({ taskTitle: 'Revisions' }, { messageId: 'm1', delivery, remoteTarget })
+    const text = (await call()).content[0].text
+    expect(text).toContain(status)
+    expect(text.includes('Recorded under task "Revisions".')).toBe(accepted)
+  })
+})
 
 describe('team_send forward depth', () => {
   it('inherits the depth of the turn it is sent from', async () => {

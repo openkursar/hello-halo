@@ -34,13 +34,48 @@ jobs:
           cache-dependency-path: src/sdk/halo-sdk/package-lock.json
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.90.0 --profile minimal
+      - name: Install pinned ripgrep
+        shell: bash
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64) asset=ripgrep-15.0.0-x86_64-unknown-linux-musl.tar.gz; sum=253ad0fd5fef0d64cba56c70dccdacc1916d4ed70ad057cc525fcdb0c3bbd2a7 ;;
+            macOS-ARM64) asset=ripgrep-15.0.0-aarch64-apple-darwin.tar.gz; sum=98bb2e61e7277ba0ea72d2ae2592497fd8d2940934a16b122448d302a6637e3b ;;
+            Windows-X64) asset=ripgrep-15.0.0-x86_64-pc-windows-msvc.zip; sum=21a98bf42c4da97ca543c010e764cc6dec8b9b7538d05f8d21874016385e0860 ;;
+            *) echo "No pinned ripgrep for $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o "$asset" "https://github.com/BurntSushi/ripgrep/releases/download/15.0.0/$asset"
+          if command -v sha256sum >/dev/null; then echo "$sum  $asset" | sha256sum -c -; else echo "$sum  $asset" | shasum -a 256 -c -; fi
+          case "$asset" in *.zip) unzip -q "$asset" ;; *) tar -xzf "$asset" ;; esac
+          directory="$RUNNER_TEMP/${asset%.tar.gz}"
+          directory="${directory%.zip}"
+          if [ "$RUNNER_OS" = Windows ]; then directory="$(cygpath -w "$directory")"; fi
+          echo "$directory" >> "$GITHUB_PATH"
       - run: npm ci
-      - run: npm run build
-      - run: npm test -- worker tools/mcp tools/bash tools/file-access.test.ts utils/windows-process-tree.test.ts --maxWorkers=2 --minWorkers=1
+      - id: sdk_build
+        run: npm run build
+      - run: npm test -- worker tools/mcp tools/bash tools/grep tools/read tools/file-access.test.ts tools/file-tools.test.ts utils/windows-process-tree.test.ts --maxWorkers=2 --minWorkers=1
       - run: node scripts/benchmark-workers.mjs --sessions=10 > worker-benchmark.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: worker-benchmark-${{ matrix.os }}-${{ matrix.node }}
           path: src/sdk/halo-sdk/worker-benchmark.json
+          retention-days: 14
+      - name: Test Windows shell process handling
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.sdk_build.outcome == 'success' }}
+        run: >-
+          cargo +1.90.0 test --locked -p halo-core --lib tools::shell_platform:: -- --test-threads=1
+      - name: Measure Windows command cancellation
+        id: windows_stop
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.sdk_build.outcome == 'success' }}
+        shell: pwsh
+        run: node validation/windows-stop.mjs --output "$env:RUNNER_TEMP/windows-stop.json" --concurrency 12
+      - name: Upload Windows cancellation measurements
+        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.windows_stop.outcome == 'success' || steps.windows_stop.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-stop-${{ matrix.os }}-node-${{ matrix.node }}
+          path: ${{ runner.temp }}/windows-stop.json
+          if-no-files-found: error
           retention-days: 14

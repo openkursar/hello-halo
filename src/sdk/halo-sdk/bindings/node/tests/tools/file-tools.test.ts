@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
-import { writeFileSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -578,6 +578,40 @@ describe('GlobTool — pattern matching', () => {
     expect(result.content).toMatch(/no files matched/i);
   });
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('retains matches and reports unreadable directories, but fails for an unreadable root', async () => {
+    const blocked = path.join(tmpDir, 'blocked');
+    await fs.mkdir(blocked);
+    const visible = path.join(tmpDir, 'safe.txt');
+    await fs.writeFile(visible, '');
+    await fs.chmod(blocked, 0);
+    try {
+      const result = await tool.execute({ pattern: '**/*.txt' }, makeCtx(tmpDir));
+      expect(result.isError).toBe(false);
+      expect(result.content).toContain(visible);
+      expect(result.content).toMatch(/directories[^\n]*1|1 director/i);
+      const empty = await tool.execute({ pattern: '**/*.none' }, makeCtx(tmpDir));
+      expect(empty.content).toMatch(/directories[^\n]*1|1 director/i);
+      expect(empty.content).toContain('No files matched in the readable directories');
+      expect(empty.content).toContain(blocked);
+      expect(result.content).toContain(blocked);
+      const root = await tool.execute({ pattern: '**/*.txt', path: blocked }, makeCtx(tmpDir));
+      expect(root.isError).toBe(true);
+      const pruned = await tool.execute({ pattern: 'safe.txt' }, makeCtx(tmpDir));
+      expect(pruned.content.trim()).toBe(visible);
+    } finally { await fs.chmod(blocked, 0o700); }
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('samples only the first unreadable directories and counts every skipped directory', async () => {
+    const paths = ['blocked-a', 'blocked-b', 'blocked-c', 'blocked-d'].map(name => path.join(tmpDir, name));
+    try {
+      for (const dir of paths) { await fs.mkdir(dir); await fs.chmod(dir, 0); }
+      const result = await tool.execute({ pattern: '**/*.none' }, makeCtx(tmpDir));
+      expect(result.content).toContain('Directories not fully read: 4');
+      for (const dir of paths.slice(0, 3)) expect(result.content).toContain(dir);
+      expect(result.content).not.toContain(paths[3]);
+    } finally { for (const dir of paths) await fs.chmod(dir, 0o700); }
+  });
+
   it('matches files by extension', async () => {
     await fs.writeFile(path.join(tmpDir, 'a.ts'), '', 'utf-8');
     await fs.writeFile(path.join(tmpDir, 'b.ts'), '', 'utf-8');
@@ -902,9 +936,8 @@ describe('Read-before-write — WriteTool', () => {
     const ctx = makeStrictCtx(tmpDir);
     await read.execute({ file_path: filePath }, ctx);
 
-    // Force the cached timestamp into the past so the next write is "stale".
-    const state = ctx.readFileState.get(filePath)!;
-    ctx.readFileState.set(filePath, { ...state, timestamp: state.timestamp - 1000 });
+    // Timestamps alone do not mark a file stale; changed content does.
+    await fs.writeFile(filePath, 'v1 changed externally\n', 'utf-8');
 
     const result = await write.execute(
       { file_path: filePath, content: 'v2\n' },
@@ -913,7 +946,7 @@ describe('Read-before-write — WriteTool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toMatch(/changed after your last Read.*Nothing was written.*Call Read again/s);
-    expect(await fs.readFile(filePath, 'utf-8')).toBe('v1\n');
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('v1 changed externally\n');
   });
 
   it('allows whole-file replacement after a partial view (offset/limit truncated)', async () => {
@@ -1464,5 +1497,175 @@ describe('ReadTool — image files', () => {
     const result = await tool.execute({ file_path: filePath }, makeCtx(tmpDir));
     expect(result.isError).toBe(true);
     expect(result.content).toMatch(/too large/i);
+  });
+});
+
+describe('File tools — encodings and line endings', () => {
+  const read = getTool('Read');
+  const write = getTool('Write');
+  const edit = getTool('Edit');
+
+  function utf16le(text: string): Buffer {
+    return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+  }
+
+  it('reads CRLF text as LF and keeps CRLF when a multi-line passage is edited', async () => {
+    const filePath = path.join(tmpDir, 'Program.cs');
+    await fs.writeFile(filePath, 'class A {\r\n    int x = 1;\r\n    int y = 2;\r\n}\r\n');
+    const ctx = makeStrictCtx(tmpDir);
+    const shown = await read.execute({ file_path: filePath }, ctx);
+    expect(shown.content).toBe('1\tclass A {\n2\t    int x = 1;\n3\t    int y = 2;\n4\t}\n5\t\n');
+
+    const result = await edit.execute(
+      { file_path: filePath, old_string: '    int x = 1;\n    int y = 2;', new_string: '    int x = 1;\n    int z = 3;\n    int y = 2;' },
+      ctx,
+    );
+    expect(result.isError).toBe(false);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('class A {\r\n    int x = 1;\r\n    int z = 3;\r\n    int y = 2;\r\n}\r\n');
+  });
+
+  it('changes text it cannot decode losslessly after saving the exact original bytes', async () => {
+    const filePath = path.join(tmpDir, 'gbk.c');
+    const comment = Buffer.concat([Buffer.from('// '), Buffer.from([0xd6, 0xd0, 0xce, 0xc4])]);
+    const original = Buffer.concat([comment, Buffer.from('\nint main() { return 0; }\n')]);
+    await fs.writeFile(filePath, original);
+    const ctx = makeStrictCtx(tmpDir);
+    const shown = await read.execute({ file_path: filePath }, ctx);
+    expect(shown.content).toContain('not valid UTF-8 or UTF-16 text');
+    const savedAt = (content: string) => content.match(/saved at (.+)\.$/s)![1];
+
+    const edited = await edit.execute({ file_path: filePath, old_string: 'return 0;', new_string: 'return 1;' }, ctx);
+    expect(edited.isError).toBe(false);
+    expect(await fs.readFile(filePath)).toEqual(Buffer.concat([comment, Buffer.from('\nint main() { return 1; }\n')]));
+    expect(await fs.readFile(savedAt(edited.content))).toEqual(original);
+
+    const written = await write.execute({ file_path: filePath, content: 'int main() { return 2; }\n' }, ctx);
+    expect(written.isError).toBe(false);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('int main() { return 2; }\n');
+    expect((await fs.readFile(savedAt(written.content))).subarray(0, comment.length)).toEqual(comment);
+  });
+
+  it('decodes UTF-16LE and keeps the encoding on Edit and Write', async () => {
+    const filePath = path.join(tmpDir, 'strings.rc');
+    await fs.writeFile(filePath, utf16le('name=old\r\nvalue=中文\r\n'));
+    const ctx = makeStrictCtx(tmpDir);
+    const shown = await read.execute({ file_path: filePath }, ctx);
+    expect(shown.content).toContain('1\tname=old\n2\tvalue=中文\n');
+    expect(shown.content).toContain('Decoded from UTF-16LE');
+
+    expect((await edit.execute({ file_path: filePath, old_string: 'name=old', new_string: 'name=new' }, ctx)).isError).toBe(false);
+    expect(await fs.readFile(filePath)).toEqual(utf16le('name=new\r\nvalue=中文\r\n'));
+
+    const written = await write.execute({ file_path: filePath, content: 'name=final\n' }, ctx);
+    expect(written.isError).toBe(false);
+    expect(written.content).toContain('keeps its UTF-16LE encoding');
+    expect(await fs.readFile(filePath)).toEqual(utf16le('name=final\n'));
+  });
+
+  it('accepts back-to-back writes and timestamp-only touches', async () => {
+    const filePath = path.join(tmpDir, 'touched.txt');
+    const ctx = makeStrictCtx(tmpDir);
+    expect((await write.execute({ file_path: filePath, content: 'v1\n' }, ctx)).isError).toBe(false);
+    expect((await write.execute({ file_path: filePath, content: 'v2\n' }, ctx)).isError).toBe(false);
+    const later = new Date(Date.now() + 5000);
+    await fs.utimes(filePath, later, later);
+    const result = await write.execute({ file_path: filePath, content: 'v3\n' }, ctx);
+    expect(result.isError).toBe(false);
+    expect(result.metadata?.lines).toBe(1);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('v3\n');
+  });
+
+  it('rejects a byte-only change after a full read', async () => {
+    const filePath = path.join(tmpDir, 'endings.txt');
+    await fs.writeFile(filePath, 'one\ntwo\n');
+    const ctx = makeStrictCtx(tmpDir);
+    await read.execute({ file_path: filePath }, ctx);
+    await fs.writeFile(filePath, 'one\r\ntwo\r\n');
+    const result = await write.execute({ file_path: filePath, content: 'replacement\n' }, ctx);
+    expect(result.isError).toBe(true);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('one\r\ntwo\r\n');
+  });
+});
+
+describe('File tools — one read state per file', () => {
+  const read = getTool('Read');
+  const write = getTool('Write');
+  const edit = getTool('Edit');
+
+  async function linkedFile(): Promise<{ real: string; alias: string }> {
+    await fs.mkdir(path.join(tmpDir, 'real'));
+    await fs.symlink(path.join(tmpDir, 'real'), path.join(tmpDir, 'link'));
+    const real = path.join(tmpDir, 'real', 'notes.txt');
+    await fs.writeFile(real, 'alpha\n');
+    return { real, alias: path.join(tmpDir, 'link', 'notes.txt') };
+  }
+
+  it.skipIf(process.platform === 'win32')('rejects a stale write through another spelling of a read file', async () => {
+    const { real, alias } = await linkedFile();
+    const ctx = makeStrictCtx(tmpDir);
+    await read.execute({ file_path: alias }, ctx);
+    await fs.writeFile(real, 'changed elsewhere\n');
+    const result = await write.execute({ file_path: real, content: 'overwrite\n' }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/changed after your last Read/);
+    expect(await fs.readFile(real, 'utf-8')).toBe('changed elsewhere\n');
+  });
+
+  it.skipIf(process.platform === 'win32')('accepts an edit through another spelling of a read file', async () => {
+    const { real, alias } = await linkedFile();
+    const ctx = makeStrictCtx(tmpDir);
+    await read.execute({ file_path: alias }, ctx);
+    expect((await edit.execute({ file_path: real, old_string: 'alpha', new_string: 'beta' }, ctx)).isError).toBe(false);
+    expect(ctx.readFileState.has(real)).toBe(true);
+    expect(ctx.readFileState.has(alias)).toBe(false);
+    expect((await edit.execute({ file_path: alias, old_string: 'beta', new_string: 'gamma' }, ctx)).isError).toBe(false);
+    expect(await fs.readFile(real, 'utf-8')).toBe('gamma\n');
+  });
+
+  it.skipIf(process.platform === 'win32').each(['retargeted', 'deleted'])('keeps protecting a file read through a link that was later %s', async (change) => {
+    const one = path.join(tmpDir, 'one.txt');
+    const two = path.join(tmpDir, 'two.txt');
+    const link = path.join(tmpDir, 'link.txt');
+    await fs.writeFile(one, 'one\n');
+    await fs.writeFile(two, 'two\n');
+    await fs.symlink(one, link);
+    const ctx = makeStrictCtx(tmpDir);
+    await read.execute({ file_path: link }, ctx);
+    await fs.writeFile(one, 'changed elsewhere\n');
+    await fs.unlink(link);
+    if (change === 'retargeted') {
+      await fs.symlink(two, link);
+      const reused = await edit.execute({ file_path: link, old_string: 'two', new_string: 'TWO' }, ctx);
+      expect(reused.isError).toBe(true);
+      expect(reused.content).toMatch(/needs a recorded Read/);
+      expect(await fs.readFile(two, 'utf-8')).toBe('two\n');
+    }
+    const result = await write.execute({ file_path: one, content: 'overwrite\n' }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/changed after your last Read/);
+    expect(await fs.readFile(one, 'utf-8')).toBe('changed elsewhere\n');
+  });
+
+  it('resolves the same number of paths per Read whatever the read state holds', async () => {
+    const filePath = path.join(tmpDir, 'counted.txt');
+    await fs.writeFile(filePath, 'x\n');
+    const resolutions = async (entries: number): Promise<number> => {
+      const ctx = makeStrictCtx(tmpDir);
+      for (let index = 0; index < entries; index += 1) {
+        ctx.readFileState.set(path.join(tmpDir, `absent-${index}`, 'file.txt'), { timestamp: 0 });
+      }
+      await read.execute({ file_path: filePath }, ctx);
+      const spy = vi.spyOn(realpathSync, 'native');
+      try {
+        await read.execute({ file_path: filePath }, ctx);
+        await read.execute({ file_path: filePath }, ctx);
+        return spy.mock.calls.length;
+      } finally {
+        spy.mockRestore();
+      }
+    };
+    const small = await resolutions(0);
+    expect(small).toBeLessThanOrEqual(4);
+    expect(await resolutions(511)).toBe(small);
   });
 });

@@ -6,7 +6,7 @@
  *   - createTeam manual: attaches existing apps, provisions a lead, default
  *     structured edges (lead→member sync)
  *   - createTeam AI: caps the confirmed proposal at AI_MEMBER_HARD_LIMIT,
- *     installs member apps with aiProvisioned=true in independent spaces
+ *     installs member apps with aiProvisioned=true in the owning space
  *   - dissolve orphan cleanup: AI members + provisioned lead removed, manual
  *     members kept (and apps referenced by another team kept)
  *   - collabMode switch clears / regenerates edges
@@ -136,9 +136,6 @@ function buildService(overrides?: Partial<TeamServiceDeps>) {
 
   const appManager = makeAppManager()
   const runtime = makeRuntime(store)
-  const createdSpaces: string[] = []
-  const deletedSpaces: string[] = []
-  let spaceCounter = 0
 
   const deps: TeamServiceDeps = {
     store,
@@ -146,14 +143,7 @@ function buildService(overrides?: Partial<TeamServiceDeps>) {
     getRuntime: () => runtime as never,
     spaces: {
       spaceExists: () => true,
-      createMemberSpace: () => {
-        const id = `member-space-${++spaceCounter}`
-        createdSpaces.push(id)
-        return id
-      },
-      deleteMemberSpace: (spaceId) => {
-        deletedSpaces.push(spaceId)
-      },
+      createMemberSpace: ({ owningSpaceId }) => owningSpaceId,
     },
     listArtifacts: vi.fn(async () => []),
     proposeMembersFromGoal: vi.fn(async () => []),
@@ -163,7 +153,7 @@ function buildService(overrides?: Partial<TeamServiceDeps>) {
   const service = createTeamService(deps)
   const installedSpec = (appId: string) => appManager.apps.get(appId)?.spec ?? null
 
-  return { service, store, appManager, runtime, dbManager, createdSpaces, deletedSpaces, installedSpec }
+  return { service, store, appManager, runtime, dbManager, installedSpec }
 }
 
 function manualInput(overrides?: Partial<CreateTeamInput>): CreateTeamInput {
@@ -284,7 +274,7 @@ describe('TeamService', () => {
       }))
     }
 
-    it('installs AI members (aiProvisioned) in independent spaces and caps at the hard limit', async () => {
+    it('installs AI members (aiProvisioned) in the owning space and caps at the hard limit', async () => {
       const team = await ctx.service.createTeam(
         manualInput({ memberSourcing: 'ai', members: [] }),
         proposal(AI_MEMBER_HARD_LIMIT + 3) // over the cap
@@ -295,8 +285,7 @@ describe('TeamService', () => {
       expect(workers).toHaveLength(AI_MEMBER_HARD_LIMIT)
       expect(workers.every((m) => m.aiProvisioned)).toBe(true)
 
-      // One independent space + one install per AI member, plus one lead install.
-      expect(ctx.createdSpaces).toHaveLength(AI_MEMBER_HARD_LIMIT)
+      expect(workers.every(m => ctx.appManager.getApp(m.appId)?.spaceId === SPACE_A)).toBe(true)
       expect(ctx.appManager.install).toHaveBeenCalledTimes(AI_MEMBER_HARD_LIMIT + 1)
     })
 
@@ -493,7 +482,6 @@ describe('TeamService', () => {
       expect(ctx.appManager.deleteApp).not.toHaveBeenCalled()
       expect(ctx.appManager.uninstall).not.toHaveBeenCalled()
       expect(identities.length).toBeGreaterThan(1)
-      expect(ctx.deletedSpaces).toEqual([])
     })
 
     it('deletes AI members + the provisioned lead, keeps manual members', async () => {
@@ -534,16 +522,66 @@ describe('TeamService', () => {
       expect(ctx.runtime.teamFolders.remove).toHaveBeenCalledWith(team.id, expect.arrayContaining(['epoch-a', 'epoch-b']))
     })
 
-    it('deletes AI member apps + their spaces on dissolve', async () => {
-      const proposal: ProposedMember[] = [{ memberName: 'ai1', role: 'r', responsibility: 'x' }]
-      const team = await ctx.service.createTeam(manualInput({ memberSourcing: 'ai', members: [] }), proposal)
-      const aiMember = ctx.store.listMembersByTeam(team.id).filter((m) => !m.isLead)[0]
+    it.each(['dissolve', 'remove'])('keeps a moved member and the other people in its destination on %s', async action => {
+      const team = await ctx.service.createTeam(manualInput({ memberSourcing: 'ai', members: [] }),
+        [{ memberName: 'Researcher', role: 'research', responsibility: 'Review findings' }])
+      const member = ctx.store.listMembersByTeam(team.id).find(m => !m.isLead)!
+      const spaceId = 'destination'
+      ctx.appManager.apps.get(member.appId)!.spaceId = spaceId
+      const neighbor = await ctx.appManager.install(spaceId, { name: 'Independent reviewer' })
 
-      ctx.appManager.deleteApp.mockClear()
+      if (action === 'dissolve') await ctx.service.dissolveTeam(team.id)
+      else await ctx.service.removeMember(team.id, member.appId)
+
+      expect(ctx.store.listMembersByAppId(member.appId)).toEqual([])
+      for (const id of [member.appId, neighbor]) {
+        expect(ctx.appManager.apps.get(id)?.spaceId).toBe(spaceId)
+        expect(ctx.appManager.uninstall).not.toHaveBeenCalledWith(id, expect.anything())
+      }
+    })
+
+    it.each(['into', 'out of'])('keeps a member moved %s the owning workspace while stopping the team', async direction => {
+      const team = await ctx.service.createTeam(manualInput({ memberSourcing: 'ai', members: [] }),
+        [{ memberName: 'Reviewer', role: 'review', responsibility: 'Review findings' }])
+      const member = ctx.store.listMembersByTeam(team.id).find(m => !m.isLead)!
+      const app = ctx.appManager.apps.get(member.appId)!
+      app.spaceId = direction === 'into' ? 'another-space' : SPACE_A
+      ctx.store.insertEpoch({ id: 'work', teamId: team.id, lifecycle: 'run', startedAt: 1, endedAt: null, endReason: null, summary: null })
+      ctx.store.addMember({ teamId: team.id, appId: 'remote', memberName: 'Peer', role: '', isLead: false,
+        aiProvisioned: false, addedAt: 1, ownerNodeId: 'other-node', origin: 'remote' })
+      ctx.runtime.stopMemberTurn.mockImplementation(async () => {
+        app.spaceId = direction === 'into' ? SPACE_A : 'another-space'
+        return true
+      })
+
       await ctx.service.dissolveTeam(team.id)
 
-      expect(ctx.appManager.deleteApp).toHaveBeenCalledWith(aiMember.appId)
-      expect(ctx.deletedSpaces.length).toBeGreaterThanOrEqual(1)
+      expect(ctx.runtime.stopMemberTurn).toHaveBeenCalledOnce()
+      expect(ctx.store.getTeamById(team.id)).toBeNull()
+      expect(ctx.appManager.getApp(member.appId)).toBe(app)
+      expect(ctx.appManager.deleteApp).not.toHaveBeenCalledWith(member.appId)
+      expect(ctx.appManager.deleteApp).toHaveBeenCalledWith(team.leadAppId)
+    })
+
+    it('keeps a legacy member alone in its separate workspace', async () => {
+      const team = await ctx.service.createTeam(manualInput({ members: [] }))
+      const appId = await ctx.appManager.install('legacy-member-space', { name: 'Reviewer' })
+      ctx.store.addMember({ teamId: team.id, appId, memberName: 'Reviewer', role: '', isLead: false, aiProvisioned: true, addedAt: 1 })
+
+      await ctx.service.dissolveTeam(team.id)
+
+      expect(ctx.store.listMembersByAppId(appId)).toEqual([])
+      expect(ctx.appManager.getApp(appId)?.spaceId).toBe('legacy-member-space')
+    })
+
+    it('does not treat a remote membership as ownership of a local app with the same ID', async () => {
+      const team = await ctx.service.createTeam(manualInput({ members: [] }))
+      ctx.store.addMember({ teamId: team.id, appId: 'existing-1', memberName: 'Remote reviewer', role: '', isLead: false,
+        aiProvisioned: true, addedAt: 1, origin: 'remote', ownerNodeId: 'other-node' })
+
+      await ctx.service.dissolveTeam(team.id)
+
+      expect(ctx.appManager.getApp('existing-1')?.spaceId).toBe(SPACE_A)
     })
 
     it('keeps an AI app that is still referenced by another team', async () => {
@@ -562,23 +600,18 @@ describe('TeamService', () => {
       expect(ctx.appManager.deleteApp).not.toHaveBeenCalledWith(aiMember.appId)
     })
 
-    it('deletes a space the team built, never the space the team was created in', async () => {
+    it('deletes only the team-created apps still in the owning space', async () => {
       const proposal: ProposedMember[] = [{ memberName: 'ai1', role: 'r', responsibility: 'x' }]
       const team = await ctx.service.createTeam(manualInput({ memberSourcing: 'ai', members: [] }), proposal)
       const leadAppId = team.leadAppId!
       const aiMember = ctx.store.listMembersByTeam(team.id).filter((m) => !m.isLead)[0]
-      const aiSpaceId = ctx.appManager.getApp(aiMember.appId)!.spaceId
 
       await ctx.service.dissolveTeam(team.id)
 
       // Both apps are the team's own and go with it.
       expect(ctx.appManager.deleteApp).toHaveBeenCalledWith(leadAppId)
       expect(ctx.appManager.deleteApp).toHaveBeenCalledWith(aiMember.appId)
-      // The space built for the AI member goes too.
-      expect(ctx.deletedSpaces).toContain(aiSpaceId)
-      // The lead was provisioned into the user's own space. Deleting that would
-      // take its files and every other app living in it.
-      expect(ctx.deletedSpaces).not.toContain(SPACE_A)
+      expect(ctx.appManager.getApp('existing-1')?.spaceId).toBe(SPACE_A)
     })
 
     it('leaves the owning space alone when a demoted lead is removed', async () => {
@@ -592,7 +625,7 @@ describe('TeamService', () => {
       await ctx.service.removeMember(team.id, oldLeadAppId)
 
       expect(ctx.appManager.deleteApp).toHaveBeenCalledWith(oldLeadAppId)
-      expect(ctx.deletedSpaces).not.toContain(SPACE_A)
+      expect(ctx.appManager.getApp('existing-1')?.spaceId).toBe(SPACE_A)
     })
   })
 

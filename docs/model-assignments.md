@@ -14,16 +14,16 @@ Model assignments let you choose which configured account and model a new subage
 1. Open **Settings → AI Models**. Add or sign in to the accounts you want to use first; you can also create a load-balancing group.
 2. Open the chevron menu beside **Add AI Provider** (**More ways to add**).
 3. Choose **Configure model assignments**. The **Model assignments** panel opens in place.
-4. Choose **Configure** beside one of the three fixed tiers: **Small**, **Medium** or **Large**.
-5. Select an **Account and model**, or a load-balancing group. The choice is saved as soon as you select it.
-6. To change what a tier is for, choose **Edit**, then **Edit details**, and update its **Suitable tasks**.
+4. Choose **Configure** beside one of the three fixed tiers: **Small**, **Medium** or **Large**. The tier opens in place with its **Suitable tasks** and **Account and model**.
+5. Adjust **Suitable tasks** if you want, select an account and model or a load-balancing group, then select **Save**.
+6. To change a tier later, choose **Edit**. Its purpose and current target appear together; change either one and select **Save**.
 7. Select **Done** to close the panel.
 
 The tier names are organizational labels, not model ratings. You decide which targets fit them. All three tiers may remain **Not configured**; empty tiers are not used, and you do not need to fill every tier. Opening the panel or cancelling an editor does not bind a target.
 
 The fixed tiers cannot be renamed or deleted. Use **Clear configuration** to remove a tier's target while retaining the tier and its purpose. Use **Add custom assignment** below the tiers for another named purpose, such as “Backend review.” Custom assignments can be renamed and deleted; their names must not duplicate a tier or another assignment.
 
-Saving an assignment does not change the main model or turn on automatic selection. If changing a model fails, the previous selection is kept; if saving a name or purpose fails, the editor keeps your draft. If another client changed the same assignment, reopen it to edit the latest version.
+Saving an assignment does not change the main model or turn on automatic selection. If saving fails, the assignment keeps its previous settings and the editor keeps your changes. If another client changed the same assignment, reopen it to edit the latest version.
 
 ## Choose how new subagents select a model
 

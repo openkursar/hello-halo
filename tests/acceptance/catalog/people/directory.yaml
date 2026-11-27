@@ -24,7 +24,23 @@ promises:
   tags:
     en: I can put my own tags on digital humans and MCP servers, filter a list by one tag, find items by a tag through search, and rename or delete a tag across that list; tags stay on this computer and never change the item itself.
     zh: 我能给数字人和 MCP 服务打上自己的标签，按一个标签筛选列表，搜索时能命中标签，并能在该列表内重命名或删除标签；标签只保存在本机，不改变条目本身。
+  removed-team:
+    en: When a team disappears, its directory filter clears without changing other filters.
+    zh: 团队不存在时，目录会清除该团队的筛选条件，并保留其他筛选条件。
 scenarios:
+  - id: people.directory.removed-team
+    title: Return to all teams after the filtered team is dissolved
+    verifies: [removed-team]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Filter the directory by a team, dissolve the team, return to the directory and restart the app.
+    expected:
+      - All teams is selected, and retained people are visible both before and after restart.
   - id: people.directory.team-work-status
     title:
       en: See a team member at work outside the team view

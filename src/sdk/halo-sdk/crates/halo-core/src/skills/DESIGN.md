@@ -50,8 +50,10 @@ existing instances retain sources and read current bodies on invocation.
 
 Metadata reads use at most 16 KiB per file. Invocation reads the selected
 source only, with a 1 MiB limit, removes frontmatter and expands arguments in one
-pass. Execution directives such as `context: fork` are not interpreted by the
-SDK loader; it returns instructions to the existing caller and starts no alternate
+pass. For file-backed invocations, the Skill result and slash expansion include
+one resource-base line before the body. Catalogs and in-memory built-ins do not
+include a base directory. The SDK loader does not interpret execution directives
+such as `context: fork`; it returns instructions to the existing caller and starts no alternate
 executor. A missing or unreadable selected source fails rather than switching to a
 different workflow. Bundled definitions come from the Rust Harness catalogs and
 resources; the build also emits JavaScript baseline assets for synchronous

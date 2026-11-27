@@ -219,6 +219,10 @@ impl OutputStore {
     }
 
     pub async fn save_text(&self, kind: &str, text: &str) -> SaveState {
+        self.save_bytes(kind, text.as_bytes()).await
+    }
+
+    pub async fn save_bytes(&self, kind: &str, bytes: &[u8]) -> SaveState {
         if let Err(reason) = self.ensure_directory().await {
             tracing::warn!(
                 session_id = %self.session_id,
@@ -238,7 +242,7 @@ impl OutputStore {
             Ok(writer) => writer,
             Err(reason) => return SaveState::Failed { reason },
         };
-        writer.write_bytes(text.as_bytes()).await;
+        writer.write_bytes(bytes).await;
         writer.finish().await
     }
 

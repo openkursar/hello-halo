@@ -101,7 +101,7 @@ impl HostBridge for ExternalReads {
             "file.recordChange" => {
                 assert_eq!(values[path]["content"], "written");
                 if self.mutation_after_write {
-                    values.get_mut(path).unwrap()["timestamp"] = json!(0);
+                    values.get_mut(path).unwrap()["contentHash"] = json!("observer");
                 }
                 Ok(Value::Null)
             }
@@ -907,8 +907,8 @@ async fn external_read_state_is_authoritative_and_write_observers_see_its_commit
     assert_eq!(written["isError"], false);
     assert_eq!(bridge.writes.load(std::sync::atomic::Ordering::Relaxed), 1);
     assert_eq!(
-        bridge.values.lock().unwrap()[path.to_str().unwrap()]["timestamp"],
-        0,
+        bridge.values.lock().unwrap()[path.to_str().unwrap()]["contentHash"],
+        "observer",
         "finalization must not overwrite an observer's mutation of the external Map"
     );
     let refused = runtime
@@ -1695,7 +1695,11 @@ async fn background_registry_context_shares_metadata_output_and_shutdown() {
         .tool_context_async_call("backgroundTasks.readOutput", json!([task]), &cancel)
         .await
         .unwrap();
-    assert_eq!(output["truncated"], false);
+    assert_eq!(output["truncated"], true);
+    assert_eq!(output["fileComplete"], false);
+    let preview = output["output"].as_str().unwrap();
+    assert!(preview.contains("Capture ended before all output streams closed normally"));
+    assert!(!preview.contains("file limit"));
     runtime
         .tool_context_call("backgroundTasks.dispose", json!([]))
         .unwrap();
@@ -1734,7 +1738,10 @@ async fn background_timeout_terminates_ignoring_children_and_retains_persistent_
     let parsed: Value = serde_json::from_str(result["content"].as_str().unwrap()).unwrap();
     assert_eq!(parsed["task"]["status"], "failed");
     assert_eq!(parsed["task"]["error"], "Timed out after 100ms");
-    assert_eq!(parsed["task"]["result"], "saved");
+    let preview = parsed["task"]["result"].as_str().unwrap();
+    assert!(preview.starts_with("saved\n"));
+    assert!(preview.contains("Capture ended before all output streams closed normally"));
+    assert_eq!(parsed["task"]["truncated"], true);
     let path = std::path::PathBuf::from(launched["metadata"]["output_file"].as_str().unwrap());
     assert!(std::path::Path::new(&format!("{}.done", path.display())).exists());
     assert!(!std::fs::read_dir(path.parent().unwrap())
@@ -1828,7 +1835,9 @@ async fn skill_body_is_loaded_and_substituted_once() {
         )
         .await
         .unwrap();
-    assert_eq!(result["content"], "Read $ARGUMENTS. Details: $ARGUMENTS");
+    let content = result["content"].as_str().unwrap();
+    assert!(content.starts_with("Base directory for this skill: "));
+    assert_eq!(content.split_once('\n').unwrap().1, "Read $ARGUMENTS. Details: $ARGUMENTS");
     assert_eq!(result["metadata"]["skill"]["name"], "fixture");
     r.close().await.unwrap();
 }
