@@ -74,17 +74,20 @@ function accountSettings(profile: string) {
 
 test('a custom provider saved through settings supplies the connection check and a real chat after restart', modelSettingsAcceptance('models.accounts.custom'), async ({ providerGateway, managementApp, window }) => {
   const name = 'Local configured provider'
+  const endpoint = providerGateway.url('primary')
+  const pastedUrl = `\u200B ${endpoint}\u00A0\uFEFF`
   await openAdd(window)
-  await fillProvider(window, { name, url: providerGateway.url('primary'), key: providerGateway.key('primary') })
+  await fillProvider(window, { name, url: pastedUrl, key: providerGateway.key('primary') })
   await expect(aiSection(window).getByText('No models loaded', { exact: true })).toBeVisible()
   await expect(aiSection(window).getByRole('button', { name: 'Fetch Models', exact: true })).toBeEnabled()
   await fetchAndChoose(window, 'gpt-4o-mini')
   await successfulConnection(window)
+  await providerField(window, 'API URL').fill(pastedUrl)
   await saveProvider(window, name)
   await expect.poll(() => readProviderConfiguration(managementApp.profile).sources.length).toBe(1)
   const saved = readProviderConfiguration(managementApp.profile).sources[0]
   expect(saved).toMatchObject({ name, provider: 'openai', authType: 'api-key', model: 'gpt-4o-mini' })
-  expect([providerGateway.url('primary'), `${providerGateway.url('primary')}/chat/completions`]).toContain(saved.apiUrl)
+  expect(saved.apiUrl).toBe(endpoint)
   expect(readProviderConfiguration(managementApp.profile).currentId).toBe(saved.id)
   expect(providerGateway.requests.some(request => /\/(chat\/completions|messages)$/.test(request.path) && request.model === 'gpt-4o-mini' && request.authorized && request.status === 200)).toBe(true)
 

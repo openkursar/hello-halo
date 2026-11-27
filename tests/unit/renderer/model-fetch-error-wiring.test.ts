@@ -23,7 +23,7 @@ describe('model-fetch error UI wiring', () => {
   it('surfaces the structured service error in onboarding', () => {
     const source = readComponent('setup/CustomApiSetupForm.tsx')
 
-    expect(source).toContain('await api.fetchModels(apiKey.trim(), apiUrl)')
+    expect(source).toContain('await api.fetchModels(apiKey.trim(), requestUrl)')
     expect(source).toContain('formatModelFetchError(t, res.code, res.error)')
     expect(source).not.toContain('const response = await fetch(url')
   })

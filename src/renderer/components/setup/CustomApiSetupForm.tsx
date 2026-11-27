@@ -25,6 +25,7 @@ import { api } from '../../api'
 import { getBuiltinProvider, type AISource, type ModelOption, type ProviderId } from '../../types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveLocalizedText, type ProviderDocsLink } from '../../../shared/types'
+import { trimPastedValue } from '../../../shared/pasted-value'
 import { formatModelFetchError } from '../../utils/model-fetch-error'
 import { createRequestGate } from '../../utils/request-gate'
 import { ProviderCatalogDropdown } from '../ai-config/ProviderCatalogDropdown'
@@ -108,7 +109,7 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
   // cannot enter the app with a broken key (#249). Other fetch failures are
   // tolerated when the user named a model: many compatible gateways do not
   // implement `/models` but serve chat just fine.
-  const resolveModels = async (): Promise<{
+  const resolveModels = async (requestUrl: string): Promise<{
     model: string
     availableModels: ModelOption[]
     fetchError?: string
@@ -116,9 +117,9 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
     const typedModel = modelId.trim()
     let fetched: ModelOption[] = []
 
-    if (!isAnthropic && apiKey.trim() && apiUrl) {
+    if (!isAnthropic && apiKey.trim() && requestUrl) {
       try {
-        const res = await api.fetchModels(apiKey.trim(), apiUrl)
+        const res = await api.fetchModels(apiKey.trim(), requestUrl)
         if (!res.success) {
           const message = formatModelFetchError(t, res.code, res.error)
           if (!typedModel || res.code === 'MODEL_FETCH_UNAUTHORIZED') {
@@ -179,7 +180,8 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
     setIsSaving(true)
 
     try {
-      const { model, availableModels, fetchError } = await resolveModels()
+      const requestUrl = trimPastedValue(apiUrl)
+      const { model, availableModels, fetchError } = await resolveModels(requestUrl)
       if (!requestGate.current.isCurrent(token)) {
         setError(t('Configuration changed — review and save again'))
         return
@@ -199,7 +201,7 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
         name: t(builtin.name),
         provider: providerId,
         authType: 'api-key',
-        apiUrl,
+        apiUrl: requestUrl,
         apiType: builtin.apiType,
         apiKey: apiKey.trim(),
         model,
@@ -232,7 +234,8 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
     setValidationResult(null)
 
     try {
-      const { model, fetchError } = await resolveModels()
+      const requestUrl = trimPastedValue(apiUrl)
+      const { model, fetchError } = await resolveModels(requestUrl)
       if (!requestGate.current.isCurrent(token)) return
       if (fetchError) {
         setValidationResult({ valid: false, message: fetchError })
@@ -248,7 +251,7 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
       if (canBackfillTestedModel(staticModels.length > 0, modelField)) {
         setModelField(onTestSelected(model))
       }
-      const result = await api.validateApi(apiKey.trim(), apiUrl, isAnthropic ? 'anthropic' : 'openai', model)
+      const result = await api.validateApi(apiKey.trim(), requestUrl, isAnthropic ? 'anthropic' : 'openai', model)
       if (!requestGate.current.isCurrent(token)) return
 
       if (!result.success || !result.data?.valid) {

@@ -12,7 +12,7 @@
  * IM Sessions are NOT shown here — they live in the digital human config.
  */
 
-import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo, useId, type ReactNode } from 'react'
 import type { TFunction } from 'i18next'
 import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
@@ -62,6 +62,9 @@ import { HelpHint } from '../ui/HelpHint'
 import { ImProcessingNoticeRow } from './ImProcessingNoticeRow'
 import { ImLinkStatusNotice, imConnectionState, imLinkView, imSectionSummary } from './ImLinkStatus'
 import { effectiveSmtpPort, parseSmtpPort, smtpPortAfterSecureChange } from './smtp-port'
+import { hasPasteWhitespace, trimPastedValue } from '../../../shared/pasted-value'
+import { useNotifyChannelDraft } from './use-notify-channel-draft'
+import { useAppStore } from '../../stores/app.store'
 
 // ============================================
 // Types
@@ -84,6 +87,7 @@ interface FieldDef {
   type: 'text' | 'password' | 'number' | 'toggle' | 'select'
   placeholder?: string
   required?: boolean
+  whitespace?: 'trim' | 'warn'
   options?: { value: string; label: string }[]
   nested?: string
   /** Optional group for collapsible sections (e.g. 'advanced') */
@@ -114,14 +118,14 @@ function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
       labelKey: NOTIFICATION_CHANNEL_META.email.labelKey,
       description: t('Send notifications via SMTP email'),
       fields: [
-        { key: 'smtp.host', label: t('SMTP Host'), type: 'text', placeholder: 'smtp.gmail.com', required: true, nested: 'smtp.host' },
+        { key: 'smtp.host', label: t('SMTP Host'), type: 'text', whitespace: 'trim', placeholder: 'smtp.gmail.com', required: true, nested: 'smtp.host' },
         { key: 'smtp.port', label: t('SMTP Port'), type: 'number', required: true, nested: 'smtp.port' },
         { key: 'smtp.secure', label: t('Use SSL/TLS'), type: 'toggle', nested: 'smtp.secure' },
-        { key: 'smtp.user', label: t('Username'), type: 'text', placeholder: 'user@example.com', required: true, nested: 'smtp.user' },
-        { key: 'smtp.password', label: t('Password'), type: 'password', placeholder: t('App password'), required: true, nested: 'smtp.password' },
-        { key: 'defaultTo', label: t('Default Recipient'), type: 'text', placeholder: 'recipient@example.com', required: true },
-        { key: 'caldavUrl', label: t('CalDAV URL'), type: 'text', placeholder: 'https://{host}/dav/users/{email}/calendars/default/', group: 'advanced' },
-        { key: 'tlsCiphers', label: t('TLS Ciphers'), type: 'text', placeholder: t('Auto (system default)'), group: 'advanced' },
+        { key: 'smtp.user', label: t('Username'), type: 'text', whitespace: 'trim', placeholder: 'user@example.com', required: true, nested: 'smtp.user' },
+        { key: 'smtp.password', label: t('Password'), type: 'password', whitespace: 'warn', placeholder: t('App password'), required: true, nested: 'smtp.password' },
+        { key: 'defaultTo', label: t('Default Recipient'), type: 'text', whitespace: 'trim', placeholder: 'recipient@example.com', required: true },
+        { key: 'caldavUrl', label: t('CalDAV URL'), type: 'text', whitespace: 'trim', placeholder: 'https://{host}/dav/users/{email}/calendars/default/', group: 'advanced' },
+        { key: 'tlsCiphers', label: t('TLS Ciphers'), type: 'text', whitespace: 'trim', placeholder: t('Auto (system default)'), group: 'advanced' },
       ],
     },
     {
@@ -131,11 +135,11 @@ function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
       labelKey: NOTIFICATION_CHANNEL_META.wecom.labelKey,
       description: t('Send notifications via WeChat Work (企业微信)'),
       fields: [
-        { key: 'corpId', label: t('Corp ID'), type: 'text', placeholder: 'ww...', required: true },
+        { key: 'corpId', label: t('Corp ID'), type: 'text', whitespace: 'trim', placeholder: 'ww...', required: true },
         { key: 'agentId', label: t('Agent ID'), type: 'number', placeholder: '1000002', required: true },
         { key: 'secret', label: t('Secret'), type: 'password', required: true },
-        { key: 'defaultToUser', label: t('Default User ID'), type: 'text', placeholder: t('userid (optional)') },
-        { key: 'defaultToParty', label: t('Default Party ID'), type: 'text', placeholder: t('party id (optional)') },
+        { key: 'defaultToUser', label: t('Default User ID'), type: 'text', whitespace: 'trim', placeholder: t('userid (optional)') },
+        { key: 'defaultToParty', label: t('Default Party ID'), type: 'text', whitespace: 'trim', placeholder: t('party id (optional)') },
       ],
     },
     {
@@ -145,11 +149,11 @@ function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
       labelKey: NOTIFICATION_CHANNEL_META.dingtalk.labelKey,
       description: t('Send notifications via DingTalk (钉钉)'),
       fields: [
-        { key: 'appKey', label: t('App Key'), type: 'text', required: true },
+        { key: 'appKey', label: t('App Key'), type: 'text', whitespace: 'trim', required: true },
         { key: 'appSecret', label: t('App Secret'), type: 'password', required: true },
         { key: 'agentId', label: t('Agent ID'), type: 'number', placeholder: '0', required: true },
-        { key: 'robotCode', label: t('Robot Code'), type: 'text', placeholder: t('Robot code (optional)') },
-        { key: 'defaultChatId', label: t('Default Chat ID'), type: 'text', placeholder: t('Chat ID (optional)') },
+        { key: 'robotCode', label: t('Robot Code'), type: 'text', whitespace: 'trim', placeholder: t('Robot code (optional)') },
+        { key: 'defaultChatId', label: t('Default Chat ID'), type: 'text', whitespace: 'trim', placeholder: t('Chat ID (optional)') },
       ],
     },
     {
@@ -159,10 +163,10 @@ function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
       labelKey: NOTIFICATION_CHANNEL_META.feishu.labelKey,
       description: t('Send notifications via Feishu/Lark (飞书)'),
       fields: [
-        { key: 'appId', label: t('App ID'), type: 'text', required: true },
+        { key: 'appId', label: t('App ID'), type: 'text', whitespace: 'trim', required: true },
         { key: 'appSecret', label: t('App Secret'), type: 'password', required: true },
-        { key: 'defaultChatId', label: t('Default Chat ID'), type: 'text', placeholder: t('Chat ID (optional)') },
-        { key: 'defaultUserId', label: t('Default User ID'), type: 'text', placeholder: t('User open_id (optional)') },
+        { key: 'defaultChatId', label: t('Default Chat ID'), type: 'text', whitespace: 'trim', placeholder: t('Chat ID (optional)') },
+        { key: 'defaultUserId', label: t('Default User ID'), type: 'text', whitespace: 'trim', placeholder: t('User open_id (optional)') },
       ],
     },
     {
@@ -172,7 +176,7 @@ function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
       labelKey: NOTIFICATION_CHANNEL_META.webhook.labelKey,
       description: t('Send notifications via HTTP webhook'),
       fields: [
-        { key: 'url', label: t('URL'), type: 'text', placeholder: 'https://example.com/webhook', required: true },
+        { key: 'url', label: t('URL'), type: 'text', whitespace: 'trim', placeholder: 'https://example.com/webhook', required: true },
         {
           key: 'method', label: t('Method'), type: 'select',
           options: [{ value: 'POST', label: 'POST' }, { value: 'PUT', label: 'PUT' }],
@@ -225,12 +229,17 @@ interface ChannelFieldProps {
   field: FieldDef
   value: unknown
   onChange: (value: unknown) => void
+  rejectedPaste?: boolean
+  onRejectedPasteChange?: (rejected: boolean) => void
   /** Help link rendered under the input (product.json `notifyChannels`) */
   docs?: ChannelDocsLink
 }
 
-function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
+function ChannelField({ field, value, onChange, rejectedPaste, onRejectedPasteChange, docs }: ChannelFieldProps) {
   const { t } = useTranslation()
+  const inputId = useId()
+  const [inputDraft, setInputDraft] = useState<string | null>(null)
+  const [hasSuspiciousWhitespace, setHasSuspiciousWhitespace] = useState(false)
 
   if (field.type === 'toggle') {
     const checked = Boolean(value)
@@ -263,15 +272,20 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
 
   const inputType = field.type === 'number' ? 'number' : field.type === 'password' ? 'password' : 'text'
 
-  let displayValue: string
-  if (field.key === 'headers' && typeof value === 'object' && value !== null) {
-    displayValue = JSON.stringify(value)
-  } else {
-    displayValue = value != null ? String(value) : ''
-  }
+  const displayValue = inputDraft ?? (field.key === 'headers' && typeof value === 'object' && value !== null
+    ? JSON.stringify(value)
+    : value != null ? String(value) : '')
 
   const handleChange = (raw: string) => {
-    if (field.type === 'number') {
+    if (field.whitespace === 'trim') {
+      setInputDraft(raw)
+      onChange(trimPastedValue(raw))
+    } else if (field.whitespace === 'warn') {
+      setInputDraft(raw)
+      setHasSuspiciousWhitespace(hasPasteWhitespace(raw))
+      onRejectedPasteChange?.(false)
+      onChange(raw)
+    } else if (field.type === 'number') {
       onChange(raw === '' ? 0 : Number(raw))
     } else if (field.key === 'headers') {
       onChange(raw === '' ? undefined : raw)
@@ -281,6 +295,7 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
   }
 
   const handleBlur = () => {
+    setInputDraft(null)
     if (field.key === 'headers' && typeof value === 'string' && value.trim()) {
       try {
         const parsed = JSON.parse(value)
@@ -293,18 +308,35 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
 
   return (
     <div className="space-y-1">
-      <label className="text-sm text-muted-foreground">
+      <label htmlFor={inputId} className="text-sm text-muted-foreground">
         {field.label}
-        {field.required && <span className="text-red-400 ml-0.5">*</span>}
+        {field.required && <span aria-hidden="true" className="text-destructive ml-0.5">*</span>}
       </label>
       <input
+        id={inputId}
         type={inputType}
         value={displayValue}
+        aria-describedby={rejectedPaste || hasSuspiciousWhitespace ? `${inputId}-whitespace` : undefined}
         onChange={(e) => handleChange(e.target.value)}
+        onFocus={(e) => {
+          if (field.whitespace === 'warn' && value === '***') e.currentTarget.select()
+        }}
+        onPaste={field.whitespace === 'warn' ? (e) => {
+          const rejected = /[\r\n]/.test(e.clipboardData.getData('text'))
+          if (rejected) e.preventDefault()
+          onRejectedPasteChange?.(rejected)
+        } : undefined}
         onBlur={handleBlur}
         placeholder={field.placeholder}
         className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
       />
+      {(rejectedPaste || hasSuspiciousWhitespace) && (
+        <p id={`${inputId}-whitespace`} role="status" className="text-xs text-halo-warning">
+          {rejectedPaste
+            ? t('The pasted password contains a line break. Paste the password on one line.')
+            : t('This password contains spaces or invisible characters. Halo will use it as entered.')}
+        </p>
+      )}
       {docs && (
         <button
           type="button"
@@ -332,14 +364,16 @@ interface SmtpPortFieldProps {
 /** Shows the text being typed so the field can be cleared; only a usable port is saved. */
 function SmtpPortField({ label, value, invalid, onChange, onBlur }: SmtpPortFieldProps) {
   const { t } = useTranslation()
+  const inputId = useId()
   return (
     <div className="space-y-1">
-      <label className="text-sm text-muted-foreground">
+      <label htmlFor={inputId} className="text-sm text-muted-foreground">
         {label}
-        <span className="text-red-400 ml-0.5">*</span>
+        <span aria-hidden="true" className="text-destructive ml-0.5">*</span>
       </label>
       <input
-        type="number"
+        id={inputId}
+        type="text"
         inputMode="numeric"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -361,10 +395,11 @@ function SmtpPortField({ label, value, invalid, onChange, onBlur }: SmtpPortFiel
 interface NameResolutionFieldProps {
   value: string
   onChange: (value: string) => void
+  onBlur: (value: string) => void
   status?: ImChannelInstanceStatus['identityResolution']
 }
 
-function NameResolutionField({ value, onChange, status }: NameResolutionFieldProps) {
+function NameResolutionField({ value, onChange, onBlur, status }: NameResolutionFieldProps) {
   const { t } = useTranslation()
   const [revealed, setRevealed] = useState(false)
   const configured = value.trim().length > 0
@@ -400,6 +435,7 @@ function NameResolutionField({ value, onChange, status }: NameResolutionFieldPro
           type={revealed ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={(e) => onBlur(e.currentTarget.value)}
           placeholder="https://qyapi.weixin.qq.com/mcp/v2/bot/msg?apikey=..."
           className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:border-primary"
         />
@@ -523,8 +559,15 @@ function InstanceCard({
   const currentCfg = draft ?? cfg
 
   const handleConfigChange = (key: string, value: unknown) => {
+    const normalized = typeof value === 'string' && (key === 'botId' || key === 'wsUrl' || key === 'nameResolveUrl')
+      ? trimPastedValue(value) : value
     setDraft({ ...currentCfg, [key]: value })
-    scheduleChange({ config: { [key]: value } })
+    scheduleChange({ config: { [key]: normalized } })
+  }
+
+  const finishConnectionEdit = (key: string, value: string) => {
+    const normalized = trimPastedValue(value)
+    if (normalized !== value) handleConfigChange(key, normalized)
   }
 
   /** Immediate save for toggles/selects; typing still waiting for the debounce goes with it. */
@@ -700,6 +743,7 @@ function InstanceCard({
                 type="text"
                 value={(currentCfg.botId as string) ?? ''}
                 onChange={(e) => handleConfigChange('botId', e.target.value)}
+                onBlur={(e) => finishConnectionEdit('botId', e.currentTarget.value)}
                 placeholder="aib-xxx"
                 className={`w-full bg-secondary border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary ${
                   duplicateWarning ? 'border-amber-500' : 'border-transparent'
@@ -726,6 +770,7 @@ function InstanceCard({
                 type="text"
                 value={(currentCfg.wsUrl as string) ?? ''}
                 onChange={(e) => handleConfigChange('wsUrl', e.target.value)}
+                onBlur={(e) => finishConnectionEdit('wsUrl', e.currentTarget.value)}
                 placeholder="wss://openws.work.weixin.qq.com"
                 className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
               />
@@ -733,6 +778,7 @@ function InstanceCard({
             <NameResolutionField
               value={(currentCfg.nameResolveUrl as string) ?? ''}
               onChange={(v) => handleConfigChange('nameResolveUrl', v)}
+              onBlur={(v) => finishConnectionEdit('nameResolveUrl', v)}
               status={status?.identityResolution}
             />
           </InstanceSection>
@@ -876,10 +922,7 @@ interface NotifyChannelCardProps {
   channelConfig: Record<string, unknown>
   isExpanded: boolean
   onToggleExpand: () => void
-  onSave: (def: NotifyChannelDef, config: Record<string, unknown>) => Promise<void>
-  onTest: (channelType: string) => void
-  isTesting: boolean
-  testResult?: TestResult
+  onSave: (type: NotificationChannelType, config: Record<string, unknown>) => Promise<boolean>
   /** Help link this build declares for the channel, if any */
   docs?: ChannelDocsLink
 }
@@ -890,44 +933,34 @@ function NotifyChannelCard({
   isExpanded,
   onToggleExpand,
   onSave,
-  onTest,
-  isTesting,
-  testResult,
   docs,
 }: NotifyChannelCardProps) {
   const { t } = useTranslation()
   const Icon = def.icon
-  const isEnabled = Boolean(channelConfig?.enabled)
+  const { draft, edit, flush, saveFailed } = useNotifyChannelDraft(config => onSave(def.notifyType, config))
+  const currentConfig = draft ?? channelConfig
+  const isEnabled = Boolean(currentConfig.enabled)
+  const [isTesting, setIsTesting] = useState(false)
+  const [passwordPasteRejected, setPasswordPasteRejected] = useState(false)
+  const [testResult, setTestResult] = useState<TestResult>()
+  const editRevision = useRef(0)
 
-  // The help link answers "where do I get this credential", so it hangs off the
-  // channel's secret input rather than a hard-coded field name.
   const credentialFieldKey = def.fields.find(f => f.type === 'password')?.key
 
-  const [draft, setDraft] = useState<Record<string, unknown> | null>(null)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const currentConfig = draft ?? channelConfig
+  const update = (config: Record<string, unknown>, immediate = false) => {
+    editRevision.current++
+    setTestResult(undefined)
+    void edit(config, immediate)
+  }
 
-  const scheduleSave = useCallback((updated: Record<string, unknown>) => {
-    setDraft(updated)
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
-      onSave(def, updated)
-      setDraft(null)
-      saveTimerRef.current = null
-    }, 500)
-  }, [def, onSave])
-
-  const handleToggleEnabled = async () => {
-    const updated = { ...currentConfig, enabled: !isEnabled }
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    setDraft(null)
-    await onSave(def, updated)
+  const handleToggleEnabled = () => {
+    update({ ...currentConfig, enabled: !isEnabled }, true)
   }
 
   const handleFieldChange = (fieldKey: string, value: unknown, nested?: string) => {
     const path = nested || fieldKey
-    const updated = setNestedValue({ ...currentConfig }, path, value)
-    scheduleSave(updated)
+    const updated = setNestedValue(currentConfig, path, value)
+    update(updated)
   }
 
   const getFieldValue = (field: FieldDef): unknown => {
@@ -944,6 +977,8 @@ function NotifyChannelCard({
   const portInvalid = def.notifyType === 'email' && parseSmtpPort(portShown) === null
 
   const handlePortChange = (text: string) => {
+    editRevision.current++
+    setTestResult(undefined)
     setPortText(text)
     setPortTestRefused(false)
     const port = parseSmtpPort(text)
@@ -960,15 +995,30 @@ function NotifyChannelCard({
     }
     setPortText(null)
     setPortTestRefused(false)
-    scheduleSave(updated)
+    update(updated)
   }
 
-  const handleTest = () => {
+  const handleTest = async () => {
+    if (isTesting || passwordPasteRejected) return
     if (portInvalid) {
       setPortTestRefused(true)
       return
     }
-    onTest(def.notifyType)
+    const revision = editRevision.current
+    setIsTesting(true)
+    setTestResult(undefined)
+    try {
+      if (!await flush() || editRevision.current !== revision) return
+      const response = await api.testNotificationChannel(def.notifyType) as ApiResponse<TestResult>
+      if (editRevision.current === revision) {
+        setTestResult(response.success ? response.data : { success: false })
+      }
+    } catch {
+      console.warn('[MessageChannelsSection] Channel test request failed:', def.notifyType)
+      if (editRevision.current === revision) setTestResult({ success: false })
+    } finally {
+      setIsTesting(false)
+    }
   }
 
   const renderField = (field: FieldDef, fieldDocs?: ChannelDocsLink) => {
@@ -992,6 +1042,14 @@ function NotifyChannelCard({
         onChange={(value) => field.key === 'smtp.secure'
           ? handleSecureChange(value)
           : handleFieldChange(field.key, value, field.nested)}
+        rejectedPaste={field.whitespace === 'warn' && passwordPasteRejected}
+        onRejectedPasteChange={field.whitespace === 'warn' ? (rejected) => {
+          if (rejected) {
+            editRevision.current++
+            setTestResult(undefined)
+          }
+          setPasswordPasteRejected(rejected)
+        } : undefined}
         docs={fieldDocs}
       />
     )
@@ -1057,14 +1115,25 @@ function NotifyChannelCard({
             <button
               type="button"
               onClick={handleTest}
-              disabled={isTesting || !isEnabled}
+              disabled={isTesting || !isEnabled || passwordPasteRejected}
               className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary/10 text-primary hover:bg-primary/20 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}
               {isTesting ? t('Testing...') : t('Test')}
             </button>
-            {portTestRefused && portInvalid ? (
-              <div className="flex items-center gap-1.5 text-sm text-red-500">
+            {saveFailed ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <p role="status" className="text-sm text-destructive">
+                  {t('Could not save these settings. Your changes are still here; try again.')}
+                </p>
+                {(!isEnabled || passwordPasteRejected || portInvalid) && (
+                  <button type="button" className="text-sm text-primary underline" onClick={() => void flush()}>
+                    {t('Retry')}
+                  </button>
+                )}
+              </div>
+            ) : portTestRefused && portInvalid ? (
+              <div role="status" className="flex items-center gap-1.5 text-sm text-destructive">
                 <XCircle className="w-4 h-4" />
                 <span>{t('Please enter the SMTP port')}</span>
               </div>
@@ -1091,8 +1160,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
 
   const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set())
   const [expandedInstances, setExpandedInstances] = useState<Set<string>>(new Set())
-  const [testingChannel, setTestingChannel] = useState<string | null>(null)
-  const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
+  const notifySaveQueue = useRef(Promise.resolve<boolean>(true))
   const [imStatuses, setImStatuses] = useState<ImChannelInstanceStatus[]>([])
   const [instanceError, setInstanceError] = useState<string | null>(null)
   const rebindBusy = useRef(false)
@@ -1455,36 +1523,39 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
     })
   }, [])
 
-  const handleSaveNotifyChannel = useCallback(async (def: NotifyChannelDef, channelConfig: Record<string, unknown>) => {
-    if (!config) return
-    const updatedConfig = {
-      ...config,
-      notificationChannels: {
-        ...config.notificationChannels,
-        [def.notifyType]: channelConfig,
-      },
-    } as HaloConfig
-    try {
-      await api.setConfig({ notificationChannels: updatedConfig.notificationChannels })
-      setConfig(updatedConfig)
-      api.clearNotificationChannelCache().catch(() => {})
-    } catch (error) {
-      console.error('[MessageChannelsSection] Failed to save channel config:', error)
-    }
-  }, [config, setConfig])
-
-  const handleTestChannel = useCallback(async (channelType: string) => {
-    setTestingChannel(channelType)
-    setTestResults(prev => { const next = { ...prev }; delete next[channelType]; return next })
-    try {
-      const result = await api.testNotificationChannel(channelType) as { data: TestResult }
-      setTestResults(prev => ({ ...prev, [channelType]: result.data }))
-    } catch {
-      setTestResults(prev => ({ ...prev, [channelType]: { success: false, error: t('Test failed') } }))
-    } finally {
-      setTestingChannel(null)
-    }
-  }, [t])
+  const handleSaveNotifyChannel = useCallback((type: NotificationChannelType, channelConfig: Record<string, unknown>) => {
+    const save = notifySaveQueue.current.then(async () => {
+      try {
+        const current = useAppStore.getState().config
+        if (!current) throw new Error('Settings are unavailable')
+        const response = await api.setConfig({
+          notificationChannels: { ...current.notificationChannels, [type]: channelConfig },
+        }) as ApiResponse<HaloConfig>
+        if (!response.success || !response.data?.notificationChannels?.[type]) {
+          console.warn('[MessageChannelsSection] Channel settings were not saved:', type, response.code)
+          return false
+        }
+        const latest = useAppStore.getState().config ?? current
+        setConfig({
+          ...latest,
+          notificationChannels: {
+            ...latest.notificationChannels,
+            [type]: response.data.notificationChannels[type],
+          },
+        })
+        void api.clearNotificationChannelCache().catch(() => {
+          console.warn('[MessageChannelsSection] Could not clear the notification channel cache')
+        })
+        return true
+      } catch {
+        console.warn('[MessageChannelsSection] Channel settings save request failed:', type)
+        return false
+      }
+    })
+    // The config API replaces the notification-channel map as a whole.
+    notifySaveQueue.current = save
+    return save
+  }, [setConfig])
 
   const getNotifyConfig = (def: NotifyChannelDef): Record<string, unknown> => {
     const channels = config?.notificationChannels as NotificationChannelsConfig | undefined
@@ -1745,9 +1816,6 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
             isExpanded={expandedChannels.has(def.id)}
             onToggleExpand={() => toggleExpanded(def.id)}
             onSave={handleSaveNotifyChannel}
-            onTest={handleTestChannel}
-            isTesting={testingChannel === def.notifyType}
-            testResult={testResults[def.notifyType]}
             docs={notifyProductConfig?.[def.notifyType]?.docs}
           />
         ))}

@@ -33,6 +33,7 @@ import { HelpHint } from '../ui/HelpHint'
 import { ImProcessingNoticeRow } from './ImProcessingNoticeRow'
 import { ImLinkStatusNotice, imConnectionState, imLinkView } from './ImLinkStatus'
 import { Switch, switchRowHover } from '../ui/Switch'
+import { trimPastedValue } from '../../../shared/pasted-value'
 
 export interface FeishuInstanceCardProps {
   instance: ImChannelInstanceConfig
@@ -167,7 +168,8 @@ export function FeishuInstanceCard({
 
   const handleConfigChange = (key: string, value: unknown) => {
     setDraft({ ...currentCfg, [key]: value })
-    scheduleChange({ config: { [key]: value } })
+    const normalized = key === 'appId' && typeof value === 'string' ? trimPastedValue(value) : value
+    scheduleChange({ config: { [key]: normalized } })
   }
 
   /** Immediate save for toggles/selects; typing still waiting for the debounce goes with it. */
@@ -302,6 +304,11 @@ export function FeishuInstanceCard({
                 type="text"
                 value={appId}
                 onChange={(e) => handleConfigChange('appId', e.target.value)}
+                onBlur={(e) => {
+                  const value = e.currentTarget.value
+                  const normalized = trimPastedValue(value)
+                  if (normalized !== value) handleConfigChange('appId', normalized)
+                }}
                 placeholder="cli_xxxxxxxxxxxxxxxx"
                 className={`w-full bg-secondary border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary ${
                   duplicateWarning ? 'border-amber-500' : 'border-transparent'

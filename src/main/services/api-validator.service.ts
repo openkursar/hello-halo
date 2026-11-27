@@ -25,6 +25,7 @@ import {
   modelFetchFailureFromResponse
 } from '../../shared/model-fetch-error'
 import { parseCatalogModelOption } from '../../shared/model-catalog'
+import { trimPastedValue } from '../../shared/pasted-value'
 import type { CatalogModelCapability } from '../../shared/types/model-capabilities'
 import { getHeadlessElectronPath } from './agent/helpers'
 
@@ -55,13 +56,14 @@ export interface FetchModelsResult {
  */
 export async function fetchModelsFromApi(params: FetchModelsParams): Promise<FetchModelsResult> {
   const { apiKey, apiUrl } = params
+  const endpoint = trimPastedValue(apiUrl ?? '')
 
-  if (!apiKey || !apiUrl) {
+  if (!apiKey || !endpoint) {
     throw new Error('API key and URL are required')
   }
 
   // Normalize URL: strip trailing slashes, known path suffixes, and auto-append /v1
-  let baseUrl = apiUrl.replace(/\/+$/, '')
+  let baseUrl = endpoint.replace(/\/+$/, '')
   const suffixes = ['/chat/completions', '/completions', '/responses', '/v1/chat']
   for (const suffix of suffixes) {
     if (baseUrl.endsWith(suffix)) {

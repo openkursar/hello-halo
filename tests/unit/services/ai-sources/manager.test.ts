@@ -127,7 +127,20 @@ describe('getBackendConfig — API key path', () => {
     expect(bc!.model).toBe('gpt-4o')
   })
 
-  it('skips URL normalization for native anthropic (SDK appends /v1/messages)', () => {
+  it.each([
+    { provider: 'openai', apiType: undefined, url: 'https://api.example.com/v4/chat/completions' },
+    { provider: 'anthropic', apiType: undefined, url: 'https://api.example.com/v4/' },
+    { provider: 'custom', apiType: 'anthropic_passthrough', url: 'https://api.example.com/v4/v1/messages' },
+  ] as const)('trims $provider endpoints before composing both backend descriptors', ({ provider, apiType, url }) => {
+    const source = apiKeySource({ provider, apiType, apiUrl: '\u200B https://api.example.com/v4/\u00A0\uFEFF' })
+    seed({ currentId: source.id, sources: [source] })
+    const manager = new AISourceManager()
+
+    expect(manager.getBackendConfig()).toMatchObject({ url, key: source.apiKey, model: source.model })
+    expect(manager.getBackendConfigForSource(source.id, 'pinned-model')).toMatchObject({ url, key: source.apiKey, model: 'pinned-model' })
+  })
+
+  it('skips wire-format URL normalization for native anthropic (SDK appends /v1/messages)', () => {
     seed({
       currentId: 's1',
       sources: [apiKeySource({ provider: 'anthropic', apiUrl: 'https://api.anthropic.com/', model: 'claude-opus-4-6' })]

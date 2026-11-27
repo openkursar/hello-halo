@@ -46,13 +46,15 @@ describe('validateApiConnection captured credentials', () => {
       send: vi.fn(), close,
       stream: async function* () { yield { type: 'result', subtype: 'success', is_error: false, result: 'OK' } },
     })
-    const params = { provider, apiKey: 'test-validation-only', apiUrl: 'https://validation.example/v1', model: 'validation-model' }
-    expect(await validateApiConnection(params)).toMatchObject({ valid: true, model: params.model })
+    const endpoint = 'https://validation.example/v1'
+    const params = { provider, apiKey: 'test-validation-only', apiUrl: `\u200B ${endpoint}\u00A0\uFEFF`, model: 'validation-model' }
+    const expectedUrl = normalizeApiUrl(endpoint, provider)
+    expect(await validateApiConnection(params)).toMatchObject({ valid: true, model: params.model, normalizedUrl: expectedUrl })
     const options = createSessionMock.mock.calls.at(-1)![0]
     expect(options.engineId).toBe('halo')
     expect(options.model).toBe(params.model)
     expect(getSdkApiCredentials(options)).toEqual({
-      provider, apiKey: params.apiKey, baseUrl: normalizeApiUrl(params.apiUrl, provider), model: params.model,
+      provider, apiKey: params.apiKey, baseUrl: expectedUrl, model: params.model,
     })
     expect(close).toHaveBeenCalledTimes(1)
   })
@@ -76,6 +78,24 @@ describe('fetchModelsFromApi error details', () => {
       apiKey: 'sk-test-placeholder',
       apiUrl: 'https://example.com/v1'
     })).rejects.toMatchObject({ code })
+  })
+
+  it('trims the base URL before removing an existing completion suffix', async () => {
+    proxyFetchMock.mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'model-a' }] })))
+
+    await expect(fetchModelsFromApi({
+      apiKey: 'test-key',
+      apiUrl: '\u200B https://example.com/gateway%20path/v4/chat/completions/\u00A0\uFEFF'
+    })).resolves.toMatchObject({ models: [{ id: 'model-a' }] })
+    expect(proxyFetchMock).toHaveBeenCalledWith('https://example.com/gateway%20path/v4/models', expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer test-key' })
+    }))
+  })
+
+  it('does not fetch a model list when the endpoint contains only pasted whitespace', async () => {
+    await expect(fetchModelsFromApi({ apiKey: 'test-key', apiUrl: ' \u200B\u00A0\uFEFF' }))
+      .rejects.toThrow('API key and URL are required')
+    expect(proxyFetchMock).not.toHaveBeenCalled()
   })
 
   it('preserves an OpenAI-compatible provider detail', async () => {

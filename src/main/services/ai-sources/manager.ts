@@ -78,6 +78,7 @@ import {
 } from './catalog-models'
 import { selectGroup } from './groups'
 import type { ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
+import { trimPastedValue } from '../../../shared/pasted-value'
 
 /**
  * Extended OAuth provider interface for token management
@@ -373,41 +374,7 @@ class AISourceManager {
       return result
     }
 
-    // API Key: build config directly
-    const isAnthropic = isAnthropicProvider(source.provider)
-    const isAnthropicPassthrough = source.apiType === 'anthropic_passthrough'
-
-    // Normalize URL: ensure protocol prefix, then apply wire-format normalization.
-    // Native Anthropic skips normalization because the Claude SDK appends
-    // /v1/messages itself; the passthrough and OpenAI paths route through the
-    // router which POSTs backendUrl verbatim, so the full endpoint must be
-    // composed here.
-    let normalizedUrl = source.apiUrl
-    if (normalizedUrl && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalizedUrl)) {
-      normalizedUrl = `http://${normalizedUrl}`
-    }
-    if (!isAnthropic) {
-      normalizedUrl = normalizeApiUrl(
-        normalizedUrl,
-        isAnthropicPassthrough ? 'anthropic_passthrough' : 'openai'
-      )
-    }
-
-    // Build backend config
-    const config: BackendRequestConfig = {
-      url: normalizedUrl,
-      key: source.apiKey!,
-      model: source.model
-    }
-
-    // Set API type only if explicitly configured on the source.
-    // When not set, request-handler infers from URL suffix (/chat/completions or /responses).
-    // TODO: Add apiType selector in ProviderSelector UI for explicit control.
-    if (!isAnthropic && source.apiType) {
-      config.apiType = source.apiType
-    }
-
-    this.stampVisionCapability(source, config)
+    const config = this.buildApiKeyBackendConfig(source, source.model)
 
     console.log('[AISourceManager] getBackendConfig result:', {
       url: config.url,
@@ -543,33 +510,25 @@ class AISourceManager {
       return result
     }
 
-    // API Key: build config directly. See getBackendConfig() for the rationale
-    // behind the wire-format normalization branching.
+    return this.buildApiKeyBackendConfig(source, modelId || source.model)
+  }
+
+  private buildApiKeyBackendConfig(source: AISource, model: string): BackendRequestConfig {
     const isAnthropic = isAnthropicProvider(source.provider)
-    const isAnthropicPassthrough = source.apiType === 'anthropic_passthrough'
-    let normalizedUrl = source.apiUrl
-    if (normalizedUrl && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalizedUrl)) {
-      normalizedUrl = `http://${normalizedUrl}`
+    let url = trimPastedValue(source.apiUrl)
+    if (url && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url)) {
+      url = `http://${url}`
     }
+    // The native Anthropic SDK appends /v1/messages; routed APIs need the full endpoint.
     if (!isAnthropic) {
-      normalizedUrl = normalizeApiUrl(
-        normalizedUrl,
-        isAnthropicPassthrough ? 'anthropic_passthrough' : 'openai'
-      )
+      url = normalizeApiUrl(url, source.apiType === 'anthropic_passthrough' ? 'anthropic_passthrough' : 'openai')
     }
 
-    const config: BackendRequestConfig = {
-      url: normalizedUrl,
-      key: source.apiKey!,
-      model: modelId || source.model
-    }
-
+    const config: BackendRequestConfig = { url, key: source.apiKey!, model }
     if (!isAnthropic && source.apiType) {
       config.apiType = source.apiType
     }
-
     this.stampVisionCapability(source, config)
-
     return config
   }
 

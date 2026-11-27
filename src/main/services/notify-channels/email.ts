@@ -6,6 +6,7 @@
  */
 
 import type { EmailChannelConfig, NotificationPayload, NotifySendResult } from '../../../shared/types/notification-channels'
+import { normalizeEmailChannelConfig } from '../../../shared/email-channel-config'
 
 // Use dynamic import for nodemailer since it's a large dependency
 let nodemailerModule: typeof import('nodemailer') | null = null
@@ -21,9 +22,10 @@ async function getNodemailer() {
  * Send a notification email via SMTP.
  */
 export async function sendEmail(
-  config: EmailChannelConfig,
+  rawConfig: EmailChannelConfig,
   payload: NotificationPayload
 ): Promise<NotifySendResult> {
+  const config = normalizeEmailChannelConfig(rawConfig)
   const channel = 'email' as const
   console.log(`[NotifyChannel][Email] Sending to=${config.defaultTo}, subject="${payload.title}"`)
 
@@ -66,8 +68,9 @@ export async function sendEmail(
 /**
  * Test SMTP connection.
  */
-export async function testEmail(config: EmailChannelConfig): Promise<{ success: boolean; error?: string }> {
+export async function testEmail(rawConfig: EmailChannelConfig): Promise<{ success: boolean; error?: string }> {
   try {
+    const config = normalizeEmailChannelConfig(rawConfig)
     const nodemailer = await getNodemailer()
     const transporter = nodemailer.createTransport({
       host: config.smtp.host,

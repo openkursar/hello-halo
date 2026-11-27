@@ -20,6 +20,11 @@ describe('endpointIdentity', () => {
       .toBe(endpointIdentity('https://api.deepseek.com'))
   })
 
+  it('ignores copied edge whitespace when comparing endpoint origins', () => {
+    expect(endpointIdentity('\u200B https://api.example.com/v4\u00A0\uFEFF'))
+      .toBe(endpointIdentity('https://api.example.com/v4'))
+  })
+
   it('falls back to the trimmed value when the URL cannot be parsed', () => {
     expect(endpointIdentity('  not a url  ')).toBe('not a url')
     expect(endpointIdentity('   ')).toBe('')

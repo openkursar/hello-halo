@@ -13,8 +13,14 @@ paths:
   - src/main/foundation/config-encryption.ts
   - src/main/foundation/credential-safety.ts
   - src/main/services/proxy-fetch.ts
+  - src/main/services/notify-channels/email.ts
+  - src/main/services/notify-channels/index.ts
+  - src/main/controllers/config.controller.ts
+  - src/main/ipc/config.ts
+  - src/main/ipc/notification-channels.ts
+  - src/shared/types/notification-channels.ts
 dependsOn:
   - startup
 scope:
-  en: Desktop and remote settings with explicit desktop-only groups; theme/language/scale/send key, proxy, credential faults and shared browser cleanup.
-  zh: 桌面与远程设置及明确的桌面专用分组；主题、语言、缩放、发送键、代理、凭证问题和共享浏览数据清理。
+  en: Desktop and remote settings with explicit desktop-only groups; theme/language/scale/send key, email connection setup, proxy, credential faults and shared browser cleanup.
+  zh: 桌面与远程设置及明确的桌面专用分组；主题、语言、缩放、发送键、邮件连接配置、代理、凭证问题和共享浏览数据清理。
