@@ -42,12 +42,13 @@ impl Edge {
     }
 }
 
+/// Children that could not be attributed; `0` stands for MSYS rows that had no Windows PID yet.
 pub(super) fn walk<T>(
     members: &mut HashMap<Pid, (T, Lifetime)>,
     edges: impl IntoIterator<Item = Edge>,
     host: Pid,
     mut open: impl FnMut(Pid) -> Option<(T, Lifetime)>,
-) -> bool {
+) -> HashSet<Pid> {
     let mut children: HashMap<Pid, Vec<Edge>> = HashMap::new();
     for edge in edges {
         children.entry(edge.parent).or_default().push(edge);
@@ -89,7 +90,7 @@ pub(super) fn walk<T>(
             }
         }
     }
-    unresolved.is_empty()
+    unresolved
 }
 
 pub(super) fn has_trusted_msys_root<I: Iterator>(
@@ -118,7 +119,27 @@ pub(super) struct MsysTable {
 
 struct MsysRow {
     parent: Pid,
+    group: Pid,
     native: Pid,
+}
+
+/// MSYS processes that had no Windows PID while the command's tree was observed.
+pub(super) struct Transients {
+    pids: HashSet<Pid>,
+    groups: HashSet<Pid>,
+}
+
+impl Transients {
+    /// Whether a table taken after every member exited leaves nothing of the command:
+    /// each row is either the leftover row of a member confirmed to have exited, or a
+    /// process outside both the transient rows and the members' process groups.
+    /// `exited` must still hold the members' handles, so their Windows PIDs are not reused.
+    pub(super) fn cleared_in<T>(&self, later: &MsysTable, exited: &HashMap<Pid, T>) -> bool {
+        later.rows.iter().all(|(pid, row)| {
+            (row.native != 0 && exited.contains_key(&row.native))
+                || (!self.pids.contains(pid) && !self.groups.contains(&row.group))
+        })
+    }
 }
 
 impl MsysTable {
@@ -145,10 +166,10 @@ impl MsysTable {
             .parse()
             .ok()?;
             let parent = cells.next()?.parse().ok()?;
-            let _: Pid = cells.next()?.parse().ok()?;
+            let group = cells.next()?.parse().ok()?;
             let native = cells.next()?.parse().ok()?;
             if (native != 0 && !native_ids.insert(native))
-                || rows.insert(pid, MsysRow { parent, native }).is_some()
+                || rows.insert(pid, MsysRow { parent, group, native }).is_some()
             {
                 return None;
             }
@@ -171,6 +192,34 @@ impl MsysTable {
         created != 0
             && created < self.before
             && self.rows.values().filter(|row| row.native == pid).count() == 1
+    }
+
+    /// The rows without a Windows PID under `members`, with the members' process groups;
+    /// `None` when no member has a row to name its group.
+    pub(super) fn transients<T>(&self, members: &HashMap<Pid, T>) -> Option<Transients> {
+        let groups: HashSet<Pid> = self
+            .rows
+            .values()
+            .filter(|row| row.native != 0 && members.contains_key(&row.native))
+            .map(|row| row.group)
+            .collect();
+        if groups.is_empty() {
+            return None;
+        }
+        let pids = self
+            .rows
+            .iter()
+            .filter(|(_, row)| {
+                row.native == 0
+                    && (groups.contains(&row.group)
+                        || self
+                            .rows
+                            .get(&row.parent)
+                            .is_some_and(|parent| members.contains_key(&parent.native)))
+            })
+            .map(|(pid, _)| *pid)
+            .collect();
+        Some(Transients { pids, groups })
     }
 }
 
@@ -291,7 +340,8 @@ mod tests {
         };
         assert!(walk(&mut members, [stale_edge, edge(1, 2, 30)], 99, |_| {
             Some(member(21))
-        }));
+        })
+        .is_empty());
         assert!(members.contains_key(&2));
     }
 
@@ -309,7 +359,8 @@ mod tests {
         )]);
         assert!(!walk(&mut members, [edge(1, 2, 30)], 99, |_| Some(member(
             32
-        ))));
+        )))
+        .is_empty());
         assert!(!members.contains_key(&2));
         assert!(walk(
             &mut members,
@@ -322,7 +373,8 @@ mod tests {
                     _ => 9,
                 }))
             }
-        ));
+        )
+        .is_empty());
         assert!(members.contains_key(&2));
         assert!(!members.contains_key(&3));
         assert!(!members.contains_key(&4));
@@ -333,11 +385,39 @@ mod tests {
         let table = MsysTable::parse("PID PPID PGID WINPID TTY UID STIME COMMAND\n11 1 11 101 ? 1 00:00 bash\n12 11 11 0 ? 1 00:00 transient\nS 13 12 11 102 ? 1 00:00 sleep\n14 11 11 200 ? 1 00:00 host\n15 14 11 201 ? 1 00:00 other\n", 50).unwrap();
         let mut members = HashMap::from([(101, member(10))]);
         assert!(table.knows_root(101, 10));
-        assert!(!walk(&mut members, table.edges(), 200, |_| panic!(
-            "unverified node was opened"
-        )));
+        assert_eq!(
+            walk(&mut members, table.edges(), 200, |_| panic!(
+                "unverified node was opened"
+            )),
+            HashSet::from([0, 200])
+        );
         assert_eq!(members.len(), 1);
         assert!(MsysTable::parse("PID PPID PGID WINPID\ninvalid row", 50).is_none());
+    }
+
+    #[test]
+    fn transient_msys_rows_clear_only_when_nothing_of_the_command_remains() {
+        let header = "PID PPID PGID WINPID TTY UID STIME COMMAND\n";
+        let first = MsysTable::parse(&format!("{header}11 1 11 101 ? 1 00:00 bash\n12 11 11 0 ? 1 00:00 fork\n13 11 11 102 ? 1 00:00 make\n31 1 31 301 ? 1 00:00 neighbour\n"), 50).unwrap();
+        let mut members = HashMap::from([(101, member(10))]);
+        assert_eq!(walk(&mut members, first.edges(), 999, |pid| (pid == 102).then(|| member(20))), HashSet::from([0]));
+        let transients = first.transients(&members).unwrap();
+        let cases = [
+            ("only unrelated processes remain", "31 1 31 301 ? 1 00:00 neighbour\n41 1 41 401 ? 1 00:00 new\n", true),
+            ("exited members leave stale rows", "11 1 11 101 ? 1 00:00 bash\n13 11 11 102 ? 1 00:00 make\n", true),
+            ("the transient row is still pending", "12 11 11 0 ? 1 00:00 fork\n", false),
+            ("the transient row now has an unknown process", "12 11 11 501 ? 1 00:00 fork\n", false),
+            ("the transient row left the process group", "12 1 77 501 ? 1 00:00 daemon\n", false),
+            ("another process remains in the group", "61 11 11 601 ? 1 00:00 child\n", false),
+        ];
+        for (name, rows, cleared) in cases {
+            let later = MsysTable::parse(&format!("{header}{rows}"), 90).unwrap();
+            assert_eq!(transients.cleared_in(&later, &members), cleared, "{name}");
+        }
+        // Without its handle a member's Windows PID could be reused, so its row no longer clears.
+        let stale = MsysTable::parse(&format!("{header}13 11 11 102 ? 1 00:00 make\n"), 90).unwrap();
+        assert!(!transients.cleared_in(&stale, &HashMap::from([(101, member(10))])));
+        assert!(first.transients(&HashMap::from([(999, member(10))])).is_none());
     }
 
     #[test]
@@ -366,7 +446,8 @@ mod tests {
                 native.chain(posix.iter().flat_map(MsysTable::edges)),
                 host,
                 |pid| times.get(&pid).map(|time| member(*time))
-            ));
+            )
+            .is_empty());
             assert_eq!(
                 members.keys().copied().collect::<HashSet<_>>(),
                 times.keys().copied().collect()

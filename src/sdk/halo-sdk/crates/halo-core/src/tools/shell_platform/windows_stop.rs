@@ -7,6 +7,7 @@ use super::{
     capture_process_table,
     windows_ancestry::{
         confirmation_after_stop, has_trusted_msys_root, walk, Edge, Lifetime, MsysTable, Pid, Proof,
+        Transients,
     },
     windows_ps_executable,
 };
@@ -198,12 +199,20 @@ fn snapshot(deadline: Instant) -> io::Result<Snapshot> {
     Ok(Snapshot { edges, before })
 }
 
+#[derive(PartialEq)]
+enum Discovery {
+    Complete,
+    /// Only MSYS rows without a Windows PID remain unattributed.
+    Transients,
+    Incomplete,
+}
+
 fn discover(
     members: &mut HashMap<Pid, (Member, Lifetime)>,
     native: &Snapshot,
     msys: Option<&MsysTable>,
     deadline: Instant,
-) -> bool {
+) -> Discovery {
     if members
         .values_mut()
         .any(|(member, lifetime)| match member.lifetime() {
@@ -214,9 +223,9 @@ fn discover(
             Err(_) => true,
         })
     {
-        return false;
+        return Discovery::Incomplete;
     }
-    walk(
+    let unresolved = walk(
         members,
         native
             .edges
@@ -232,7 +241,12 @@ fn discover(
             let lifetime = process.lifetime().ok()?;
             Some((process, lifetime))
         },
-    )
+    );
+    match unresolved.len() {
+        0 => Discovery::Complete,
+        1 if unresolved.contains(&0) && msys.is_some() => Discovery::Transients,
+        _ => Discovery::Incomplete,
+    }
 }
 
 fn stop_and_wait(
@@ -290,33 +304,49 @@ fn msys_root_is_known(
     })
 }
 
+enum Shutdown {
+    Confirmed,
+    /// Every observed process stopped, but MSYS rows that had no Windows PID can
+    /// only be cleared by a later table. The members keep their handles until then.
+    PendingTransients(Transients, HashMap<Pid, (Member, Lifetime)>),
+    Unconfirmed,
+}
+
 fn stop_tree(
     root: Member,
     msys: Option<MsysTable>,
     launcher_target: Option<&Path>,
     mut complete: bool,
     deadline: Instant,
-) -> bool {
+) -> Shutdown {
     let pid = unsafe { GetProcessId(root.raw()) };
     let Ok(lifetime) = root.lifetime() else {
         let _ = root.stop();
-        return false;
+        return Shutdown::Unconfirmed;
     };
     if pid == 0 || pid == std::process::id() {
-        return false;
+        return Shutdown::Unconfirmed;
     }
     complete &= lifetime.exited.is_none();
     let mut members = HashMap::from([(pid, (root, lifetime))]);
+    let mut transients = None;
     for round in 0..MAX_SCANS {
         let Ok(native) = snapshot(deadline) else {
             if round == 0 {
                 let _ = members[&pid].0.stop();
             }
-            return false;
+            return Shutdown::Unconfirmed;
         };
         let previous = members.len();
         let table = if round == 0 { msys.as_ref() } else { None };
-        complete &= discover(&mut members, &native, table, deadline);
+        match discover(&mut members, &native, table, deadline) {
+            Discovery::Complete => {}
+            Discovery::Transients => {
+                transients = table.and_then(|table| table.transients(&members));
+                complete &= transients.is_some();
+            }
+            Discovery::Incomplete => complete = false,
+        }
         if round != 0 {
             // Only a table taken after the previously held parents exited can close the walk.
             complete &= members
@@ -328,7 +358,11 @@ fn stop_tree(
             complete &= msys_root_is_known(table, pid, &members, &native, launcher_target);
         }
         if round != 0 && previous == members.len() {
-            return complete;
+            return match (complete, transients) {
+                (false, _) => Shutdown::Unconfirmed,
+                (true, None) => Shutdown::Confirmed,
+                (true, Some(transients)) => Shutdown::PendingTransients(transients, members),
+            };
         }
         if round != 0 {
             // An untracked parent could already have spawned and lost an intermediate process.
@@ -337,11 +371,11 @@ fn stop_tree(
         let Some(confirmation) =
             confirmation_after_stop(complete, round == 0, stop_and_wait(pid, &members, deadline))
         else {
-            return false;
+            return Shutdown::Unconfirmed;
         };
         complete = confirmation;
     }
-    false
+    Shutdown::Unconfirmed
 }
 
 pub(in crate::tools) async fn terminate_windows_shell(
@@ -357,16 +391,18 @@ pub(in crate::tools) async fn terminate_windows_shell(
         }
     };
     let pid = unsafe { GetProcessId(root.raw()) };
-    let msys = if let Some(ps) = windows_ps_executable(shell) {
+    let ps = windows_ps_executable(shell);
+    let observe = |ps: std::path::PathBuf| async move {
         let before = now_filetime();
         let budget = MSYS_PS_BUDGET.min(deadline.saturating_duration_since(Instant::now()));
-        let observed = capture_process_table(&ps, budget)
+        capture_process_table(&ps, budget)
             .await
             .ok()
-            .and_then(|output| MsysTable::parse(std::str::from_utf8(&output).ok()?, before));
-        observed
-    } else {
-        None
+            .and_then(|output| MsysTable::parse(std::str::from_utf8(&output).ok()?, before))
+    };
+    let msys = match ps.clone() {
+        Some(ps) => observe(ps).await,
+        None => None,
     };
     let launcher_target = root.image().and_then(|image| {
         let bin = image.parent()?;
@@ -397,8 +433,17 @@ pub(in crate::tools) async fn terminate_windows_shell(
         )
     });
     match tokio::time::timeout_at(deadline, stop).await {
-        Ok(Ok(true)) => return true,
-        Ok(Ok(false)) => {}
+        Ok(Ok(Shutdown::Confirmed)) => return true,
+        Ok(Ok(Shutdown::PendingTransients(transients, members))) => {
+            let later = match ps {
+                Some(ps) => observe(ps).await,
+                None => None,
+            };
+            if later.is_some_and(|later| transients.cleared_in(&later, &members)) {
+                return true;
+            }
+        }
+        Ok(Ok(Shutdown::Unconfirmed)) => {}
         _ => process.stop_windows_root(),
     }
     tracing::warn!(
@@ -464,12 +509,9 @@ mod tests {
         let handle = Member(root.windows_stop_handle().unwrap());
         assert!(root.wait().await.unwrap().success());
         assert!(!handle.stop().unwrap());
-        assert!(!stop_tree(
-            handle,
-            None,
-            None,
-            true,
-            Instant::now() + WINDOWS_STOP_BUDGET
+        assert!(matches!(
+            stop_tree(handle, None, None, true, Instant::now() + WINDOWS_STOP_BUDGET),
+            Shutdown::Unconfirmed
         ));
     }
 
@@ -530,9 +572,11 @@ mod tests {
         let deadline = Instant::now() + WINDOWS_STOP_BUDGET;
         let confirmed = if native_only {
             let handle = Member(root.windows_stop_handle().unwrap());
-            tokio::task::spawn_blocking(move || stop_tree(handle, None, None, true, deadline))
-                .await
-                .unwrap()
+            tokio::task::spawn_blocking(move || {
+                matches!(stop_tree(handle, None, None, true, deadline), Shutdown::Confirmed)
+            })
+            .await
+            .unwrap()
         } else {
             terminate_windows_shell(&root, &binary, deadline).await
         };

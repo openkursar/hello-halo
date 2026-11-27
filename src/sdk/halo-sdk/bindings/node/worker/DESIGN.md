@@ -164,9 +164,12 @@ uses a bounded observation from that Git installation and fresh Windows snapshot
 It requests termination and checks exit through the same retained process handles.
 This discovery does not run at startup or when a command finishes normally.
 
-A shell without an identifiable MSYS root, a failed `ps` query, or a possible
-descendant with no usable Windows PID leaves the overall result unconfirmed. The SDK still
-stops native descendants it can identify. A descendant whose handle shows it
+A shell without an identifiable MSYS root or a failed `ps` query leaves the overall
+result unconfirmed. The SDK still stops native descendants it can identify. An MSYS
+row that has no Windows PID yet (a process being forked) is resolved only by a second
+`ps` table taken after every held member exited, while their handles stay open: each
+row must then be either a confirmed member's leftover or outside both that row and
+the members' process groups. A descendant whose handle shows it
 already exited counts as stopped; the follow-up snapshot taken after held parents
 exit still has to account for any children it started. A shell that exited before
 its termination request leaves the result unconfirmed. Tests therefore check actual
