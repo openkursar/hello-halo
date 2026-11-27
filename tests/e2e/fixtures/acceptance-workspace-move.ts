@@ -19,10 +19,16 @@ export { acceptance } from './acceptance-app'
 export { expect } from '@playwright/test'
 export const MOVE_OWNER = 'acceptance-move-owner'
 
-export const test = base.extend<{ wecom: AcceptanceWecom; moveMcp: Awaited<ReturnType<typeof startAcceptanceMcp>> }>({
+type MoveMcp = Awaited<ReturnType<typeof startAcceptanceMcp>>
+
+export const test = base.extend<{ wecom: AcceptanceWecom; moveMcp: { origin: MoveMcp; target: MoveMcp } }>({
   moveMcp: async ({}, use) => {
-    const service = await startAcceptanceMcp()
-    try { await use(service) } finally { await service.close() }
+    const origin = await startAcceptanceMcp()
+    let target: MoveMcp | undefined
+    try {
+      target = await startAcceptanceMcp()
+      await use({ origin, target })
+    } finally { await Promise.all([origin.close(), target?.close()]) }
   },
   wecom: async ({}, use, info) => {
     const wecom = await startAcceptanceWecom()

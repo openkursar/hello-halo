@@ -115,9 +115,9 @@ describe('execution environment relocation and recovery', () => {
     expect(store.relocateAppEnvironments(app.id, destination, buildExecutionEnvironment(app, manager, 'b'))).toBe(11)
 
     store = new ActivityStore(database.getAppDatabase())
-    for (const key of sessionKeys) expect(store.getSessionEnvironment(key)).toEqual({ ...destination, pendingConnectionNotice: true })
+    for (const key of sessionKeys) expect(store.getSessionEnvironment(key)).toEqual(destination)
     for (const run of store.getRunsForApp(app.id)) {
-      expect(run.environment).toEqual({ ...destination, mcpBindings: { calendar: 'declared-b' }, pendingConnectionNotice: true })
+      expect(run.environment).toEqual({ ...destination, mcpBindings: { calendar: 'declared-b' } })
     }
     expect(store.getEntry('question')).toEqual(decision)
     expect(store.getDecisionCounts(app.id).pending).toBe(1)
@@ -300,7 +300,7 @@ describe('execution environment relocation and recovery', () => {
     expect(validateExecutionEnvironment(recovered, { app, manager })).toBe(recovered)
   })
 
-  it.each(['replaced', 'removed', 'added'] as const)('persists a pending connection notice when missing storage recovery finds a %s binding', change => {
+  it.each(['replaced', 'removed', 'added'] as const)('persists a %s connection binding after missing storage recovery without queuing a connection notice', change => {
     connections.a = change === 'added' ? [] : [connection('original')]
     connections.b = change === 'removed' ? [] : [connection('replacement')]
     const key = 'app-chat:person'
@@ -309,38 +309,23 @@ describe('execution environment relocation and recovery', () => {
     rmSync(original.memoryDir, { recursive: true })
 
     const recovered = resolveChatEnvironment(app, manager, store, key)
-    expect(recovered.pendingConnectionNotice).toBe(true)
-    expect(store.getSessionEnvironment(key)).toEqual(recovered)
-    expect(validateEnvironmentConnections(recovered, app, manager, 'chat').changed).toBe(false)
+    expect(recovered.mcpBindings).toEqual(change === 'removed' ? {} : { calendar: 'replacement' })
+    expect(recovered).not.toHaveProperty('pendingConnectionNotice')
+    expect(recovered.pendingWorkspaceNotice).toEqual({ kind: 'missing' })
     store = new ActivityStore(database.getAppDatabase())
-    expect(resolveChatEnvironment(app, manager, store, key).pendingConnectionNotice).toBe(true)
-    delete recovered.pendingConnectionNotice
-    store.replaceSessionEnvironment(key, app.id, recovered)
-    expect(resolveChatEnvironment(app, manager, store, key).pendingConnectionNotice).toBeUndefined()
+    expect(resolveChatEnvironment(app, manager, store, key)).toEqual(recovered)
   })
 
-  it('preserves a previous unannounced connection change through another storage recovery', () => {
-    connections.a = [connection('original')]
-    const original = { ...resolveExecutionEnvironment(app, manager), pendingConnectionNotice: true }
-    rmSync(original.memoryDir, { recursive: true })
-    const onRecovered = vi.fn()
-    const recovered = validateExecutionEnvironment(original, { app, manager, onRecovered })
-    expect(recovered.mcpBindings).toEqual(original.mcpBindings)
-    expect(recovered.pendingConnectionNotice).toBe(true)
-    expect(onRecovered).toHaveBeenCalledWith(expect.objectContaining({ pendingConnectionNotice: true }))
-  })
-
-  it.each(['paused', 'error', 'needs_login'] as const)('does not queue a new connection notice when recovered storage still uses the same %s account', status => {
+  it.each(['paused', 'error', 'needs_login'] as const)('preserves the connection identity when recovered storage still uses the same %s account', status => {
     connections.a = [connection('original')]
     const original = resolveExecutionEnvironment(app, manager)
     connections.a[0].status = status
     rmSync(original.memoryDir, { recursive: true })
     const recovered = validateExecutionEnvironment(original, { app, manager })
     expect(recovered.mcpBindings).toEqual(original.mcpBindings)
-    expect(recovered.pendingConnectionNotice).toBeUndefined()
   })
 
-  it('sets the pending notice before the recovered run environment is persisted', () => {
+  it('persists the recovered run environment with the current connection identity', () => {
     connections.a = [connection('original')]
     connections.b = [connection('replacement')]
     const original = resolveExecutionEnvironment(app, manager)
@@ -350,7 +335,7 @@ describe('execution environment relocation and recovery', () => {
     const recovered = validateExecutionEnvironment(original, {
       app, manager, onRecovered: environment => store.replaceRunEnvironment('run', environment),
     })
-    expect(recovered.pendingConnectionNotice).toBe(true)
+    expect(recovered.mcpBindings).toEqual({ calendar: 'replacement' })
     expect(store.getRun('run')?.environment).toEqual(recovered)
   })
 
@@ -395,7 +380,8 @@ describe('execution environment relocation and recovery', () => {
     rmSync(fixtures.spaces.get('b').workingDir, { recursive: true })
     const current = resolveChatRecordEnvironment(app, manager, store, key)
     expect(current.spaceId).toBe('b')
-    expect(current.pendingConnectionNotice).toBe(true)
+    expect(current.mcpBindings).toEqual({ calendar: 'replacement' })
+    expect(current.pendingWorkspaceNotice).toEqual({ kind: 'missing' })
     expect(store.getSessionEnvironment(key)).toEqual(current)
     expect(() => resolveChatEnvironment(app, manager, store, key)).toThrow(WorkingDirectoryUnavailableError)
   })

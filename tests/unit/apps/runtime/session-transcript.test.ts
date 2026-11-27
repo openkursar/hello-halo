@@ -523,7 +523,7 @@ describe('provenance', () => {
     expect(injected.metadata).toBeUndefined()
   })
 
-  it.each(['cross-conversation', 'cross-conversation-notice', 'team-message', 'environment-notice'] as const)(
+  it.each(['cross-conversation', 'cross-conversation-notice', 'team-message'] as const)(
     'reads source %s as a system message',
     source => {
       const [message] = convertEventsToMessages([user('from elsewhere', 1, { _source: source })])
@@ -601,8 +601,10 @@ describe('provenance', () => {
       rmSync(dir, { recursive: true, force: true })
     })
 
-    it.each(['environment-notice', 'workspace-notice'] as const)('preserves a %s as its own system record before the next input and reply', source => {
+    it('omits retired connection notices without hiding workspace notices or ordinary messages', () => {
+      const source = 'workspace-notice'
       const writer = openSessionWriter(dir, 'app-1', 'run-1')
+      writer.writeEvent(user('Old connection notice.', 1, { _source: 'environment-notice' }))
       const written = writer.writeTrigger('Context changed.', undefined, undefined, { source })
       writer.writeTrigger('Continue the original task.')
       writer.writeEvent(assistant([text('Continuing.')], 3))

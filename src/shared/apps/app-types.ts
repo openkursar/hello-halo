@@ -199,9 +199,8 @@ export interface ExecutionEnvironment {
   spacePath: string
   workDir: string
   memoryDir: string
-  /** Current connection identities; replaced accounts are announced before continuing. */
+  /** Current connection identities for the retained capability inventory. */
   mcpBindings?: Record<string, string>
-  pendingConnectionNotice?: boolean
   /** Recording the timeline notice and delivering model context survive retries independently. */
   pendingWorkspaceNotice?: { kind: WorkspaceNoticeKind; recorded?: boolean }
 }

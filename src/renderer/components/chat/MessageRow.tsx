@@ -118,6 +118,8 @@ export const MessageRow = memo(function MessageRow({
     ? mergeArrivalThoughts(message.thoughts as Thought[], arrivals.map(toArrivalThought))
     : message.thoughts as Thought[], [hasInlineThoughts, message.thoughts, arrivals])
 
+  if (message.source === 'environment-notice') return null
+
   // System-sourced rows are routed before the bubble branches below: MessageItem
   // only distinguishes user from assistant, so anything reaching it would be
   // dressed as one of the two. This is the only place that decision is made.

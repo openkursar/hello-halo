@@ -2226,10 +2226,10 @@ persists that repair. A missing user-selected project directory still produces t
 change-folder error; stored history remains readable independently of that cwd.
 Connection identity and availability remain distinct: pausing an instance does
 not change its identity, while replacement, removal or authorization changes update
-the binding to currently authorized instances. A durable environment notice is
-recorded before continuing with changed accounts. Independent runs still enforce
-declared connection prerequisites. Deletion-related relocation and missing-workspace
-recovery also retain a per-conversation workspace notice. It is written as a system
+the binding to currently authorized instances without adding a conversation
+notice. Older connection notices do not appear in the transcript. Independent
+runs still enforce declared connection prerequisites. Deletion-related relocation
+and missing-workspace recovery retain a per-conversation workspace notice. It is written as a system
 record in the timeline, not an IM reply, and supplied with the next model input.
 Recording and engine acceptance are separate checkpoints: failed preparation keeps
 the model context pending without rewriting the timeline notice; a slash command

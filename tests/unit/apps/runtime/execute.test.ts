@@ -296,7 +296,7 @@ import {
 } from '../../../../src/main/services/agent/session-manager'
 import { getAppManager } from '../../../../src/main/apps/manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from '../../../../src/main/apps/runtime/execution-environment'
-import { ENVIRONMENT_NOTICE_TEXT, WORKSPACE_NOTICE_TEXT } from '../../../../src/shared/transcript'
+import { WORKSPACE_NOTICE_TEXT } from '../../../../src/shared/transcript'
 import { WorkingDirectoryUnavailableError } from '../../../../src/main/services/agent'
 import { openSessionWriter, loadChatEngineState, saveChatEngineBinding } from '../../../../src/main/apps/runtime/session-store'
 import { ensureEngineAvailable, waitForSessionCleanup } from '../../../../src/main/services/agent'
@@ -530,31 +530,38 @@ describe('executeRun — environment preparation', () => {
   })
 })
 
-describe('executeRun — connection change notice', () => {
+describe('executeRun — environment changes', () => {
   beforeEach(() => {
     nextSession = new FakeSession({ script: [assistantReport()] })
     vi.mocked(openSessionWriter).mockClear()
   })
 
-  it.each(['changed', 'pending'] as const)('records a %s connection notice once before the actual input and clears it only after persistence', async reason => {
-    const environment = { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1', pendingConnectionNotice: reason === 'pending' }
+  it.each(['changed', 'legacy pending'] as const)('continues without a transcript notice for a %s connection', async state => {
+    const environment = {
+      spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1',
+      mcpBindings: { docs: state === 'changed' ? 'original' : 'current' },
+      ...(state === 'legacy pending' ? { pendingConnectionNotice: true } : {}),
+    }
     vi.mocked(resolveExecutionEnvironment).mockReturnValueOnce(environment)
-    vi.mocked(validateEnvironmentConnections).mockReturnValueOnce({ changed: reason === 'changed', changedSpecIds: reason === 'changed' ? ['docs'] : [] })
-    const writeTrigger = vi.fn((..._args: unknown[]) => ({ timestamp: '2026-11-16T00:00:00.000Z', inputId: 'written-notice' }))
+    if (state === 'changed') {
+      vi.mocked(validateEnvironmentConnections).mockImplementationOnce(current => {
+        current.mcpBindings = { docs: 'current' }
+        return { changed: true, changedSpecIds: ['docs'] }
+      })
+    }
+    const writeTrigger = vi.fn()
     vi.mocked(openSessionWriter).mockReturnValueOnce({ writeTrigger, writeEvent: vi.fn() } as never)
-    const saved: unknown[] = []
     const store = makeStore()
-    store.replaceRunEnvironment.mockImplementation((_id: string, value: object) => saved.push({ ...value }))
 
     const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory() })
 
     expect(result.outcome).toBe('useful')
-    expect(writeTrigger.mock.calls[0]).toEqual([ENVIRONMENT_NOTICE_TEXT, undefined, undefined, { source: 'environment-notice' }])
-    expect(writeTrigger.mock.calls[1][0]).toBe('INITIAL MESSAGE')
-    expect(writeTrigger).toHaveBeenCalledTimes(2)
-    expect(saved.at(-1)).not.toHaveProperty('pendingConnectionNotice')
-    expect(environment).not.toHaveProperty('pendingConnectionNotice')
-    if (reason === 'changed') expect(saved[0]).toHaveProperty('pendingConnectionNotice', true)
+    expect(writeTrigger.mock.calls.map(call => call[0])).toEqual(['INITIAL MESSAGE'])
+    if (state === 'changed') {
+      expect(store.replaceRunEnvironment.mock.calls).toEqual([[result.runId, { ...environment, mcpBindings: { docs: 'current' } }]])
+    } else {
+      expect(store.replaceRunEnvironment).not.toHaveBeenCalled()
+    }
     expect(nextSession.send).toHaveBeenCalledWith('INITIAL MESSAGE')
   })
 
@@ -592,27 +599,6 @@ describe('executeRun — connection change notice', () => {
     expect(environment.pendingWorkspaceNotice).toEqual({ kind: 'deleted', recorded: true })
   })
 
-  it('retains the pending notice when the transcript writer could not persist it', async () => {
-    const environment = { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1', pendingConnectionNotice: true }
-    vi.mocked(resolveExecutionEnvironment).mockReturnValueOnce(environment)
-    const writeTrigger = vi.fn()
-    vi.mocked(openSessionWriter).mockReturnValueOnce({ writeTrigger, writeEvent: vi.fn() } as never)
-    const store = makeStore()
-
-    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory() })
-
-    expect(result.outcome).toBe('useful')
-    expect(writeTrigger.mock.calls[0][0]).toBe(ENVIRONMENT_NOTICE_TEXT)
-    expect(writeTrigger.mock.calls[1][0]).toBe('INITIAL MESSAGE')
-    expect(environment.pendingConnectionNotice).toBe(true)
-    expect(store.replaceRunEnvironment).not.toHaveBeenCalled()
-  })
-
-  it('does not insert a notice when connection identity did not change', async () => {
-    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
-    const writer = vi.mocked(openSessionWriter).mock.results[0].value
-    expect(vi.mocked(writer.writeTrigger).mock.calls.map((call: unknown[]) => call[0])).toEqual(['INITIAL MESSAGE'])
-  })
 })
 
 describe('executeRun — per-person engines', () => {

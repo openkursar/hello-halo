@@ -71,9 +71,6 @@ describe('manager workspace relocation with runtime persistence', () => {
     return { spaceId, spacePath: spaces[spaceId], workDir: automation ? appRoot(appId, spaceId) : join(root, 'projects', spaceId),
       memoryDir: appRoot(appId, spaceId), mcpBindings: { crm: `crm-${spaceId}` } }
   }
-  function relocatedEnvironment(appId: string, spaceId: string, automation = false): ExecutionEnvironment {
-    return { ...environment(appId, spaceId, automation), pendingConnectionNotice: true }
-  }
   function rows(table: string): unknown[] {
     return database.getAppDatabase().prepare(`SELECT * FROM ${table} ORDER BY 1`).all()
   }
@@ -152,7 +149,7 @@ describe('manager workspace relocation with runtime persistence', () => {
       const projects = snapshot(join(root, 'projects'))
       const changed = vi.fn(() => {
         expect(database.getAppDatabase().inTransaction).toBe(false)
-        expect(activity.getSessionEnvironment(`app-chat:${appId}:im`)).toEqual(relocatedEnvironment(appId, 'target'))
+        expect(activity.getSessionEnvironment(`app-chat:${appId}:im`)).toEqual(environment(appId, 'target'))
       })
       manager.onAppAuthorityChanged(changed)
 
@@ -163,12 +160,12 @@ describe('manager workspace relocation with runtime persistence', () => {
       expect(rows('installed_apps')).toEqual(expected)
       expect(rows('activity_entries')).toEqual(entries)
       expect(rows('automation_runs')).toEqual(runs.map(row => row.app_id === appId
-        ? { ...row, environment_json: JSON.stringify(relocatedEnvironment(appId, 'target', true)) } : row))
+        ? { ...row, environment_json: JSON.stringify(environment(appId, 'target', true)) } : row))
       expect(rows('app_session_environments')).toEqual(sessions.map(row => row.app_id === appId
-        ? { ...row, environment_json: JSON.stringify(relocatedEnvironment(appId, 'target')) } : row))
+        ? { ...row, environment_json: JSON.stringify(environment(appId, 'target')) } : row))
       expect(activity.listAppEnvironments(occupant)).toEqual(otherHistory)
-      for (const item of activity.listSessionEnvironments(appId)) expect(item.environment).toEqual(relocatedEnvironment(appId, 'target'))
-      for (const run of activity.getRunsForApp(appId)) expect(run.environment).toEqual(relocatedEnvironment(appId, 'target', true))
+      for (const item of activity.listSessionEnvironments(appId)) expect(item.environment).toEqual(environment(appId, 'target'))
+      for (const run of activity.getRunsForApp(appId)) expect(run.environment).toEqual(environment(appId, 'target', true))
       expect(manager.listApps({ spaceId: 'target' }).map(app => app.id).sort()).toEqual([appId, occupant, removed].sort())
       expect(readFileSync(join(appRoot(appId, 'target'), 'memory.md'), 'utf8')).toBe(`${appId} memory`)
       expect(readFileSync(join(appRoot(occupant, 'target'), 'memory.md'), 'utf8')).toBe(`${occupant} memory`)

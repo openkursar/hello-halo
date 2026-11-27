@@ -64,7 +64,6 @@ import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
 import { titleFromFirstMessage } from '../../../shared/conversation-title'
-import { ENVIRONMENT_NOTICE_TEXT } from '../../../shared/transcript'
 import { prepareWorkspaceNotice } from './workspace-notice'
 import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
@@ -921,9 +920,9 @@ async function runAppChatTurn(
     ? getToolset(TEAM_MCP_SERVER_NAME)
     : undefined
   // ── 4. Build MCP servers ─────────────────────────────
-  const connectionChange = validateEnvironmentConnections(environment, app, manager, 'chat')
-  const announceConnectionChange = connectionChange.changed || environment.pendingConnectionNotice === true
-  if (connectionChange.changed) activityStore.replaceSessionEnvironment(conversationId, appId, { ...environment, pendingConnectionNotice: true })
+  if (validateEnvironmentConnections(environment, app, manager, 'chat').changed) {
+    activityStore.replaceSessionEnvironment(conversationId, appId, environment)
+  }
   const disabledMcpIds = new Set(
     (app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled === false).map(dependency => dependency.id)
   )
@@ -1361,14 +1360,6 @@ async function runAppChatTurn(
   // the queue of messages awaiting an answer, so a session rebuild underneath it
   // never orphans a caller.
   const sink = getAppChatSink({ appId, conversationId, runId: chatRunId, spacePath, spaceId })
-  if (announceConnectionChange) {
-    const notice = sink.writeUserMessage(ENVIRONMENT_NOTICE_TEXT, undefined, undefined, { source: 'environment-notice' })
-    if (sink.getRecordedInputIds([notice])[0]) {
-      delete environment.pendingConnectionNotice
-      activityStore.replaceSessionEnvironment(conversationId, appId, environment)
-      sink.announceLiveInputs([notice], false)
-    }
-  }
   const workspaceNotice = prepareWorkspaceNotice(environment, text => {
     const notice = sink.writeUserMessage(text, undefined, undefined, { source: 'workspace-notice' })
     if (!sink.getRecordedInputIds([notice])[0]) return false

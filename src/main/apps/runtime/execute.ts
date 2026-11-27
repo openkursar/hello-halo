@@ -18,7 +18,6 @@ import { randomUUID } from 'crypto'
 import { getAppManager, type InstalledApp } from '../manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
 import { resolvePermission, type ExecutionEnvironment } from '../../../shared/apps/app-types'
-import { ENVIRONMENT_NOTICE_TEXT } from '../../../shared/transcript'
 import { prepareWorkspaceNotice } from './workspace-notice'
 import { opensWithSlashCommand } from '../../services/agent/opening-context'
 import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
@@ -332,10 +331,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       throw new Error('The original execution context is unavailable; no replacement task was started')
     }
     validateExecutionEnvironment(environment)
-    const connectionChange = validateEnvironmentConnections(environment, app, manager)
-    const announceConnectionChange = connectionChange.changed || environment.pendingConnectionNotice === true
-    if (connectionChange.changed) {
-      environment.pendingConnectionNotice = true
+    if (validateEnvironmentConnections(environment, app, manager).changed) {
       store.replaceRunEnvironment(runId, environment)
     }
     // Checked before anything reaches a model: a run short of a connection it
@@ -692,20 +688,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // ── 5b. Open session writer for "View process" ────────
     const spacePath = environment.spacePath
-    let sessionWriter: SessionWriter | undefined
+    const sessionWriter = spacePath ? openSessionWriter(spacePath, app.id, runId) : undefined
     // A follow-up from the run-detail view may carry the places the user pointed
     // at: recorded as references, read by the engine expanded ahead of the text.
     const followupReferences = trigger.type === 'continue_followup' ? trigger.continue?.references : undefined
-    if (spacePath) {
-      sessionWriter = openSessionWriter(spacePath, app.id, runId)
-      if (announceConnectionChange) {
-        const written = sessionWriter.writeTrigger(ENVIRONMENT_NOTICE_TEXT, undefined, undefined, { source: 'environment-notice' })
-        if (written) {
-          delete environment.pendingConnectionNotice
-          store.replaceRunEnvironment(runId, environment)
-        }
-      }
-    }
     const workspaceNotice = prepareWorkspaceNotice(environment,
       text => !!sessionWriter?.writeTrigger(text, undefined, undefined, { source: 'workspace-notice' }),
       () => store.replaceRunEnvironment(runId, environment))
