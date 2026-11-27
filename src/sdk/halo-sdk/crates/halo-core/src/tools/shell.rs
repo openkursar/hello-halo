@@ -5,6 +5,7 @@ use crate::{
     harness::{Message, ResolvedHarness, TextId},
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
@@ -1409,6 +1410,36 @@ mod encoding_tests {
     }
 
     #[tokio::test]
+    async fn finished_valid_output_is_read_back_from_its_file_instead_of_kept_in_memory() {
+        let (_directory, shell, ctx) = fixture();
+        let launch = shell.execute(&json!({"command":"seq 1 12000; echo done >&2","run_in_background":true}), ctx.clone()).await;
+        assert_eq!(launch["isError"], false, "{}", launch["content"]);
+        let id = launch["metadata"]["task_id"].clone();
+        let first = task_output(&shell, &ctx, &id, true).await;
+        let path = first["task"]["output_file"].as_str().unwrap().to_owned();
+        let task = shell.tasks.lock().unwrap().get(id.as_str().unwrap()).cloned().unwrap();
+        {
+            let preview = task.preview.lock().unwrap();
+            assert_eq!(preview.text.capacity(), 0);
+            assert_eq!(preview.released.map(|(length, _)| length), Some(BACKGROUND_PREVIEW_LIMIT));
+        }
+        let saved = tokio::fs::read(&path).await.unwrap();
+        let result = first["task"]["result"].as_str().unwrap();
+        assert!(result.starts_with(std::str::from_utf8(&saved[..BACKGROUND_PREVIEW_LIMIT]).unwrap()), "{result}");
+        assert!(result.contains("The preview represents 32768 of"), "{result}");
+        assert_eq!(task_output(&shell, &ctx, &id, false).await["task"]["result"], result);
+
+        // A file that no longer starts with the captured bytes is not shown as this task's output.
+        let mut changed = saved.clone();
+        changed[0] = b'9';
+        tokio::fs::write(&path, &changed).await.unwrap();
+        let after = task_output(&shell, &ctx, &id, false).await;
+        assert!(after["task"]["result"].as_str().unwrap().contains(&path), "{after}");
+        assert!(!after["task"]["result"].as_str().unwrap().starts_with("9"), "{after}");
+        shell.close().await;
+    }
+
+    #[tokio::test]
     async fn background_preview_never_combines_invalid_bytes_from_different_pipes() {
         let (directory, shell, ctx) = fixture();
         let command = r"printf '\302'; while [ ! -f release ]; do sleep 0.02; done; printf '\251' >&2";
@@ -1735,6 +1766,8 @@ struct BackgroundPreview {
     display_cut: bool,
     file_limited: bool,
     save_failed: bool,
+    /// Set once `text` was released: its length and SHA-256, which the output file's prefix must match.
+    released: Option<(usize, [u8; 32])>,
 }
 
 impl BackgroundPreview {
@@ -1746,7 +1779,33 @@ impl BackgroundPreview {
             display_cut: false,
             file_limited: false,
             save_failed: false,
+            released: None,
         }
+    }
+
+    /// A copy of the text of a finished task that the saved file may reproduce. Invalid
+    /// UTF-8, split characters or an incomplete file keep the text in memory, because the
+    /// combined file cannot reproduce what the separately decoded streams showed.
+    fn releasable(&self) -> Option<String> {
+        let complete = !self.save_failed
+            && !self.file_limited
+            && self.pipes.iter().all(|pipe| pipe.eof == Some(true) && !pipe.invalid_utf8 && pipe.withheld == 0);
+        (complete && !self.text.is_empty() && self.released.is_none()).then(|| self.text.clone())
+    }
+
+    /// Frees `text` after the saved file was found to start with exactly these bytes.
+    fn release(&mut self, saved: &str) {
+        if self.text == saved {
+            self.released = Some((saved.len(), Sha256::digest(saved.as_bytes()).into()));
+            self.text = String::new();
+        }
+    }
+
+    /// The preview text, read back from the output file when it was released.
+    async fn restore(released: (usize, [u8; 32]), path: &Path) -> Option<String> {
+        let bytes = read_prefix(path, released.0).await?;
+        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        (digest == released.1).then(|| String::from_utf8(bytes).ok()).flatten()
     }
 
     fn push(&mut self, pipe: usize, text: &str, raw_bytes: usize) {
@@ -1763,6 +1822,10 @@ impl BackgroundPreview {
     }
 
     fn render(&self, path: &str, running: bool, harness: &ResolvedHarness) -> Value {
+        self.render_text(self.text.clone(), path, running, harness)
+    }
+
+    fn render_text(&self, mut text: String, path: &str, running: bool, harness: &ResolvedHarness) -> Value {
         use super::output::SaveReason;
         let received: usize = self.pipes.iter().map(|pipe| pipe.received).fold(0, usize::saturating_add);
         let shown: usize = self.pipes.iter().map(|pipe| pipe.shown).sum();
@@ -1771,7 +1834,6 @@ impl BackgroundPreview {
         let invalid = self.pipes.iter().any(|pipe| pipe.invalid_utf8);
         let file_complete = !(running || incomplete || self.file_limited || self.save_failed);
         let shown_bytes = shown.to_string();
-        let mut text = self.text.clone();
         let mut append = |line: &str| {
             if !text.is_empty() && !text.ends_with('\n') {
                 text.push('\n');
@@ -1802,6 +1864,15 @@ impl BackgroundPreview {
         json!({"output": text, "truncated": self.display_cut || !file_complete,
             "shownBytes": shown, "fileComplete": file_complete, "noticesIncluded": true})
     }
+}
+
+/// Up to `length` bytes from the start of `path`; `None` if fewer exist or the read fails.
+async fn read_prefix(path: &Path, length: usize) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut bytes = Vec::with_capacity(length);
+    file.take(length as u64).read_to_end(&mut bytes).await.ok()?;
+    (bytes.len() == length).then_some(bytes)
 }
 
 struct CaptureSinkState {
@@ -2668,8 +2739,17 @@ impl ShellTools {
             tracing::warn!("decoded command preview is no longer retained");
             return Ok(missing(harness.render(TextId::ToolsShellTaskPreviewExpired, &[("path", path)])));
         };
+        let released = task.preview.lock().unwrap_or_else(|error| error.into_inner()).released;
+        let Some(released) = released else {
+            let preview = task.preview.lock().unwrap_or_else(|error| error.into_inner());
+            return Ok(preview.render(path, running, harness));
+        };
+        let Some(text) = BackgroundPreview::restore(released, Path::new(path)).await else {
+            tracing::warn!("saved command output no longer matches its preview");
+            return Ok(missing(harness.render(TextId::ToolsShellTaskPreviewExpired, &[("path", path)])));
+        };
         let preview = task.preview.lock().unwrap_or_else(|error| error.into_inner());
-        Ok(preview.render(path, running, harness))
+        Ok(preview.render_text(text, path, running, harness))
     }
     pub async fn context_async_call(
         &self,
@@ -3237,6 +3317,12 @@ impl ShellTools {
                 }
             }
             drop(output);
+            let releasable = task.preview.lock().unwrap_or_else(|error| error.into_inner()).releasable();
+            if let (Some(text), Some(path)) = (releasable, value["output_file"].as_str()) {
+                if read_prefix(Path::new(path), text.len()).await.as_deref() == Some(text.as_bytes()) {
+                    task.preview.lock().unwrap_or_else(|error| error.into_inner()).release(&text);
+                }
+            }
             if persistent {
                 if let Some(path) = value["output_file"].as_str() {
                     if let Err(error) =
