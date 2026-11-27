@@ -25,7 +25,8 @@ MCP server set is final, right before the session starts
 for dsh, which builds its children's environment itself). It first removes
 `WEBCLI_HOST_ENDPOINT` and `WEBCLI_HOST_TOKEN`, so a session never inherits
 another one's or Halo's own. It sets them again only when the set includes an
-AI Browser server, pointing at that server's browser context. A session
+AI Browser server, pointing at that server's browser context, together with
+the state directories programs built for a host require (see "State"). A session
 without the browser capability, because it was excluded, filtered by a policy
 or never granted to a digital human, gets nothing. Each session gets the
 variables when it is created; a session that is reused keeps the ones it has.
@@ -92,6 +93,13 @@ on is brought back, so the AI's next browser step acts where it left off.
 
 `storage-cache.ts` keeps session-storage values an Adapter asked to cache,
 encrypted with `foundation/crypto-envelope`, in
-`<halo dir>/browser-program-host/session-storage.json`. A program's own files
-(for example a WebCLI's Adapter data) stay where that program keeps them; the
-host does not choose them.
+`<halo dir>/browser-program-host/session-storage.json`.
+
+A WebCLI build for a host refuses to start unless the host also names its
+state directories, so alongside the endpoint and token every lending session
+gets `WEWORKER_USER_ADAPTERS_DIR` and `WEBCLI_ADAPTERS_DIR` (user Adapters),
+`WEWORKER_ADAPTER_DATA_DIR` (Adapter data) and `WEBCLI_HOST_STATE_DIR`
+(provider state), all under `<halo dir>/browser-program-host/programs/`,
+created on first use with owner-only permissions. They are shared by every
+session of this Halo and never point at a separately installed copy's
+`~/.webcli`. A session without the browser gets none of them from the host.

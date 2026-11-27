@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Agent, request } from 'node:http'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 const mocks = vi.hoisted(() => ({
   browser: vi.fn(async (_ctx: unknown, command: string, _args?: unknown, _signal?: AbortSignal) => ({ command })),
   fetch: vi.fn(async (_grant: unknown, _request: unknown, _signal: AbortSignal) => ({ ok: true })),
 }))
 vi.mock('electron', () => ({}))
+vi.mock('../../../src/main/foundation/config.service', () => ({ getHaloDir: () => globalThis.__HALO_TEST_DIR__ }))
 vi.mock('../../../src/main/services/ai-browser', () => ({
   browserContextOfServer: (server: any) => server?.ctx,
 }))
@@ -68,6 +71,10 @@ describe('browser program host environment', () => {
     await applyProgramHostEnvironment(env, { 'web-search': {}, 'ai-browser': { ctx } })
     expect(env.WEBCLI_HOST_ENDPOINT).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/webcli\/v1$/)
     expect(env.WEBCLI_HOST_TOKEN).toMatch(/^[a-f0-9]{64}$/)
+    for (const name of ['WEWORKER_USER_ADAPTERS_DIR', 'WEBCLI_ADAPTERS_DIR', 'WEWORKER_ADAPTER_DATA_DIR', 'WEBCLI_HOST_STATE_DIR']) {
+      expect(String(env[name])).toContain(join(globalThis.__HALO_TEST_DIR__, 'browser-program-host', 'programs'))
+      expect(existsSync(String(env[name]))).toBe(true)
+    }
     const again: Record<string, string | number | undefined> = {}
     await applyProgramHostEnvironment(again, { 'ai-browser': { ctx } })
     expect(again.WEBCLI_HOST_TOKEN).toBe(env.WEBCLI_HOST_TOKEN)
