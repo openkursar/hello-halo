@@ -6,6 +6,8 @@ if (Number(process.versions.napi) < 10) {
   throw new Error('Halo requires a Node runtime with N-API 10 (Node 22.14.0+ or 24+) for its native dependencies.')
 }
 
+run('node scripts/commit-check/install.mjs --if-checkout')
+
 // Optional engines are never installed here.
 run('patch-package')
 

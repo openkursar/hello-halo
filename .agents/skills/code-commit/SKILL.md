@@ -9,7 +9,7 @@ description: Must be invoked when the user asks to commit code, submit code, or 
 
 ### 1. Review Changes
 
-Run `git status` and `git diff` in the owning Git repository to understand all current changes. For SDK work, read repository `src/sdk/halo-sdk/AGENTS.md` and `src/sdk/halo-sdk/TESTING.md`; inspect its working tree explicitly while it remains a nested checkout. An ignored SDK path is not an empty change set.
+Run `git status` and `git diff` in the owning Git repository to understand all current changes. For SDK work, read `src/sdk/halo-sdk/AGENTS.md` and `src/sdk/halo-sdk/TESTING.md`.
 
 ### 2. Pre-commit Checks
 
@@ -73,7 +73,8 @@ Ensure the code is suitable for an internationalized, open-source project:
 - **Comments in English** to align with open-source conventions.
 - **No pinyin naming** for variables, functions, or identifiers. Use meaningful English names.
 - **No internal/private information** such as internal IP addresses, intranet domains, personal emails, phone numbers, API keys, or secrets.
-- **No specific company or brand names** in code, comments, or commit messages — this includes but is not limited to Microsoft, Google, Tencent, Alibaba, Apple, Meta, Amazon, Baidu, ByteDance, etc. Use generic terms instead (e.g., "cloud provider", "search engine", "platform").
+- **No company or product names** in code, comments, or commit messages unless the feature needs them, such as the engine, model provider or IM channel the code integrates with. Otherwise use generic terms (e.g., "cloud provider", "search engine", "platform").
+- **No internal story** in code, comments, test names or commit messages. Say what the code does and the technical reason it needs to; leave out internal documents and notes, why or by whom a decision was made, the customer or incident behind a change, release plans and development history. If a sentence only makes sense to someone who was in the discussion, cut it.
 
 ### 3. Generate Commit Message
 
@@ -112,6 +113,12 @@ git commit -m "<generated commit message>"
 
 - Only stage files that pass the checks. Stage by explicit file path; never `git add .`, `-A`, or a directory, which sweeps in stray files.
 - Run `git status` after committing to verify.
+
+#### Disclosure Reminders
+
+The repository's `commit-msg` hook scans the lines this commit adds and its message. Any match pauses the commit and lists the file, line and what matched; credential-like values are not printed. It assists your review and does not replace it. Do not skip it with `--no-verify`.
+
+Open each place. If it is fine as is (a name the feature needs per 2.4, test data, a public example), rerun the same commit as `git -c disclosure.reviewed=true commit ...`. Otherwise fix it, restage and commit again; for a real secret, tell the user the file and line without repeating the value.
 
 ## Notes
 
