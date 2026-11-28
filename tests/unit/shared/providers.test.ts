@@ -141,3 +141,30 @@ describe('Standard Compute built-in provider', () => {
     ])
   })
 })
+
+describe('LLMTR built-in provider', () => {
+  it('registers an OpenAI-compatible gateway provider with dynamic model discovery', () => {
+    const provider = getBuiltinProvider('llmtr')
+
+    expect(provider).toMatchObject({
+      id: 'llmtr',
+      authType: 'api-key',
+      apiUrl: 'https://llmtr.com/v1',
+      modelsUrl: 'https://llmtr.com/v1/models',
+      region: 'global'
+    })
+    expect(provider?.recommended).toBeUndefined()
+    expect(getAllProviderIds()).toContain('llmtr')
+  })
+
+  it('defaults to Qwen3.8 Flash, with vendor-prefixed model ids', () => {
+    expect(getDefaultModel('llmtr')).toBe('qwen/qwen3.8-flash')
+    expect(getBuiltinProvider('llmtr')?.models.map(model => model.id)).toEqual([
+      'qwen/qwen3.8-flash',
+      'qwen/qwen3.8-max',
+      'anthropic/claude-sonnet-5.5',
+      'deepseek/deepseek-v4-pro',
+      'google/gemini-3.8-flash'
+    ])
+  })
+})

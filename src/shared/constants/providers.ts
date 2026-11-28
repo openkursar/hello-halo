@@ -465,6 +465,25 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     icon: 'route'
   },
   {
+    id: 'llmtr',
+    name: 'LLMTR',
+    authType: 'api-key',
+    apiUrl: 'https://llmtr.com/v1',
+    modelsUrl: 'https://llmtr.com/v1/models',
+    models: [
+      { id: 'qwen/qwen3.8-flash', name: 'Qwen3.8 Flash' },
+      { id: 'qwen/qwen3.8-max', name: 'Qwen3.8 Max' },
+      { id: 'anthropic/claude-sonnet-5.5', name: 'Claude Sonnet 5.5' },
+      { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+      { id: 'google/gemini-3.8-flash', name: 'Gemini 3.8 Flash' }
+    ],
+    description: 'LLMTR prepaid OpenAI-compatible gateway',
+    website: 'https://llmtr.com/',
+    region: 'global',
+    icon: 'route',
+    notes: 'Model ids use the vendor/model form. Model list fetched dynamically'
+  },
+  {
     id: 'requesty',
     name: 'Requesty',
     authType: 'api-key',
